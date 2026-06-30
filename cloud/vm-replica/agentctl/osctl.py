@@ -2246,6 +2246,91 @@ def _luma_resample(rgb: bytes, w: int, ix0: int, iy0: int, ix1: int, iy1: int,
     return out
 
 
+def _classify_lib(templates: "list[tuple[str, bytes, int, int]]",
+                  inset: float, norm: int) -> "list[tuple[str, list[int]]]":
+    """Resample each ``(label, patch, pw, ph)`` template to one ``norm``x``norm``
+    luma signature, inset by the same fraction the cells are read at (so the score
+    keys on the sprite, not the cell/checker shade behind it). Shared by
+    :func:`classify_grid` and :func:`classify_boxes`; validates each template."""
+    if not templates:
+        raise ValueError("templates must be a non-empty list of (label, patch, pw, ph)")
+    lib: "list[tuple[str, list[int]]]" = []
+    for t in templates:
+        if len(t) != 4:
+            raise ValueError("each template must be (label, patch, pw, ph)")
+        label, patch, pw, ph = t
+        if pw < 1 or ph < 1:
+            raise ValueError("template pw and ph must be >= 1")
+        if len(patch) != pw * ph * 3:
+            raise ValueError(f"template '{label}' patch must be pw*ph*3={pw * ph * 3}"
+                             f" bytes, got {len(patch)}")
+        tx0 = int(pw * inset)
+        tx1 = max(tx0 + 1, int(pw * (1.0 - inset)))
+        ty0 = int(ph * inset)
+        ty1 = max(ty0 + 1, int(ph * (1.0 - inset)))
+        lib.append((label, _luma_resample(patch, pw, tx0, ty0, tx1, ty1, norm)))
+    return lib
+
+
+def _classify_box(rgb: bytes, w: int, h: int,
+                  box: "tuple[float, float, float, float]",
+                  lib: "list[tuple[str, list[int]]]", npix: int, inset: float,
+                  ink_tol: int, ink_min: int, norm: int,
+                  empty_label: str, unknown_label: str,
+                  max_score: "float | None") -> str:
+    """Classify one cell/box against the resampled ``lib``: inset-crop, gate on
+    ink (a box with fewer than ``ink_min`` pixels deviating more than ``ink_tol``
+    from its own mean is blank → ``empty_label``, never scored), resample to a
+    ``norm``x``norm`` luma signature and return the lowest mean-abs-diff label
+    (``unknown_label`` when ``max_score`` is set and even the best exceeds it).
+    The pixel core shared by :func:`classify_grid` and :func:`classify_boxes`."""
+    bx0, by0, bx1, by1 = box
+    bw = bx1 - bx0
+    bh = by1 - by0
+    ix0 = int(bx0 + bw * inset)
+    ix1 = int(bx0 + bw * (1.0 - inset))
+    if ix1 <= ix0:
+        ix1 = ix0 + 1
+    ix0 = max(0, min(ix0, w - 1))
+    ix1 = max(ix0 + 1, min(ix1, w))
+    iy0 = int(by0 + bh * inset)
+    iy1 = int(by0 + bh * (1.0 - inset))
+    if iy1 <= iy0:
+        iy1 = iy0 + 1
+    iy0 = max(0, min(iy0, h - 1))
+    iy1 = max(iy0 + 1, min(iy1, h))
+    lums = []
+    for yy in range(iy0, iy1):
+        base = (yy * w + ix0) * 3
+        for k in range(0, (ix1 - ix0) * 3, 3):
+            lums.append((rgb[base + k] * 299 + rgb[base + k + 1] * 587
+                         + rgb[base + k + 2] * 114) // 1000)
+    n = len(lums)
+    mean = sum(lums) // n if n else 0
+    ink = 0
+    for v in lums:
+        if abs(v - mean) > ink_tol:
+            ink += 1
+            if ink >= ink_min:
+                break
+    if ink < ink_min:
+        return empty_label
+    sig = _luma_resample(rgb, w, ix0, iy0, ix1, iy1, norm)
+    best = None
+    best_label = unknown_label
+    for label, tv in lib:
+        s = 0
+        for a, b in zip(sig, tv):
+            d = a - b
+            s += d if d >= 0 else -d
+        if best is None or s < best:
+            best = s
+            best_label = label
+    if max_score is not None and best is not None and best / npix > max_score:
+        return unknown_label
+    return best_label
+
+
 def classify_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
                   templates: "list[tuple[str, bytes, int, int]]",
                   rgb: bytes | None = None, size: tuple[int, int] | None = None,
@@ -2311,26 +2396,11 @@ def classify_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
         if size is None:
             raise ValueError("size required when rgb is provided")
         w, h = size
-    # Resample every template to the same norm x norm luma signature, once. The
-    # template is a full-cell crop, so inset it by the *same* fraction the cells
-    # are read at: the central window is glyph-dominated, so the score keys on the
-    # sprite, not the checker/background shade behind it (a bishop on a light
-    # square must still match a bishop harvested from a dark one).
-    lib: list[tuple[str, list[int]]] = []
-    for t in templates:
-        if len(t) != 4:
-            raise ValueError("each template must be (label, patch, pw, ph)")
-        label, patch, pw, ph = t
-        if pw < 1 or ph < 1:
-            raise ValueError("template pw and ph must be >= 1")
-        if len(patch) != pw * ph * 3:
-            raise ValueError(f"template '{label}' patch must be pw*ph*3={pw * ph * 3}"
-                             f" bytes, got {len(patch)}")
-        tx0 = int(pw * inset)
-        tx1 = max(tx0 + 1, int(pw * (1.0 - inset)))
-        ty0 = int(ph * inset)
-        ty1 = max(ty0 + 1, int(ph * (1.0 - inset)))
-        lib.append((label, _luma_resample(patch, pw, tx0, ty0, tx1, ty1, norm)))
+    # Resample every template to the same norm x norm luma signature, once: the
+    # central window is glyph-dominated, so the score keys on the sprite, not the
+    # checker/background shade behind it (a bishop on a light square must still
+    # match a bishop harvested from a dark one).
+    lib = _classify_lib(templates, inset, norm)
     npix = norm * norm
     x0, y0, x1, y1 = bbox
     cw = (x1 - x0 + 1) / cols
@@ -2339,56 +2409,76 @@ def classify_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
     for r in range(rows):
         ry0 = float(ys[r]) if ys is not None else y0 + r * ch
         rh = (ys[r + 1] - ys[r]) if ys is not None else ch
-        iy0 = int(ry0 + rh * inset)
-        iy1 = int(ry0 + rh * (1.0 - inset))
-        if iy1 <= iy0:
-            iy1 = iy0 + 1
-        iy0 = max(0, min(iy0, h - 1))
-        iy1 = max(iy0 + 1, min(iy1, h))
         row = []
         for c in range(cols):
             cx0 = float(xs[c]) if xs is not None else x0 + c * cw
             ccw = (xs[c + 1] - xs[c]) if xs is not None else cw
-            ix0 = int(cx0 + ccw * inset)
-            ix1 = int(cx0 + ccw * (1.0 - inset))
-            if ix1 <= ix0:
-                ix1 = ix0 + 1
-            ix0 = max(0, min(ix0, w - 1))
-            ix1 = max(ix0 + 1, min(ix1, w))
-            lums = []
-            for yy in range(iy0, iy1):
-                base = (yy * w + ix0) * 3
-                for k in range(0, (ix1 - ix0) * 3, 3):
-                    lums.append((rgb[base + k] * 299 + rgb[base + k + 1] * 587
-                                 + rgb[base + k + 2] * 114) // 1000)
-            n = len(lums)
-            mean = sum(lums) // n if n else 0
-            ink = 0
-            for v in lums:
-                if abs(v - mean) > ink_tol:
-                    ink += 1
-                    if ink >= ink_min:
-                        break
-            if ink < ink_min:
-                row.append(empty_label)
-                continue
-            sig = _luma_resample(rgb, w, ix0, iy0, ix1, iy1, norm)
-            best = None
-            best_label = unknown_label
-            for label, tv in lib:
-                s = 0
-                for a, b in zip(sig, tv):
-                    d = a - b
-                    s += d if d >= 0 else -d
-                if best is None or s < best:
-                    best = s
-                    best_label = label
-            if max_score is not None and best / npix > max_score:
-                row.append(unknown_label)
-            else:
-                row.append(best_label)
+            row.append(_classify_box(rgb, w, h, (cx0, ry0, cx0 + ccw, ry0 + rh),
+                                     lib, npix, inset, ink_tol, ink_min, norm,
+                                     empty_label, unknown_label, max_score))
         grid.append(row)
     return grid
+
+
+def classify_boxes(boxes: "list[tuple[int, int, int, int]]",
+                   templates: "list[tuple[str, bytes, int, int]]",
+                   rgb: bytes | None = None, size: tuple[int, int] | None = None,
+                   inset: float = 0.18, ink_tol: int = 50, ink_min: int = 6,
+                   norm: int = 32, empty_label: str = "", unknown_label: str = "?",
+                   max_score: "float | None" = None) -> list[str]:
+    """Classify a *list of arbitrary boxes* against a labelled template library —
+    the lattice-free sibling of :func:`classify_grid` (F254).
+
+    :func:`classify_grid` reads a sprite board only when it is a ``cols``x``rows``
+    *lattice*. Many boards are not: a mahjongg layout is tiles stacked in offset
+    3-D layers, a freecell/klondike spread is cards at ragged depths, a diffed
+    frame yields change regions wherever they fell. The boxes are already in hand
+    — from :func:`find_color_blobs` (segment the tile faces), :func:`detect_cascade`
+    (the ``faceup`` box per pile), :func:`locate_change_blobs` (each changed
+    region) — but to *read* them every caller re-rolls the same :func:`match_template`
+    loop classify_grid already owns (crop, ink-gate, resample, argmin, threshold).
+    This is that loop over an explicit box list: ``detect_*`` answers *where* the
+    things are, ``classify_boxes`` answers *what* each one is.
+
+    Scoring is identical to :func:`classify_grid` (they share the same core), so a
+    library harvested once classifies both a lattice and a scatter: each box is
+    inset by ``inset``, gated on ink (fewer than ``ink_min`` pixels deviating more
+    than ``ink_tol`` from the box mean → ``empty_label``, never scored), resampled
+    to a ``norm``x``norm`` luma signature and given the lowest mean-abs-diff label,
+    or ``unknown_label`` when ``max_score`` is set and even the best exceeds it.
+    ``boxes`` are *inclusive* ``(x0, y0, x1, y1)`` in screen coordinates — exactly
+    the ``bbox`` :func:`find_color_blobs`/:func:`locate_change_blobs` return and
+    :func:`crop_rgb` harvests templates from, so a box segmented one frame and its
+    library harvested another line up to the pixel (a 1-px frame mismatch shifts a
+    sharp glyph enough to fail its own self-match). Returns one label per box, in
+    input order — empty ``boxes`` returns ``[]``."""
+    if not 0.0 <= inset < 0.5:
+        raise ValueError("inset must be in [0.0, 0.5)")
+    if ink_min < 1:
+        raise ValueError("ink_min must be >= 1")
+    if norm < 1:
+        raise ValueError("norm must be >= 1")
+    if max_score is not None and max_score < 0:
+        raise ValueError("max_score must be >= 0 or None")
+    if rgb is None:
+        w, h, rgb = capture_rgb()
+    else:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        w, h = size
+    lib = _classify_lib(templates, inset, norm)
+    npix = norm * norm
+    out = []
+    for box in boxes:
+        if len(box) != 4:
+            raise ValueError("each box must be (x0, y0, x1, y1)")
+        bx0, by0, bx1, by1 = box
+        # inclusive box -> half-open rect, so the inset window matches the one
+        # _classify_lib takes over a crop_rgb patch (also inclusive) pixel-for-pixel.
+        out.append(_classify_box(rgb, w, h, (bx0, by0, bx1 + 1, by1 + 1), lib,
+                                 npix, inset, ink_tol, ink_min, norm,
+                                 empty_label, unknown_label, max_score))
+    return out
 
 
 def detect_grid(search: tuple[int, int, int, int],
