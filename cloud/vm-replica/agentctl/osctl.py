@@ -4007,6 +4007,141 @@ def consensus_shift(votes, tol: float = 8.0, min_support: float = 0.5,
             "inliers": len(inliers), "n": n, "tol": tol}
 
 
+def consensus_affine(votes, min_votes: int = 8, max_iter: int = 4,
+                     outlier_k: float = 2.5, resid_floor: float = 2.0,
+                     min_support: float = 0.5) -> "dict | None":
+    """Fit a robust *affine* flow field to position-tagged displacement
+    ``votes`` — the model a camera rotation needs and that ``consensus_shift``
+    can only reject (F267).
+
+    ``consensus_shift`` (F265) fits one global translation and, honestly, refuses
+    a scene whose flow is not a single shift — its own docstring names FPS yaw as
+    that case. Practice then pinned down *why*, and what the right model is.
+    Yawing an OpenArena view by a fixed amount and reading per-block displacement
+    over the viewport, the horizontal flow was not one value and was not a few
+    discrete layers: it was a smooth, repeatable ramp down the frame — measured
+    ``dx`` ``-72`` px across the top band, ``-60``, ``-48``, ``-36`` across the
+    bottom, each band tight (IQR ~6 px), the histogram a gap-free plateau from
+    ``-36`` to ``-72`` with no clusters. ``consensus_shift`` returned ``None``
+    (correct: no single shift owns a majority), but nothing in the floor could
+    *represent* that flow. A camera rotation / perspective pan produces exactly
+    this — image velocity affine in image position — so the honest generalisation
+    of a global shift is a global *affine* field, which also degrades back to a
+    pure translation when its linear terms vanish (a side-scroller pan).
+
+    ``votes`` is an iterable of ``(x, y, dx, dy)``: the image position ``(x, y)``
+    of a tracked block and its measured displacement ``(dx, dy)`` (e.g. each from
+    a :func:`match_unique` hit). Entries with any ``None`` component are dropped,
+    pairing with the matcher's honest misses. Both components are fit as
+    ``d = c0 + c1·x + c2·y`` by least squares; centring the seed positions makes
+    the normal equations collapse to a 2x2 solve per component, with the constant
+    term the mean displacement. The fit is made robust by iteratively trimming
+    seeds whose residual exceeds ``median + outlier_k·MAD`` (never below
+    ``resid_floor`` px, so a near-perfect fit is not over-pruned) and refitting,
+    up to ``max_iter`` rounds or until the inlier set is stable — so a few gross
+    mislocks or an independently-moving object do not bend the global field.
+
+    Returns ``None`` when fewer than ``min_votes`` valid votes survive, when the
+    seed positions are degenerate (collinear / single column or row, so a
+    gradient is unidentifiable — an honest refusal rather than a wild
+    extrapolation), or when the inlier fraction falls below ``min_support``.
+    Otherwise returns ``{ax, bx, ay, by, support, inliers, n, rms, cx, cy}``:
+    ``ax`` is ``(c0, c1, c2)`` for ``dx`` and ``ay`` likewise for ``dy`` (absolute
+    image coords, so ``dx ≈ ax[0] + ax[1]·x + ax[2]·y``); ``bx``/``by`` are the
+    same coefficients re-expressed about the seed centroid ``(cx, cy)`` as
+    ``(mean_d, d/dx, d/dy)``, so ``bx[0]``/``by[0]`` are the shift at the frame
+    centre (what to feed an aim loop) and ``bx[1:]``/``by[1:]`` the gradient (zero
+    => a pure translation, i.e. the ``consensus_shift`` regime). ``support`` is
+    the inlier fraction, ``rms`` the inlier residual in px."""
+    pts = [(float(x), float(y), float(dx), float(dy))
+           for (x, y, dx, dy) in votes
+           if x is not None and y is not None and dx is not None and dy is not None]
+    n = len(pts)
+    if n < min_votes:
+        return None
+
+    def fit(idx):
+        k = len(idx)
+        cx = sum(pts[i][0] for i in idx) / k
+        cy = sum(pts[i][1] for i in idx) / k
+        sxx = sxy = syy = 0.0
+        sxdx = sydx = sxdy = sydy = 0.0
+        mdx = sum(pts[i][2] for i in idx) / k
+        mdy = sum(pts[i][3] for i in idx) / k
+        for i in idx:
+            xc = pts[i][0] - cx
+            yc = pts[i][1] - cy
+            sxx += xc * xc
+            sxy += xc * yc
+            syy += yc * yc
+            sxdx += xc * pts[i][2]
+            sydx += yc * pts[i][2]
+            sxdy += xc * pts[i][3]
+            sydy += yc * pts[i][3]
+        det = sxx * syy - sxy * sxy
+        if abs(det) < 1e-6:
+            return None
+        # centred linear terms for dx and dy
+        dx1 = (syy * sxdx - sxy * sydx) / det
+        dx2 = (sxx * sydx - sxy * sxdx) / det
+        dy1 = (syy * sxdy - sxy * sydy) / det
+        dy2 = (sxx * sydy - sxy * sxdy) / det
+        return cx, cy, mdx, mdy, dx1, dx2, dy1, dy2
+
+    idx = list(range(n))
+    res = None
+    for _ in range(max_iter):
+        res = fit(idx)
+        if res is None:
+            return None
+        cx, cy, mdx, mdy, dx1, dx2, dy1, dy2 = res
+        resid = []
+        for i in range(n):
+            xc = pts[i][0] - cx
+            yc = pts[i][1] - cy
+            ex = pts[i][2] - (mdx + dx1 * xc + dx2 * yc)
+            ey = pts[i][3] - (mdy + dy1 * xc + dy2 * yc)
+            resid.append((ex * ex + ey * ey) ** 0.5)
+        sr = sorted(resid)
+        med = sr[len(sr) // 2]
+        mad = sorted(abs(r - med) for r in resid)[len(sr) // 2]
+        thr = max(resid_floor, med + outlier_k * mad)
+        new_idx = [i for i in range(n) if resid[i] <= thr]
+        if len(new_idx) < min_votes:
+            break
+        if len(new_idx) == len(idx):
+            idx = new_idx
+            break
+        idx = new_idx
+
+    res = fit(idx)
+    if res is None:
+        return None
+    cx, cy, mdx, mdy, dx1, dx2, dy1, dy2 = res
+    inset = set(idx)
+    inl = 0
+    ss = 0.0
+    for i in range(n):
+        xc = pts[i][0] - cx
+        yc = pts[i][1] - cy
+        ex = pts[i][2] - (mdx + dx1 * xc + dx2 * yc)
+        ey = pts[i][3] - (mdy + dy1 * xc + dy2 * yc)
+        if i in inset:
+            inl += 1
+            ss += ex * ex + ey * ey
+    support = inl / n
+    if support < min_support:
+        return None
+    rms = (ss / inl) ** 0.5 if inl else 0.0
+    # absolute-coord coefficients: d = c0 + c1*x + c2*y
+    ax = (mdx - dx1 * cx - dx2 * cy, dx1, dx2)
+    ay = (mdy - dy1 * cx - dy2 * cy, dy1, dy2)
+    return {"ax": ax, "ay": ay,
+            "bx": (mdx, dx1, dx2), "by": (mdy, dy1, dy2),
+            "cx": cx, "cy": cy,
+            "support": support, "inliers": inl, "n": n, "rms": rms}
+
+
 _OCR_ENGINE: "str | None" = None
 
 # Content-addressed OCR cache (F238). tesseract is spawned as a subprocess per

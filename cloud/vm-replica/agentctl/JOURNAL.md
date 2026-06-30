@@ -9495,3 +9495,79 @@ no. The next honest direction is pair-level: when a frame pair is *not* a clean
 rigid translation, name it (deformation / cut / occlusion), rather than gating the
 seeds within a pair that already tracks fine. All twenty-three floor friction tests
 (F243–F265) pass unchanged; no regressions.
+
+
+---
+
+## F267 · consensus_affine — the camera-rotation flow consensus_shift could only refuse
+
+`consensus_shift` (F265) fits one global translation and, in its own docstring,
+names FPS yaw as the case it refuses: a yaw is not a single shift. F264 had
+already rejected a global-shift model for yaw and called the flow
+"rotational / range-dependent". The open question for a multi-motion primitive
+was the **shape** of that flow: does it cluster into a few discrete coherent
+modes (a layer/segmentation primitive could recover those), or is it a smooth
+continuum (for which discrete modes are the wrong model)?
+
+**Practice answered it, and it overturned my own first guess.** I yawed the live
+OpenArena view by a fixed delta, laid a seed grid over the central viewport,
+measured each seed's displacement with `match_unique`, and bucketed `dx` by
+screen-Y. The probe's own comment predicted *uniform* `dx` ("a pure yaw is
+camera rotation, whose optical flow is depth-INDEPENDENT"). The data said
+otherwise — a clean, repeatable ramp down the frame, identical across three
+trials:
+
+```
+screen-y [  0..107]: median dx -72   IQR[-75,-66]
+screen-y [107..214]: median dx -60   IQR[-63,-57]
+screen-y [214..321]: median dx -48   IQR[-51,-42]
+screen-y [321..428]: median dx -36   IQR[-39,-30]
+```
+
+Two further probes killed the obvious confounders. `_probe_f267b` swept the yaw
+magnitude (10..320 counts) and found the per-count gain flat at ~0.95–1.05
+px/count over the usable range — **no acceleration**, so the ramp is not a
+gain nonlinearity. `_probe_f267c` held total yaw fixed and varied the step count
+(1..16); all produced the same ~42 px — **no per-step dead zone**. The ramp is a
+property of the *scene's projection under rotation*, not of the actuator.
+
+**So both rival models are wrong.** It is not one shift (`consensus_shift`
+returns `None`, correctly — no single value owns a majority). It is not discrete
+layers either: the `dx` histogram is a gap-free plateau from −36 to −72 with no
+clusters, and the per-band medians form a smooth line, not 2–3 modes. An FPS yaw
+is a **smooth affine flow gradient** — exactly what a camera rotation /
+perspective pan produces, image velocity affine in image position.
+
+**The honest generalisation is therefore a model, not a clusterer.** Where
+`consensus_shift` fits `dx = const` (a translation) and refuses anything else,
+`consensus_affine` fits `dx ≈ c0 + c1·x + c2·y` (and `dy` likewise) — a global
+affine field that *represents* the ramp `consensus_shift` can only reject, and
+**degrades back to a pure translation when its linear terms vanish** (a
+side-scroller pan, the F265 regime). Centring the seed positions collapses the
+normal equations to a 2×2 solve per component (the constant term is just the mean
+displacement); the fit is made robust by iteratively trimming seeds whose
+residual exceeds `median + k·MAD` and refitting, so a few gross mislocks — or a
+single independently-moving object in the frame — do not bend the global field.
+It refuses (`None`) on too few votes and on degenerate geometry (collinear seeds,
+where a gradient is unidentifiable — an honest refusal, not a wild
+extrapolation). Its quality signal is the inlier `rms`, which the caller reads.
+
+**Proof.** Synthetic `_test_f267.py` (22 assertions): recovers a pure gradient's
+centre-shift and per-pixel slope; degrades to a translation on a uniform pan and
+matches `consensus_shift` there; reproduces the measured OpenArena ramp as a
+gradient on the very vote-bag where `consensus_shift` returns `None`; rejects a
+compact independently-moving cluster without bending the field; refuses on too
+few votes and single-column geometry; drops `None` components; leaves a large
+`rms` on no-model votes. Live `_game_f267.py` on the running ioquake3 window:
+across three yaw round-trips, the two clean frames recovered a gradient of
++0.13 / +0.11 px/px at rms 1.7 px and ~73 % support while `consensus_shift`
+refused; the third frame was noisy and `consensus_affine`'s rms rose to ~20 px —
+the quality gate doing its job (honest "this fit is poor"), not a silent wrong
+answer. The measured slope matches the probe's ~0.11 px/px. All twenty-four floor
+friction tests (F243–F267) pass; no regressions.
+
+The closed-loop chain now reads: `react_pixel` (when) · `move_rel` (how much) ·
+`servo` (gain) · `match_unique` (is the lock trustworthy) · `lead` (where it is
+going) · `consensus_shift` (one shift, or honestly none) · `consensus_affine`
+(the rotational/perspective field a single shift can only refuse). 反者道之動：
+the model belongs to the geometry it was built for.
