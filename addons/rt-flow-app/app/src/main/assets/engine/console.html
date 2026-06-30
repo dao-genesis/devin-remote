@@ -1044,7 +1044,9 @@
       _proxyBaseGood=null;   // 渲染失败 → 清掉缓存的反代基址, 「重试」时重新探活解析(可能中继刚恢复/已切活端点)
       var msg=(e&&e.message)?e.message:(typeof e==="string"?e:"登录态获取失败");
       if(msg==="i_init_failed") msg="取登录态失败(账号未登录或令牌已失效)";
-      if(msg==="no_proxy_endpoint") msg="未找到可达的反代端点 — 手机自带隧道与中继 Worker 均不可达。<br>请确认手机在线 (本控台仍可远程操控手机), 待隧道恢复后重试。";
+      if(msg==="no_proxy_endpoint") msg="未找到可达的反代端点 — 手机自带隧道与中继 Worker 此刻在本设备网络下均不可达。<br>" +
+        "说明: 页面渲染须经一个本设备能直达的 HTTP 反代(中继 Worker / 手机隧道); 控制面(P2P·ntfy mesh)走的是另一条线, 故「控台能远程操控手机、但页面打不开」属正常现象, 注入登录态也绕不开这层网络可达性。<br>" +
+        "处理: ① 确认手机在线后点「重试」(中继/隧道可能刚恢复); ② 若本设备无 VPN 且 *.workers.dev 被网络屏蔽, 请在手机端「公网穿透」配置一个本设备可直达的固定中继域名(自有域名命名隧道)后重开本链接。";
       if(t.ld){
         t.ld.innerHTML='<div class="er">网页内打开「'+host(url)+'」失败：<br>'+msg+
           '<br><br><span style="color:#6e7681">已留在本控台 · 不会离开此页</span></div>'+
