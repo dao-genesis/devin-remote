@@ -3944,6 +3944,69 @@ def lead(samples, horizon: float = 0.0, min_samples: int = 2) -> "dict | None":
             "px": px, "py": py, "horizon": horizon}
 
 
+def consensus_shift(votes, tol: float = 8.0, min_support: float = 0.5,
+                    min_votes: int = 4) -> "dict | None":
+    """Recover the dominant image translation (camera / world shift) from a bag
+    of noisy per-feature displacement ``votes``, refusing when no single shift
+    actually explains the scene (F265).
+
+    ``lead`` (F264) fits a velocity from one feature's history over *time*; this
+    is its spatial twin — it fuses *many* features at one instant into a single
+    global shift. Practice forced it. Panning a side-scroller (SuperTux), a
+    block-flow over the foreground reads, between two frames, a uniform world
+    translation — the scene has one depth, so geometrically one shift is right
+    (unlike FPS yaw's rotational, range-dependent flow, which F264 rejected a
+    global shift for). But the *measurement* is not clean: the repeating ice
+    texture makes each :func:`match_unique` vote land a tile-fraction off, and a
+    few blocks gross-mislock — so a plain mean is dragged toward the outliers
+    and a median lands in the empty gap *between* vote clusters (measured: a
+    real ~-26 px pan produced per-block votes spread -48..0 px with two stray
+    votes at +128 and -128; the median read -20 px but only 31 % of blocks lay
+    within a few px of it, so its confidence was unreadable). Nothing in the
+    floor turned a cloud of disagreeing displacement votes into one shift *with
+    a stated confidence*, nor refused when the votes had no agreement at all
+    (a scene transition / death frame / motion past the search window scatters
+    votes across the whole range with no dominant value).
+
+    ``votes`` is an iterable of ``(dx, dy)`` displacements (e.g. one per tracked
+    block); entries with a ``None`` component are dropped, so this pairs with
+    :func:`match_unique`'s honest misses without the caller stitching gaps. The
+    dominant shift is the ``(dx, dy)`` with the most votes within ``tol`` pixels
+    (Chebyshev) of it — a coarse 2-D translation mode / Hough vote — refined to
+    the mean of those inliers. ``tol`` should be on the order of the locate
+    noise / feature spacing (a tile, here). Returns ``None`` when fewer than
+    ``min_votes`` valid votes survive or the best shift's support (inlier
+    fraction) is below ``min_support`` — the flow-domain analog of
+    ``match_unique``'s margin gate: report a shift only when one shift commands
+    a majority. Otherwise returns ``{dx, dy, support, inliers, n, tol}``:
+    ``dx``/``dy`` the refined shift, ``support`` the inlier fraction in
+    ``[0, 1]``, ``inliers`` their count, ``n`` total votes considered."""
+    pts = [(float(dx), float(dy)) for (dx, dy) in votes
+           if dx is not None and dy is not None]
+    n = len(pts)
+    if n < min_votes:
+        return None
+    best_idx = 0
+    best_count = -1
+    for i, (cx, cy) in enumerate(pts):
+        c = 0
+        for (dx, dy) in pts:
+            if abs(dx - cx) <= tol and abs(dy - cy) <= tol:
+                c += 1
+        if c > best_count:
+            best_count, best_idx = c, i
+    cx, cy = pts[best_idx]
+    inliers = [(dx, dy) for (dx, dy) in pts
+               if abs(dx - cx) <= tol and abs(dy - cy) <= tol]
+    support = len(inliers) / n
+    if support < min_support:
+        return None
+    mx = sum(p[0] for p in inliers) / len(inliers)
+    my = sum(p[1] for p in inliers) / len(inliers)
+    return {"dx": mx, "dy": my, "support": support,
+            "inliers": len(inliers), "n": n, "tol": tol}
+
+
 _OCR_ENGINE: "str | None" = None
 
 # Content-addressed OCR cache (F238). tesseract is spawned as a subprocess per

@@ -9351,3 +9351,77 @@ single time instant (no time base), and below `min_samples`; `horizon=0` predict
 the last point exactly; two-sample and negative/2-D velocities correct. 18
 assertions; all twenty-two floor friction tests pass (F264 plus the prior
 twenty-one), no regressions.
+
+## F265 — `consensus_shift`: one shift from a cloud of disagreeing votes
+
+**反者道之动 (reverse the motion) — a new game to test the old hypothesis.** F264
+rejected a global `estimate_shift` because FPS yaw is a *rotational* flow field
+(near walls slide fast, the far end barely) — no single translation fits it. But
+that rejection was about FPS geometry, not about the idea of a global shift. The
+honest move was not to bury the idea but to take it to a world where the camera
+motion genuinely *is* a single translation: a side-scroller. So F265 left the FPS
+and ran Tux right through a SuperTux ice level, where the camera-follow slides the
+whole world — one depth, one plane — under the view. There a per-block flow
+*should* read one uniform shift, and the hypothesis F264 couldn't honour in FPS
+gets its fair test.
+
+**The hypothesis half-held — and broke on measurement, not geometry.** Panning
+SuperTux, the world shift between two frames truly is one translation (measured:
+a clean −19 px/frame slide, all in x, none in y — exactly the side-scroller
+prediction). But recovering it from a block-flow is *not* clean. The repeating ice
+texture is the F263 trap in the flow domain: every block has near-identical
+periodic neighbours, so each `match_unique` vote lands a tile-fraction off the
+true shift, and a handful of blocks gross-mislock to the wrong tile entirely. The
+result is a **bag of disagreeing votes**, not a value. Standing perfectly still,
+an *ungated* `match_template` block-flow fabricated a confident −32 px shift at
+2 % internal agreement — the aliasing inventing motion where there is none. Even
+gated, a real −19 px pan produced per-block votes whose plain median read −16 px
+but with only **33 % of blocks within a pixel of it**; another frame's median read
+−22 px at **15 %** agreement. The median always returns *a number*; it cannot say
+that the number is meaningless.
+
+**Friction (what no floor verb did).** Nothing turned a cloud of displacement
+votes into one shift *with a stated confidence*, and nothing **refused** when the
+votes had no agreement at all (a scene cut, a death frame, motion past the search
+window scatters votes across the whole range with no dominant value). `match_unique`
+(F263) gates a *single* feature's match by best-vs-rival margin; this is its
+spatial-aggregate twin — gate the *fusion of many* features by how many agree.
+
+**Solution.** `consensus_shift(votes, tol=8.0, min_support=0.5, min_votes=4)` —
+the spatial dual of `lead` (F264 fits one feature's velocity over *time*; this
+fuses *many* features at one instant into one shift). It finds the `(dx, dy)` with
+the most votes within `tol` (Chebyshev) of it — a coarse 2-D translation mode /
+Hough vote — and refines to the mean of those inliers. It returns `None` when
+fewer than `min_votes` survive or the best shift's **support** (inlier fraction)
+is below `min_support`: report a shift only when one shift commands a majority,
+the flow-domain analog of `match_unique`'s margin gate. Votes with a `None`
+component (a block the matcher refused) are dropped, so it pairs with
+`match_unique`'s honest misses without the caller stitching gaps. It returns
+`{dx, dy, support, inliers, n, tol}` — the shift *and* the confidence the median
+could not state.
+
+**Lesson (architecture).** The floor's certainty verbs now come in two scales.
+`match_unique` asks "is *this one* match trustworthy?" (margin over the rival).
+`consensus_shift` asks "do *these many* measurements agree on one answer?"
+(support over the bag). Both refuse rather than fabricate — the recurring shape of
+this whole arc: a verb that knows when it does not know. And the F264 reversal is
+completed honestly: the global-shift idea was right, just mis-homed; it belongs to
+translational cameras (side-scrollers, map pans, scroll views, drag-to-pan
+canvases), not rotational ones, and even there it needs a dominance gate to
+survive periodic texture.
+
+**Proof.** *Live, SuperTux* (`_game_f265.py`): standing still, the ungated
+block-flow fabricates a −32 px shift at 2 % agreement while `consensus_shift`
+returns `None` (no majority) and the gated flow returns ~0 px at 95 % support;
+running right under real camera-follow, across five frames the naive median reads
+−16/−22/−24/−20/−24 px at only 15–33 % agreement every time, while
+`consensus_shift` recovers −19.3 px at **100 %** support (0 outliers), −35.8 px at
+62 % (rejecting 10 mislock votes), −33.9 px at 70 %, −26.6 px at 90 %, and on the
+fifth — a genuine scatter frame — honestly returns `None`. *Synthetic*
+(`_test_f265.py`, no display): exact recovery and full support on unanimous votes;
+recovery of a clustered shift while a plain mean is dragged toward gross outliers;
+the real SuperTux dt≈110 ms vote histogram resolved to the ~−26 px pan at majority
+support; ~zero with high support standing still; refusal on scattered votes with
+no dominance, on too few votes, and on all-`None` votes; `None` components dropped;
+input/argument hygiene. 21 assertions; all twenty-three floor friction tests pass
+(F265 plus the prior twenty-two), no regressions.
