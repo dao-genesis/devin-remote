@@ -9286,3 +9286,68 @@ match at a high threshold; a locality `search` window around one copy makes it u
 again; a search smaller than the patch finds nothing; a coarse `step` still locates;
 and `min_margin` outside `[0, 1)` raises. All twenty-one floor friction tests pass
 (F263 plus the prior twenty), no regressions.
+
+---
+
+## F264 — `lead`: aim where the target is going, not where it has been
+
+**Friction (the one I predicted at F262, finally reached by practice).** `servo`
+relocates every step, then actuates toward where it *just* found the feature. For
+a still target that is exact; for a moving one it is forever one frame behind —
+it converges on the trail, never the target. I had named this at F262 ("目标在动 →
+需要预测/提前量") and detoured through F263; F264 is where I actually measured it.
+
+**A negative first (反者道之动).** My first guess for the moving-target wall was
+*egomotion*: when the camera turns, frame-differencing (`locate_change_blobs`)
+should drown in self-motion. It does — a still frame diffs at 4.5 % of pixels
+(the software-GL noise floor), but a small camera turn jumps to 18–25 % and
+`locate_change_blobs` shatters into **98 phantom regions**. So I reached for an
+`estimate_shift` primitive (median block displacement → compensate the global
+slide). Practice refused it: panning the view, a grid of tracked blocks scattered
+−34..+20 px in x and −36..+42 px in y, and compensating by the median shift barely
+moved the diff (0.168 → 0.112). FPS yaw is **not** a global translation — it is a
+rotational/perspective flow field (near walls slide fast, the far end barely), so
+a single-shift model is the wrong model, and the floor's `wait_until_stable`
+already covers the honest workaround (diff only when the view is at rest). I threw
+the shift primitive away rather than ship a clever thing that doesn't hold —
+前識者，道之華也. The egomotion probe's real yield was negative knowledge, and the
+narrower, truer friction underneath it: the lag itself.
+
+**Solution.** `lead(samples, horizon=0.0, min_samples=2)` — it turns a short
+history of `(t, x, y)` locations (each typically a `match_unique` /
+`locate_change_blobs` hit) into an image-plane **velocity** and a predicted lead
+point. Velocity is the least-squares slope of `x(t)` and `y(t)` (optimal for the
+zero-mean matcher jitter, and it down-weights a single bad locate instead of
+trusting the last pair); observations whose `x`/`y` is `None` — a frame the locate
+refused or lost — are skipped, so it pairs directly with `match_unique`'s honest
+`None` with no gap-stitching by the caller. It returns
+`{vx, vy, speed, x, y, t, n, px, py, horizon}`, where `(px, py) = (x + vx·horizon,
+y + vy·horizon)` is the point to feed `servo`/`move_rel` so the actuator targets
+the **interception**, not the trail. The model is constant-velocity by design —
+honest only over the short horizon a relocating loop predicts into, which is the
+only horizon it needs.
+
+**Lesson (architecture).** Every perception verb the floor had answered a question
+about *now*: where a feature is (`match_unique`), what changed (`locate_change`),
+whether motion has stopped (`wait_until_stable`). None held a belief *across* time.
+`lead` is the floor's first **temporal estimator** — the smallest such belief, a
+constant velocity — and the natural completion of the closed loop: `react_pixel`
+says *when*, `move_rel` says *how much*, `servo` measures its own *gain*,
+`match_unique` measures its own *certainty*, and `lead` measures the target's own
+*motion* so the loop can aim ahead of it. It sits under any "click/track the moving
+thing" task — a dragged window, a scrolling row, a cursor, a bot — none of which a
+now-only locator can lead.
+
+**Proof.** *Live, OpenArena* (`_game_f264.py`): panning a wall feature at a steady
+rate, `match_unique` tracks it frame to frame while `lead` fits a velocity of
+~45 px/s; one-step-ahead prediction errs **24.0 px** under the "assume it stays"
+model (servo's implicit one) versus **10.5 px** with `last + v·dt` — and the fit
+absorbs a single mis-located frame (one sample jumped 38 px and back) without
+chasing it. *Synthetic* (`_test_f264.py`, no display): exact velocity and
+prediction recovery on a clean constant-velocity track; lead beats "assume-stays"
+on a jittered track in the motion-dominates-noise regime practice measured; `None`
+rows are skipped and only valid points counted; refusal on too few points, on a
+single time instant (no time base), and below `min_samples`; `horizon=0` predicts
+the last point exactly; two-sample and negative/2-D velocities correct. 18
+assertions; all twenty-two floor friction tests pass (F264 plus the prior
+twenty-one), no regressions.

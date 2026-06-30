@@ -3886,6 +3886,64 @@ def match_unique(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
                       if rival else None)}
 
 
+def lead(samples, horizon: float = 0.0, min_samples: int = 2) -> "dict | None":
+    """Estimate a tracked point's image-plane velocity and predict where it
+    will be after ``horizon`` seconds (F264).
+
+    ``servo`` (F262) drives a *located* feature onto a target, relocating each
+    step — but every step it aims at where the feature *was* when it last
+    looked. For a still target that is fine; for a moving one it is always a
+    step behind. Practice measured it: panning a wall feature across the view
+    at ~27 px/s, predicting the next frame by "assume it stays" (servo's
+    implicit model) erred 15 px, while ``last + v·dt`` erred 2.9 px — the lag
+    is one whole inter-frame displacement, and it is exactly the displacement a
+    velocity estimate removes. Nothing in the floor turned a short history of
+    locations into a *velocity*, so nothing could aim where the target is
+    going rather than where it has been.
+
+    ``samples`` is a sequence of ``(t, x, y)`` observations — ``t`` in seconds
+    (any common origin), ``x``/``y`` in pixels, typically the centre of each
+    :func:`match_unique` / :func:`locate_change_blobs` hit. Entries whose ``x``
+    or ``y`` is ``None`` (a frame where the locate refused or lost the target)
+    are skipped, so this pairs directly with the honest ``None`` of
+    ``match_unique`` without the caller stitching gaps. Velocity is the
+    least-squares slope of ``x(t)`` and ``y(t)`` — optimal for the zero-mean
+    locate jitter the matcher leaves and naturally down-weighting a single
+    noisy sample, rather than trusting the last pair alone.
+
+    Returns ``None`` when fewer than ``min_samples`` valid points survive or
+    every sample shares one instant (no time base to differentiate). Otherwise
+    returns ``{vx, vy, speed, x, y, t, n, px, py, horizon}``: ``vx``/``vy`` px/s,
+    ``x``/``y``/``t`` the latest observation, ``n`` points used, and ``px``/``py``
+    the predicted *lead* point ``(x + vx·horizon, y + vy·horizon)`` — feed that
+    to :func:`servo`/:func:`move_rel` as the aim point so the actuator targets
+    the interception, not the trail. The model is constant-velocity (no
+    acceleration): honest only out to roughly the horizon over which the
+    target's motion stays straight — a step or few frames, which is the regime
+    a relocating loop actually predicts into."""
+    if min_samples < 2:
+        min_samples = 2
+    pts = [(float(t), float(x), float(y)) for (t, x, y) in samples
+           if x is not None and y is not None]
+    if len(pts) < min_samples:
+        return None
+    n = len(pts)
+    tm = sum(p[0] for p in pts) / n
+    xm = sum(p[1] for p in pts) / n
+    ym = sum(p[2] for p in pts) / n
+    stt = sum((p[0] - tm) ** 2 for p in pts)
+    if stt <= 0.0:
+        return None
+    vx = sum((p[0] - tm) * (p[1] - xm) for p in pts) / stt
+    vy = sum((p[0] - tm) * (p[2] - ym) for p in pts) / stt
+    t_last, x_last, y_last = pts[-1]
+    px = x_last + vx * horizon
+    py = y_last + vy * horizon
+    return {"vx": vx, "vy": vy, "speed": (vx * vx + vy * vy) ** 0.5,
+            "x": x_last, "y": y_last, "t": t_last, "n": n,
+            "px": px, "py": py, "horizon": horizon}
+
+
 _OCR_ENGINE: "str | None" = None
 
 # Content-addressed OCR cache (F238). tesseract is spawned as a subprocess per
