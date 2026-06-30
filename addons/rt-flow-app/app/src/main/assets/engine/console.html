@@ -583,14 +583,33 @@
   //   故不会落入此列; 而 P2P/ntfy 中继档的 role"q" 413 纯文本是合法应答, 走 _dead(宽松)不经本判定 → 不误杀。
   function _deadEndpoint(res){ if(_dead(res)) return true;
     return !!(res && res.status>=400 && res.body && res.body.error==="bad_json"); }
+  // ── 候选探活: 并发探所有候选, 但「按优先级取第一个活的」与旧串行 go() 结果逐字节一致 ──────
+  //   提速根因(用户「网页穿透慢/转圈」之一): 旧串行对每个候选挨个 6s 探活 —— 当高优候选是**已失效/被墙
+  //   而非快速 5xx 的隧道**(探活挂到超时), 多个这类候选叠加 = N×6s 才轮到那个活的。无 VPN 设备尤甚
+  //   (缓存的旧设备隧道域名大多探活挂死)。改为一次性并发全部候选, 谁先回不重要 —— 只认「下标最小的活候选」:
+  //   一旦它之前的候选都已判定(死)且它自己判活即立即返回 → 等待时间从「Σ各候选」降到「到首个活候选为止的最慢一个」,
+  //   且**选中的端点与串行完全相同**(严格保持 直连>Worker>origin 优先级·绝不因并发先到而降级到 Worker)。
+  function _probeOrdered(bases){
+    var n=bases.length; if(!n) return Promise.resolve(null);
+    return new Promise(function(resolve){
+      var st=new Array(n), done=false;   // st[i]: undefined=探活中, true=活, false=死
+      function decide(){
+        for(var i=0;i<n;i++){ if(st[i]===undefined) return;   // 更高优候选仍未定 → 暂不能定夺(保序)
+          if(st[i]===true){ done=true; return resolve(bases[i]); } }
+        done=true; resolve(null);   // 全部判死
+      }
+      bases.forEach(function(b,i){
+        _relayAt(b, "/api/rpc", {cmd:"getState"}, 6000).then(function(res){
+          if(done) return; st[i]=!_deadEndpoint(res); decide();
+        }, function(){ if(done) return; st[i]=false; decide(); });
+      });
+    });
+  }
   var _resolving=null;
   function _resolveLive(){
     if(_resolving) return _resolving;
     var bases=_candBases();
-    _resolving=(function go(i){ if(i>=bases.length) return Promise.resolve(null);
-      return _relayAt(bases[i], "/api/rpc", {cmd:"getState"}, 6000)
-        .then(function(res){ return _deadEndpoint(res)?go(i+1):bases[i]; }, function(){ return go(i+1); });
-    })(0).then(function(found){ _resolving=null;
+    _resolving=_probeOrdered(bases).then(function(found){ _resolving=null;
       if(found){ if(found!==ENDPOINT){ ENDPOINT=found; persist(); }
         try{ localStorage.setItem("rtflow.rn.endpoint.good", found); }catch(e){} }
       return found;

@@ -443,6 +443,39 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     ok(res && res.status === 413, "Y 中继档 413 纯文本(4xx+非JSON)仍原样透出, 不被 _deadEndpoint 误杀");
   }
 
+  // 场景 Z (提速·并发探活仍严格保序): _resolveLive 改为并发探所有候选(提速: 高优候选探活挂死时不再 N×6s 串等),
+  //   但「选中端点」必须与旧串行逐字节一致 —— 严格 直连>Worker>origin。本场景让 Worker(低优)秒回、直连(高优)
+  //   延迟回, 验证绝不因 Worker 先到就降级选它, 而是等高优直连判活后选直连。
+  {
+    function delayedFetch(routes, counter) {
+      return function (url) {
+        const base = String(url).replace(/\/relay\/.*$/, "");
+        counter.total++; counter.byBase[base] = (counter.byBase[base] || 0) + 1;
+        const r = routes[base];
+        return new Promise((resolve, reject) => {
+          const act = () => {
+            if (!r) { resolve({ status: 200, ok: true, text: () => Promise.resolve(JSON.stringify({ ok: true })) }); return; }
+            if (r.reject) { reject(new Error("network")); return; }
+            resolve({ status: r.status, ok: r.status < 400, text: () => Promise.resolve(typeof r.body === "string" ? r.body : JSON.stringify(r.body || {})) });
+          };
+          if (r && r.delay) setTimeout(act, r.delay); else act();
+        });
+      };
+    }
+    const counter = { total: 0, byBase: {} };
+    const SLOW = "https://slow-direct.lhr.life";
+    const routes = {
+      "https://dead.trycloudflare.com": { status: 530, body: "<h1>1033</h1>" },  // 高优直连·快速死
+      [SLOW]: { status: 200, body: { ok: true, via: "direct" }, delay: 40 },      // 次优直连·活但慢回
+      [WORKER]: { status: 200, body: { ok: true, via: "worker" } },               // Worker·活且秒回(先到)
+    };
+    const ls = makeLocalStorage(); ls.setItem("rtflow.rn.endpoints.direct", JSON.stringify([SLOW]));
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://dead.trycloudflare.com", fetch: delayedFetch(routes, counter), localStorage: ls, location: { origin: "https://dead.trycloudflare.com", protocol: "https:" } }));
+    const res = await mod.relay("/api/rpc", { cmd: "getState" }, 5000);
+    ok(res.status === 200 && res.body && res.body.via === "direct", "Z 并发探活严格保序: 选中高优直连(慢回), 不被先到的 Worker 抢占");
+    ok(mod.getEndpoint() === SLOW, "Z ENDPOINT 切到高优直连(非先响应的 Worker), 实际 " + mod.getEndpoint());
+  }
+
   // 场景 J (回归护栏): 主 IIFE 必须在使用前声明 CFG —— 防 PR#547 式 strict ReferenceError 崩整页。
   {
     const fIdx = src.indexOf("__FAILOVER_START__");
