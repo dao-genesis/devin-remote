@@ -275,7 +275,7 @@ function _findVscdb() {
   }
   return candidates[candidates.length - 1]; // fallback
 }
-const PB_DIR = _findPbDir();
+let PB_DIR = _findPbDir(); // v9.3: 可重解析 · cascade 目录稍后才出现时自动续接
 const VSCDB = _findVscdb();
 // v12.9-wam: 日志/状态全部写入 ~/.wam/stuck-detect/ (不再用 __dirname · 插件目录可能只读)
 const WAM_STUCK_DIR = path.join(os.homedir(), ".wam", "stuck-detect");
@@ -1222,6 +1222,15 @@ function _loadBackupTitles() {
 function scan() {
   const t = nowMs();
 
+  // v9.3 · cascade .pb 目录稍后才出现 (用户首次用 Cascade) → 每 tick 重解析续接
+  if (!fs.existsSync(PB_DIR)) {
+    const _re = _findPbDir();
+    if (_re !== PB_DIR && fs.existsSync(_re)) {
+      log(`PB_DIR 重解析 → ${_re} (cascade 目录已出现 · 自动续接监控)`);
+      PB_DIR = _re;
+    }
+  }
+
   // SOURCE 1: 刷新 vscdb 会话元数据
   refreshVscdb();
 
@@ -1230,7 +1239,8 @@ function scan() {
   try {
     pbFiles = fs.readdirSync(PB_DIR).filter((f) => f.endsWith(".pb"));
   } catch (e) {
-    log(`SCAN_ERR pb_dir: ${e.message}`);
+    // v9.3 · 目录缺失是预期态 (cascade 未启用) · 静默待命, 不刷屏; 仅非 ENOENT 才记
+    if (e && e.code !== "ENOENT") log(`SCAN_ERR pb_dir: ${e.message}`);
     return null;
   }
 
@@ -2724,10 +2734,12 @@ function main() {
     // 闸门失败不阻塞启动 · 道法自然 · 兜不住就让它跑
   }
 
-  // 验证 .pb 目录
+  // v9.3 · cascade .pb 目录可能尚未出现 (非 Windsurf / Devin Desktop / 全新装 ·
+  //   用户首次使用 Cascade 前该目录恒不存在)。旧逻辑此处 FATAL exit(1) → 监工 5s
+  //   重启 → 无限崩溃重启刷屏。道法自然: 不存在则空转待命, 每个 scan tick 重解析,
+  //   目录一出现即自动续接监控 (scan() 已对缺目录返 null · 全程无害)。
   if (!fs.existsSync(PB_DIR)) {
-    console.error(`FATAL: .pb 目录不存在: ${PB_DIR}`);
-    process.exit(1);
+    log(`WAIT: .pb 目录暂不存在: ${PB_DIR} · 空转待命 · 出现即自动续接 (非致命)`);
   }
 
   // 验证 vscdb

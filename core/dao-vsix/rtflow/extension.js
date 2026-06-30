@@ -9223,7 +9223,7 @@ async function loginAccount(store, idx) {
   if (!dl.ok) {
     log("  devinLogin ✗ " + (dl.error || "?"));
     _bumpFailure(store, acc.email, "devin: " + (dl.error || "?"));
-    return { ok: false, stage: "devinLogin", error: dl.error };
+    return { ok: false, stage: "devinLogin", error: dl.error, status: dl.status, retryAfterSec: dl.retryAfterSec };
   }
   const pa = await windsurfPostAuth(dl.auth1);
   if (!pa.ok) {
@@ -14473,6 +14473,10 @@ class Engine {
     // v2.1.2 · 善行无辙迹 · 无活跃会话时主动 rotate (而非死等)
     // 触发条件: 有账号 · 有可用候选 · 距上次 rotate > 60s (避免抖动)
     if (!this.store.activeEmail || !this.store.activeApiKey) {
+      // v3.1.4 · 限速窗口内不主动 rotate · 与 prewarm/devinLogin 同源让位
+      //   全池共享同一限速窗口 → 窗口内任何 login 必返 rate-limit-window
+      //   仍每 tick rotate 只会空转刷屏 (no-active churn) · 窗口内整体让位至窗口结束
+      if (Date.now() < _devinLoginRateLimitedUntil) return;
       const sinceRotate = Date.now() - (this.store.lastRotateAt || 0);
       if (
         this.store.accounts.length > 0 &&
@@ -14883,6 +14887,11 @@ class Engine {
         } else if (sr.error && /登录失败/.test(sr.error)) {
           log(tag + " FAIL#" + _retry + ": " + sr.error + " — 尝试下一个");
           continue;
+        } else if (sr.error === "rate-limit-window" || sr.status === 429) {
+          // v3.1.4 · 命中限速窗口 → 全池共享窗口 · 3s 重试必再命中 · 立即让位 (止 churn)
+          log(tag + " FAIL: " + (sr.error || "rate-limit") + " · 限速让位·不重试");
+          _predictiveCandidate = -1;
+          break;
         } else {
           // 注入失败 → 短暂等待后重试
           if (_retry < 2) {
