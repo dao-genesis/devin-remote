@@ -2,11 +2,12 @@
 
 gnome-sudoku draws its 9x9 grid on a custom widget: AT-SPI exposes the toolbar
 buttons but *not* the 81 cells or their digits, so the board is read purely by
-vision. The cold-start reader ``osctl.ocr_text`` (tesseract) lifts each given
-digit; the grid geometry is recovered from the four heavy 3x3 box-border lines
-the board draws (no hard-coded pixels). Solve with backtracking, then drive the
-empties back in with ``click`` + ``type_unicode``. The hybrid games demand:
-AT-SPI to find the window, pixels for the board, synthetic input to play.
+vision. The grid geometry is recovered by ``osctl.detect_grid`` scoped to the
+Sudoku window rect (``window_geometry`` -- no hard-coded screen pixels, robust
+to any window size/position), then ``osctl.ocr_grid`` lifts the givens off the
+detected ``xs``/``ys`` edges in one ink-gated pass. Solve with backtracking, then
+drive the empties back in with ``click`` + ``type_unicode``. The hybrid games
+demand: AT-SPI to find the window, pixels for the board, synthetic input to play.
 
 Two readout lessons that matter for any self-drawn fixed-font glyph grid:
   * feed tesseract the *greyscale* crop, never a hard 1-bit threshold -- the
@@ -21,7 +22,6 @@ import sys, time, copy
 sys.path.insert(0, '.')
 import osctl
 
-DARK = 100          # grid-line / glyph luma threshold
 W = H = 0
 RGB = b''
 
@@ -43,70 +43,53 @@ def _ensure_started():
                 return
 
 
-def _lum(x, y):
-    i = (y * W + x) * 3
-    return (RGB[i] * 299 + RGB[i + 1] * 587 + RGB[i + 2] * 114) // 1000
-
-
-def _runs(vals, gap=3):
-    """Collapse a sorted list of coords into the centres of contiguous runs."""
-    out, cur = [], [vals[0]]
-    for v in vals[1:]:
-        if v - cur[-1] <= gap:
-            cur.append(v)
-        else:
-            out.append((cur[0] + cur[-1]) // 2)
-            cur = [v]
-    out.append((cur[0] + cur[-1]) // 2)
-    return out
-
-
 def detect_board():
-    """Find board origin + cell size from the heavy 3x3 box-border lines.
-
-    The thin per-cell separators are light grey; only the four box borders are
-    dark across the whole board, so a 'mostly dark over the board span' column /
-    row test isolates exactly the bounding 4 verticals + 4 horizontals."""
-    _grab()
-    # coarse board bbox: any dark pixel cluster near screen centre
-    ys = range(280, 920, 2)
-    cols = [x for x in range(420, 1160)
-            if sum(1 for y in ys if _lum(x, y) < DARK) > 180]
-    xs = range(480, 1100, 2)
-    rows = [y for y in range(280, 920)
-            if sum(1 for x in xs if _lum(x, y) < DARK) > 180]
-    vx, hy = _runs(cols), _runs(rows)
-    if len(vx) < 4 or len(hy) < 4:
-        raise RuntimeError(f"board borders not found: vx={vx} hy={hy}")
-    x0, x1 = vx[0], vx[-1]
-    y0, y1 = hy[0], hy[-1]
-    return x0, y0, (x1 - x0) / 9.0, (y1 - y0) / 9.0
+    """Locate the 9x9 lattice with the floor's detect_grid, scoped to the
+    gnome-sudoku window rect -- no hard-coded screen pixels, so it survives the
+    window being moved or the board drawn at any size. Returns the detect_grid
+    dict (bbox + true xs/ys edges)."""
+    win = next((w['id'] for w in osctl.list_windows()
+                if (w.get('title') or '') == 'Sudoku'), None)
+    if win is None:
+        raise RuntimeError("Sudoku window not found")
+    geom = osctl.window_geometry(win)
+    if not geom:
+        raise RuntimeError("no window geometry for Sudoku window")
+    # search the window interior, below the ~44px header bar
+    search = (geom['x'], geom['y'] + 44, geom['x'] + geom['w'], geom['y'] + geom['h'])
+    grid = osctl.detect_grid(search)
+    if not grid or grid['cols'] != 9 or grid['rows'] != 9:
+        got = grid and (grid['cols'], grid['rows'])
+        raise RuntimeError(f"board lattice not 9x9: {got}")
+    return grid
 
 
 class Board:
     def __init__(self):
-        self.x0, self.y0, self.cw, self.ch = detect_board()
+        g = detect_board()
+        self.bbox, self.xs, self.ys = g['bbox'], g['xs'], g['ys']
 
     def center(self, r, c):
-        return int(self.x0 + self.cw * (c + 0.5)), int(self.y0 + self.ch * (r + 0.5))
-
-    def _dark(self, r, c, m=20):
-        cx, cy = self.center(r, c)
-        return sum(1 for yy in range(cy - m, cy + m) for xx in range(cx - m, cx + m)
-                   if _lum(xx, yy) < 110)
-
-    def read_cell(self, r, c):
-        if self._dark(r, c) < 20:
-            return 0
-        cx, cy = self.center(r, c)
-        t = osctl.ocr_text(region=(cx - 24, cy - 24, 48, 48), whitelist='123456789',
-                           psm=6, scale=4, rgb=RGB, size=(W, H))
-        d = ''.join(ch for ch in t if ch.isdigit())
-        return int(d[0]) if d else 0
+        return ((self.xs[c] + self.xs[c + 1]) // 2,
+                (self.ys[r] + self.ys[r + 1]) // 2)
 
     def read(self):
+        """Read the 9x9 board in one ink-gated pass via osctl.ocr_grid off the
+        detected xs/ys edges: the gate leaves blanks empty (no empty-cell
+        hallucination, no wasted OCR) and only the givens reach tesseract,
+        whitelisted to digits in psm=6 (F251)."""
         _grab()
-        return [[self.read_cell(r, c) for c in range(9)] for r in range(9)]
+        grid = osctl.ocr_grid(self.bbox, 9, 9, rgb=RGB, size=(W, H),
+                              xs=self.xs, ys=self.ys,
+                              whitelist='123456789', psm=6, scale=4)
+        out = []
+        for row in grid:
+            line = []
+            for s in row:
+                d = ''.join(ch for ch in s if ch.isdigit())
+                line.append(int(d[0]) if d else 0)
+            out.append(line)
+        return out
 
 
 def _ok(g, r, c, v):

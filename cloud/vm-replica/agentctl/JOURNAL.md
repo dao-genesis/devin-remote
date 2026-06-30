@@ -8443,3 +8443,188 @@ delta-tracked board matches a fresh full ground-truth read **0/64 mismatches** �
 the saving is from not redoing unchanged work, not from missing changes. (The
 solver still hits the round cap without a full clear; convergence is solver logic,
 not a floor gap — F250 is purely about not re-reading what didn't move.)
+
+---
+
+> 大制不割。 A board is read whole, in one capture, in one verb — not re-derived
+> cell by cell by every caller who happens upon a lattice of glyphs.
+
+## F251 — ocr_grid: read a glyph lattice into a 2D array, ink-gated
+
+Exercising games live to find the next friction, the first move was the obvious
+one: read the gnome-sudoku board. Two ways failed in instructive ways. Whole-
+board `ocr_text` on the 9x9 returned `''` — tesseract will not segment a sparse
+field of digits ruled by gridlines. So drop to per-cell. The *naive* per-cell
+loop (no whitelist, default psm) read the givens but **hallucinated**: empty
+grey cells came back as `"a"` (rows 1,2,5,7,8 each grew a stray glyph from the
+shaded-cell border), so the board mis-filled. The cure for *accuracy* was
+already known (F235: `whitelist='123456789'`, `psm=6`) and indeed read 81/81 —
+but only because the caller also hand-rolled an **ink gate** (skip a cell with
+too little dark ink) so empties never reach OCR, plus the geometry double-loop
+and the whitelist/psm/scale tuning. Grepping the floor's own players confirmed
+the smell: `_game_sudoku` and `_game_mines` *both* re-derive that exact triple
+(geometry loop + per-cell gate + whitelist/psm), each slightly differently.
+
+**New verb** `osctl.ocr_grid(bbox, cols, rows, rgb, size, inset, whitelist, psm,
+scale, invert, ink_tol, ink_min, xs, ys) -> [[str, ...], ...]` — the OCR grid
+that `sample_grid` (F247) is for colour. It divides the board with the *exact*
+`sample_grid`/`grid_changes` geometry and, for each cell, gates on ink before
+reading: it measures the central window and counts pixels whose luminance
+deviates from the window mean by more than `ink_tol`; a cell with fewer than
+`ink_min` such pixels is blank — returned `""` and **never sent to tesseract**.
+Only inked cells are OCR'd (with the given whitelist/psm/scale/invert). Two
+losses cut (損之又損): the empty-cell hallucination is gone (a blank is decided
+by pixels, never by OCR), and the dominant cost on a sparse board is skipped
+(the F250 lesson — don't read what holds nothing — applied to OCR). The gate is
+polarity-agnostic (deviation from the cell's own mean fires for dark-on-light
+*and* light-on-dark), so it needs no `invert` to classify blankness.
+
+**Honest edge found while validating — why `xs`/`ys` exist.** First cut divided
+`bbox` into equal cells (the `sample_grid` convention) and read the live board at
+**78/81**: three mid-board `4`s came back blank. Not the gate (ink=213, far over
+threshold) and not OCR (the same crop off `detect_grid`'s real edges read `'4'`).
+It was *drift*: a real board's pitch is not perfectly uniform — the heavy 3x3
+rules make some columns a pixel wider — and where colour sampling shrugs that off,
+an OCR crop does not; two pixels of accumulated offset shifts a mid-board crop
+onto the cell edge, clips the glyph, and psm=6 then reads nothing. So `ocr_grid`
+also takes the exact `xs`/`ys` line positions `detect_grid` already returns and,
+when given, crops each cell on its true `[xs[c], xs[c+1]]` box. With them the live
+board read **81/81**. The intended pipeline is therefore
+`g = detect_grid(...); ocr_grid(g['bbox'], g['cols'], g['rows'], xs=g['xs'], ys=g['ys'], ...)`.
+
+**Proof.** *Synthetic* (`_test_f251.py`, no display, no tesseract — `ocr_text`
+is stubbed to a recorder): only inked cells are read and blanks are `""` with
+OCR never called on them; the gate is polarity-agnostic (light-on-dark trips it)
+and honours `ink_tol`/`ink_min` (a sub-tol mark stays blank); the gated set
+equals the cells `sample_grid` sees as non-background; with uneven `xs`/`ys` the
+crop handed to OCR sits inside the *true* cell, not the uniform split; args
+validated (bad cols/rows/inset/ink_min, wrong `xs`/`ys` length, rgb-without-size).
+*Live* (gnome-sudoku Easy): `ocr_grid` off `detect_grid`'s edges read the board
+**81/81, 0 hallucinations**, in 1.24s vs 1.7s for the read-every-cell loop
+(~60 empties skipped).
+
+### F251 end-to-end payoff (sudoku player wired to ocr_grid)
+
+Rewrote `_game_sudoku`'s `Board.read` — previously a `read_cell`/`_dark`
+double-loop — to one `ocr_grid` call off the detected `xs`/`ys`, deleting the
+hand-rolled gate and per-cell OCR plumbing. Driven live: the floor read the Easy
+board 81/81, solved it by backtracking, drove the 54 empties back in with
+`click`+`type_unicode`, and gnome-sudoku put up **"Well done, you completed the
+puzzle in 9 minutes!"** — a full board read → solve → fill round through the
+floor, with the glyph-lattice read now a single primitive any grid game shares.
+
+**Negatives recorded the same session (no verb earned).** Two suspected
+frictions were chased and *cleared*, which is itself the point of exercising
+live. (1) **drag on GTK4 DnD**: gnome-tetravex moved a tile only every *other*
+identical drag (a clean 3/6 alternation). Instrumented `mouse_state` (button
+never stuck), tried hover-settle, nudge-onto-source, dwell-at-target, and a 2.5s
+inter-drag settle — all still 3/6. The decider: the system's own `xdotool` drag
+alternates **3/6 identically**, so the floor's `drag` is on par with the
+reference X11 injector and the alternation is tetravex's DnD semantics, not a
+floor gap — no fix made. (2) **detect_grid undercount**: it returned 8x8 for the
+9x9 sudoku, but only because the search box clipped the board's outer rule;
+widened to contain the border it returns 9x9 exactly (last line at x=880). Both
+are recorded so the next reader doesn't re-chase them.
+
+## F252 — classify_grid: read a lattice of sprites against a template library
+
+The next board exercised live was gnome-chess. Reading it broke every reader the
+floor had. Whole-board `ocr_text` reads nothing — the pieces are *vector glyphs*,
+not text. `sample_grid` (F247) sees a cell's mean colour and so tells *piece
+present and its shade* but **not its type**: the black back rank `R N B Q K B N R`
+sampled to luma `[56,37,92,56,69,79,44,49]` — rook `56` and queen `56` are
+*identical*, so colour cannot separate a rook from a queen. `ocr_grid` (F251) is
+the right shape but the wrong channel (there is no text to read). The only verb
+that keys on *appearance* was `match_template` (F053) — but it **locates one
+patch**, so reading 64 squares meant hand-rolling the per-cell loop: crop the
+cell, score it against every candidate sprite, take the argmin, and gate out the
+empties. That is the same orchestration `sample_grid`/`ocr_grid` already absorbed
+for colour and text, missing for sprites.
+
+**New verb** `osctl.classify_grid(bbox, cols, rows, templates, rgb, size, inset,
+ink_tol, ink_min, norm, empty_label, unknown_label, max_score, xs, ys) -> [[str,
+...], ...]` — the appearance grid that `sample_grid` is for colour and `ocr_grid`
+for text. It divides the board with the *exact* `sample_grid`/`ocr_grid` geometry
+(same `inset`, same clamping, optional `detect_grid` `xs`/`ys` edges, so the
+`[r][c]` indices line up one-to-one) and, for each cell: gates on ink exactly as
+`ocr_grid` does (a cell with fewer than `ink_min` pixels deviating more than
+`ink_tol` from its own mean is blank → `empty_label`, never scored), then
+resamples the cell to a fixed `norm`×`norm` luma signature and scores it against
+each `(label, patch, pw, ph)` template by **mean-absolute-difference per pixel**.
+The lowest mean-diff label wins. Templates are harvested once from a known frame
+(the chess start position gives all twelve pieces at known squares) with
+`crop_rgb`, then every later board is one call.
+
+**Two design points the live board forced out.** (1) **Shade-invariance via the
+shared `inset`.** First cut resampled the *whole* cell and scored raw luma → the
+checkerboard wrecked it (3/64): a bishop on a light square differs from a bishop
+harvested on a dark square mostly in *background shade*, and that swamps the SAD.
+The fix is to score only the **inset central window** — glyph-dominated, so the
+score keys on the sprite, not the square behind it — and to inset the *template*
+patch by the same fraction so the two windows are commensurate. With that the
+live start position read **0/64**. (2) **Size-invariance via the resample.** A raw
+SAD favours whichever sprite covers fewer pixels, and on an uneven `xs`/`ys` pitch
+no two cells are even the same size; resampling every cell *and* every template to
+one `norm`×`norm` grid makes the mean-diff comparable across templates and across
+unequal cells. (3) **`max_score` as a strictness knob.** The argmin always returns
+*some* label; when `max_score` is set and even the best mean-diff exceeds it the
+cell is `unknown_label` — so an off-nominal cell (a highlighted last-move square, a
+piece mid-animation) is *flagged*, not silently mislabelled.
+
+**Proof.** *Synthetic* (`_test_f252.py`, no display — `classify_grid` is
+self-contained pixel maths): a lattice of painted sprites is classified against a
+harvested library with blanks gated to `empty_label` and only placed cells
+labelled; the **shade-invariance** is asserted directly (the same sprite over a
+much darker background still matches the light-background template); `max_score`
+flags an off-library sprite as unknown yet a `None` threshold forces the nearest
+label; an uneven `xs`/`ys` pitch classifies off the true edges; args validated
+(bad cols/rows/inset/ink_min/norm, empty library, bad patch length, negative
+`max_score`, wrong `xs`/`ys` length, rgb-without-size). *Live* (gnome-chess):
+`classify_grid` off twelve start-position templates read the **full start board
+0/64 in 0.06s**, then — after the floor played `e2e4` by `click`+`click` and the
+engine replied `c7c5` — re-read the new position **perfectly** (e4 white pawn, c5
+black pawn, e2/c7 empty, 0 unknowns), proving it classifies an *arbitrary* board,
+not just the memorised start. With a tight `max_score=45` the just-moved
+highlighted `e4` square is correctly flagged `?`, the knob behaving as designed.
+
+### F251 follow-up — sudoku reader hardened onto detect_grid (kill the bespoke scan)
+
+**Friction.** Recording the floor play a *full* gnome-sudoku round surfaced a
+latent brittleness in the player, not the floor. `_game_sudoku.detect_board`
+hand-rolled its geometry: it scanned a **hard-coded screen rectangle**
+(`x 420..1160, y 280..920`) for the four heavy 3×3 box-border lines. That window
+was tuned to one particular launch position/size. On this VM the default board
+runs to `y≈1040` and a maximised board fills the screen — both fall outside the
+scan box, so `detect_board` raised `board borders not found` and the player could
+not even start. The reader was sound (`ocr_grid` reads the digits fine); the
+**locator** was the weak link, and its own docstring already *claimed* "no
+hard-coded pixels" — aspirational, not true.
+
+**Fix.** Delete the bespoke scan (`_lum`/`_runs`/`DARK` and the fixed ranges) and
+locate the lattice with the floor primitive built for exactly this — `detect_grid`
+— **scoped to the live window rect** from `window_geometry`: find the `Sudoku`
+window, take its interior (below the ~44px header), and let `detect_grid` return
+the true `bbox`/`xs`/`ys`. `Board` now reads off those detected edges (uneven
+pitch tolerated) and computes cell centres from `xs`/`ys` midpoints. The
+docstring's "no hard-coded pixels" is now *literally* true, and the reader
+survives the window being moved or resized.
+
+**Lesson (architecture).** Every game player that hand-rolls "find the board"
+geometry is a brittle re-implementation of `detect_grid`. The friction was not a
+missing verb — `detect_grid` already existed (F-series) — but a *caller* that
+predated it and never adopted it. Eating bespoke locators back into the primitive
+is the same flow→primitive consolidation as F250/F251, applied to the call site.
+One caller-side caveat worth recording: a search box that *clips* the board makes
+`detect_grid` return a smaller-but-valid lattice (a clipped top read 9×7 with no
+error), so the caller must hand it a generous, board-containing region — here the
+whole window interior — rather than a tight guess.
+
+**Proof.** *Live, default window*: the hardened reader detects `bbox=(511,312,
+1089,890)` 9×9 and reads **32/32 givens**, solver returns a complete solution.
+*Live, maximised window* (the exact case the old scan crashed on): detection now
+*adapts* — `bbox=(271,73,1328,1130)` 9×9 located, no crash (OCR at ~2× cell size
+drops a few, a separate accuracy matter; detection itself is robust). *End-to-end
+recording*: the floor read → solved → filled all **49 empty cells** via
+`click`+`type_unicode`, and gnome-sudoku put up **"Well done, you completed the
+puzzle in 4 minutes!"** — a complete autonomous round. All ten synthetic friction
+tests (F243–F252) still pass, no regressions.
