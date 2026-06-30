@@ -1923,6 +1923,112 @@ function isAppProxyPassthrough(route: string): boolean {
 }
 
 // ═══════════════════════════════════════════════════════════
+// 道 · 模型反代「单隧道直达」— 把 dao-proxy-pro 本源 Origin (/v1/* + /origin/revproxy/*)
+//   透明反代经本体公网隧道直达, 令用户在任意远程环境用网页对话台/标准 OpenAI 客户端
+//   调用与管理反代模型 (帛书「無有入於無間」)。本源 Origin 端口随实际监听而动, 经其
+//   发现文件 ~/.codeium/dao-byok/endpoint.json 软读 (不写死 8889/8985)。
+// ═══════════════════════════════════════════════════════════
+function revproxyOriginPort(): number {
+    try {
+        const home = process.env.USERPROFILE || process.env.HOME || '';
+        if (home) {
+            const f = path.join(home, '.codeium', 'dao-byok', 'endpoint.json');
+            const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+            const p = parseInt(j && j.port, 10);
+            if (p > 0 && p < 65536) return p;
+        }
+    } catch (e) { /* 守柔 · 缺省本源 Origin 端口 */ }
+    return 8889;
+}
+// 本源 Origin 自有 apiKey (~/.codeium/dao-byok/revproxy.json) — 隧道边界已以本体 token
+// 把关身份, 转发时换上 Origin 真钥, 令其放行 (远程用户只需持本体 token, 无需另知 Origin key)。
+function revproxyApiKey(): string {
+    try {
+        const home = process.env.USERPROFILE || process.env.HOME || '';
+        if (home) {
+            const f = path.join(home, '.codeium', 'dao-byok', 'revproxy.json');
+            const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+            if (j && typeof j.apiKey === 'string') return j.apiKey;
+        }
+    } catch (e) { /* 守柔 · Origin 未配 key 则空 (本机直放) */ }
+    return '';
+}
+// /origin/revproxy/* 全量 + /v1 标准推理面 (精确匹配, 不抢官网 SPA 其余根路径)
+function isRevproxyRoute(route: string): boolean {
+    if (route === '/origin/revproxy' || route.startsWith('/origin/revproxy/')) return true;
+    return route === '/v1/chat/completions' || route === '/v1/messages' || route === '/v1/models'
+        || route === '/v1/completions' || route === '/v1/embeddings';
+}
+// 网页对话台外壳页 (静态 HTML) 免 token — 令远程浏览器先打开页面, 再在页内填 Bearer 调 API。
+function isRevproxyConsoleShell(route: string): boolean {
+    return route === '/origin/revproxy' || route === '/origin/revproxy/'
+        || route === '/origin/revproxy/console' || route === '/origin/revproxy/空';
+}
+function forwardToRevproxyOrigin(route: string, url: URL, req: any, res?: any): Promise<any> {
+    return new Promise((resolve) => {
+        const port = revproxyOriginPort();
+        const headers: Record<string, any> = {};
+        for (const [k, v] of Object.entries((req && req.headers) || {})) {
+            const kl = k.toLowerCase();
+            if (kl === 'host' || kl === 'connection' || kl === 'keep-alive' || kl === 'proxy-connection'
+                || kl === 'transfer-encoding' || kl === 'upgrade' || kl === 'te' || kl === 'trailer') continue;
+            headers[k] = v as any;
+        }
+        headers['host'] = '127.0.0.1:' + port;
+        // 换钥: 边界已验本体 token, 转发时以 Origin 真钥替换 Authorization (去 x-api-key 旧痕)。
+        const apiKey = revproxyApiKey();
+        if (apiKey) {
+            for (const k of Object.keys(headers)) {
+                const kl = k.toLowerCase();
+                if (kl === 'authorization' || kl === 'x-api-key') delete headers[k];
+            }
+            headers['authorization'] = 'Bearer ' + apiKey;
+        }
+        const stripHop = (src: any): Record<string, string> => {
+            const out: Record<string, string> = {};
+            for (const [k, v] of Object.entries(src || {})) {
+                const kl = k.toLowerCase();
+                if (kl === 'transfer-encoding' || kl === 'connection' || kl === 'keep-alive' || kl === 'proxy-connection'
+                    || kl === 'te' || kl === 'trailer' || kl === 'upgrade') continue;
+                out[k] = Array.isArray(v) ? (v as string[]).join(', ') : String(v);
+            }
+            return out;
+        };
+        const up = http.request({ host: '127.0.0.1', port, method: (req && req.method) || 'GET', path: route + (url.search || ''), headers }, (ur: any) => {
+            const respHeaders = stripHop(ur.headers);
+            if (res) {
+                try { (res as any).shouldKeepAlive = true; } catch {}
+                try { res.writeHead(ur.statusCode || 200, respHeaders); } catch {}
+                ur.pipe(res);
+                ur.on('end', () => resolve({ _streamed: true }));
+                ur.on('error', () => { try { res.end(); } catch {} resolve({ _streamed: true }); });
+            } else {
+                const chunks: Buffer[] = [];
+                ur.on('data', (c: Buffer) => chunks.push(c));
+                ur.on('end', () => {
+                    const buf = Buffer.concat(chunks);
+                    const ct = String(ur.headers['content-type'] || 'application/octet-stream');
+                    const isText = /text|json|javascript|xml|event-stream|html/i.test(ct);
+                    resolve({ _proxy: true, status: ur.statusCode || 200, contentType: ct, headers: respHeaders, body: isText ? buf.toString('utf8') : buf.toString('base64'), binary: !isText });
+                });
+                ur.on('error', () => resolve({ _proxy: true, status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'revproxy origin unreachable' }) }));
+            }
+        });
+        up.on('error', () => {
+            if (res) { try { res.writeHead(502, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'revproxy origin unreachable' })); } catch {} resolve({ _streamed: true }); }
+            else resolve({ _proxy: true, status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'revproxy origin unreachable' }) });
+        });
+        const method = (req && req.method) || 'GET';
+        if (method !== 'GET' && method !== 'HEAD') {
+            if (req && typeof req.pipe === 'function') { req.pipe(up); }
+            else { try { up.end(req && req._relayBody ? req._relayBody : undefined); } catch { up.end(); } }
+        } else {
+            up.end();
+        }
+    });
+}
+
+// ═══════════════════════════════════════════════════════════
 // 道 · 整机投屏控制底座 (知其雄守其雌) — 隧道只搬数据, 渲染/输入捕获在访问者浏览器
 //   常驻 PowerShell GUI worker(一次性载入 Win32): cap 截屏(JPEG) + 鼠/键注入(SetCursorPos/
 //   mouse_event/keybd_event/SendKeys)。软编码: 虚拟屏边界运行时探测, PowerShell 路径经 env 解析。
@@ -2939,6 +3045,15 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     //   同源注册 SW(scope '/') · cache-first 仅缓存哈希不可变静态资产 → 重载零代理/零上游往返。
     if (route === '/__dao_sw.js') {
         return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoCloudSwJs(), headers: { 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/' } };
+    }
+
+    // ── 归一 · 模型反代「单隧道直达」(/v1/* + /origin/revproxy/*) → 本源 Origin ──
+    //   必须在 isAppProxyPassthrough 之前, 否则被当作官网 SPA 路径透传到 app.devin.ai。
+    //   外壳页(静态 HTML)免 token 令远程浏览器先打开; 其余数据/推理面强制本体 Bearer
+    //   (隧道边界鉴权 — 转发到 127.0.0.1 后本源 Origin 视其为本机, 故门禁须在此把关)。
+    if (isRevproxyRoute(route)) {
+        if (!isRevproxyConsoleShell(route) && !checkAuth(req)) throw new Error('unauthorized');
+        return await forwardToRevproxyOrigin(route, url, req, res);
     }
 
     // 官网 SPA 根路径资源/接口 → 透传 app.devin.ai
