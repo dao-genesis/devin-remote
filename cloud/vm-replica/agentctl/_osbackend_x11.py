@@ -76,6 +76,8 @@ _x.XGetKeyboardMapping.argtypes = [ctypes.c_void_p, ctypes.c_ubyte, ctypes.c_int
 
 _xt.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
                                      ctypes.c_int, ctypes.c_ulong]
+_xt.XTestFakeRelativeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                             ctypes.c_int, ctypes.c_ulong]
 _xt.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
 _xt.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
 
@@ -166,6 +168,16 @@ def cursor_pos() -> tuple[int, int]:
 def move(x: int, y: int) -> None:
     with _lock:
         _xt.XTestFakeMotionEvent(_dpy, _screen, int(x), int(y), 0)
+        _x.XFlush(_dpy)
+
+
+def move_rel(dx: int, dy: int) -> None:
+    """Move the pointer by a RELATIVE delta — XTEST relative motion. The leaf
+    ``move`` warps to an absolute (x, y); a pointer-grabbed surface (FPS mouse-look,
+    a pointer-locked canvas) ignores that warp and reads deltas instead, so only
+    this can drive it."""
+    with _lock:
+        _xt.XTestFakeRelativeMotionEvent(_dpy, int(dx), int(dy), 0)
         _x.XFlush(_dpy)
 
 

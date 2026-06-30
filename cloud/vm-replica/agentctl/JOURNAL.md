@@ -9113,3 +9113,58 @@ detects mouse-free; a callable fires once at the detection instant; `timeout` re
 anti-aliased edge won't false-fire; and `{wait_ms, act_ms, polls, rgb}` report the
 budget. All eighteen floor friction tests pass (F260 plus the prior seventeen), no
 regressions.
+
+### F261 — move_rel: the motion move() couldn't make, where the cursor isn't a place
+
+**Friction.** Pushing past single-player reaction trainers into a *complex* realtime
+GUI, I installed an open-source FPS (AssaultCube, software-GL, ~110 fps on the VM) — not
+to win, but to find what driving a 3D camera demands of the floor that flat desktops
+never did. The first wall was immediate and total: I could not turn the view. Every
+pointer verb the floor owns — `move`, `drag`, `glide`, every click — names an *absolute*
+screen pixel, which is exactly right for a desktop where the cursor and the coordinate
+are the same thing. But an FPS *grabs* the pointer and steers the camera from its
+**motion**, warping the OS cursor back to centre every frame and integrating the deltas.
+So `move(x,y)` — a warp to a fixed pixel — has nothing to say to it: I swept the cursor
+across the screen and the camera sat frozen. Worse, it also broke the game's *own* menus:
+the in-game menu pointer is decoupled from the OS cursor, so an absolute click landed
+nowhere. The floor had a rich vocabulary of *destinations* and not one word for a
+*delta*. (Where a relative-mode SDL backend happens to read warp-deltas the camera does
+drift, but it is an uncontrolled, irreversible nudge — you command a pixel, never a turn
+— and on raw-input games, Windows SendInput-absolute, or a Pointer-Lock browser canvas
+the absolute warp does precisely nothing.)
+
+**Solution.** `move_rel(dx, dy, steps=1, delay=0.0)` — relative pointer motion, the
+write-side dual of `move` that speaks deltas instead of destinations. It emits relative
+motion through the backend (XTEST `FakeRelativeMotionEvent` on X11, `SendInput` without
+`ABSOLUTE` on Windows — both newly wired leaf primitives). `steps` splits a large delta
+into that many equal relative events `delay` apart, because a big sweep sent as one giant
+jump can be clamped or dropped by a game that integrates per frame; the remainder is
+spread so the steps sum *exactly* to `(dx, dy)` with no rounding drift, and motion stays
+monotonic toward the target. `steps=1` is a single immediate event. It returns the
+integer `(dx, dy)` actually emitted, and raises rather than silently no-op'ing on a
+backend too old to have the leaf — a silent no-op would look exactly like a frozen camera.
+
+**Lesson (architecture).** The floor had quietly assumed that *the cursor is a place*:
+to act on a point you put the cursor there, and where it is *is* what you mean. A whole
+class of surfaces denies that — they take the pointer captive and care only how it
+*moves*. Absolute and relative motion are not two settings of one verb; they are two
+different relationships to the screen, and the floor only had one. `move_rel` is the
+other: the same hand, but a turn of the head instead of a step of the foot. It is the
+foundation under anything pointer-captured — FPS/3D camera look, orbit-drag in an editor,
+a Pointer-Lock canvas — and it pairs with F260's reflex (`react_pixel` decides *when*,
+`move_rel` decides *how much to turn*) toward driving a moving target rather than a still
+one.
+
+**Proof.** *Live, AssaultCube*: a driver (`_game_fps.py`) reaches gameplay by probing
+with a `move_rel` sweep (the camera turns only when live, so the sweep itself detects a
+menu and clears it), then sweeps the view right by a yaw delta of 600 and sweeps the same
+delta back. The viewport changed by mean-pixel-diff **23.1** at full right yaw and
+returned home after the reverse sweep with a residual of **0.000** — proportional,
+pixel-perfect *reversible* mouse-look, the controlled turn the absolute pointer family
+could never express (the compass rotates and settles back; before/after frames captured).
+*Synthetic* (`_test_f261.py`, no display — the backend's relative leaf is stubbed): one
+event carries the exact asked delta, floats round to integer pixels, a large sweep splits
+into `<= steps` events that sum *exactly* to the target with monotonic drift-free
+progress, zero-noise sub-events are skipped, a leaf-less backend raises instead of
+silently freezing, and arguments are validated. All nineteen floor friction tests pass
+(F261 plus the prior eighteen), no regressions.

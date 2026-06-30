@@ -831,6 +831,52 @@ def cursor_pos() -> "tuple[int, int]":
     return _be.cursor_pos()
 
 
+def move_rel(dx: float, dy: float, steps: int = 1, delay: float = 0.0) -> "tuple[int, int]":
+    """Move the pointer by a *relative* delta ``(dx, dy)`` — the motion :func:`move`
+    cannot make (F261).
+
+    Every pointer verb the floor had — :func:`move`, :func:`drag`, :func:`glide`,
+    every click — addresses an *absolute* screen pixel. That is exactly right for a
+    desktop, where the cursor and the coordinate you name are the same thing. But a
+    whole class of surfaces *grabs* the pointer and reads only its **motion**: an FPS
+    in mouse-look, a 3D editor's orbit drag, any Pointer-Lock canvas (WebGL games,
+    map panners). They warp the OS cursor back to centre every frame and integrate
+    the deltas, so an absolute warp to a fixed pixel produces *zero* net delta and the
+    view never turns — verified live in AssaultCube: absolute ``move`` left the camera
+    frozen; relative motion swung it. There was no verb that spoke deltas at all.
+
+    This emits relative motion through the backend (XTEST ``FakeRelativeMotion`` on
+    X11, ``SendInput`` without ``ABSOLUTE`` on Windows). ``steps`` splits the delta
+    into that many equal relative events ``delay`` seconds apart: a large sweep sent as
+    one giant jump can be clamped or skipped by a game that integrates per frame, so
+    stepping makes a big turn land smoothly and predictably (the remainder is spread
+    so the steps sum *exactly* to ``(dx, dy)`` — no rounding drift). ``steps=1`` (the
+    default) is a single immediate event. Returns the integer ``(dx, dy)`` actually
+    emitted. It is to :func:`move` what a turn of the head is to a step of the foot:
+    the same body, but motion instead of a destination."""
+    if steps < 1:
+        raise ValueError("steps must be >= 1")
+    if delay < 0:
+        raise ValueError("delay must be >= 0")
+    move_rel_leaf = getattr(_be, "move_rel", None)
+    if move_rel_leaf is None:
+        raise NotImplementedError("this OS backend has no relative pointer motion")
+    tx, ty = int(round(dx)), int(round(dy))
+    # Spread the total over `steps` so the running sum hits each integer target
+    # exactly — no per-step rounding leaves the cursor short of the asked delta.
+    sx = sy = 0
+    for i in range(1, steps + 1):
+        nx = int(round(tx * i / steps))
+        ny = int(round(ty * i / steps))
+        ex, ey = nx - sx, ny - sy
+        if ex or ey or steps == 1:
+            move_rel_leaf(ex, ey)
+        sx, sy = nx, ny
+        if delay and i < steps:
+            time.sleep(delay)
+    return (tx, ty)
+
+
 def focus_window(match: str, settle: float = 0.25) -> dict | None:
     """Bring the window whose title contains ``match`` to the front, by name (F146).
 

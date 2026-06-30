@@ -117,6 +117,15 @@ def move(x: int, y: int) -> None:
     _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
 
 
+def move_rel(dx: int, dy: int) -> None:
+    """Move the pointer by a RELATIVE delta — ``MOUSEEVENTF_MOVE`` without
+    ``ABSOLUTE``. ``move`` warps to an absolute (x, y); a pointer-grabbed surface
+    (FPS mouse-look, a pointer-locked canvas) ignores that warp and reads deltas
+    instead, so only this can drive it."""
+    mi = _MOUSEINPUT(int(dx), int(dy), 0, MOUSEEVENTF_MOVE, 0, 0)
+    _send(_INPUT(INPUT_MOUSE, _INPUTUNION(mi=mi)))
+
+
 class _POINT(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
