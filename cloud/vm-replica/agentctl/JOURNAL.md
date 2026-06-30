@@ -8991,3 +8991,63 @@ count; a same-label run does not leak across a different label between it; 4- vs
 ring's bbox centre is the hole; background labels (single or set) never form
 regions; deterministic first-appearance order and re-run identity. All sixteen
 floor friction tests pass (F258 plus the prior fifteen), no regressions.
+
+### F259 — line_runs: the straight-line predicate label_regions can't answer
+
+**Friction.** `label_regions` (F258) groups a reader's label grid into connected
+*blobs*, and I reached for it on gnome-four-in-a-row — only to find a blob is the
+wrong shape for the one question that game asks. Four-in-a-row's entire rule is a
+**straight line**: four of your discs collinear, in any of four directions, wins.
+Reading the live 7x6 board with `sample_grid(stat="mode")` (F257 again paid off —
+each disc is a coloured fill under a bevel/star mark) gave a clean `{R,G,.}` grid,
+and then `label_regions(connectivity=8)` was useless for the move: it lumps the
+bottom-row horizontal three `R R R`, the diagonal red touching it, and the red
+stack above into one eight-cell region and reports *no line at all* — neither that
+there is a horizontal three (a threat) nor where it points. A line is a property
+of a *direction*, not of bare adjacency, and connected-components is direction-blind
+by construction. So to pick a move I started hand-writing the same four-axis scan
+every line game needs — the very scan F258's own lesson had punted ("five-or-more:
+keep groups that are collinear runs ≥5") back to the caller.
+
+**Solution.** `line_runs(grid, background=None, min_len=2, directions=("h","v","d","a"))`
+— that scan made a primitive. For each requested axis (`h` →, `v` ↓, `d` ↘, `a` ↙)
+it walks the grid and returns every **maximal** run of equal, non-`background`
+cells: a `{label, cells, length, direction, start, end}` with `cells` ordered along
+the axis (`cells[0]==start`, `cells[-1]==end`). "Maximal" is enforced by starting a
+run only at a cell whose predecessor along the axis is off-grid or a different
+label, so each run is found exactly once and never as a sub-run of a longer one (a
+five is one run of five, not two overlapping fours). `min_len` gates output — set it
+to the win length to get *only* wins, the cheapest possible "did anyone win" query;
+default 2 drops singletons. `background` (one label or a set) never forms a run and
+is the only thing that bounds them. It reads no pixels — pure grid topology, the
+twin of `label_regions`: that one says *which cells are one blob*, this one says
+*which cells are one line*.
+
+**Lesson (architecture).** The floor's perception had grown *readers* (pixels →
+labels), *geometry* (where the cells are), and `label_regions` (cells → blobs), but
+the second topological reducer — cells → **lines** — was missing, so every line game
+re-derived it. Blob and line are the two shapes a "group of cells" can mean, and a
+game's win/legal-move predicate is almost always a function of one or the other:
+swell-foop/mines want the blob, four-in-a-row/gomoku/tic-tac-toe want the line.
+Naming the line reducer next to the blob reducer is the same 損之又損 move as the
+readers — extract the shared scan once, leave each game only its own threshold (4,
+5, 3). A reader says *what*, `label_regions` says *which together*, `line_runs` says
+*which in a row*.
+
+**Proof.** *Live, gnome-four-in-a-row (One player, Easy)*: a driver
+(`_game_fourinarow.py`) reads the board each turn with `sample_grid(stat="mode")`,
+then uses `line_runs` as its whole brain — win if a drop makes a 4-run, else block
+the opponent's, else play the column that most extends my longest run — with **no
+bespoke line scan anywhere**. It played a full 20-move game against the AI and won;
+`line_runs` flagged the winning move and then read the result off the final board as
+a single **anti-diagonal** run `R@[(2,5),(3,4),(4,3),(5,2)]`, length 4 — the window
+title turned "You win!". *Synthetic* (`_test_f259.py`, no display): the exact live
+board fixture yields the bottom-row `R R R` as one length-3 horizontal run with
+correct endpoints (and the row-4 three, and a G three), while the column-0 vertical
+G three does not swallow the R's that bound it; a clean four in each of the four axes
+surfaces as exactly one run in its own direction, ordered along the axis (the
+anti-diagonal starts top-right); a five is one run not overlapping fours; `min_len`
+selects threats (2) vs wins (4) vs singletons (1); `directions` selects axes;
+`background` (single or set) bounds runs and is never itself a run; deterministic
+order and re-run identity; args validated. All seventeen floor friction tests pass
+(F259 plus the prior sixteen), no regressions.

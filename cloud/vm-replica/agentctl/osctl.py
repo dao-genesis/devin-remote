@@ -2750,6 +2750,86 @@ def label_regions(grid: "list[list]", background=None,
     return regions
 
 
+_LINE_DIRS = {"h": (0, 1), "v": (1, 0), "d": (1, 1), "a": (1, -1)}
+
+
+def line_runs(grid: "list[list]", background=None, min_len: int = 2,
+              directions: "tuple[str, ...]" = ("h", "v", "d", "a")) -> list[dict]:
+    """Find maximal straight runs of equal label along the grid's axes — the
+    *N-in-a-row* predicate every line game's win/threat test reduces to (F259).
+
+    :func:`label_regions` (F258) answers "which cells are one *blob*", but a blob
+    is the wrong shape for the games whose whole rule is a **straight line**:
+    connect-four wins on four collinear, gomoku / five-or-more on five, tic-tac-toe
+    on three, and the F258 lesson itself punted "is this group a collinear run" back
+    to the caller. Connected-components cannot answer it — eight-connectivity lumps
+    a horizontal three, the diagonal touching it and the stack above into one blob
+    and reports neither line; the run is a property of a *direction*, not of mere
+    adjacency. Every line game therefore re-implemented the same four-axis scan over
+    a reader's label grid. This is that scan, made a primitive.
+
+    ``grid`` is a rectangular list of rows of hashable labels (the exact shape a
+    reader returns; snap a :func:`sample_grid` colour to a palette label first).
+    For each requested axis it returns every **maximal** run of two-or-more equal,
+    non-``background`` cells — maximal meaning it cannot be extended at either end,
+    so each run is reported once and never as a sub-run of a longer one. A run is a
+    ``{label, cells, length, direction, start, end}`` where ``cells`` is ordered
+    along the axis (``cells[0] == start``, ``cells[-1] == end``, each a ``(r, c)``),
+    so a connect-four threat is just ``length >= 3`` and a win ``length >= 4`` with
+    no extra geometry. Runs are ordered by ``directions`` first, then by ``start``
+    row-major (deterministic).
+
+    A label in ``background`` — one label, or a set/list — never forms a run (the
+    empty cells of a board); pass ``None`` to run over every label. ``min_len``
+    (default 2) is the shortest run kept — set it to the win length to get only
+    wins, or to 1 to keep singletons. ``directions`` is any subset of ``"h"``
+    (horizontal →), ``"v"`` (vertical ↓), ``"d"`` (diagonal ↘) and ``"a"``
+    (anti-diagonal ↙), in the order you want them reported."""
+    if not isinstance(grid, list) or not grid:
+        raise ValueError("grid must be a non-empty list of rows")
+    rows = len(grid)
+    cols = len(grid[0])
+    if cols == 0 or any(len(row) != cols for row in grid):
+        raise ValueError("grid rows must be non-empty and of equal length")
+    if min_len < 1:
+        raise ValueError("min_len must be >= 1")
+    if not directions:
+        raise ValueError("directions must name at least one axis")
+    for d in directions:
+        if d not in _LINE_DIRS:
+            raise ValueError("directions must be a subset of 'h','v','d','a'")
+    if background is None:
+        bg: set = set()
+    elif isinstance(background, (set, list, tuple)):
+        bg = set(background)
+    else:
+        bg = {background}
+    out = []
+    for d in directions:
+        dr, dc = _LINE_DIRS[d]
+        for sr in range(rows):
+            for sc in range(cols):
+                label = grid[sr][sc]
+                if label in bg:
+                    continue
+                # Only a run's first cell starts it: the cell one step back along
+                # the axis must be off-grid or a different label — so each maximal
+                # run is found exactly once, never as a sub-run of a longer one.
+                pr, pc = sr - dr, sc - dc
+                if 0 <= pr < rows and 0 <= pc < cols and grid[pr][pc] == label:
+                    continue
+                cells = [(sr, sc)]
+                r, c = sr + dr, sc + dc
+                while 0 <= r < rows and 0 <= c < cols and grid[r][c] == label:
+                    cells.append((r, c))
+                    r, c = r + dr, c + dc
+                if len(cells) >= min_len:
+                    out.append({"label": label, "cells": cells,
+                                "length": len(cells), "direction": d,
+                                "start": cells[0], "end": cells[-1]})
+    return out
+
+
 def detect_grid(search: tuple[int, int, int, int],
                 rgb: bytes | None = None, size: tuple[int, int] | None = None,
                 stride: int = 2, k: float = 0.8, pmin: int = 8, tol: int = 5,
