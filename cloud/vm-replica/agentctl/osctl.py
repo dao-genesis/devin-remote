@@ -2663,6 +2663,93 @@ def cluster_boxes(boxes: "list[tuple[int, int, int, int]]",
     return out
 
 
+def label_regions(grid: "list[list]", background=None,
+                  connectivity: int = 4) -> list[dict]:
+    """Group a grid of cell labels into connected regions of equal label — the
+    *labels → objects* layer that every reader feeds into (F258).
+
+    The readers all answer "what is in each cell": :func:`sample_grid` a colour,
+    :func:`ocr_grid` text, :func:`classify_grid` a sprite name. But a *thing* in a
+    game is rarely one cell — a swell-foop move is a whole **connected group** of
+    same-colour tiles, a klotski piece spans several cells, a flood-opened pocket
+    in mines is a blob, a settled tetromino is four joined cells. The question
+    after reading is therefore not "what is this cell" but "**which cells are the
+    same object**", and the floor had no primitive for it: each game hand-rolled
+    the identical flood fill over a reader's output. This is that flood fill, made
+    a primitive — it consumes any reader's ``rows``x``cols`` label grid and
+    returns its objects, so the perception splits cleanly into *read the cells*
+    (a reader) then *assemble the cells into objects* (this).
+
+    ``grid`` is a rectangular list of rows of hashable labels (the exact shape a
+    reader returns; map a :func:`sample_grid` colour to a label first, e.g. snap
+    to the nearest palette name). Returns a list of regions, each a
+    ``{label, cells, size, bbox}`` where ``cells`` is the region's ``(r, c)``
+    coordinates (row-major within the region, so ``cells[0]`` is a safe click
+    target for any shape, unlike a bbox centre on an L), ``size`` is ``len(cells)``
+    and ``bbox`` is the inclusive ``(r0, c0, r1, c1)``. Regions are ordered by
+    first appearance in a row-major scan (deterministic). A label in
+    ``background`` — one label, or a set/list of them — is never grouped (a
+    swell-foop board with cleared cells, a mines board's covered cells); pass
+    ``None`` to group every label. ``connectivity`` is 4 (orthogonal neighbours)
+    or 8 (also diagonals — a five-or-more diagonal line, a chess king's reach)."""
+    if not isinstance(grid, list) or not grid:
+        raise ValueError("grid must be a non-empty list of rows")
+    rows = len(grid)
+    cols = len(grid[0])
+    if cols == 0 or any(len(row) != cols for row in grid):
+        raise ValueError("grid rows must be non-empty and of equal length")
+    if connectivity not in (4, 8):
+        raise ValueError("connectivity must be 4 or 8")
+    if background is None:
+        bg: set = set()
+    elif isinstance(background, (set, list, tuple)):
+        bg = set(background)
+    else:
+        bg = {background}
+    if connectivity == 4:
+        nbrs = ((-1, 0), (1, 0), (0, -1), (0, 1))
+    else:
+        nbrs = ((-1, 0), (1, 0), (0, -1), (0, 1),
+                (-1, -1), (-1, 1), (1, -1), (1, 1))
+    seen = [[False] * cols for _ in range(rows)]
+    regions = []
+    for sr in range(rows):
+        for sc in range(cols):
+            if seen[sr][sc]:
+                continue
+            label = grid[sr][sc]
+            seen[sr][sc] = True
+            if label in bg:
+                continue
+            # Flood the connected same-label cells with an explicit stack (a
+            # board can be larger than the recursion limit).
+            cells = [(sr, sc)]
+            stack = [(sr, sc)]
+            r0 = r1 = sr
+            c0 = c1 = sc
+            while stack:
+                r, c = stack.pop()
+                for dr, dc in nbrs:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < rows and 0 <= nc < cols and not seen[nr][nc] \
+                            and grid[nr][nc] == label:
+                        seen[nr][nc] = True
+                        cells.append((nr, nc))
+                        stack.append((nr, nc))
+                        if nr < r0:
+                            r0 = nr
+                        elif nr > r1:
+                            r1 = nr
+                        if nc < c0:
+                            c0 = nc
+                        elif nc > c1:
+                            c1 = nc
+            cells.sort()
+            regions.append({"label": label, "cells": cells, "size": len(cells),
+                            "bbox": (r0, c0, r1, c1)})
+    return regions
+
+
 def detect_grid(search: tuple[int, int, int, int],
                 rgb: bytes | None = None, size: tuple[int, int] | None = None,
                 stride: int = 2, k: float = 0.8, pmin: int = 8, tol: int = 5,
