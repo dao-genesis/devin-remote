@@ -2300,18 +2300,17 @@ def _classify_lib(templates: "list[tuple[str, bytes, int, int]]",
     return lib
 
 
-def _classify_box(rgb: bytes, w: int, h: int,
-                  box: "tuple[float, float, float, float]",
-                  lib: "list[tuple[str, list[int]]]", npix: int, inset: float,
-                  ink_tol: int, ink_min: int, norm: int,
-                  empty_label: str, unknown_label: str,
-                  max_score: "float | None") -> str:
-    """Classify one cell/box against the resampled ``lib``: inset-crop, gate on
-    ink (a box with fewer than ``ink_min`` pixels deviating more than ``ink_tol``
-    from its own mean is blank → ``empty_label``, never scored), resample to a
-    ``norm``x``norm`` luma signature and return the lowest mean-abs-diff label
-    (``unknown_label`` when ``max_score`` is set and even the best exceeds it).
-    The pixel core shared by :func:`classify_grid` and :func:`classify_boxes`."""
+def _box_signature(rgb: bytes, w: int, h: int,
+                   box: "tuple[float, float, float, float]",
+                   inset: float, ink_tol: int, ink_min: int,
+                   norm: int) -> "list[int] | None":
+    """Inset-crop ``box`` to its glyph-dominated centre, gate on ink, and return
+    its ``norm``x``norm`` luma signature — or ``None`` when the box is blank
+    (fewer than ``ink_min`` pixels deviating more than ``ink_tol`` from its own
+    mean). The crop / inset / ink-gate / resample shared by :func:`_classify_box`
+    (match against a library) and :func:`cluster_boxes` (group with no library),
+    so a box that is clustered and one that is classified are measured from the
+    exact same pixels."""
     bx0, by0, bx1, by1 = box
     bw = bx1 - bx0
     bh = by1 - by0
@@ -2342,8 +2341,25 @@ def _classify_box(rgb: bytes, w: int, h: int,
             if ink >= ink_min:
                 break
     if ink < ink_min:
+        return None
+    return _luma_resample(rgb, w, ix0, iy0, ix1, iy1, norm)
+
+
+def _classify_box(rgb: bytes, w: int, h: int,
+                  box: "tuple[float, float, float, float]",
+                  lib: "list[tuple[str, list[int]]]", npix: int, inset: float,
+                  ink_tol: int, ink_min: int, norm: int,
+                  empty_label: str, unknown_label: str,
+                  max_score: "float | None") -> str:
+    """Classify one cell/box against the resampled ``lib``: inset-crop, gate on
+    ink (a box with fewer than ``ink_min`` pixels deviating more than ``ink_tol``
+    from its own mean is blank → ``empty_label``, never scored), resample to a
+    ``norm``x``norm`` luma signature and return the lowest mean-abs-diff label
+    (``unknown_label`` when ``max_score`` is set and even the best exceeds it).
+    The pixel core shared by :func:`classify_grid` and :func:`classify_boxes`."""
+    sig = _box_signature(rgb, w, h, box, inset, ink_tol, ink_min, norm)
+    if sig is None:
         return empty_label
-    sig = _luma_resample(rgb, w, ix0, iy0, ix1, iy1, norm)
     best = None
     best_label = unknown_label
     for label, tv in lib:
@@ -2506,6 +2522,90 @@ def classify_boxes(boxes: "list[tuple[int, int, int, int]]",
         out.append(_classify_box(rgb, w, h, (bx0, by0, bx1 + 1, by1 + 1), lib,
                                  npix, inset, ink_tol, ink_min, norm,
                                  empty_label, unknown_label, max_score))
+    return out
+
+
+def cluster_boxes(boxes: "list[tuple[int, int, int, int]]",
+                  rgb: bytes | None = None, size: tuple[int, int] | None = None,
+                  inset: float = 0.18, ink_tol: int = 50, ink_min: int = 6,
+                  norm: int = 32, max_score: float = 32.0,
+                  blank: int = -1) -> list[int]:
+    """Group a list of boxes into discovered visual classes with *no* template
+    library — the unsupervised sibling of :func:`classify_boxes` (F256).
+
+    :func:`classify_boxes`/:func:`classify_grid` answer *what* each box is, but
+    only once you have harvested a labelled template per class. On a board whose
+    alphabet you do not know in advance you cannot: a mid-game chess position, an
+    unfamiliar mahjongg tileset, the change-regions of a never-seen game offer no
+    known frame to crop labels from. Yet you can still ask the cheaper question
+    the library hand-rolling was answering all along — *which of these boxes look
+    the same?* — and that needs no labels at all. (F254 already hand-rolled this
+    inline for mahjongg: seed a library on first sight, start a new entry when the
+    best match exceeds a radius. This is that leader-clustering loop made a
+    primitive, so the next board need not re-roll it.)
+
+    Each box is measured by the exact pixel core of :func:`classify_boxes` — shared
+    via :func:`_box_signature`: inset to the glyph-dominated centre, gate on ink,
+    resample to a ``norm``x``norm`` luma signature — so clustering boxes and later
+    classifying the same boxes agree pixel-for-pixel. The boxes are then grouped by
+    single-pass *leader clustering*: each box joins the nearest existing cluster
+    whose exemplar is within ``max_score`` mean-absolute-difference per pixel, else
+    it founds a new cluster (and becomes that cluster's exemplar). Cluster ids are
+    assigned in order of first appearance — the first non-blank box is cluster 0 —
+    so the result is deterministic and order-stable. A blank box (gated out before
+    scoring, exactly as in :func:`classify_boxes`) is ``blank`` (default ``-1``),
+    never clustered.
+
+    ``max_score`` is the merge radius, in the same luma units as the
+    :func:`classify_boxes` threshold (mean-abs-diff per pixel, 0–255): too small
+    over-splits a class on incidental variation (the same chess piece on a light vs
+    a dark square), too large merges distinct classes — there is normally a wide
+    plateau between, and the exemplar-not-centroid rule keeps a cluster anchored to
+    a real box rather than drifting as members accrue. ``boxes`` are *inclusive*
+    ``(x0, y0, x1, y1)`` exactly as :func:`classify_boxes` takes. Returns one
+    cluster id per box, in input order — empty ``boxes`` returns ``[]``."""
+    if not 0.0 <= inset < 0.5:
+        raise ValueError("inset must be in [0.0, 0.5)")
+    if ink_min < 1:
+        raise ValueError("ink_min must be >= 1")
+    if norm < 1:
+        raise ValueError("norm must be >= 1")
+    if max_score < 0:
+        raise ValueError("max_score must be >= 0")
+    if rgb is None:
+        w, h, rgb = capture_rgb()
+    else:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        w, h = size
+    npix = norm * norm
+    exemplars: "list[list[int]]" = []
+    out = []
+    for box in boxes:
+        if len(box) != 4:
+            raise ValueError("each box must be (x0, y0, x1, y1)")
+        bx0, by0, bx1, by1 = box
+        # inclusive box -> half-open rect, matching classify_boxes pixel-for-pixel.
+        sig = _box_signature(rgb, w, h, (bx0, by0, bx1 + 1, by1 + 1),
+                             inset, ink_tol, ink_min, norm)
+        if sig is None:
+            out.append(blank)
+            continue
+        best = None
+        best_i = -1
+        for i, ex in enumerate(exemplars):
+            s = 0
+            for a, b in zip(sig, ex):
+                d = a - b
+                s += d if d >= 0 else -d
+            if best is None or s < best:
+                best = s
+                best_i = i
+        if best is not None and best / npix <= max_score:
+            out.append(best_i)
+        else:
+            exemplars.append(sig)
+            out.append(len(exemplars) - 1)
     return out
 
 
