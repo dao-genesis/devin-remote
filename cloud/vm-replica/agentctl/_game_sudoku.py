@@ -90,23 +90,24 @@ class Board:
     def center(self, r, c):
         return int(self.x0 + self.cw * (c + 0.5)), int(self.y0 + self.ch * (r + 0.5))
 
-    def _dark(self, r, c, m=20):
-        cx, cy = self.center(r, c)
-        return sum(1 for yy in range(cy - m, cy + m) for xx in range(cx - m, cx + m)
-                   if _lum(xx, yy) < 110)
-
-    def read_cell(self, r, c):
-        if self._dark(r, c) < 20:
-            return 0
-        cx, cy = self.center(r, c)
-        t = osctl.ocr_text(region=(cx - 24, cy - 24, 48, 48), whitelist='123456789',
-                           psm=6, scale=4, rgb=RGB, size=(W, H))
-        d = ''.join(ch for ch in t if ch.isdigit())
-        return int(d[0]) if d else 0
-
     def read(self):
+        """Read the 9x9 board in one ink-gated pass via osctl.ocr_grid: the gate
+        leaves blanks empty (no empty-cell hallucination, no wasted OCR) and only
+        the givens reach tesseract, whitelisted to digits in psm=6 (F251)."""
         _grab()
-        return [[self.read_cell(r, c) for c in range(9)] for r in range(9)]
+        xs = [int(self.x0 + self.cw * c) for c in range(10)]
+        ys = [int(self.y0 + self.ch * r) for r in range(10)]
+        bbox = (xs[0], ys[0], xs[-1], ys[-1])
+        grid = osctl.ocr_grid(bbox, 9, 9, rgb=RGB, size=(W, H), xs=xs, ys=ys,
+                              whitelist='123456789', psm=6, scale=4)
+        out = []
+        for row in grid:
+            line = []
+            for s in row:
+                d = ''.join(ch for ch in s if ch.isdigit())
+                line.append(int(d[0]) if d else 0)
+            out.append(line)
+        return out
 
 
 def _ok(g, r, c, v):

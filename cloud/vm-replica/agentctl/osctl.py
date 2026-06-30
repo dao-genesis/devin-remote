@@ -2109,6 +2109,124 @@ def grid_changes(prev: bytes, cur: bytes, bbox: tuple[int, int, int, int],
     return changed
 
 
+def ocr_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
+             rgb: bytes | None = None, size: tuple[int, int] | None = None,
+             inset: float = 0.18, whitelist: "str | None" = None,
+             psm: int = 6, scale: int = 4, invert: bool = False,
+             ink_tol: int = 50, ink_min: int = 6,
+             xs: "list[int] | None" = None,
+             ys: "list[int] | None" = None) -> list[list[str]]:
+    """Read a ``cols``x``rows`` lattice of glyphs into a 2D array of strings, in
+    one capture — the OCR grid that :func:`sample_grid` is for colour (F251).
+
+    Reading a board of glyphs (a sudoku of digits, a chess rank of pieces, a
+    mahjongg face) is a recurring need, but the floor only offered the single-
+    region :func:`ocr_text` — so every caller (the sudoku and mines players both
+    do) hand-rolls the *same* triple: the geometry double-loop, a per-cell
+    ink/colour gate, and the ``whitelist``/``psm``/``scale`` tuning. Two costs
+    repeat on every board: each caller re-derives that orchestration, and the
+    naive version OCRs *every* cell — which is both slow (a sparse 9x9 sudoku is
+    ~21 filled of 81, so ~60 wasted reads) and, worse, *wrong*: tesseract handed
+    an empty bordered cell hallucinates a stray glyph (an empty grey sudoku cell
+    reads as ``"a"``), so a reader with no gate mis-fills the board.
+
+    This divides ``bbox`` into ``cols``x``rows`` equal cells with the *exact*
+    geometry of :func:`sample_grid`/:func:`grid_changes` (same ``inset``, same
+    bounds clamping, so the ``[r][c]`` indices line up one-to-one) and, for each
+    cell, gates on ink before reading: it measures the cell's central window and
+    counts pixels whose luminance deviates from the window mean by more than
+    ``ink_tol``. A cell with fewer than ``ink_min`` such pixels is treated as
+    blank — returned as ``""`` and **never sent to OCR** — which both removes the
+    empty-cell hallucination and skips the dominant cost on a sparse board (the
+    F250 lesson — don't read what holds nothing — applied to OCR). Only inked
+    cells are passed to :func:`ocr_text` with the given ``whitelist``/``psm``/
+    ``scale``/``invert``; its result is stripped and stored. Returns a
+    ``rows``x``cols`` list of strings (``""`` = blank). Pass ``rgb``/``size`` to
+    reuse a capture (pair with :func:`capture_patch` to read just the board).
+
+    Two ways to place the cells. By default ``bbox`` is divided into equal cells
+    (the :func:`sample_grid` convention). But a real board's pitch is rarely
+    perfectly uniform — a sudoku's heavy 3x3 rules make some cells a pixel wider
+    — and where colour sampling shrugs that off, an OCR crop does not: a couple
+    of pixels of accumulated drift shifts a mid-board crop onto the cell edge,
+    clips the glyph, and tesseract then reads *nothing*. So this also takes the
+    exact column/row edges ``xs`` (``cols+1`` x-coords) and ``ys`` (``rows+1``
+    y-coords) — precisely what :func:`detect_grid` returns — and when given uses
+    each cell's true ``[xs[c], xs[c+1]]`` x ``[ys[r], ys[r+1]]`` box instead of
+    the uniform split, so every crop is centred on its glyph. The intended
+    pipeline is ``g = detect_grid(...); ocr_grid(g['bbox'], g['cols'], g['rows'],
+    xs=g['xs'], ys=g['ys'], ...)``.
+
+    The ink gate is polarity-agnostic (it measures deviation from the cell's own
+    mean, so it fires for dark-on-light *and* light-on-dark without ``invert``);
+    ``invert`` still controls what :func:`ocr_text` sees for the read itself."""
+    if cols < 1 or rows < 1:
+        raise ValueError("cols and rows must be >= 1")
+    if not 0.0 <= inset < 0.5:
+        raise ValueError("inset must be in [0.0, 0.5)")
+    if ink_min < 1:
+        raise ValueError("ink_min must be >= 1")
+    if xs is not None and len(xs) != cols + 1:
+        raise ValueError(f"xs must have cols+1={cols + 1} entries, got {len(xs)}")
+    if ys is not None and len(ys) != rows + 1:
+        raise ValueError(f"ys must have rows+1={rows + 1} entries, got {len(ys)}")
+    if rgb is None:
+        w, h, rgb = capture_rgb()
+    else:
+        if size is None:
+            raise ValueError("size required when rgb is provided")
+        w, h = size
+    x0, y0, x1, y1 = bbox
+    cw = (x1 - x0 + 1) / cols
+    ch = (y1 - y0 + 1) / rows
+    grid = []
+    for r in range(rows):
+        # cell's vertical span: exact edges when ys given, else uniform split.
+        ry0 = float(ys[r]) if ys is not None else y0 + r * ch
+        rh = (ys[r + 1] - ys[r]) if ys is not None else ch
+        iy0 = int(ry0 + rh * inset)
+        iy1 = int(ry0 + rh * (1.0 - inset))
+        if iy1 <= iy0:
+            iy1 = iy0 + 1
+        iy0 = max(0, min(iy0, h - 1))
+        iy1 = max(iy0 + 1, min(iy1, h))
+        row = []
+        for c in range(cols):
+            cx0 = float(xs[c]) if xs is not None else x0 + c * cw
+            ccw = (xs[c + 1] - xs[c]) if xs is not None else cw
+            ix0 = int(cx0 + ccw * inset)
+            ix1 = int(cx0 + ccw * (1.0 - inset))
+            if ix1 <= ix0:
+                ix1 = ix0 + 1
+            ix0 = max(0, min(ix0, w - 1))
+            ix1 = max(ix0 + 1, min(ix1, w))
+            # luminance of the central window — one pass for the mean, a second
+            # to count pixels that deviate from it (the glyph ink).
+            lums = []
+            for yy in range(iy0, iy1):
+                base = (yy * w + ix0) * 3
+                for k in range(0, (ix1 - ix0) * 3, 3):
+                    lums.append((rgb[base + k] * 299 + rgb[base + k + 1] * 587
+                                 + rgb[base + k + 2] * 114) // 1000)
+            n = len(lums)
+            mean = sum(lums) // n if n else 0
+            ink = 0
+            for v in lums:
+                if abs(v - mean) > ink_tol:
+                    ink += 1
+                    if ink >= ink_min:
+                        break
+            if ink < ink_min:
+                row.append("")
+                continue
+            text = ocr_text((ix0, iy0, ix1 - ix0, iy1 - iy0),
+                            whitelist=whitelist, psm=psm, scale=scale,
+                            invert=invert, rgb=rgb, size=(w, h))
+            row.append(text.strip())
+        grid.append(row)
+    return grid
+
+
 def detect_grid(search: tuple[int, int, int, int],
                 rgb: bytes | None = None, size: tuple[int, int] | None = None,
                 stride: int = 2, k: float = 0.8, pmin: int = 8, tol: int = 5,

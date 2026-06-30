@@ -8443,3 +8443,85 @@ delta-tracked board matches a fresh full ground-truth read **0/64 mismatches** �
 the saving is from not redoing unchanged work, not from missing changes. (The
 solver still hits the round cap without a full clear; convergence is solver logic,
 not a floor gap — F250 is purely about not re-reading what didn't move.)
+
+---
+
+> 大制不割。 A board is read whole, in one capture, in one verb — not re-derived
+> cell by cell by every caller who happens upon a lattice of glyphs.
+
+## F251 — ocr_grid: read a glyph lattice into a 2D array, ink-gated
+
+Exercising games live to find the next friction, the first move was the obvious
+one: read the gnome-sudoku board. Two ways failed in instructive ways. Whole-
+board `ocr_text` on the 9x9 returned `''` — tesseract will not segment a sparse
+field of digits ruled by gridlines. So drop to per-cell. The *naive* per-cell
+loop (no whitelist, default psm) read the givens but **hallucinated**: empty
+grey cells came back as `"a"` (rows 1,2,5,7,8 each grew a stray glyph from the
+shaded-cell border), so the board mis-filled. The cure for *accuracy* was
+already known (F235: `whitelist='123456789'`, `psm=6`) and indeed read 81/81 —
+but only because the caller also hand-rolled an **ink gate** (skip a cell with
+too little dark ink) so empties never reach OCR, plus the geometry double-loop
+and the whitelist/psm/scale tuning. Grepping the floor's own players confirmed
+the smell: `_game_sudoku` and `_game_mines` *both* re-derive that exact triple
+(geometry loop + per-cell gate + whitelist/psm), each slightly differently.
+
+**New verb** `osctl.ocr_grid(bbox, cols, rows, rgb, size, inset, whitelist, psm,
+scale, invert, ink_tol, ink_min, xs, ys) -> [[str, ...], ...]` — the OCR grid
+that `sample_grid` (F247) is for colour. It divides the board with the *exact*
+`sample_grid`/`grid_changes` geometry and, for each cell, gates on ink before
+reading: it measures the central window and counts pixels whose luminance
+deviates from the window mean by more than `ink_tol`; a cell with fewer than
+`ink_min` such pixels is blank — returned `""` and **never sent to tesseract**.
+Only inked cells are OCR'd (with the given whitelist/psm/scale/invert). Two
+losses cut (損之又損): the empty-cell hallucination is gone (a blank is decided
+by pixels, never by OCR), and the dominant cost on a sparse board is skipped
+(the F250 lesson — don't read what holds nothing — applied to OCR). The gate is
+polarity-agnostic (deviation from the cell's own mean fires for dark-on-light
+*and* light-on-dark), so it needs no `invert` to classify blankness.
+
+**Honest edge found while validating — why `xs`/`ys` exist.** First cut divided
+`bbox` into equal cells (the `sample_grid` convention) and read the live board at
+**78/81**: three mid-board `4`s came back blank. Not the gate (ink=213, far over
+threshold) and not OCR (the same crop off `detect_grid`'s real edges read `'4'`).
+It was *drift*: a real board's pitch is not perfectly uniform — the heavy 3x3
+rules make some columns a pixel wider — and where colour sampling shrugs that off,
+an OCR crop does not; two pixels of accumulated offset shifts a mid-board crop
+onto the cell edge, clips the glyph, and psm=6 then reads nothing. So `ocr_grid`
+also takes the exact `xs`/`ys` line positions `detect_grid` already returns and,
+when given, crops each cell on its true `[xs[c], xs[c+1]]` box. With them the live
+board read **81/81**. The intended pipeline is therefore
+`g = detect_grid(...); ocr_grid(g['bbox'], g['cols'], g['rows'], xs=g['xs'], ys=g['ys'], ...)`.
+
+**Proof.** *Synthetic* (`_test_f251.py`, no display, no tesseract — `ocr_text`
+is stubbed to a recorder): only inked cells are read and blanks are `""` with
+OCR never called on them; the gate is polarity-agnostic (light-on-dark trips it)
+and honours `ink_tol`/`ink_min` (a sub-tol mark stays blank); the gated set
+equals the cells `sample_grid` sees as non-background; with uneven `xs`/`ys` the
+crop handed to OCR sits inside the *true* cell, not the uniform split; args
+validated (bad cols/rows/inset/ink_min, wrong `xs`/`ys` length, rgb-without-size).
+*Live* (gnome-sudoku Easy): `ocr_grid` off `detect_grid`'s edges read the board
+**81/81, 0 hallucinations**, in 1.24s vs 1.7s for the read-every-cell loop
+(~60 empties skipped).
+
+### F251 end-to-end payoff (sudoku player wired to ocr_grid)
+
+Rewrote `_game_sudoku`'s `Board.read` — previously a `read_cell`/`_dark`
+double-loop — to one `ocr_grid` call off the detected `xs`/`ys`, deleting the
+hand-rolled gate and per-cell OCR plumbing. Driven live: the floor read the Easy
+board 81/81, solved it by backtracking, drove the 54 empties back in with
+`click`+`type_unicode`, and gnome-sudoku put up **"Well done, you completed the
+puzzle in 9 minutes!"** — a full board read → solve → fill round through the
+floor, with the glyph-lattice read now a single primitive any grid game shares.
+
+**Negatives recorded the same session (no verb earned).** Two suspected
+frictions were chased and *cleared*, which is itself the point of exercising
+live. (1) **drag on GTK4 DnD**: gnome-tetravex moved a tile only every *other*
+identical drag (a clean 3/6 alternation). Instrumented `mouse_state` (button
+never stuck), tried hover-settle, nudge-onto-source, dwell-at-target, and a 2.5s
+inter-drag settle — all still 3/6. The decider: the system's own `xdotool` drag
+alternates **3/6 identically**, so the floor's `drag` is on par with the
+reference X11 injector and the alternation is tetravex's DnD semantics, not a
+floor gap — no fix made. (2) **detect_grid undercount**: it returned 8x8 for the
+9x9 sudoku, but only because the search box clipped the board's outer rule;
+widened to contain the border it returns 9x9 exactly (last line at x=880). Both
+are recorded so the next reader doesn't re-chase them.
