@@ -1964,7 +1964,8 @@ def sample_color(bbox: tuple[int, int, int, int], rgb: bytes | None = None,
 
 def sample_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
                 rgb: bytes | None = None, size: tuple[int, int] | None = None,
-                inset: float = 0.25) -> list[list[dict]]:
+                inset: float = 0.25, stat: str = "mean",
+                quant: int = 24) -> list[list[dict]]:
     """Classify a regular ``cols``x``rows`` grid of cells by colour, from ONE
     capture — the grid generalisation of :func:`sample_color` (F247).
 
@@ -1979,21 +1980,49 @@ def sample_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
     game (a falling piece) cannot spend per tick.
 
     This divides ``bbox`` into ``cols``x``rows`` equal cells and returns a
-    ``rows``x``cols`` list of ``{r, g, b, count}`` cell means. Two losses are cut
+    ``rows``x``cols`` list of ``{r, g, b, count}`` cells. Two losses are cut
     (損之又損): it indexes straight into the one capture instead of allocating a
-    crop per cell, and it averages only each cell's central window — ``inset`` is
+    crop per cell, and it reads only each cell's central window — ``inset`` is
     the fraction trimmed off every side (default ``0.25`` keeps the central half
     in each axis, ~a quarter of the pixels), which both skips the grid lines /
     borders between cells (so a separator never pollutes a cell's colour) and
-    reads far fewer pixels. For a solid-filled cell the centre mean equals the
-    whole-cell mean; ``inset`` only changes which pixels are summed, not the
+    reads far fewer pixels. ``inset`` only changes which pixels are read, not the
     coordinate or packing convention, so each cell matches a centred
     ``sample_color``. Pass an existing ``rgb``/``size`` to reuse a capture (pair
-    with :func:`capture_patch` to read just the board)."""
+    with :func:`capture_patch` to read just the board).
+
+    ``stat`` chooses how a cell's pixels reduce to one colour:
+
+    - ``"mean"`` (default) averages them — for a solid-filled cell the centre
+      mean equals the whole-cell mean, and it matches a centred ``sample_color``.
+    - ``"mode"`` returns the *fill* — the mean of the largest cluster of similar
+      pixels — and is **immune to a foreground mark** painted on that fill. The
+      mean of a cell conflates background and mark in proportion to how much of
+      the cell the mark covers, so two cells with the *same* fill but differently
+      sized marks read as *different* colours (and the discriminating signal, the
+      fill, is lost): a minesweeper theme that tints the cell by its count (1 =
+      green, 2 = tan) carries a dark digit whose ink grows with the count, so the
+      mean of a "2" is dragged further from its tan fill than a "1" from its
+      green — the very signal you want to read is corrupted by the very glyph
+      sitting on it. ``"mode"`` buckets the cell's pixels into a coarse colour
+      histogram (each channel quantised to ``quant``-wide bins, default 24),
+      takes the most-populated bin (the fill always outvotes the glyph, which is
+      a minority of the central window), and returns the *exact* mean of the
+      pixels in that bin — a precise, mark-immune fill colour. ``count`` is the
+      number of pixels that fell in the modal bin (its dominance); a near-solid
+      cell approaches the full window. Reading the fill under a mark generalises
+      past mines — a button's colour under its label, a card's colour under its
+      number, a token's team colour under its symbol, or simply telling a covered
+      cell from an empty one from a numbered one by fill alone, at any size where
+      the glyph itself is too small to read."""
     if cols < 1 or rows < 1:
         raise ValueError("cols and rows must be >= 1")
     if not 0.0 <= inset < 0.5:
         raise ValueError("inset must be in [0.0, 0.5)")
+    if stat not in ("mean", "mode"):
+        raise ValueError("stat must be 'mean' or 'mode'")
+    if not 1 <= quant <= 256:
+        raise ValueError("quant must be in [1, 256]")
     if rgb is None:
         w, h, rgb = capture_rgb()
     else:
@@ -2021,15 +2050,40 @@ def sample_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
                 ix1 = ix0 + 1
             ix0 = max(0, min(ix0, w - 1))
             ix1 = max(ix0 + 1, min(ix1, w))
-            sr = sg = sb = n = 0
-            for yy in range(iy0, iy1):
-                base = (yy * w + ix0) * 3
-                for k in range(0, (ix1 - ix0) * 3, 3):
-                    sr += rgb[base + k]
-                    sg += rgb[base + k + 1]
-                    sb += rgb[base + k + 2]
-                    n += 1
-            row.append({"r": sr // n, "g": sg // n, "b": sb // n, "count": n})
+            if stat == "mean":
+                sr = sg = sb = n = 0
+                for yy in range(iy0, iy1):
+                    base = (yy * w + ix0) * 3
+                    for k in range(0, (ix1 - ix0) * 3, 3):
+                        sr += rgb[base + k]
+                        sg += rgb[base + k + 1]
+                        sb += rgb[base + k + 2]
+                        n += 1
+                row.append({"r": sr // n, "g": sg // n, "b": sb // n, "count": n})
+            else:
+                # Modal fill: bucket pixels into a coarse colour histogram,
+                # accumulating each bin's exact channel sums, then return the
+                # mean of the most-populated bin — the fill outvotes any mark.
+                bins: "dict[tuple[int, int, int], list[int]]" = {}
+                for yy in range(iy0, iy1):
+                    base = (yy * w + ix0) * 3
+                    for k in range(0, (ix1 - ix0) * 3, 3):
+                        pr = rgb[base + k]
+                        pg = rgb[base + k + 1]
+                        pb = rgb[base + k + 2]
+                        key = (pr // quant, pg // quant, pb // quant)
+                        acc = bins.get(key)
+                        if acc is None:
+                            bins[key] = [1, pr, pg, pb]
+                        else:
+                            acc[0] += 1
+                            acc[1] += pr
+                            acc[2] += pg
+                            acc[3] += pb
+                best = max(bins.values(), key=lambda a: a[0])
+                bn = best[0]
+                row.append({"r": best[1] // bn, "g": best[2] // bn,
+                            "b": best[3] // bn, "count": bn})
         grid.append(row)
     return grid
 

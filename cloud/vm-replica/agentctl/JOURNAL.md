@@ -8871,3 +8871,67 @@ cluster id; the result is deterministic; and feeding one exemplar per discovered
 cluster back to `classify_boxes` as a labelled library reproduces the grouping
 exactly. All fourteen floor friction tests pass (F256 plus the prior thirteen),
 no regressions.
+
+### F257 — sample_grid(stat="mode"): the fill colour, immune to the mark on it
+
+**Friction.** `sample_grid` reads a cell's *mean* colour, and a mean cannot tell
+the cell's **fill** from a **mark painted on it**. The two blend in proportion to
+how much of the cell the mark covers — so two cells with the *same* fill but
+different-sized marks read as *different* colours, and the signal you wanted (the
+fill) is gone. gnome-mines made this concrete in a way I had the friction backwards
+on first. Classic minesweeper tints the *digit* (1 blue, 2 green, 3 red) on a
+neutral cell, and I expected to need a "read the glyph's hue" primitive — but the
+installed GTK theme does the opposite: the digit is always dark, and the **cell
+background** is tinted by the count (1 green, 2 tan, 0/empty near-white, covered
+grey). So the value lives in the fill, and a dark digit sits on top of it whose ink
+*grows with the count*. `sample_grid` mean: a "1" cell read `(170,193,154)`, a "2"
+`(213,214,174)`, empty `(222,222,220)`, covered `(186,189,182)` — the fills smear
+toward each other and toward grey, because the heavier "2" glyph drags its mean
+further down than the lighter "1", i.e. the very glyph you are trying to see past
+corrupts the very measurement that would let you. Neither existing reader fits: the
+glyphs are too small and antialiased for reliable OCR at speed, and `classify_grid`
+/`cluster_boxes` reduce to a *luma* signature that is deliberately colour-blind
+(it would also have to template every digit), when the count is cleanly there in
+one cheap number — the fill hue — if only the mark would stop polluting it.
+
+**Solution.** A `stat` parameter on `sample_grid`: `"mean"` (default, unchanged)
+or `"mode"`. `"mode"` buckets the cell's central window into a coarse colour
+histogram (each channel quantised to `quant`-wide bins, default 24), takes the
+most-populated bin, and returns the **exact mean of the pixels in that bin**. The
+fill is the majority of the window and the mark a minority, so the fill bin always
+wins; de-quantising back to the real pixel mean keeps the colour precise rather
+than snapped to a bucket centre. `count` becomes the modal bin's dominance (how
+solid the fill is). It is the same loss-cutting double loop, the same geometry,
+inset, clamping and `{r,g,b,count}` shape as the mean path — only the per-cell
+reduction changes — so it composes with `detect_grid` edges and `capture_patch`
+exactly as before, and `stat="mean"` is byte-for-byte the old behaviour.
+
+**Lesson (architecture).** `sample_color`/`sample_grid` had quietly assumed a cell
+is *solid* — that its mean *is* its colour. A cell with a mark on it breaks that
+assumption, and the fix is not a new reader but the **right reduction**: mean is the
+estimator for a uniform region, mode is the estimator for "a dominant fill plus
+clutter". The floor's colour reader now spans both, and the choice is one keyword.
+This is the same move as `ocr_grid`'s `invert="auto"` (F255): a reader grows a
+*statistic option* to stay correct on a board that violates its tacit assumption,
+rather than the caller pre-cleaning the pixels or a near-duplicate primitive being
+spawned (損之又損). Reading a fill under a mark is not a mines quirk — it is a
+button's colour under its label, a card's colour under its number, a token's team
+colour under its symbol, or just telling covered / empty / numbered apart by fill
+at a size where the glyph itself is illegible.
+
+**Proof.** *Live, gnome-mines 8x8*: `sample_grid(stat="mode", inset≈0.22)` returns
+four crisply separated fills — covered `(180,180,180)`, empty `(228,228,228)`,
+"1" `(228,252,204)` green, "2" `(228,228,180)` tan — where the mean of the same
+cells smears them together. Measured on the live board, the within-class colour
+spread of the "2" cells (which should all read identically) is **65** under mean
+but **33** under mode: the mark-immunity halves the scatter of a class that ought
+to be a single point, which is the difference between a fixed colour rule working
+and not. *Synthetic* (`_test_f257.py`, no display/capture): fills painted under
+centred marks of growing area — mode recovers each true fill within tolerance
+regardless of ink and reads two same-fill/different-mark cells as the *same*
+colour, while mean drifts the heavily-inked cell far from its fill and smears the
+class apart (within-class spread collapses under mode, stays large under mean);
+`count` tracks modal dominance; on a solid mark-free cell mode equals mean (it adds
+nothing when there is nothing to be immune to); the default stays mean
+(backward-compatible); args validated. All fifteen floor friction tests pass
+(F257 plus the prior fourteen), no regressions.
