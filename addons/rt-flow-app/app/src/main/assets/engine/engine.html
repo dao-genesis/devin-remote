@@ -1323,26 +1323,12 @@
         cur[sid] = { phase: phase, title: ttl || sid, email: s.email || "", reason: s.reason, label: s.actionLabel, msgId: s.msgId||"", unread: !!s.unread };
       });
       _updLatest(titleByAcct, now);   // 更新最近对话名缓存(供额度类通知优先显示对话名)
-      // 续跑复活探测: 上轮已登记「最近结束」的会话, 本轮又活跃 → 是「续跑」而非「全新」, 文案/绿灯据此区分。
-      var endedV = {}; try { var rawE = N.vaultLoad ? N.vaultLoad("rtflow.trk.ended") : null; if (rawE) endedV = JSON.parse(rawE) || {}; } catch(e){}
-      // 跃迁判定: 续跑复活(🟢) / 全新对话(🆕) / 新内容(💬) / 卡住·待处理·等待输入(⚠️⛔⏳)
+      // 跃迁判定: 新对话/续跑/新内容 → 仅实时反映「追踪状态 + 标签变绿」, 不发消息提示(按用户要求·
+      //   开播/续跑/新内容皆静默, 只让账号页标签变绿·网页镜像同步); 仅「需你关注」(卡住/待处理/等待输入)才通知。
+      //   绿灯与续跑复活的状态反映由 next[sid] 登记 + _mirrorTickToVault 复活剪枝承担, 与通知解耦。
       Object.keys(cur).forEach(function(sid){
         var c = cur[sid], p = prev[sid];
         next[sid] = { phase: c.phase, title: c.title, email: c.email, ts: now, msgId: c.msgId, reason: c.reason };
-        var resurrected = !p && !!endedV[sid];   // 上轮已登记终态、本轮又活跃 → 续跑复活
-        if (!p && !coldStart && c.phase === "active") {
-          if (resurrected) {
-            // 已结束的对话又被发了新消息·续跑 → 实时反映·亮绿灯(根治「续跑不亮绿灯·状态死板」)
-            notify("conv-" + sid, "🟢 对话继续: " + c.title, (c.email ? c.email + " · " : "") + "已结束的对话收到新消息·已恢复运行");
-          } else {
-            // 全新对话(上轮无·本轮活跃且非卡住·非冷启) → 开播通知(实时新对话监测)
-            notify("conv-" + sid, "🆕 新对话: " + c.title, (c.email ? c.email + " · " : "") + "Devin 已开始执行");
-          }
-        } else if (p && !coldStart && c.phase === "active" && p.phase !== "active" && c.msgId && p.msgId && c.msgId !== p.msgId) {
-          // 由「待输入/卡住/额度」转回活跃且有新消息 → 实时新内容监测(你回复后 Devin 又动起来)。
-          //   不刷屏: 仅状态跃迁(非持续运行)时一次, 避免运行中会话每 60s 因 msgId 变化反复弹。
-          notify("conv-" + sid, "💬 已继续: " + c.title, (c.email ? c.email + " · " : "") + "对话收到新消息·已继续运行");
-        }
         if (c.phase === "stuck" && (!p || p.phase !== "stuck")) {
           var head = c.reason === "action_required" ? "⚠️ 待你处理" : (c.reason === "blocked" ? "⛔ 卡住/失败" : "⏳ 等待输入");
           notify("conv-" + sid, head + ": " + c.title, (c.email ? c.email + " · " : "") + (c.label || "Devin 需要你回应") );
