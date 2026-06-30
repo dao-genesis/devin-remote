@@ -199,6 +199,7 @@ const CFG = {
   authTtlMs: 12 * 60 * 60 * 1000, // 登录态缓存 12h
   reqTimeoutMs: 30000,
   streamTimeoutMs: 90000, // v: 180000→90000 弱链路下更快回收挂死的 event-stream socket
+  streamRetryDelayMs: 1500, // event-stream 流式拉取 3 试之间的间隔退避 (软编码·便于单测加速)
   maxRetries: 3, // 瞬态网络错误(TLS socket 断/ECONNRESET/超时)自动重试次数 (弱者道之用·反复至成)
   retryBaseMs: 500, // 重试退避基数 (指数: 500/1000/2000ms)
   rateLimitMaxRetries: 6, // HTTP 429 限流重试次数 (多账号预载/普查最易撞限流·退避后必复)
@@ -656,7 +657,10 @@ async function sendMessage(auth, devinId, message, opts) {
 }
 
 // 事件流 (SSE/ndjson/json 混合) → 去重排序后的事件数组
-async function getEventStream(auth, devinId) {
+// 详版: 返回 { events, ok, reason, status }。
+//   ok=false 仅当「流 3 试 + first-load 兜底」皆未取得 200 → 硬拉取失败 (区别于"真空对话": 真空对话 first-load 返 200 空数组 → ok=true)。
+//   破坏性清理据此判定: ok=false 的备份不可信, 不得据此删原对话 (否则瞬时 403/5xx/限速 → 空备份 → 误删真数据)。
+async function fetchEventStreamDetailed(auth, devinId) {
   // /events/<id>/{stream,first-load} 要求 devin- 前缀 (无前缀 → 403 → 0 事件 → 空 MD)。
   // 归一: 内部强制补前缀, 兼容 resolveConvMd 等剥前缀的调用方与已带前缀的调用方。
   const _eid = "devin-" + String(devinId || "").replace(/^devin-/, "");
@@ -676,12 +680,13 @@ async function getEventStream(auth, devinId) {
         break;
       }
     } catch {}
-    if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    if (attempt < 2) await new Promise((r) => setTimeout(r, (CFG.streamRetryDelayMs || 1500) * (attempt + 1)));
   }
   if (resp == null) {
     // first-load 兜底
     const r = await jsonRequest("GET", CFG.apiBase + "/events/first-load/" + _eid, authHeaders(auth));
-    return asArray(r.json, "result", "events");
+    if (r.status !== 200) return { events: [], ok: false, reason: "fetch-failed", status: r.status || 0 };
+    return { events: asArray(r.json, "result", "events"), ok: true, reason: "first-load", status: 200 };
   }
   const merged = new Map();
   const add = (ev) => {
@@ -730,7 +735,12 @@ async function getEventStream(auth, devinId) {
   }
   const events = Array.from(merged.values());
   events.sort((a, b) => (a.created_at_ms || 0) - (b.created_at_ms || 0));
-  return events;
+  return { events, ok: true, reason: "stream", status: 200 };
+}
+// 事件流 (SSE/ndjson/json 混合) → 去重排序后的事件数组。
+//   薄壳: 保持旧签名 (恒返数组·非 200 返空·仅网络彻底失败时同旧版上抛), 现有导出/拖会话调用方零改动。
+async function getEventStream(auth, devinId) {
+  return (await fetchEventStreamDetailed(auth, devinId)).events;
 }
 
 async function listKnowledge(auth) {
@@ -1595,7 +1605,10 @@ async function backupOneConversation(auth, sess, accountDir, opts) {
   opts = opts || {};
   const devinId = sess.devin_id || sess.devinId || sess.session_id || sess.id;
   const title = sess.title || sess.name || "未命名";
-  const events = await getEventStream(auth, devinId);
+  // 守柔·宁可不删不可误删: 事件流硬拉取失败(非 200)即上抛 → 计入 failed → 备份校验不通过 → 不据空备份清理原对话。
+  const _ev = await fetchEventStreamDetailed(auth, devinId);
+  if (!_ev.ok) throw new Error("事件流拉取失败(status " + _ev.status + ") · 备份不可信, 拒绝据此清理: " + devinId);
+  const events = _ev.events;
 
   // 增量判断
   const state = readJson(DC_BACKUP_STATE, {});
@@ -2187,7 +2200,10 @@ async function backupOneConversationFolder(auth, sess, accountDir, opts, sharedS
     } catch {}
   }
 
-  const events = await getEventStream(auth, devinId);
+  // 守柔·宁可不删不可误删: 事件流硬拉取失败(非 200)即上抛 → 计入 failed → 备份校验不通过 → 不据空备份清理原对话。
+  const _ev = await fetchEventStreamDetailed(auth, devinId);
+  if (!_ev.ok) throw new Error("事件流拉取失败(status " + _ev.status + ") · 备份不可信, 拒绝据此清理: " + devinId);
+  const events = _ev.events;
   // 增量判断: 事件数未变且目标文件夹已成形 → 跳过 (省去 detail/文件重下)
   if (opts.incremental !== false && state[sk] && state[sk].eventCount === events.length &&
       fs.existsSync(path.join(convDir, "_meta.json"))) {
@@ -2619,6 +2635,7 @@ module.exports = {
   listSessions,
   getSessionDetail,
   getEventStream,
+  fetchEventStreamDetailed,
   // writes (代替用户发起/续写对话)
   createSession,
   sendMessage,

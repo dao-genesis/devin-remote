@@ -1055,6 +1055,50 @@ function test(name, fn) {
     });
   }
 
+  // ── N. fetchEventStreamDetailed · 守柔防误删 (硬拉取失败 ≠ 真空对话) ────────
+  // 反者道之动: 备份→归零→出库 的破坏性链路, 唯有「事件流真拿到(200)」才算备齐;
+  //   流+兜底皆非 200(403/5xx/限速) → ok:false → 上层计 failed → 校验不过 → 拒删原对话。
+  //   真空对话(first-load 返 200 空数组) → ok:true → 可正常清理。本测以本地 http 服务模拟两路。
+  console.log("\n[fetchEventStreamDetailed · 守柔防误删]");
+  await test("流+兜底皆 403 → ok:false (硬失败·不可据此删原对话)", async () => {
+    const prev = { base: cloud.CFG.apiBase, srd: cloud.CFG.streamRetryDelayMs };
+    cloud.configure({ streamRetryDelayMs: 1 });
+    const server = http.createServer((req, res) => { res.statusCode = 403; res.end("forbidden"); });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    cloud.configure({ apiBase: "http://127.0.0.1:" + server.address().port });
+    try {
+      const r = await cloud.fetchEventStreamDetailed({ auth1: "x", orgId: "o", orgBare: "o" }, "abc123");
+      assert.strictEqual(r.ok, false, "硬拉取失败须 ok:false");
+      assert.deepStrictEqual(r.events, [], "失败时 events 空");
+    } finally { server.close(); cloud.configure({ apiBase: prev.base, streamRetryDelayMs: prev.srd }); }
+  });
+  await test("流非 200 但 first-load 返 200 空数组 → ok:true (真空对话·可清理)", async () => {
+    const prev = { base: cloud.CFG.apiBase, srd: cloud.CFG.streamRetryDelayMs };
+    cloud.configure({ streamRetryDelayMs: 1 });
+    const server = http.createServer((req, res) => {
+      if (/\/events\/first-load\//.test(req.url)) { res.statusCode = 200; res.end('{"result":[]}'); }
+      else { res.statusCode = 404; res.end("no stream"); }
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    cloud.configure({ apiBase: "http://127.0.0.1:" + server.address().port });
+    try {
+      const r = await cloud.fetchEventStreamDetailed({ auth1: "x", orgId: "o", orgBare: "o" }, "abc123");
+      assert.strictEqual(r.ok, true, "真空对话(first-load 200)须 ok:true");
+      assert.deepStrictEqual(r.events, [], "真空对话 events 空");
+    } finally { server.close(); cloud.configure({ apiBase: prev.base, streamRetryDelayMs: prev.srd }); }
+  });
+  await test("getEventStream 薄壳保持旧签名: 恒返数组", async () => {
+    const prev = { base: cloud.CFG.apiBase, srd: cloud.CFG.streamRetryDelayMs };
+    cloud.configure({ streamRetryDelayMs: 1 });
+    const server = http.createServer((req, res) => { res.statusCode = 403; res.end("forbidden"); });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    cloud.configure({ apiBase: "http://127.0.0.1:" + server.address().port });
+    try {
+      const ev = await cloud.getEventStream({ auth1: "x", orgId: "o", orgBare: "o" }, "abc123");
+      assert.ok(Array.isArray(ev), "getEventStream 恒返数组(非 200 → 空数组·不上抛)");
+    } finally { server.close(); cloud.configure({ apiBase: prev.base, streamRetryDelayMs: prev.srd }); }
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
