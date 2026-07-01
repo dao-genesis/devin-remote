@@ -82,6 +82,21 @@
   #menuPop .mi:hover{background:#1a2030}
   #menuPop .sep{height:1px;background:var(--border);margin:5px 4px}
   #menuPop .ic{width:20px;text-align:center}
+  /* 🕐 浏览历史 / ⭐ 书签收藏: 整页列表 (复刻 APK openBrowserListTab, 非小浮层) */
+  #listPage{position:absolute;inset:0;background:var(--bg);display:none;flex-direction:column;z-index:70}
+  #listPage.show{display:flex}
+  #lpHead{display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--border);flex:0 0 auto}
+  #lpHead .t{flex:1;font-size:14px;color:var(--fg);font-weight:600}
+  #lpHead .btn{background:#1c2230;color:var(--fg);border:1px solid var(--input-b);border-radius:7px;height:28px;padding:0 11px;font-size:12px;cursor:pointer}
+  #lpBody{flex:1 1 auto;overflow:auto;padding:8px 10px}
+  #lpBody .it{display:flex;align-items:center;gap:8px;padding:9px 8px;border:1px solid var(--border);border-radius:8px;margin-bottom:7px}
+  #lpBody .it .row{flex:1;min-width:0;cursor:pointer}
+  #lpBody .it:hover{border-color:var(--green)}
+  #lpBody .it .t2{font-size:13px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #lpBody .it .u{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+  #lpBody .it .del{width:26px;height:26px;line-height:24px;text-align:center;border-radius:50%;color:#8a93a0;font-size:15px;cursor:pointer;flex:0 0 auto}
+  #lpBody .it .del:hover{background:#3a2030;color:#f88}
+  #lpBody .empty{color:var(--muted);font-size:12px;padding:14px 8px}
 </style>
 </head>
 <body>
@@ -106,6 +121,11 @@
   <div id="frames">
     <div id="menuPop"></div>
     <div id="dlPanel"></div>
+    <div id="listPage">
+      <div id="lpHead"><span class="t" id="lpTitle">浏览历史</span>
+        <button class="btn" id="lpClear">清空</button><button class="btn" id="lpClose">关闭</button></div>
+      <div id="lpBody"></div>
+    </div>
     <div id="launch"><div id="launchCard">
       <h3>新标签 — 选择板块, 或输入任意网址 (各大浏览器多实例)</h3>
       <div class="grid" id="segGrid"></div>
@@ -225,6 +245,7 @@
     if(!url) return;
     if(!/^[a-z]+:\/\//i.test(url)) url="https://"+url;
     var ac = acct || acctFor(url);
+    recordHist(url, title||host(url), ac);
     if(isExternal(url)){
       var t={title:title||host(url), origUrl:url, acct:ac, kind:"web", src:"about:blank", rootmount:true};
       addTab(t); openExternal(t,url,ac); return;
@@ -401,6 +422,8 @@
     mi("📖","阅读模式", tabReader);
     mi("🌙","夜间模式", tabNight);
     sep();
+    mi("🕐","浏览历史", function(){ openListPage("hist"); });
+    mi("⭐","书签收藏", function(){ openListPage("bm"); });
     mi("🔗","复制本标签网址", function(){ var t=tabs[active]; if(!t) return;
       var u = t.kind==="web"? (t.origUrl||t.src) : (location.origin+pageSrc(pageByKey(t.pageKey)));
       try{ navigator.clipboard.writeText(u); shToast("已复制网址"); }catch(e){} });
@@ -448,6 +471,44 @@
     var i=a.findIndex(function(b){return b.url===u;});
     if(i>=0){ a.splice(i,1); shToast("已取消收藏"); } else { a.unshift({url:u,title:curTitle()}); shToast("已收藏"); }
     setBM(a); updateStar(); };
+
+  // ── 🕐 浏览历史 (本机记录·排除内部功能页, 与 APK addHistory 同义) ──
+  function getHist(){ try{ return JSON.parse(localStorage.getItem("rtflow.history")||"[]"); }catch(e){ return []; } }
+  function recordHist(url, title, acct){
+    if(!url || /^(rtflow|about|file|data|blob):/i.test(url)) return;
+    try{ var a=getHist().filter(function(h){ return h && h.url!==url; });
+      a.unshift({ url:url, title:title||host(url), acct:acct&&acct!=="_"?acct:undefined, t:Date.now() });
+      if(a.length>300) a.length=300; localStorage.setItem("rtflow.history", JSON.stringify(a)); }catch(e){}
+  }
+  // ── 整页 列表 (🕐 历史 / ⭐ 书签): 复刻 APK openBrowserListTab ──
+  var listPage=document.getElementById("listPage"), lpBody=document.getElementById("lpBody"),
+      lpTitle=document.getElementById("lpTitle"), _lpMode="hist", _lpData=[];
+  function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
+  function openListPage(mode){
+    _lpMode=mode; lpTitle.textContent = mode==="bm" ? "⭐ 书签收藏" : "🕐 浏览历史";
+    document.getElementById("lpClear").style.display = mode==="bm" ? "none" : "";
+    menuPop.classList.remove("show"); try{ dlPanel.classList.remove("show"); }catch(e){}
+    var arr = mode==="bm" ? getBM() : getHist();
+    _lpData=[]; var html="";
+    if(!arr.length){ html='<div class="empty">'+(mode==="bm"?"暂无书签 — 点第二行 ☆ 收藏本页":"暂无浏览历史 — 网页内打开的对话/外站会记于此")+"</div>"; }
+    else arr.forEach(function(e){ if(!e||!e.url) return; var idx=_lpData.length; _lpData.push(e);
+      html+='<div class="it"><div class="row" data-i="'+idx+'"><div class="t2">'+_esc(e.title||e.url)+'</div>'
+          +'<div class="u">'+_esc(e.url)+'</div></div><div class="del" data-i="'+idx+'" title="删除">\u2715</div></div>'; });
+    lpBody.innerHTML=html; listPage.classList.add("show");
+  }
+  function _lpOpen(e){ if(!e||!e.url) return;
+    if(/^rtflow:\/\//i.test(e.url)){ openPage(e.url.replace(/^rtflow:\/\//i,"").trim()); return; }
+    openWebAcct(e.url, e.acct||"", e.title); }
+  function _lpDelete(e){ var key = _lpMode==="bm" ? "rtflow.bookmarks" : "rtflow.history";
+    try{ var arr=(_lpMode==="bm"?getBM():getHist()).filter(function(h){ return h && h.url!==e.url; });
+      localStorage.setItem(key, JSON.stringify(arr)); }catch(x){}
+    if(_lpMode==="bm") updateStar(); openListPage(_lpMode); }
+  lpBody.addEventListener("click", function(ev){
+    var del=ev.target.closest&&ev.target.closest(".del"); if(del){ var e=_lpData[+del.getAttribute("data-i")]; if(e) _lpDelete(e); return; }
+    var row=ev.target.closest&&ev.target.closest(".row"); if(row){ var e2=_lpData[+row.getAttribute("data-i")]; if(e2){ listPage.classList.remove("show"); _lpOpen(e2); } } });
+  document.getElementById("lpClose").onclick=function(){ listPage.classList.remove("show"); };
+  document.getElementById("lpClear").onclick=function(){ if(!confirm("清空全部浏览历史？")) return;
+    try{ localStorage.setItem("rtflow.history","[]"); }catch(x){} openListPage("hist"); shToast("历史已清空"); };
 
   // 根挂载代理续命: 每 60s 对仍打开的根挂载标签 ping 手机 → 刷新其 (源站,账号) 代理活跃时刻。
   // 手机端「空闲回收」据此只拆「浏览器已离开(关页/切站)」的代理, 对仍打开的实时会话(含 WebSocket/SSE
