@@ -148,7 +148,7 @@ def read_board(rgb, size, atlas):
     return out
 
 
-def main(max_levels=12):
+def main(max_levels=25):
     atlas = load_atlas()
     osctl.omnibox_go("https://humanbenchmark.com/tests/chimp"); time.sleep(2.2)
     osctl.click(776, 564); time.sleep(1.4)              # Start Test

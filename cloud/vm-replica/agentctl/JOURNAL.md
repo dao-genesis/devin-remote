@@ -10063,10 +10063,12 @@ Two wrinkles the floor answered without new code:
   by level 6 and 0 by level 7, then cleared on.
 
 Live proof (both from a cold process): with the committed `chimp_atlas.json` and
-with a deliberately truncated **1–5 seed**, the floor cleared the Chimp Test
-through **level 12 — fifteen numbers, 1..15**, every level read exactly 1..N with
-**zero strikes**, stopping only at the harness's `max_levels` cap. Chimps remember
-~9 over 90% of the time; the floor read fifteen clean and could keep going.
+with a deliberately truncated **1–5 seed**, the floor cleared the Chimp Test with
+every level read exactly 1..N and **zero strikes**. Pushed past the arbitrary cap,
+the full-atlas run cleared **through level 25 — twenty-eight numbers, 1..28**, each
+board (two-digit tiles 10..28 all grouped and read cleanly) perfect, stopping only
+when the harness `max_levels` loop ran out — not on any misread. Chimps remember
+~9 over 90% of the time; the floor read twenty-eight clean and showed no ceiling.
 
 The lesson is the friction-driven principle stated in the positive: before
 inventing F277 for "digit reading", I checked whether the existing rungs already
