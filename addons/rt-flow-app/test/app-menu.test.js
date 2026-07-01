@@ -36,5 +36,14 @@ ok(/function\s+copyAccessLink\s*\(/.test(src) && /mi\("📋","复制接入链接
 ok(/session="\+encodeURIComponent\(SESSION\)\+"&token="\+encodeURIComponent\(TOKEN\)/.test(src),
    "接入链接携带 session/token (同网设备可打开同一归一网页)");
 
+// 🕐 浏览历史 / ⭐ 书签收藏: 整页列表 (复刻 APK openBrowserListTab)。
+ok(/function\s+openListPage\s*\(mode\)/.test(src), "存在整页列表 openListPage(hist/bm)");
+ok(/function\s+recordHist\s*\(/.test(src) && /recordHist\(url,\s*title\|\|host\(url\),\s*ac\)/.test(src),
+   "openWebAcct 打开网页时记录浏览历史 (recordHist)");
+ok(/mi\("🕐","浏览历史",\s*function\(\)\{\s*openListPage\("hist"\)/.test(src), "菜单: 浏览历史 → openListPage(hist)");
+ok(/mi\("⭐","书签收藏",\s*function\(\)\{\s*openListPage\("bm"\)/.test(src), "菜单: 书签收藏 → openListPage(bm)");
+ok(/rtflow\.history/.test(src), "浏览历史落 localStorage rtflow.history (纯客户端·无金库依赖)");
+ok(/id="listPage"/.test(src) && /id="lpBody"/.test(src), "存在整页列表 DOM 容器 (#listPage/#lpBody)");
+
 if (fails) { console.error("\napp.html ☰ 菜单页面工具对齐护栏: " + fails + " 项失败 ✗"); process.exit(1); }
 console.log("\n全部通过 ✓");
