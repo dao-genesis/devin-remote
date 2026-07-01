@@ -364,7 +364,7 @@ let KEY = "";
   console.log("[12] 官方直通捕获帧解析: 末条消息正文整体换为 newText(逐字节保形)");
   {
     const SRC = require("../../bundled-origin/source.js")._test;
-    const { _pbTag, _pbEncVarint, _swapLastUserMsg, parseFrames, parseProto, _findMsgsArray, _msgContentInfo } = SRC;
+    const { _pbTag, _pbEncVarint, _swapLastUserMsg, _trimFrameHistory, parseFrames, parseProto, _findMsgsArray, _msgContentInfo } = SRC;
     const strF = (f, s) => {
       const b = Buffer.from(s, "utf8");
       return Buffer.concat([_pbTag(f, 2), _pbEncVarint(b.length), b]);
@@ -400,6 +400,24 @@ let KEY = "";
     ok("老wire(field2)末条正文被换", f2 && lastContent(f2) === "PINGPONG_OLD");
     // 空/坏帧不崩
     ok("空帧返回 null 不崩", _swapLastUserMsg(Buffer.alloc(0), "x") === null);
+
+    // 去污染: _trimFrameHistory 把多轮消息数组裁成仅留末条(单轮·干净)· 防预热历史串染
+    const msgCount = (frame) => {
+      const top = parseProto(parseFrames(frame)[0].payload);
+      const fnd = _findMsgsArray(top);
+      return fnd ? fnd.arr.length : 0;
+    };
+    const t1 = _trimFrameHistory(f1); // f1 = 换过末条的新 wire(原 2 条)
+    ok("裁史: 多轮消息数组裁成仅留末条", msgCount(t1) === 1);
+    ok("裁史: 末条(新 user turn)正文保留", lastContent(t1) === "PINGPONG_NEW");
+    ok("裁史: 首条旧历史已剔除", !/old user A/.test(t1.toString("utf8")));
+    // 单轮帧幂等·坏帧不崩回退原帧
+    const single = _swapLastUserMsg(
+      frameOf(wrap(3, Buffer.concat([varF(2, 1), strF(3, "only turn")]))),
+      "SOLO",
+    );
+    ok("裁史: 单轮帧不变(幂等)", msgCount(_trimFrameHistory(single)) === 1);
+    ok("裁史: 坏帧回退原 body 不崩", _trimFrameHistory(Buffer.alloc(0)).length === 0);
 
     // 回包解码: Connect end-stream 帧(gzip)载 JSON quota 错误 → parseFrames 解压 + JSON.parse 取 error
     const zlib = require("zlib");

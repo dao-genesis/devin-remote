@@ -5552,6 +5552,64 @@ function _pbRebuildField(buf, targetField, fn) {
   }
   return Buffer.concat(out);
 }
+// 顶层某 repeated(wt=2) field 仅保留最末一条(用于把整段历史裁成单条新 user turn)。
+function _pbKeepLastRepeated(buf, targetField) {
+  const recs = [];
+  let i = 0;
+  const n = buf.length;
+  while (i < n) {
+    let tag;
+    [tag, i] = _pbReadVarint(buf, i);
+    const field = tag >> 3;
+    const wt = tag & 7;
+    let start = i;
+    if (wt === 0) {
+      let v;
+      [v, i] = _pbReadVarint(buf, i);
+    } else if (wt === 2) {
+      let ln;
+      [ln, i] = _pbReadVarint(buf, i);
+      i += ln;
+    } else if (wt === 5) i += 4;
+    else if (wt === 1) i += 8;
+    else return buf;
+    if (field === targetField && wt === 2) {
+      recs.push({ start, end: i });
+    }
+  }
+  // 复现顶层顺序: 非目标字段原位, 目标 repeated 仅在其原「首个出现」处放最末一条。
+  const lastRec = recs.length ? recs[recs.length - 1] : null;
+  const parts = [];
+  let placed = false;
+  // 重扫一遍以保持相对顺序
+  i = 0;
+  while (i < n) {
+    let tag;
+    const tagStart = i;
+    [tag, i] = _pbReadVarint(buf, i);
+    const field = tag >> 3;
+    const wt = tag & 7;
+    let start = i;
+    if (wt === 0) {
+      let v;
+      [v, i] = _pbReadVarint(buf, i);
+    } else if (wt === 2) {
+      let ln;
+      [ln, i] = _pbReadVarint(buf, i);
+      i += ln;
+    } else if (wt === 5) i += 4;
+    else if (wt === 1) i += 8;
+    if (field === targetField && wt === 2) {
+      if (!placed && lastRec) {
+        parts.push(_pbTag(targetField, 2), buf.slice(lastRec.start, lastRec.end));
+        placed = true;
+      }
+    } else {
+      parts.push(buf.slice(tagStart, i));
+    }
+  }
+  return Buffer.concat(parts);
+}
 function _pbHasField(buf, targetField) {
   let i = 0;
   const n = buf.length;
@@ -6355,9 +6413,34 @@ function _findMsgsArray(top) {
   }
   return null;
 }
+// 读捕获帧顶层 CHAT_MODEL_UID(field 21)/CHAT_MODEL_NAME(field 14) 字符串 = 预热档。
+//   cascade_wire 实证: api_server_pb.GetChatMessageRequest field21=modelUid, field14=modelName。
+function _frameModelInfo(capturedBody) {
+  try {
+    const frames = parseFrames(capturedBody);
+    if (!frames.length) return null;
+    const top = parseProto(frames[0].payload);
+    const rd = (f) => {
+      const e = top[f] && top[f][0];
+      return e && e.w === 2 && e.b ? Buffer.from(e.b).toString("utf8") : null;
+    };
+    const found = _findMsgsArray(top);
+    return {
+      modelUid: rd(21), // 官方直通实际路由之档(预热时 Cascade 所选模型·云端会话钉定)
+      modelName: rd(14),
+      cascadeId: rd(16),
+      msgField: found ? found.field : null,
+      msgCount: found ? found.arr.length : 0,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
 // 把捕获帧「最末一条消息的正文子字段」整体换成 newText, 其余字节逐一原样保留。
 // 用 _pbRebuildField 沿 path 重算长度前缀(消息数组末项 → 该项内正文子字段),
 // 不靠 _pbCloneSwapStrings(其仅换 <200B 纯 ASCII 短串, 不适合多行长正文)。
+// 纯换正文·不裁史(裁史由 _trimFrameHistory 于官方直通复用层单独施加)。
 function _swapLastUserMsg(capturedBody, newText) {
   const frames = parseFrames(capturedBody);
   if (!frames.length) return null;
@@ -6378,6 +6461,28 @@ function _swapLastUserMsg(capturedBody, newText) {
   });
   if (!swapped || !swapped.length || !_pbParseOk(swapped)) return null;
   return buildFrame(0, swapped);
+}
+
+// 去污染(实证·2026-07): 预热帧本携「预热对话整段历史」(field3 repeated, msgCount 可达十数条),
+//   官方直通复用时若原样带上, 云端把每次反代请求当作预热会话的续轮 → 回包被预热旧轮次串染,
+//   甚至可被 "复述上文" 类提问套出整段预热历史(隔离/隐私缺陷)。故复用前把消息数组裁成仅留末条
+//   (即刚换入的新 user turn·单轮干净)。系统提示词(顶层 field2)不在数组内, 不受影响。
+//   注: 官方直通本就只注入「末条 user 文本」、从不映射请求方多轮上下文, 故裁史不丢用户真上下文。
+//   裁后不能解析则回退原帧(宁稳勿崩)。
+function _trimFrameHistory(frameBody) {
+  try {
+    const frames = parseFrames(frameBody);
+    if (!frames.length) return frameBody;
+    const payload = frames[0].payload;
+    const top = parseProto(payload);
+    const found = _findMsgsArray(top);
+    if (!found || found.arr.length <= 1) return frameBody;
+    const trimmed = _pbKeepLastRepeated(payload, found.field);
+    if (trimmed && trimmed.length && _pbParseOk(trimmed)) {
+      return buildFrame(0, trimmed);
+    }
+  } catch (_) {}
+  return frameBody;
 }
 
 // 官方直通: revproxy 经此真转云端、解码回包。sink: {onText,onEnd,onError}。
@@ -6402,7 +6507,8 @@ function _officialChatReplay(target, norm, sink) {
       }
     } catch (_) {}
     if (!userText) userText = "你好";
-    const newBody = _swapLastUserMsg(_lastChatFrame.body, userText);
+    let newBody = _swapLastUserMsg(_lastChatFrame.body, userText);
+    if (newBody) newBody = _trimFrameHistory(newBody); // 去污染: 裁掉预热历史·单轮干净
     if (!newBody) {
       sink.onError &&
         sink.onError("官方直通: 捕获帧解析失败, 请重新预热一次官方对话");
@@ -6608,6 +6714,21 @@ async function _maybeRevproxy(req, res) {
   if (req.method === "OPTIONS") {
     res.writeHead(204);
     res.end();
+    return true;
+  }
+  // 诊断: 当前预热帧所携模型(官方直通实际将路由之档) · 只读 · 供面板/自检显预热档
+  if (u.pathname === "/origin/revproxy/warm" && req.method === "GET") {
+    const has = !!(_lastChatFrame && _lastChatFrame.body);
+    const frame = has ? _frameModelInfo(_lastChatFrame.body) : null;
+    res.setHeader("Content-Type", "application/json");
+    res.end(
+      JSON.stringify({
+        ok: true,
+        has,
+        warm: frame,
+        at: (_lastChatFrame && _lastChatFrame.at) || 0,
+      }),
+    );
     return true;
   }
   try {
@@ -7463,6 +7584,8 @@ module.exports = {
     _loadFullModelCatalog,
     _pbRebuildField,
     _swapLastUserMsg,
+    _trimFrameHistory,
+    _pbKeepLastRepeated,
     _findMsgsArray,
     _msgContentInfo,
     parseFrames,
