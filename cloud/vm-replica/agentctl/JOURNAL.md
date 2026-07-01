@@ -9863,3 +9863,52 @@ the threshold lands mid-jitter. The gaps are bimodal — a tight cluster of jitt
 and a tight cluster of pitch — so the split belongs *between* the two
 populations, at the largest ratio jump, not at a statistic of the pooled set.
 Reading the shape of the distribution beats reading its average. 道法自然.
+
+## F274 — grid_index: snap a foreign reading onto an already-known board
+
+`grid_lattice` (F273) builds a lattice out of one point set and indexes *that*
+set. But the two sets are usually different things seen at different moments: the
+board's *resting* cell centres fix the lattice once (idle tiles, a `detect_grid`
+result), and then a *separate*, transient reading — the tiles that flashed this
+round, the pieces on the board now, every white blob of a move — has to be
+snapped onto that fixed lattice and collapsed to *which cells* it touched. The
+F273 live harness hand-rolled exactly this, per reading: two `min(lines,
+key=abs-distance)` nearest-line searches (one per axis) plus bucketing repeat
+detections of one tile into a single click by averaging their centroids. That
+bookkeeping wanted owning.
+
+`grid_index(lattice, points, max_dist=None)` owns it as a pure function.
+`lattice` is anything carrying `xs`/`ys` (a `grid_lattice` return, or a bare
+`{"xs":…,"ys":…}`); `points` is the reading in the same forms `grid_lattice`
+takes. Each point snaps to its nearest column and row. `max_dist` (scalar or
+per-axis `(dx, dy)`) drops a point as a *stray* when it lands farther than that
+from the nearest line on either axis — the guard that keeps a blob spilled off
+the board, or noise between cells, from being mis-snapped onto a real tile.
+Returns `{rows, cols, cells, occupied, points, dropped}`: `cells` is row-major
+and shaped like `grid_lattice`'s (so the two compose), each occupied slot holding
+`{x, y, n}` — the *centroid* of the points that fell in it (the click target,
+robust to duplicate detections) and *how many* there were; `occupied` is the
+sorted distinct touched cells; `points` keeps every kept detection indexed;
+`dropped` the strays. `n` doubles as a vote — a tile held white across many
+frames stacks a high `n`, a one-frame transient a low one.
+
+Proof. `_test_f274.py` (24 checks, no display): a three-tile reading snapped onto
+a fixed 3×3; repeats of one tile collapsed to a single averaged centroid with the
+right `n`; row-major `cells` matching `grid_lattice`'s shape; off-centre points
+snapped to the *nearest* line (not floored); dict keys preserved; a bare
+`{"xs","ys"}` lattice; `max_dist` scalar and per-axis stray rejection with
+`dropped` populated; a generous `max_dist` keeping everything; empty reading
+(dims still reported); a line-less lattice (all empty, no crash); and end-to-end
+composition with `grid_lattice` on a re-grown 4×4 board. All thirty floor tests
+pass. Live `_game_f274.py` on Visual Memory: building the lattice once from the
+idle tiles and calling `grid_index` on each memorise flash snapped **18 raw white
+detections down to the 3 distinct cells** every round, its per-cell `n` voting
+away transients — the F273 harness's hand bookkeeping, now one call.
+
+Lesson. The nearest-line snap has to break ties deterministically or the same
+reading indexes differently run to run; `min(range, key=abs)` keeps the *first*
+(lowest-index) line on a tie, which is the sane, stable choice — a point exactly
+between two columns belongs to the left one, every time. And the stray guard is
+per-axis on purpose: a blob can be dead-on in x yet a full cell low in y (a
+label, a shadow), and only a per-axis `max_dist` rejects it without also throwing
+away honest points that merely sit off-centre on the *other* axis. 道法自然.

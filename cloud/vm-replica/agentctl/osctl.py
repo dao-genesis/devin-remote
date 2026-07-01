@@ -1986,6 +1986,82 @@ def grid_lattice(points, tol=None) -> dict:
             "pitch": (px, py), "cells": cells, "points": indexed}
 
 
+def grid_index(lattice, points, max_dist=None) -> dict:
+    """Index a *foreign* bag of points onto an *already-known* lattice (F274).
+
+    :func:`grid_lattice` builds a lattice out of one point set and indexes *that*
+    set. But the two point sets are often different things observed at different
+    moments: the board's resting cell centres establish the lattice once (idle
+    tiles, a :func:`detect_grid` result), and then a *separate*, transient reading
+    — the tiles that flashed this round, the pieces on the board now, every white
+    pixel-blob of a move — has to be snapped onto that fixed lattice and collapsed
+    to *which cells* it touched. On the floor that meant hand-rolling, per reading,
+    two ``min(lines, key=abs-distance)`` nearest-line searches (one per axis) and
+    then bucketing repeat detections of one tile into a single click by averaging
+    their centroids. This owns exactly that bookkeeping.
+
+    ``lattice`` is anything carrying ``xs`` (column line centres) and ``ys`` (row
+    line centres) — a :func:`grid_lattice` return, or a bare ``{"xs":…,"ys":…}``.
+    ``points`` is the reading, in the same forms :func:`grid_lattice` takes:
+    ``(x, y)`` tuples or mappings with ``x``/``y`` (extra keys are preserved).
+    Each point is snapped to its nearest column and row. ``max_dist`` (scalar, or
+    ``(dx, dy)`` per axis) drops a point as a *stray* when it lands farther than
+    that from the nearest line on either axis — the guard that keeps a blob spilled
+    outside the board, or noise between cells, from being mis-snapped onto a real
+    tile; ``None`` (default) keeps every point.
+
+    Returns::
+
+        {"rows": R, "cols": C,
+         "cells": [[agg or None] * C] * R,     # row-major, same shape as grid_lattice
+         "occupied": [(row, col), …],          # sorted distinct touched cells
+         "points": [{**pt, "x", "y", "row", "col"}],   # each kept point, indexed
+         "dropped": [{**pt, "x", "y"}]}        # strays beyond max_dist
+
+    ``agg`` for an occupied cell is ``{"x", "y", "n"}``: the centroid of the points
+    that fell in it (the click target, robust to duplicate detections) and how many
+    there were. Empty points, or a lattice with no lines, yield an empty result."""
+    xs = list(lattice["xs"]) if lattice and lattice.get("xs") else []
+    ys = list(lattice["ys"]) if lattice and lattice.get("ys") else []
+    if isinstance(max_dist, (tuple, list)):
+        mdx, mdy = float(max_dist[0]), float(max_dist[1])
+    elif max_dist is None:
+        mdx = mdy = None
+    else:
+        mdx = mdy = float(max_dist)
+
+    def snap(v, lines):
+        i = min(range(len(lines)), key=lambda k: abs(lines[k] - v))
+        return i, abs(lines[i] - v)
+
+    kept, dropped = [], []
+    buckets: "dict" = {}
+    if xs and ys:
+        for p in points:
+            if isinstance(p, dict):
+                x, y, orig = float(p["x"]), float(p["y"]), p
+            else:
+                x, y, orig = float(p[0]), float(p[1]), {"x": p[0], "y": p[1]}
+            c, dx = snap(x, xs)
+            r, dy = snap(y, ys)
+            if (mdx is not None and dx > mdx) or (mdy is not None and dy > mdy):
+                rec = dict(orig); rec["x"], rec["y"] = x, y
+                dropped.append(rec)
+                continue
+            rec = dict(orig)
+            rec["x"], rec["y"], rec["row"], rec["col"] = x, y, r, c
+            kept.append(rec)
+            buckets.setdefault((r, c), []).append((x, y))
+
+    cells = [[None] * len(xs) for _ in range(len(ys))]
+    for (r, c), pts in buckets.items():
+        n = len(pts)
+        cells[r][c] = {"x": sum(q[0] for q in pts) / n,
+                       "y": sum(q[1] for q in pts) / n, "n": n}
+    return {"rows": len(ys), "cols": len(xs), "cells": cells,
+            "occupied": sorted(buckets), "points": kept, "dropped": dropped}
+
+
 def foveate(target: tuple[int, int, int], center: tuple[int, int],
             radius: int = 80, tol: int = 24,
             locate=None) -> dict | None:
