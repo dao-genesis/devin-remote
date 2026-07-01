@@ -147,7 +147,37 @@
   }
 
   // ── 额度 (复刻 devinFetchQuota + devinParsePlanStatus + overage) ───────────
-  async function devinFetchQuota(apiKey, windsurfKey, auth1, orgId, apiServerUrl) {
+  // 额度请求合并 (道法自然·功能/效率全不变·只削冗余流量):
+  //   额度是全前台最高频的小请求 —— autoQuotaTick(8s·多号轮转) + autoQuotaLiveTick(2.2s) +
+  //   手动刷新 常在数秒内对**同一号**重复取额度 (全量轮与实时快轮撞点 / 手动刷新叠加轮询),
+  //   每取 = GetUserStatus + billing/status 两发 → 撞点即白白重穿透。此处复用仓内已验证的
+  //   listSessions 短 TTL + 在途去重范式: 同号 TTL 内复用上次结果, 同刻仅一条真实请求在途,
+  //   其余共享同一 Promise。cadence / 实时快轮 / 所有行为不变 (force 绕过); 实时快轮周期(2.2s)
+  //   > TTL(2s) 故每轮仍真取, 近实时不受影响 —— 省掉的纯是"同号同刻的重复穿透"。
+  var _qCache = Object.create(null);     // key(auth1|orgId|statusKey) → { ts, data }
+  var _qInflight = Object.create(null);  // key → Promise
+  var _Q_TTL = 2000;                     // 2s: 吸收撞点重复, 短于实时快轮(2.2s)故不减实时性
+  function _qKey(apiKey, windsurfKey, auth1, orgId) {
+    var sk = (apiKey && apiKey.indexOf("cog_") !== 0) ? apiKey : (windsurfKey || "");
+    return (auth1 || "") + "|" + (orgId || "") + "|" + sk;
+  }
+  function _qClone(d) { return d ? Object.assign({}, d) : d; }
+  function devinFetchQuota(apiKey, windsurfKey, auth1, orgId, apiServerUrl, force) {
+    var key = _qKey(apiKey, windsurfKey, auth1, orgId);
+    if (!force) {
+      var c = _qCache[key];
+      if (c && (Date.now() - c.ts) < _Q_TTL && c.data) return Promise.resolve(_qClone(c.data));
+      if (_qInflight[key]) return _qInflight[key].then(_qClone);
+    }
+    var p = _devinFetchQuotaRaw(apiKey, windsurfKey, auth1, orgId, apiServerUrl).then(function (data) {
+      if (data) _qCache[key] = { ts: Date.now(), data: data };   // 仅缓存成功值; null(失败)不缓存 → 下轮照常重试
+      delete _qInflight[key];
+      return data;
+    }, function (e) { delete _qInflight[key]; throw e; });
+    if (!force) _qInflight[key] = p;
+    return p.then(_qClone);
+  }
+  async function _devinFetchQuotaRaw(apiKey, windsurfKey, auth1, orgId, apiServerUrl) {
     var statusKey = (apiKey && apiKey.indexOf("cog_") !== 0) ? apiKey : (windsurfKey || "");
     if (statusKey) {
       var tries = [];
@@ -305,11 +335,11 @@
   //   自愈: 先用现有 auth1 取额度; 取不到(令牌过期回 401/null) 且存有邮箱密码 → 自动重登换新 auth1 再取。
   //   这样「额度刷新」不再因令牌过期而僵死, 后台心跳每轮都会让死号自己活过来 —— 无为而无不为。
   //   健康路径(令牌有效)只发一次额度请求, 不额外探活, 无性能损耗。
-  async function refreshQuotaFor(id) {
+  async function refreshQuotaFor(id, force) {
     var acc = findAcc(id);
     if (!acc) return { ok: false, error: "无此账号" };
     var q = null;
-    if (acc.auth1) { try { q = await devinFetchQuota(acc.apiKey, acc.windsurfKey, acc.auth1, acc.orgId, acc.apiServerUrl); } catch (e) {} }
+    if (acc.auth1) { try { q = await devinFetchQuota(acc.apiKey, acc.windsurfKey, acc.auth1, acc.orgId, acc.apiServerUrl, force); } catch (e) {} }
     if (!q && acc.email && acc.password) {
       var lr = await loginAndStore(acc.email, acc.password);
       if (lr.ok) { acc = findAcc(id) || acc; return { ok: !!(acc.quota), quota: acc.quota, relogin: true }; }
@@ -336,7 +366,7 @@
     var accs = loadAcc(), ok = 0, relogin = 0, fail = 0;
     for (var i = 0; i < accs.length; i++) {
       var a = accs[i]; if (!a || (!a.auth1 && !(a.email && a.password))) continue;
-      try { var r = await refreshQuotaFor(a.id || a.email); if (r.ok) ok++; else fail++; if (r.relogin) relogin++; }
+      try { var r = await refreshQuotaFor(a.id || a.email, force); if (r.ok) ok++; else fail++; if (r.relogin) relogin++; }
       catch (e) { fail++; }
     }
     return { ok: true, refreshed: ok, relogin: relogin, fail: fail, count: accs.length };
