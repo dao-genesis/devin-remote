@@ -63,6 +63,9 @@ function defaultConfig() {
     defaultMaxTokens: 4096,
     // 反代档位热切换: familyUid → 当前活跃档 modelUid (空=按默认规则·免费档优先)
     tiers: {},
+    // 双路互补(道并行而不相悖): 主路(官方直通/渠道)遇限流·配额且未出首字节时,
+    //   自动切「另一路」(同族已配渠道 ↔ 同族官方直通)。默认开·根治「卡限流」。
+    dualPath: true,
   };
 }
 
@@ -602,6 +605,81 @@ function resolveTarget(model, deps) {
   };
 }
 
+// ── 双路互补 (道并行而不相悖·外接↔反代) ────────────────────────────────────
+// 上游错误是否「限流/配额」类 → 可在未出首字节时切另一路(而非直接报错给客户端)。
+function _isRetryableErr(msg) {
+  return /rate.?limit|resets in|too many requests|\b429\b|\b402\b|quota|exhaust|配额|governor|insufficient_quota|precondition|overloaded|capacity/i.test(
+    String(msg || ""),
+  );
+}
+// 给主目标求「另一路」备援目标: 官方直通 ↔ 同族已配第三方渠道。无备路则 null。
+function _altTarget(primary, model, deps) {
+  try {
+    if (!primary) return null;
+    const idx = buildFamilyIndex(deps);
+    const primUid = primary.upstreamModel || model;
+    const pinfo = idx.byUid.get(primUid);
+    const fam = pinfo && idx.families.get(pinfo.familyUid);
+    if (primary.official) {
+      // 官方直通遇限流 → 找同族已配渠道(外接)接手
+      const cfg = (deps.getEaConfig && deps.getEaConfig()) || {};
+      const routes = (cfg.daoRoutes && cfg.daoRoutes.routes) || {};
+      const cands = [];
+      if (fam) {
+        for (const uid of fam.members) cands.push(uid);
+        if (fam.aliasSlug) cands.push(fam.aliasSlug);
+        if (fam.familyLabel) cands.push(fam.familyLabel);
+      }
+      cands.push(model);
+      for (const key of cands) {
+        if (key && routes[key]) {
+          const t = resolveTarget(key, deps);
+          if (t && !t.official && !t.builtin) return t;
+        }
+      }
+      return null;
+    }
+    // 第三方渠道遇限流 → 若模型属官方目录/家族, 以同族官方直通接手(优先免费档)
+    let offUid = null;
+    if (fam) {
+      for (const uid of fam.members) {
+        const mi = idx.byUid.get(uid);
+        if (mi && mi.free) {
+          offUid = uid;
+          break;
+        }
+      }
+      if (!offUid)
+        offUid = _familyActiveUid(fam, idx, (deps && deps.cfg) || loadConfig());
+    } else if (_officialInfo(model, deps)) {
+      offUid = model;
+    }
+    if (offUid) {
+      const info = _officialInfo(offUid, deps);
+      if (info)
+        return {
+          official: true,
+          upstreamModel: offUid,
+          free: info.free,
+          label: info.label,
+          provider: info.provider,
+        };
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+// 解析出「主路 + 备路」候选列表(双路开启时含备路)。
+function resolveTargets(model, deps) {
+  const primary = resolveTarget(model, deps);
+  if (!primary) return [];
+  const cfg = (deps && deps.cfg) || loadConfig();
+  if (cfg.dualPath === false) return [primary];
+  const alt = _altTarget(primary, model, deps);
+  return alt ? [primary, alt] : [primary];
+}
+
 // ── 上游调用(流式) ─────────────────────────────────────────────────────────
 // 以目标渠道真协议发请求, 边收边把 SSE 行解析成统一 delta, 回调 onDelta。
 function callUpstream(target, norm, deps, handlers) {
@@ -1031,51 +1109,98 @@ function _readBody(req) {
   });
 }
 
-// 把统一上游 delta 适配到客户端发射器的 generator
-function _bridge(target, norm, deps) {
+// 单目标分派: 把一个 target 的上游流适配到 sink。
+function _dispatch(target, norm, deps, sink) {
+  if (target.builtin) {
+    // builtin-stub: 固定返回 · 验证通路
+    sink.onText &&
+      sink.onText("道可道也 非恒道也 · 模型反代传输层得一 · stub 正常");
+    sink.onUsage && sink.onUsage({ input: 10, output: 20 });
+    sink.onEnd && sink.onEnd();
+    return;
+  }
+  if (target.official) {
+    // 官方直通: 复用宿主 source.js 官方推理链(捕帧复用 GetChatMessage)
+    if (!deps.officialChat) {
+      sink.onError &&
+        sink.onError(
+          "官方直通未就绪 · 需宿主提供 officialChat(预热一次官方对话以捕获帧)",
+        );
+      return;
+    }
+    Promise.resolve()
+      .then(() => deps.officialChat(target, norm, sink))
+      .then((r) => {
+        // officialChat 自行调 sink.onText/onEnd; 若返回配额态则同步着色
+        if (r && r.quota) setPremiumQuota(r.quota);
+      })
+      .catch((e) => {
+        const msg = String((e && e.message) || e);
+        if (/quota|exhaust|配额|governor|Authentication Fails/i.test(msg))
+          setPremiumQuota("exhausted");
+        sink.onError && sink.onError(msg);
+      });
+    return;
+  }
+  callUpstream(target, norm, deps, {
+    onOpen: () => {},
+    onDelta: (d) => {
+      if (d.content && sink.onText) sink.onText(d.content);
+      if (d.thinking && sink.onThinking) sink.onThinking(d.thinking);
+      if (d.finishReason && sink.onFinish) sink.onFinish(d.finishReason);
+      if (d.usage && sink.onUsage) sink.onUsage(d.usage);
+    },
+    onDone: () => sink.onEnd && sink.onEnd(),
+    onError: (e) => sink.onError && sink.onError(String((e && e.message) || e)),
+  });
+}
+
+// 把统一上游 delta 适配到客户端发射器的 generator。
+// candidates: [主路, 备路?] — 主路遇限流/配额且「未出首字节」时自动切备路(双路互补)。
+function _bridge(candidates, norm, deps) {
+  const list = (Array.isArray(candidates) ? candidates : [candidates]).filter(
+    Boolean,
+  );
+  const log = (deps && deps.log) || (() => {});
   return (sink) => {
-    if (target.builtin) {
-      // builtin-stub: 固定返回 · 验证通路
-      sink.onText &&
-        sink.onText("道可道也 非恒道也 · 模型反代传输层得一 · stub 正常");
-      sink.onUsage && sink.onUsage({ input: 10, output: 20 });
-      sink.onEnd && sink.onEnd();
+    if (!list.length) {
+      sink.onError && sink.onError("无可用反代目标");
       return;
     }
-    if (target.official) {
-      // 官方直通: 复用宿主 source.js 官方推理链(捕帧复用 GetChatMessage)
-      if (!deps.officialChat) {
-        sink.onError &&
-          sink.onError(
-            "官方直通未就绪 · 需宿主提供 officialChat(预热一次官方对话以捕获帧)",
-          );
-        return;
-      }
-      Promise.resolve()
-        .then(() => deps.officialChat(target, norm, sink))
-        .then((r) => {
-          // officialChat 自行调 sink.onText/onEnd; 若返回配额态则同步着色
-          if (r && r.quota) setPremiumQuota(r.quota);
-        })
-        .catch((e) => {
+    let emitted = false; // 是否已向客户端下发内容(出首字节后不可再切路)
+    const run = (i) => {
+      const target = list[i];
+      const hasNext = i + 1 < list.length;
+      // 包装 sink: 记录是否出字节; 未出首字节遇限流/配额且有备路 → 切备路(不报错)
+      _dispatch(target, norm, deps, {
+        onOpen: sink.onOpen,
+        onText: (t) => {
+          emitted = true;
+          sink.onText && sink.onText(t);
+        },
+        onThinking: (t) => {
+          emitted = true;
+          sink.onThinking && sink.onThinking(t);
+        },
+        onFinish: (f) => sink.onFinish && sink.onFinish(f),
+        onUsage: (u) => sink.onUsage && sink.onUsage(u),
+        onEnd: () => sink.onEnd && sink.onEnd(),
+        onError: (e) => {
           const msg = String((e && e.message) || e);
-          if (/quota|exhaust|配额|governor|Authentication Fails/i.test(msg))
-            setPremiumQuota("exhausted");
+          if (!emitted && hasNext && _isRetryableErr(msg)) {
+            log(
+              "[revproxy] 双路互补: 主路遇限流/配额 → 切备路 (" +
+                msg.slice(0, 80) +
+                ")",
+            );
+            run(i + 1);
+            return;
+          }
           sink.onError && sink.onError(msg);
-        });
-      return;
-    }
-    callUpstream(target, norm, deps, {
-      onOpen: () => {},
-      onDelta: (d) => {
-        if (d.content && sink.onText) sink.onText(d.content);
-        if (d.thinking && sink.onThinking) sink.onThinking(d.thinking);
-        if (d.finishReason && sink.onFinish) sink.onFinish(d.finishReason);
-        if (d.usage && sink.onUsage) sink.onUsage(d.usage);
-      },
-      onDone: () => sink.onEnd && sink.onEnd(),
-      onError: (e) => sink.onError && sink.onError(String((e && e.message) || e)),
-    });
+        },
+      });
+    };
+    run(0);
   };
 }
 
@@ -1112,6 +1237,7 @@ async function handle(req, res, u, deps) {
       enabled: cfg.enabled,
       applyInvert: cfg.applyInvert,
       exposeLan: cfg.exposeLan,
+      dualPath: cfg.dualPath !== false,
       hasKey: !!cfg.apiKey,
       apiKey: _isLocal(req) ? cfg.apiKey : undefined,
       port: deps.port || 0,
@@ -1171,6 +1297,7 @@ async function handle(req, res, u, deps) {
     if (typeof body.exposeLan === "boolean") next.exposeLan = body.exposeLan;
     if (typeof body.defaultMaxTokens === "number")
       next.defaultMaxTokens = body.defaultMaxTokens;
+    if (typeof body.dualPath === "boolean") next.dualPath = body.dualPath;
     if (body.tiers && typeof body.tiers === "object")
       next.tiers = Object.assign({}, next.tiers || {}, body.tiers);
     if (body.regenerateKey === true)
@@ -1241,7 +1368,8 @@ async function handle(req, res, u, deps) {
       _json(res, 400, { error: { message: "model required" } });
       return true;
     }
-    const target = resolveTarget(norm.model, deps);
+    const targets = resolveTargets(norm.model, deps);
+    const target = targets[0];
     if (!target) {
       _json(res, 400, {
         error: {
@@ -1259,14 +1387,19 @@ async function handle(req, res, u, deps) {
         clientKind +
         " model=" +
         norm.model +
-        " → provider=" +
-        target.provName +
-        "/" +
-        (target.upstreamModel || "") +
+        " → " +
+        (target.official
+          ? "official/" + (target.upstreamModel || "")
+          : target.provName + "/" + (target.upstreamModel || "")) +
+        (targets.length > 1
+          ? " (+备路 " +
+            (targets[1].official ? "official" : targets[1].provName) +
+            ")"
+          : "") +
         " stream=" +
         norm.stream,
     );
-    const gen = _bridge(target, norm, deps);
+    const gen = _bridge(targets, norm, deps);
     if (clientKind === "anthropic") {
       if (norm.stream) _emitAnthropicStream(res, norm.model, gen);
       else _emitAnthropicUnary(res, norm.model, gen);
@@ -1294,6 +1427,9 @@ module.exports = {
   defaultConfig,
   normalizeInbound,
   resolveTarget,
+  resolveTargets,
+  _altTarget,
+  _isRetryableErr,
   setPremiumQuota,
   getPremiumQuota,
   _officialInfo,

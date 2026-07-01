@@ -614,6 +614,91 @@ let KEY = "";
     ok("stream 下发 error 对象(rate_limit_error)", sawErr);
   }
 
+  // ── [16] 双路互补: 官方直通遇限流·未出首字节 → 自动切同族已配渠道(外接) ──
+  //   病灶: 主路(官方直通)撞配额/限流即把错误直吐客户端 = "卡限流"。
+  //   正法: 反者道之动·道并行而不相悖 — 首字节前遇限流转备路, 用户无感续流。
+  console.log("[16] 双路互补: 官方直通限流 → 切同族渠道(外接)");
+  {
+    ok("_isRetryableErr 命中 429", revproxy._isRetryableErr("upstream 429: x"));
+    ok(
+      "_isRetryableErr 命中 quota/Resets in",
+      revproxy._isRetryableErr("Resets in: 1h30m0s") &&
+        revproxy._isRetryableErr("daily usage quota exhausted"),
+    );
+    ok("_isRetryableErr 不误伤普通错误", !revproxy._isRetryableErr("bad json"));
+
+    // 同族两档: off-x(官方·无路由) + off-x-alt(已配渠道→mock 上游)
+    const catalog = [
+      {
+        modelUid: "off-x",
+        label: "OffFam",
+        provider: "MODEL_PROVIDER_OPENAI",
+        modelInfo: { modelFamilyUid: "F1" },
+        modelFamilyMetadata: { modelFamilyLabel: "OffFam" },
+        modelCostTier: "MODEL_COST_TIER_STANDARD",
+        creditMultiplier: 1,
+      },
+      {
+        modelUid: "off-x-alt",
+        label: "OffFam Alt",
+        provider: "MODEL_PROVIDER_OPENAI",
+        modelInfo: { modelFamilyUid: "F1" },
+        modelFamilyMetadata: { modelFamilyLabel: "OffFam" },
+        modelCostTier: "MODEL_COST_TIER_STANDARD",
+        creditMultiplier: 1,
+      },
+    ];
+    const eaConfig2 = {
+      providers: eaConfig.providers,
+      daoRoutes: {
+        routes: { "off-x-alt": { provider: "glmprov", model: "glm-4-flash" } },
+      },
+    };
+    let officialCalls = 0;
+    const deps2 = Object.assign({}, deps, {
+      getEaConfig: () => eaConfig2,
+      getModelCatalog: () => catalog,
+      officialChat: (target, norm, sink) => {
+        officialCalls++;
+        sink.onError("官方上游 429: daily usage quota exhausted");
+        return Promise.resolve({ ok: false, quota: "exhausted" });
+      },
+    });
+
+    // resolveTargets: 主路官方 + 备路渠道
+    const tg = revproxy.resolveTargets("off-x", deps2);
+    ok("resolveTargets 得主路(官方)+备路(渠道)", tg.length === 2 && tg[0].official && !tg[1].official);
+
+    // 端到端 unary: 官方限流 → 无感切渠道 → 收到渠道正文
+    let rr = await call(
+      "POST",
+      "/v1/chat/completions",
+      { model: "off-x", messages: [{ role: "user", content: "hi" }] },
+      deps2,
+    );
+    let jj = JSON.parse(rr.body);
+    ok("官方限流后切渠道·收到渠道正文", jj.choices && jj.choices[0].message.content === "你好，道可道");
+    ok("官方直通确被先试(officialChat 命中一次)", officialCalls === 1);
+
+    // dualPath=false → 不切备路 · 直吐限流错误
+    const c2 = revproxy.loadConfig();
+    c2.dualPath = false;
+    revproxy.saveConfig(c2);
+    delete deps2.cfg; // 清掉上一次 handle 写入的 deps.cfg, 走 loadConfig 真读盘
+    const tg2 = revproxy.resolveTargets("off-x", deps2);
+    ok("dualPath=false 时无备路", tg2.length === 1);
+    rr = await call(
+      "POST",
+      "/v1/chat/completions",
+      { model: "off-x", messages: [{ role: "user", content: "hi" }] },
+      deps2,
+    );
+    jj = JSON.parse(rr.body);
+    ok("dualPath=false 时限流如实报错(不切)", !!(jj.error && jj.error.type === "rate_limit_error"));
+    c2.dualPath = true;
+    revproxy.saveConfig(c2);
+  }
+
   revproxy.setPremiumQuota("unknown");
   mock.close();
   console.log(failures === 0 ? "\nALL PASS" : "\n" + failures + " FAIL");

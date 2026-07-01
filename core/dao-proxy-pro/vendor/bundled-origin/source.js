@@ -143,6 +143,7 @@ const https = require("https");
 const url = require("url");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const zlib = require("zlib");
 
 // ★ v9.9.91 · 修法① · 执一 · 引用 sp_invert.js 为唯一 SP 引擎 · 消除双引擎
@@ -6360,6 +6361,77 @@ function _signalPremiumQuota(state) {
 //   反者道之动·闭环自举: 捕最近一帧真 GetChatMessage 请求, 换入新 user turn 后
 //   真转云端官方推理链, 解码回包文本。免费档(swe-1-6 等)即便付费配额耗尽仍可出包。
 let _lastChatFrame = null; // { body:Buffer, url, method, headers, at }
+// ── 预热帧跨重启常驻 (反者道之动·没身不殆) ────────────────────────────────
+//   病灶: 帧仅存内存 → 插件每次重启即丢 → /warm 恒 has:false、外接反代官方档 502。
+//     此为 /v1 本源「供所有环境使用」重启后即断的最后一处断点。
+//   正法: 捕帧即落盘(body 二进制 + meta json), 模块加载/读帧时自盘复现 →
+//     插件重启、宿主重载后官方直通仍即通, 无需再次手动预热。宁稳勿崩·坏盘即忽略。
+function _frameCacheDir() {
+  const home =
+    os.homedir() || process.env.HOME || process.env.USERPROFILE || "";
+  return home ? path.join(home, ".codeium", "dao-byok") : null;
+}
+function _frameBodyPath() {
+  const d = _frameCacheDir();
+  return d ? path.join(d, "chatframe.bin") : null;
+}
+function _frameMetaPath() {
+  const d = _frameCacheDir();
+  return d ? path.join(d, "chatframe.json") : null;
+}
+function _persistChatFrame() {
+  try {
+    const d = _frameCacheDir();
+    const bp = _frameBodyPath();
+    const mp = _frameMetaPath();
+    if (!d || !bp || !mp || !_lastChatFrame || !_lastChatFrame.body)
+      return false;
+    if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+    const tmpB = bp + ".tmp";
+    fs.writeFileSync(tmpB, _lastChatFrame.body);
+    fs.renameSync(tmpB, bp);
+    const meta = {
+      url: _lastChatFrame.url,
+      method: _lastChatFrame.method,
+      headers: _lastChatFrame.headers,
+      at: _lastChatFrame.at,
+    };
+    const tmpM = mp + ".tmp";
+    fs.writeFileSync(tmpM, JSON.stringify(meta), { mode: 0o600 });
+    fs.renameSync(tmpM, mp);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+// 内存无帧时从盘复现; 已有则不动。返回是否复现成功。
+function _restoreChatFrame() {
+  if (_lastChatFrame && _lastChatFrame.body) return false;
+  try {
+    const bp = _frameBodyPath();
+    const mp = _frameMetaPath();
+    if (!bp || !mp || !fs.existsSync(bp) || !fs.existsSync(mp)) return false;
+    const body = fs.readFileSync(bp);
+    if (!body || !body.length) return false;
+    let meta = {};
+    try {
+      meta = JSON.parse(fs.readFileSync(mp, "utf8")) || {};
+    } catch (_) {
+      return false;
+    }
+    _lastChatFrame = {
+      body,
+      url: meta.url,
+      method: meta.method || "POST",
+      headers: meta.headers || {},
+      at: meta.at || 0,
+      restored: true,
+    };
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 function _captureChatFrame(req, body) {
   const hdr = {};
   try {
@@ -6373,7 +6445,10 @@ function _captureChatFrame(req, body) {
     headers: hdr,
     at: Date.now(),
   };
+  _persistChatFrame(); // 跨重启常驻·best-effort
 }
+// 模块加载即尝试自盘复现预热帧 (插件重启后官方直通即通)
+_restoreChatFrame();
 
 // 取捕获帧最末一条消息正文 → 换成 newText → 返回新 Connect 帧 Buffer。
 // 道·schema 自适应: 消息数组随 cascade_wire 演化(老 V2=field2/content2,
@@ -6488,6 +6563,7 @@ function _trimFrameHistory(frameBody) {
 // 官方直通: revproxy 经此真转云端、解码回包。sink: {onText,onEnd,onError}。
 function _officialChatReplay(target, norm, sink) {
   return new Promise((resolve) => {
+    if (!_lastChatFrame || !_lastChatFrame.body) _restoreChatFrame();
     if (!_lastChatFrame || !_lastChatFrame.body) {
       sink.onError &&
         sink.onError(
@@ -6679,7 +6755,10 @@ function _revproxyDeps() {
     },
     officialChat: (target, norm, sink) =>
       _officialChatReplay(target, norm, sink),
-    hasChatFrame: () => !!(_lastChatFrame && _lastChatFrame.body),
+    hasChatFrame: () => {
+      if (!_lastChatFrame || !_lastChatFrame.body) _restoreChatFrame();
+      return !!(_lastChatFrame && _lastChatFrame.body);
+    },
     resolveRoute: (uid) => {
       try {
         const r = _ea ? _ea.getRouter() : null;
@@ -6718,6 +6797,7 @@ async function _maybeRevproxy(req, res) {
   }
   // 诊断: 当前预热帧所携模型(官方直通实际将路由之档) · 只读 · 供面板/自检显预热档
   if (u.pathname === "/origin/revproxy/warm" && req.method === "GET") {
+    if (!_lastChatFrame || !_lastChatFrame.body) _restoreChatFrame();
     const has = !!(_lastChatFrame && _lastChatFrame.body);
     const frame = has ? _frameModelInfo(_lastChatFrame.body) : null;
     res.setHeader("Content-Type", "application/json");
@@ -6727,6 +6807,7 @@ async function _maybeRevproxy(req, res) {
         has,
         warm: frame,
         at: (_lastChatFrame && _lastChatFrame.at) || 0,
+        restored: !!(_lastChatFrame && _lastChatFrame.restored),
       }),
     );
     return true;
