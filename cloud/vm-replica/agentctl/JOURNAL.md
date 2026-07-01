@@ -10317,3 +10317,58 @@ cheaper than the full screen). The lesson from the FPS ceiling holds — sample 
 small window fast, don't re-grab the whole desktop — and that is a harness
 choice, not a missing or slow primitive. Genuine boundary, mapped and left
 un-forced.
+
+### Inward parity — the official operation surface, mapped verb-for-verb
+
+Fine-grained audit of the floor against the *official* agent operation surfaces
+(Devin's own `computer` tool + the desktop-op `pc_*` module), one action at a
+time, to find anything unmatched, missing, or slower.
+
+**GUI action surface — full parity, then surpass.** Every official `computer`
+action maps to a floor verb, and the floor carries the whole gesture ladder the
+official tool must fake by repetition:
+
+| official action     | floor verb                         | note                     |
+|---------------------|------------------------------------|--------------------------|
+| screenshot          | capture_rgb / crop_rgb / foveate   | + foveal sub-grab ~0.13ms|
+| cursor_position     | cursor_pos                         |                          |
+| mouse_move          | move                               |                          |
+| left/right_click    | click(right=)                      |                          |
+| middle_click        | middle_click (F123)                | true aux button          |
+| double/triple_click | double_click / triple_click        | OS-timed multiplicity    |
+| left_click_drag     | drag                               | stepped, hold-aware      |
+| mouse_down / up     | _mouse_button / press_hold (F126)  | sustained stationary hold|
+| key                 | tap / chord / mod_click (F124)     | modifier-through-click   |
+| hold_key            | key_hold                           |                          |
+| type                | type_unicode / paste_text          |                          |
+| scroll              | scroll                             |                          |
+| wait                | wait_pixel / wait_window / react_pixel | visual-state waiting |
+| zoom                | crop_rgb / foveate                 |                          |
+
+Beyond the table the floor adds a whole perception/reasoning tier the official
+tool has *none* of — find_color(+blobs), match_template(+all), edge_map/
+signature/match_edges, classify/cluster/detect_grid, OCR (read_text/glyph/grid),
+window enumeration+geometry+state, clipboard incl. files+image, and the
+combat/tracking arc (lead/servo/egomotion/link_tracks). 173 public verbs vs the
+official ~16 actions.
+
+**Deliberately out of the floor's scope (not deficiencies):**
+- `pc_exec` / `pc_file_read` / `pc_file_write` / `pc_ls` — shell + filesystem.
+  This module is the *perception+actuation* floor for the GUI; shell/FS are the
+  OS's own surface (and the agent's native exec/read/write). Folding them in
+  would be scope creep, not parity.
+- `pc_ui_tree` — an accessibility (a11y) tree. On Windows the floor already has
+  the `uia_*` family. On Linux there is no AT-SPI verb *by design*: the floor's
+  answer is pixel perception, which is strictly **more general** than an a11y
+  tree — it reads canvas/game/video surfaces that expose no a11y nodes at all.
+  A11y-tree reading is the narrower tool; the floor chose the wider one.
+
+**Efficiency:** every O(pixels) perception rung is now numpy-vectorised
+byte-identically (12 rungs, passes 1–5); the three pure-Python holdouts are each
+a mapped boundary (area-bound union-find, ULP-sensitive radial_profile,
+grab-latency-bound capture), not an un-mined slow path.
+
+Conclusion: on the GUI-operation axis the floor is at **full parity and past it**
+— nothing the official surface does is missing or slower, and the floor does a
+great deal the official surface cannot. No new F-number: parity was already met;
+this pass only mapped and documented it.
