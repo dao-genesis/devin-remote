@@ -4342,6 +4342,95 @@ def link_tracks(frames, max_gap: float = 60.0, max_skip: int = 1,
     return out
 
 
+def detect_sequence(levels, thresh: float = 0.4, refractory: int = 1,
+                    baseline=None, peak=None) -> "list[dict]":
+    """Recover the ordered activation sequence of several regions (F272).
+
+    :func:`react_pixel` answers "when did *this* pixel cross a level" for a single
+    point. A grid/board game asks it of *several* regions at once and cares about
+    ORDER — Sequence Memory flashes N tiles one after another and you must
+    reproduce the order; a Simon/whack-a-mole board is the same shape. Nothing on
+    the floor turned "these regions' levels over time" into "which fired, and in
+    what order"; the caller kept re-deriving it by hand — poll every region every
+    frame, remember each one's previous level, detect the rising edge, and debounce
+    a flash that spans several frames. This owns that bookkeeping.
+
+    ``levels`` is a list — one entry per frame — of the regions' activation this
+    frame: either a sequence of ``N`` scalars (region *i*'s level, higher = more
+    active, e.g. mean/max luminance of a tile's patch) or a ``{name: scalar}``
+    mapping (keys taken from the first frame and required in every frame). An event
+    fires for a region on the frame its level first *rises* across that region's
+    gate — edge-triggered, not level: while it stays above the gate no further
+    event fires; it must fall back to the gate for ``refractory`` frames to re-arm,
+    so one flash spanning many frames is one event and a tile that flashes twice is
+    two. The gate is per-region, ``gate_i = base_i + thresh*(peak_i - base_i)``, so
+    a dim region and a bright one are each judged on their own dynamic range; a
+    flat region (``peak_i == base_i``) never fires. ``baseline`` / ``peak`` may be
+    given explicitly (list or ``{name: scalar}``); by default each region's min /
+    max over ``levels`` is used.
+
+    Returns events in fire order::
+
+        [{"region": i_or_name, "frame": int, "level": float}, ...]
+
+    ties within a frame breaking by region order; empty when nothing crosses. Feed
+    it a windowed :func:`capture_rgb` reduction per region per frame and it returns
+    the sequence to replay."""
+    ref = max(1, int(refractory))
+    frames = list(levels)
+    if not frames:
+        return []
+    first = frames[0]
+    if isinstance(first, dict):
+        keys = list(first.keys())
+
+        def row(f):
+            return [float(f[k]) for k in keys]
+    else:
+        keys = list(range(len(first)))
+
+        def row(f):
+            return [float(v) for v in f]
+
+    mat = [row(f) for f in frames]
+    n = len(keys)
+    for r in mat:
+        if len(r) != n:
+            raise ValueError("every frame must have the same region count")
+
+    def per_region(arg, default):
+        if arg is None:
+            return default
+        if isinstance(arg, dict):
+            return [float(arg[k]) for k in keys]
+        seq = [float(v) for v in arg]
+        if len(seq) != n:
+            raise ValueError("baseline/peak length must match region count")
+        return seq
+
+    base = per_region(baseline, [min(r[i] for r in mat) for i in range(n)])
+    pk = per_region(peak, [max(r[i] for r in mat) for i in range(n)])
+    gate = [base[i] + thresh * (pk[i] - base[i]) for i in range(n)]
+
+    armed = [True] * n
+    below = [0] * n
+    events: "list[dict]" = []
+    for fi, r in enumerate(mat):
+        for i in range(n):
+            hot = r[i] > gate[i]
+            if hot:
+                below[i] = 0
+                if armed[i]:
+                    events.append({"region": keys[i], "frame": fi,
+                                   "level": r[i]})
+                    armed[i] = False
+            else:
+                below[i] += 1
+                if below[i] >= ref:
+                    armed[i] = True
+    return events
+
+
 _OCR_ENGINE: "str | None" = None
 
 # Content-addressed OCR cache (F238). tesseract is spawned as a subprocess per

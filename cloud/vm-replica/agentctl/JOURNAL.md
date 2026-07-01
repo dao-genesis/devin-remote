@@ -9772,3 +9772,49 @@ finder is not automatically richer for ignoring it — generality means the *who
 family carries the trade, or the loop that needs several targets quietly pays the
 price the loop that needs one stopped paying long ago. `find_color` · step (one
 centroid, cheap) → `find_color_blobs` · step (every centroid, just as cheap). 道法自然.
+
+## F272 — detect_sequence: which of several regions fired, and in what order
+
+`react_pixel` answers *when did this pixel cross a level* for one point. The
+**Sequence Memory** test asks it of nine tiles at once and cares only about
+ORDER: the board flashes tiles white one after another and you replay the order,
+one tile longer each level. Nothing on the floor turned "these regions' levels
+over time" into "which fired, in what order" — so the caller re-derived it by
+hand every time: poll each tile each frame, remember its previous level, detect
+the rising edge, and debounce a flash that spans several frames (`_probe_f272.py`
+does exactly this bookkeeping, and catching level 1's lone flash — cell 6 to 255
+while the other eight sat at 114 — showed why it wants owning).
+
+`detect_sequence(levels, thresh, refractory, baseline, peak)` owns it as a pure
+function over a time series. `levels` is one entry per frame, each a list of the
+regions' activation (or a `{name: scalar}` map). A region fires on the frame its
+level first *rises* across its gate — edge-triggered, not level: while it stays
+hot no further event fires; it must fall back for `refractory` frames to re-arm,
+so one flash is one event and a tile that flashes *twice* is two. The gate is
+per-region, `base_i + thresh*(peak_i - base_i)`, judged on each region's own
+dynamic range; `baseline`/`peak` may be pinned explicitly. Returns
+`[{region, frame, level}]` in fire order. It is the temporal sibling of the
+spatial `find_color_blobs`: that one says *where* the separate targets are, this
+one says *when*, in sequence.
+
+Proof. `_test_f272.py` (17 checks, no display): a lone flash; three flashes
+recovered in fire order; a flash held high across many frames as ONE event; a
+region flashing twice as two, collapsed back to one under `refractory=2`;
+per-region dynamic range; a flat region silent; dict input with key order; an
+explicit gate suppressing an auto-detected one; within-frame tie-break by region;
+empty input; `refractory<=0` clamp; ragged frames rejected. Live `_game_f272.py`
+(the real test): fed windowed `capture_rgb` tile luminances, it **solved through
+level 8** — `[8, 0, 1, 8, 2, 6, 4, 5]`, cell 8 flashing *twice* and detected as
+two ordered events by the live refractory. All twenty-eight floor tests pass.
+
+Lesson (paid in the live run, worth the scar). The first attempt let `baseline`/
+`peak` auto-fill from each region's own min/max over the window — and lit up all
+nine tiles at level 2. A tile that never flashes is not flat but *nearly* flat:
+~114 with a few counts of sensor noise, so its auto span is tiny and its gate
+sits a noise-hair above baseline, which that same noise then crosses. The
+docstring's "flat region never fires" is true only for a *perfectly* flat one;
+under real capture noise, auto-scaling manufactures a gate the noise clears.
+The fix is composition, not a new knob: pin `peak` to the *known* active level
+(here white, 255) so an idle region is judged against the real signal, not
+against its own jitter. Auto min/max is a convenience for regions you know all
+activate; when some may stay dark, tell the verb what "on" looks like. 道法自然.
