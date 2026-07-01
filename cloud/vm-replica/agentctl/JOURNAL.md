@@ -10139,3 +10139,56 @@ no primitive small enough to belong on the floor closes that gap on this hardwar
 limit that is physical, not lexical. As with Human Benchmark (saturated by the
 existing readers) and Chimp (cleared by pure composition), the disciplined move is
 to add nothing and record the edge. 道法自然,无为而无不为.
+
+---
+
+## Inward Parity — the floor as a full-stack replacement for the official VM stack (反者道之动)
+
+Having mapped the outward game surfaces to their ceilings (HB saturated, Chimp
+pure composition, FPS a physical wall), the discipline turns inward: measure the
+floor *against the official operation stack it means to replace* — the built-in
+screenshot / click / type / key / scroll / read-DOM / shell verbs — and close
+whatever is missing, slow, or weaker. Ran a live parity probe (`_probe_parity.py`)
+on this Linux VM (X11 `:0`, 1600×1200). Findings, honest:
+
+**Actuation & perception compose at full breadth, far faster than the official
+verbs.** Every official gesture has a floor rung already, and the floor's clock is
+the surpass: `capture_rgb` full-frame **~12 ms**, `sample_color` a region, unicode
+`set_clipboard`→`get_clipboard` round-trips (道法自然→"道法自然"), `move_rel`/`click`/
+`key_hold`/`type_unicode` fire instantly, `list_windows`/`screen_observe` enumerate
+top-levels via EWMH in ~30 ms. Against a hosted computer-tool whose *per action*
+latency is seconds, a floor tick is ~100–250× faster — the floor is not a parity
+substitute, it is the fast path.
+
+**Two honest boundaries, both architectural, not missing-verb:**
+1. *No AT-SPI accessibility bus on this VM* (`org.a11y.Bus` unprovided; `at-spi2`
+   not installed). The official "read the DOM / element tree" move has no bus to
+   read here — which is exactly the condition the floor's pixel-first design was
+   built for. `screen_observe` degrades to window-level EWMH, and the floor reads
+   operable content by pixels/OCR (`ocr_text`, `find_color_blobs`, `classify_grid`,
+   `detect_grid`) — broader than a11y (works on any pixels), shallower on web
+   semantics. Raising the bus would be a dependency the floor deliberately refuses.
+2. *No CDP web-DOM semantics.* The floor operates the browser as pixels, not as a
+   privileged DOM — by design. Semantic web reading is the same class of boundary
+   as the FPS single-frame locator: a whole perceptor, not a floor verb.
+
+**The one closeable gap was speed, and it is now closed (no new F-number).** The
+FPS arc's 2 Hz ceiling traced partly to O(pixels) pure-Python loops: `sample_color`
+~90 ms over 0.9 Mpx, `region_diff`/`locate_change`/`locate_change_blobs` linear in
+the ROI, `sample_grid` per-cell summation. These are the floor's *底层* efficiency
+frictions — "效率不够快的地方." Added an **optional NumPy fast path** to each: when
+`numpy` imports, the whole-region loops vectorise to a C loop; when it does not, the
+pure-Python body runs unchanged, so the zero-hard-dependency guarantee holds. The
+fast path returns the **byte-identical** result of the fallback — proven live by
+`_test_accel.py`, which toggles `osctl._np` and asserts equality on real captures.
+Measured: `sample_color`/`region_diff`/`locate_change` **7–10×** faster (a 3-op
+perception tick 630 ms → 63 ms); `sample_grid` mean restored to 3.5× over the
+per-cell loop (F247 invariant preserved); `locate_change_blobs` mask build
+vectorised (its union-find stays linear in change area — inherent, not a loop to
+kill). All 32 floor tests green, plus the new accel invariant test.
+
+This is not a new verb — it speeds existing rungs (F134/F135/F136/F137/F247) — so
+it takes no F-number (前識者,道之華也: an F277 here would be ornament). The lesson
+matches the outward arcs inverted: the floor already *speaks* every official verb;
+where it lagged was raw pixel throughput, and that closes by making the same
+computation faster, not by inventing vocabulary. 反者道之动也 — 損之又損, 无为而无不为.

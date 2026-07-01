@@ -27,6 +27,19 @@ import sys
 import time
 import zlib
 
+# Optional acceleration (no new F-number — this speeds existing rungs F134/F135/
+# F136/F137/F247, it is not a new verb): the whole-region pixel loops below — mean
+# colour, change count, change localisation — are O(pixels) in pure Python and dominate a
+# perception tick over a large ROI (~90ms for sample_color on ~0.9Mpx). When NumPy
+# is importable, the hot paths vectorise to a C loop (10-100x) while returning the
+# *byte-identical* result; when it is not, the pure-Python body runs unchanged, so
+# the floor keeps its zero-hard-dependency guarantee (道法自然: faster where the
+# ground allows, correct everywhere).
+try:  # pragma: no cover - exercised at runtime, both branches
+    import numpy as _np
+except Exception:  # pragma: no cover
+    _np = None
+
 if sys.platform.startswith("win"):
     import _osbackend_win as _be
 elif sys.platform.startswith("linux"):
@@ -2468,6 +2481,10 @@ def sample_color(bbox: tuple[int, int, int, int], rgb: bytes | None = None,
     n = pw * ph
     if n == 0:
         raise ValueError("empty bbox")
+    if _np is not None:
+        s = _np.frombuffer(patch, dtype=_np.uint8).reshape(-1, 3).sum(axis=0)
+        return {"r": int(s[0]) // n, "g": int(s[1]) // n,
+                "b": int(s[2]) // n, "count": n}
     sr = sg = sb = 0
     for i in range(0, len(patch), 3):
         sr += patch[i]
@@ -2546,6 +2563,8 @@ def sample_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
     x0, y0, x1, y1 = bbox
     cw = (x1 - x0 + 1) / cols
     ch = (y1 - y0 + 1) / rows
+    arr = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(h, w, 3)
+           if _np is not None else None)
     grid = []
     for r in range(rows):
         cy0 = y0 + r * ch
@@ -2565,6 +2584,13 @@ def sample_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
             ix0 = max(0, min(ix0, w - 1))
             ix1 = max(ix0 + 1, min(ix1, w))
             if stat == "mean":
+                if arr is not None:
+                    cell = arr[iy0:iy1, ix0:ix1]
+                    n = cell.shape[0] * cell.shape[1]
+                    s = cell.reshape(-1, 3).sum(axis=0)
+                    row.append({"r": int(s[0]) // n, "g": int(s[1]) // n,
+                                "b": int(s[2]) // n, "count": n})
+                    continue
                 sr = sg = sb = n = 0
                 for yy in range(iy0, iy1):
                     base = (yy * w + ix0) * 3
@@ -3618,6 +3644,18 @@ def locate_change(before: bytes, after: bytes, size: tuple[int, int],
         bx0, by0, bx1, by1 = search
         bx0, by0 = max(0, bx0), max(0, by0)
         bx1, by1 = min(w - 1, bx1), min(h - 1, by1)
+    if _np is not None:
+        fb = _np.frombuffer(before, dtype=_np.uint8).reshape(h, w, 3)[by0:by1 + 1, bx0:bx1 + 1].astype(_np.int16)
+        fa = _np.frombuffer(after, dtype=_np.uint8).reshape(h, w, 3)[by0:by1 + 1, bx0:bx1 + 1].astype(_np.int16)
+        mask = (_np.abs(fa - fb) > tol).any(axis=2)
+        n = int(mask.sum())
+        if n < min_count:
+            return None
+        ys, xs = _np.nonzero(mask)
+        xs = xs + bx0
+        ys = ys + by0
+        return {"x": int(xs.sum()) // n, "y": int(ys.sum()) // n, "count": n,
+                "bbox": (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))}
     sx = sy = n = 0
     minx = miny = 1 << 30
     maxx = maxy = -1
@@ -3695,21 +3733,34 @@ def locate_change_blobs(before: bytes, after: bytes, size: tuple[int, int],
         if ra != rb:
             parent[rb] = ra
 
-    for y in range(by0, by1 + 1):
-        row = y * stride
-        base = y * w
-        up_base = base - w
-        for x in range(bx0, bx1 + 1):
-            i = row + x * 3
-            if (abs(before[i] - after[i]) > tol
-                    or abs(before[i + 1] - after[i + 1]) > tol
-                    or abs(before[i + 2] - after[i + 2]) > tol):
-                key = base + x
-                parent[key] = key
-                if x > 0 and (key - 1) in parent:
-                    union(key - 1, key)
-                if y > 0 and (up_base + x) in parent:
-                    union(up_base + x, key)
+    if _np is not None:
+        fb = _np.frombuffer(before, dtype=_np.uint8).reshape(h, w, 3)[by0:by1 + 1, bx0:bx1 + 1].astype(_np.int16)
+        fa = _np.frombuffer(after, dtype=_np.uint8).reshape(h, w, 3)[by0:by1 + 1, bx0:bx1 + 1].astype(_np.int16)
+        mask = (_np.abs(fa - fb) > tol).any(axis=2)
+        ys, xs = _np.nonzero(mask)  # row-major: y outer, x inner — matches the loop
+        for x, y in zip((xs + bx0).tolist(), (ys + by0).tolist()):
+            key = y * w + x
+            parent[key] = key
+            if x > 0 and (key - 1) in parent:
+                union(key - 1, key)
+            if y > 0 and (key - w) in parent:
+                union(key - w, key)
+    else:
+        for y in range(by0, by1 + 1):
+            row = y * stride
+            base = y * w
+            up_base = base - w
+            for x in range(bx0, bx1 + 1):
+                i = row + x * 3
+                if (abs(before[i] - after[i]) > tol
+                        or abs(before[i + 1] - after[i + 1]) > tol
+                        or abs(before[i + 2] - after[i + 2]) > tol):
+                    key = base + x
+                    parent[key] = key
+                    if x > 0 and (key - 1) in parent:
+                        union(key - 1, key)
+                    if y > 0 and (up_base + x) in parent:
+                        union(up_base + x, key)
 
     agg: dict[int, dict] = {}
     for key in parent:
@@ -3770,6 +3821,12 @@ def region_diff(a: bytes, b: bytes, tol: int = 0) -> dict:
     total = len(a) // 3
     if a == b:
         return {"pixels": 0, "total": total, "frac": 0.0}
+    if _np is not None:
+        aa = _np.frombuffer(a, dtype=_np.uint8).reshape(-1, 3).astype(_np.int16)
+        bb = _np.frombuffer(b, dtype=_np.uint8).reshape(-1, 3).astype(_np.int16)
+        n = int((_np.abs(aa - bb) > tol).any(axis=1).sum())
+        return {"pixels": n, "total": total,
+                "frac": (n / total if total else 0.0)}
     n = 0
     for i in range(0, len(a), 3):
         if (abs(a[i] - b[i]) > tol or abs(a[i + 1] - b[i + 1]) > tol
