@@ -379,6 +379,15 @@
   function tabNight(){ var t=curTab(); if(!t||!t.fr){ shToast("无当前标签"); return; }
     t.night=!t.night; t.fr.style.filter = t.night ? "invert(1) hue-rotate(180deg)" : "";
     shToast(t.night?"夜间模式开 (本标签)":"夜间模式关"); }
+  // 接入链接: 本机局域网外壳 URL 带 session/token, 供同网设备打开同一张归一网页 (同 console.html 复制接入链接)。
+  function accessLink(){ var u=location.origin+"/app.html?session="+encodeURIComponent(SESSION)+"&token="+encodeURIComponent(TOKEN);
+    if(ENDPOINT) u+="&endpoint="+encodeURIComponent(ENDPOINT); return u; }
+  function copyAccessLink(){ var u=accessLink();
+    try{ navigator.clipboard.writeText(u); shToast("已复制接入链接 (同网设备可打开)"); }catch(e){ shToast(u); } }
+  function shareCurrent(){ var t=curTab();
+    var u = t&&t.kind==="web" ? (t.origUrl||t.src) : accessLink();
+    if(navigator.share){ navigator.share({ title:(t&&t.title)||"Devin Cloud", url:u }).catch(function(){}); }
+    else { try{ navigator.clipboard.writeText(u); shToast("已复制本页网址"); }catch(e){ shToast(u); } } }
   function buildMenu(){
     menuPop.innerHTML="";
     PAGES.forEach(function(p){ mi(p.ic, p.label, function(){ openPage(p.key); }); });
@@ -395,6 +404,8 @@
     mi("🔗","复制本标签网址", function(){ var t=tabs[active]; if(!t) return;
       var u = t.kind==="web"? (t.origUrl||t.src) : (location.origin+pageSrc(pageByKey(t.pageKey)));
       try{ navigator.clipboard.writeText(u); shToast("已复制网址"); }catch(e){} });
+    mi("📤","分享本页", shareCurrent);
+    mi("📋","复制接入链接", copyAccessLink);
     mi("⟳","检查更新 · 网页端", function(){ shToast("网页端始终为最新 (随中继下发); 正在硬刷新…"); setTimeout(function(){ location.reload(); }, 600); });
   }
   function mi(ic,label,fn){ var d=document.createElement("div"); d.className="mi";
