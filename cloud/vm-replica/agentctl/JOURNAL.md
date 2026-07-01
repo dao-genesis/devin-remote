@@ -10372,3 +10372,17 @@ Conclusion: on the GUI-operation axis the floor is at **full parity and past it*
 — nothing the official surface does is missing or slower, and the floor does a
 great deal the official surface cannot. No new F-number: parity was already met;
 this pass only mapped and documented it.
+
+### 去芜留精 — pruning the branch to the essence
+
+Consolidation pass. The arc had committed a large litter of scratch alongside the
+floor: 18 `_game_*.py` play harnesses, 18 `_probe_*.py` one-off experiments, and
+`chimp_atlas.json` (a game artifact). None of it is imported by `osctl.py`, the
+backends, or the regression suite — they were throwaway scaffolding used to *find*
+friction, not part of the floor. Removed from the branch (and the ~100 further
+uncommitted probe/game scratch files cleared from the working tree).
+
+What remains is exactly the essence: `osctl.py` (the floor), `_osbackend_x11.py` /
+`_osbackend_win.py` (the two backends), the `_test_f*.py` + `_test_accel.py`
+regression suite, and this JOURNAL. 33/33 test files still green after the prune.
+损之又损 — the repo now carries only what earns its place.
