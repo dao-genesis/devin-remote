@@ -20,6 +20,7 @@ PNG encoder is hand-rolled with ``zlib`` so a screenshot is always available.
 
 from __future__ import annotations
 
+import math
 import re
 import struct
 import sys
@@ -2060,6 +2061,52 @@ def grid_index(lattice, points, max_dist=None) -> dict:
                        "y": sum(q[1] for q in pts) / n, "n": n}
     return {"rows": len(ys), "cols": len(xs), "cells": cells,
             "occupied": sorted(buckets), "points": kept, "dropped": dropped}
+
+
+def frame_consensus(frames, min_frac=0.5, key=None) -> dict:
+    """Which observations persist across a *burst* of noisy frames (F275).
+
+    A single screen-grab of a transient event lies: one frame misses a tile that
+    is really lit, the next invents a phantom from an anti-alias edge or a
+    half-drawn fade. Reading the event over *many* frames and keeping only what
+    recurs is how you separate signal from flicker — the memorise flash holds its
+    tiles for a dozen frames while a stray blob shows for one or two. On the floor
+    this was hand-rolled twice: count how many frames each thing appeared in, keep
+    the ones above a fraction of the frame count. This owns that majority vote.
+
+    ``frames`` is a list of frames, each an iterable of *items* (cells ``(r, c)``,
+    labels, blobs — anything). ``key`` maps an item to the identity that is voted
+    on (default: the item itself, which must be hashable); an identity seen twice
+    *within one frame* still counts as **one** frame-vote, so duplicate detections
+    in a single grab do not stuff the ballot. An identity is kept when it appears
+    in at least ``ceil(min_frac * len(frames))`` frames (``min_frac`` clamped to
+    ``(0, 1]``; with it 0 or one frame, everything seen is kept).
+
+    Returns ``{"kept": [identity…], "counts": {identity: frames_seen},
+    "frames": F, "threshold": T, "items": {identity: [item…]}}`` — ``kept`` sorted
+    by descending count then identity (the most-persistent first), ``items`` the
+    original items grouped per identity (deduped within a frame) so a caller can
+    average their positions for a click target. Empty input yields empty."""
+    frames = list(frames)
+    F = len(frames)
+    idfn = key if key is not None else (lambda it: it)
+    counts: "dict" = {}
+    items: "dict" = {}
+    for fr in frames:
+        seen_here: "dict" = {}
+        for it in fr:
+            k = idfn(it)
+            if k not in seen_here:            # dedup within a frame
+                seen_here[k] = it
+        for k, it in seen_here.items():
+            counts[k] = counts.get(k, 0) + 1
+            items.setdefault(k, []).append(it)
+    frac = min(1.0, max(1e-9, min_frac))
+    thr = 1 if F == 0 else max(1, math.ceil(frac * F))
+    kept = sorted((k for k, n in counts.items() if n >= thr),
+                  key=lambda k: (-counts[k], k))
+    return {"kept": kept, "counts": counts, "frames": F,
+            "threshold": thr, "items": items}
 
 
 def foveate(target: tuple[int, int, int], center: tuple[int, int],

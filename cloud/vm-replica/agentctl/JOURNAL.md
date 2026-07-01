@@ -9912,3 +9912,47 @@ between two columns belongs to the left one, every time. And the stray guard is
 per-axis on purpose: a blob can be dead-on in x yet a full cell low in y (a
 label, a shadow), and only a per-axis `max_dist` rejects it without also throwing
 away honest points that merely sit off-centre on the *other* axis. 道法自然.
+
+## F275 — frame_consensus: what persists across a burst of noisy frames
+
+A single grab of a transient event lies. One frame misses a tile that is really
+lit; the next invents a phantom from an anti-alias edge or a half-drawn fade. The
+memorise flash holds its tiles for a dozen frames while a stray blob shows for
+one or two — so reading the event across *many* frames and keeping only what
+recurs is how you tell signal from flicker. On the floor this got hand-rolled
+twice (F273's `vote_cells`, F274's per-cell `n`): count how many frames each
+thing appeared in, keep those above a fraction of the frame count. F275 owns that
+majority vote as a pure, domain-free function.
+
+`frame_consensus(frames, min_frac=0.5, key=None)` takes a list of frames, each an
+iterable of *items* (cells `(r, c)`, labels, blobs — anything). `key` maps an
+item to the identity voted on (default: the item itself). An identity seen twice
+*within one frame* still counts as **one** frame-vote — duplicate detections in a
+single grab do not stuff the ballot. An identity is kept when it appears in at
+least `ceil(min_frac * len(frames))` frames (`min_frac` clamped to `(0, 1]`).
+Returns `{kept, counts, frames, threshold, items}`: `kept` sorted most-persistent
+first, `items` the original items grouped per identity (deduped within a frame)
+so a caller can average their positions into a stable click target. It is the
+temporal-robustness sibling of F274: `grid_index` says *which cell* a reading
+touched, `frame_consensus` says *which of those held up* across the burst.
+
+Proof. `_test_f275.py` (19 checks, no display): majority keep by frame count;
+within-frame duplicates counted once; `threshold == ceil(min_frac*F)` across
+fractions; `min_frac` clamp (`>1` needs every frame, `<=0` keeps all seen);
+ordering by descending count then identity; a custom `key` bucketing raw points
+by cell with `items` recovering the centroid; single-frame and empty inputs; and
+composition with `grid_index` — three frames of occupied cells with a one-frame
+phantom, voted out. All thirty-one floor tests pass. Live `_game_f275.py` on
+Visual Memory: recording each flash frame's occupied cells *separately* and
+running `frame_consensus`, it deduped every round to the cells lit through the
+flash (level 1: three cells at 5/5 frames), a one-call replacement for the two
+earlier hand rolls.
+
+Lesson. The frame boundary is the whole point, and F274's flattened `n` blurs it:
+"one tile seen in five frames" and "five phantoms in one frame" both total five,
+so a per-detection count cannot distinguish a steady tile from a busy junk frame
+— only a *per-frame* vote can. Which also bounds what a consensus can fix: a
+phantom that is *stably* mis-detected every frame (a click landing a hair off a
+real tile's edge, say) has full frame support and rightly survives the vote. The
+vote removes flicker, not a systematic error; that is a job for the detector, not
+the tally. Count frames, not detections. 道法自然.
