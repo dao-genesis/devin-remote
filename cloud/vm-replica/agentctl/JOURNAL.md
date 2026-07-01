@@ -10077,3 +10077,65 @@ composed to the task — and they did. A new *game* is not the same as a new
 confirms its touch (F276); reading the board's symbols and ordering the hand by
 what they say is just those same eyes and hand pointed at a new surface. 道法自然,
 无为而无不为 — accomplish the new thing by adding nothing.
+
+
+---
+
+## FPS Probe — AssaultCube (the honest boundary of the floor)
+
+The next surface was a real-time 3D FPS: AssaultCube 1.2 (open source), a Bot
+Deathmatch on the desert/edifice rotation, nine skill-1 bots, ~2Hz perception on
+this 2-CPU software renderer. The question was the same friction-driven one asked
+of Chimp and Visual Memory: does the floor already compose to this, and if not,
+what *primitive* is honestly missing?
+
+**Actuation composes — verified.** `move_rel` (F261) turns the camera on both
+axes: a single `move_rel(300,0)` yaws the view (~56% of the frame changes),
+`move_rel(0,±114)` pitches it (~64%), and small pitch is *not* dropped (a −60
+count still moves ~58%). `click` (F120) fires, `key_hold` (F127) walks and
+strafes, `tap('R')` reloads. So the hand reaches the FPS with no new verb.
+
+**A first genuine friction, named honestly.** Closed-loop aim (`servo`, F262)
+cannot close here. Its locate callback needs a *single-frame* enemy locator, and
+the floor's two candidates both fail in real time: frame-diff (`locate_change_blobs`,
+F136) is *blinded by the very camera motion aiming requires* — the instant you
+turn, the whole frame is "changed"; and `match_template` (SAD), the only
+appearance locator, is O(search·patch) — seconds per frame in pure Python on two
+cores. A per-frame feedback loop physically cannot run.
+
+**The feed-forward answer, and where it lands.** So `_game_fps2.py` composes the
+realtime structure instead: hold still, take several static diffs → the moving
+bot's centroid at several instants; `lead` (F264) fits its velocity and predicts
+the intercept; one calibrated `move_rel` turns there; `click` sprays. This is all
+existing rungs. Instrumented over hundreds of engagements it revealed, cleanly:
+
+* **Horizontal bearing composes.** After one feed-forward turn the crosshair's
+  *horizontal* error to the tracked bot converges to ≈±40–60 px, repeatedly. The
+  eyes-to-hand chain works in azimuth.
+* **Everything else is a hardware/perception-bandwidth wall, not a missing verb.**
+  Vertical error stays pinned near −185 px because ground-walking bots at combat
+  range all project to ≈one screen height, and at 2 Hz a re-confirm re-locks a
+  *different* running bot at that same height rather than the one just corrected
+  onto — the loop chases a moving population. Motion-only detection also tracks
+  ceiling lights, sky, and HUD-edge shimmer as "movers", throwing wild pitches
+  into the ceiling. Net result over a full match: **0 frags, 16 deaths** — thirty
+  feed-forward sprays, not one kill, against bots that read and shoot in <100 ms.
+
+**Why no F277.** The measurements refute every *primitive*-shaped fix. The one
+verb that would help — cheap single-frame enemy localization — cannot be a small
+floor rung: the bots are low-contrast camo (color-keying fails), SAD is too slow,
+and "detect the salient foreground object" is an ML-scale perceptor, not a verb.
+The other tempting rung, auto-calibrating mouse gain by measuring egomotion, was
+prototyped (`_probe_pitch.py`, 1-D projection cross-correlation of two frames) and
+*failed on principle*: a 3D turn is not an image translation (parallax moves near
+and far by different amounts), so there is no single global shift to divide by.
+Both dead ends are honest evidence that the wall is compute and perception
+bandwidth on a software renderer, **not** a gap in the floor's vocabulary.
+
+This is the boundary, and naming it *is* the result. The floor's hand fully
+operates an FPS; its motion-only eyes and 2 Hz clock cannot win a firefight, and
+no primitive small enough to belong on the floor closes that gap on this hardware.
+前識者，道之華也，而愚之首也 — to bolt on an F277 here would be ornament over a
+limit that is physical, not lexical. As with Human Benchmark (saturated by the
+existing readers) and Chimp (cleared by pure composition), the disciplined move is
+to add nothing and record the edge. 道法自然,无为而无不为.

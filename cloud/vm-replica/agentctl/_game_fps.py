@@ -1,83 +1,106 @@
-"""Live proof for F261 move_rel — mouse-look in AssaultCube (open-source FPS).
+"""AssaultCube Bot-Deathmatch combat loop, composed from EXISTING floor rungs
+only — no new primitive unless honest friction demands one.
 
-An FPS grabs the pointer and turns the camera from pointer *motion*, integrating deltas
-per frame. The floor's absolute `move(x, y)` cannot *express* a rotation — you name a
-screen pixel, not a turn — and on raw-input games / Windows SendInput-absolute /
-Pointer-Lock canvases an absolute warp moves the camera by nothing at all. (Even where a
-relative-mode SDL backend happens to read warp-deltas, the effect is an uncontrolled,
-irreversible drift you cannot command.)
+  acquire  : locate_change_blobs on a static camera (F136) -> a moving bot is
+             the dominant change cluster; HUD/radar/weapon corners post-filtered.
+  aim      : servo (F262) drives that cluster onto the crosshair via move_rel
+             (F261), self-calibrating the unknown mouse->pixel scale.
+  fire     : click() (F120) presses the button WITHOUT warping the grabbed pointer.
+  verify   : the engaged mover should vanish on the next static diff; frag count
+             on the scoreboard (Tab) is the human-checkable ground truth.
 
-`move_rel` commands the exact delta the game integrates, so the camera turn is
-*proportional and reversible*: this driver sweeps the view right by a yaw delta, then
-sweeps the same delta back, and shows the view returns home to within a hair (~0 mean
-pixel diff). That round-trip is the proof — controlled, reversible mouse-look the
-absolute pointer family could never give.
-
-Run from the agentctl dir with AssaultCube already running (any spawn map).
+Run: DISPLAY=:0 python3 -u _game_fps.py [seconds]
 """
 import sys
-sys.path.insert(0, ".")
-import osctl
 import time
+import osctl
 
-# A band of the central viewport, clear of the HUD and the corner minimap.
-VX, VY, VW, VH = 600, 360, 380, 200
-
-
-def band():
-    w, h, rgb = osctl.capture_rgb(VX, VY, VW, VH)
-    return bytes(rgb)
-
-
-def meandiff(a, b):
-    """Mean absolute per-byte difference between two equal-size RGB captures."""
-    n = min(len(a), len(b)) or 1
-    return sum(abs(a[i] - b[i]) for i in range(n)) / n
+CX, CY = 800, 590                      # crosshair centre, real px
+ROI = (40, 90, 1560, 660)              # play area (HUD row below excluded)
+RADAR = (1315, 25, 1600, 335)          # top-right minimap animates
+WEAP = (540, 425, 1170, 665)           # weapon model corner (moves only on fire)
+GAIN = (-0.77, -0.77)                  # counts/px, from the servo docstring (~1.3px/count)
 
 
-def yaw_roundtrip(delta=600, steps=20):
-    """Sweep the view right by `delta`, then back; return (turn_diff, residual).
-    turn_diff: how much the viewport changed at full right yaw (large in gameplay).
-    residual: viewport difference after sweeping back home (~0 => reversible yaw)."""
-    home = band()
-    osctl.move_rel(delta, 0, steps=steps, delay=0.004); time.sleep(0.25)
-    turned = band()
-    osctl.move_rel(-delta, 0, steps=steps, delay=0.004); time.sleep(0.25)
-    back = band()
-    return meandiff(home, turned), meandiff(home, back)
+def _in(x, y, b):
+    return b[0] <= x <= b[2] and b[1] <= y <= b[3]
 
 
-def clear_menus(tries=4):
-    """Reach gameplay: a real yaw sweep changes the viewport only when the camera is
-    live; a menu freezes it. Probe with move_rel and toggle Escape until the camera
-    turns. (Escape toggles AssaultCube's menu, so we probe rather than press blindly.)"""
-    win = osctl.focus_window("AssaultCube")
-    time.sleep(0.4)
-    for _ in range(tries):
-        turn, _ = yaw_roundtrip(delta=300, steps=10)
-        if turn > 8.0:
-            return win
-        osctl.tap(osctl.VK_ESCAPE)
-        time.sleep(0.4)
-    return win
+def _capture():
+    w, h, rgb = osctl.capture_rgb()
+    return (w, h), rgb
 
 
-def main():
-    win = clear_menus()
-    print("focused:", win)
-    time.sleep(0.4)
-    osctl.screenshot("/tmp/fps_home.png")
+def movers(wait=0.20, tol=18, min_count=45, near=None, radius=320):
+    """One static-camera change read -> candidate movers, largest first.
+    Holds the camera still across two frames; the world doesn't change, a bot does."""
+    size, a = _capture()
+    time.sleep(wait)
+    _, b = _capture()
+    bl = osctl.locate_change_blobs(a, b, size, tol=tol, min_count=min_count, search=ROI)
+    out = []
+    for z in bl:
+        if _in(z["x"], z["y"], RADAR) or _in(z["x"], z["y"], WEAP):
+            continue
+        if near is not None:
+            if (z["x"] - near[0]) ** 2 + (z["y"] - near[1]) ** 2 > radius * radius:
+                continue
+        out.append(z)
+    return out
 
-    turn, residual = yaw_roundtrip(delta=600, steps=20)
-    osctl.screenshot("/tmp/fps_roundtrip.png")
-    print(f"move_rel +600 turned the view by mean-diff {turn:6.2f}; "
-          f"after -600 the view returned home, residual {residual:6.3f}")
-    verdict = ("move_rel gives controlled, reversible mouse-look "
-               "(turns the camera, returns home to ~0)"
-               if turn > 8.0 and residual < turn * 0.2 else "INCONCLUSIVE")
-    print("F261 live:", verdict)
-    return turn, residual
+
+def fire(bursts=2):
+    for _ in range(bursts):
+        osctl.click()
+        time.sleep(0.06)
+
+
+def engage(m, log):
+    """servo the mover onto the crosshair, then fire. locate = fresh static diff
+    tracking the same mover (nearest to its last seen position)."""
+    last = [(m["x"], m["y"])]
+
+    def locate():
+        mv = movers(wait=0.14, near=last[0], radius=360)
+        if not mv:
+            return None
+        p = (mv[0]["x"], mv[0]["y"])
+        last[0] = p
+        return p
+
+    r = osctl.servo(locate, (CX, CY), gain=GAIN, tol=26.0,
+                    max_iter=5, settle=0.09, damping=0.7, max_step=260.0)
+    log.append(f"    servo hit={r['hit']} iters={r['iters']} "
+               f"err={r['err']:.0f} reason={r['reason']} pos={r['pos']}")
+    osctl.screenshot(f"/tmp/fps_aim_{len(log)}.png")
+    fire(2)
+    # verify: is the mover still there next tick?
+    gone = not movers(wait=0.18, near=last[0], radius=200)
+    log.append(f"    fired; mover_gone={gone}")
+    return r["hit"], gone
+
+
+def main(budget=30.0):
+    t0 = time.time()
+    log = []
+    scans = engages = hits = gone = 0
+    while time.time() - t0 < budget:
+        mv = movers()
+        scans += 1
+        if not mv:
+            osctl.move_rel(240, 0, steps=6, delay=0.01)   # patrol yaw to find a bot
+            time.sleep(0.12)
+            continue
+        m = mv[0]
+        log.append(f"[{time.time()-t0:5.1f}s] mover ({m['x']},{m['y']}) n={m['count']} "
+                   f"of {len(mv)}")
+        engages += 1
+        h, g = engage(m, log)
+        hits += int(h); gone += int(g)
+    print("\n".join(log))
+    print(f"\nscans={scans} engages={engages} servo_hits={hits} movers_gone={gone} "
+          f"in {time.time()-t0:.0f}s")
 
 
 if __name__ == "__main__":
-    main()
+    main(float(sys.argv[1]) if len(sys.argv) > 1 else 30.0)
