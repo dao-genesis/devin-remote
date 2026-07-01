@@ -384,6 +384,13 @@ function _saveModeToDisk(mode) {
 let SP_MODE = _loadModeFromDisk() || process.env.SP_MODE || "invert";
 const START_TIME = Date.now();
 let reqCounter = 0;
+// ── v9.9.330 · 治本 · LS 心跳活性观照 (扩展↔LS wedge 自愈之信号源) ──
+//   道法自然·自观: Windsurf LS 活时每 ~5s 经本口发心跳(GetUserStatus 等真 gRPC);
+//   一旦扩展↔LS 握手 wedge(LS "exited before sending start data" 后管理器卡
+//   "Already waiting for language server start" 死循环) · 该流即断。
+//   仅在「真 LS→上游」请求(排除 /origin/* 控制面与 /v1/ 外接反代)时刷新此戳,
+//   故看门狗可据 ls_idle_s 精准辨识「proxy 健康却 LS 掉线」之 wedge。
+let _lastLsReqAt = 0;
 // v9.9.21 · 唯变所适 · 让位标志 · POST /origin/_quit 后置 true · ext-host watchdog 见之不再唤起
 // 二十二章「夫唯不争 故莫能与之争」· 让位之德 · 旧不抢新道
 let _quitSignaled = false;
@@ -3069,6 +3076,11 @@ function handleControl(req, res) {
         pid: process.pid,
         uptime_s: Math.round((Date.now() - START_TIME) / 1000),
         req_total: reqCounter,
+        // v9.9.330 · LS 心跳活性 · 看门狗据此辨识扩展↔LS wedge (idle 超阈即自愈重启 LS)
+        ls_last_req_at: _lastLsReqAt,
+        ls_idle_s: Math.round(
+          (Date.now() - (_lastLsReqAt || START_TIME)) / 1000,
+        ),
         dao_loaded: DAO_DE_JING_81.length > 0,
         dao_chars: DAO_DE_JING_81.length,
         canon: _activeCanon,
@@ -6846,6 +6858,9 @@ const _mainHandler = async (req, res) => {
       res.end(JSON.stringify({ error: "unknown /origin endpoint" }));
       return;
     }
+    // v9.9.330 · 至此即「真 LS→上游」流量(已排除 /origin/* 控制面与 /v1/ 外接反代)
+    //   刷新 LS 心跳戳 · 供看门狗辨识扩展↔LS wedge (道法自然·自观其活)
+    _lastLsReqAt = Date.now();
     // 2. 路由分类
     const kind = classifyRPC(req.url);
     const route = routeUpstream(req.url);
