@@ -10192,3 +10192,31 @@ it takes no F-number (前識者,道之華也: an F277 here would be ornament). T
 matches the outward arcs inverted: the floor already *speaks* every official verb;
 where it lagged was raw pixel throughput, and that closes by making the same
 computation faster, not by inventing vocabulary. 反者道之动也 — 損之又損, 无为而无不为.
+
+### Inward parity, second pass — the appearance-search primitives (find_color / find_color_blobs / match_template)
+
+Continuing 損之又損 down the same seam: the remaining O(pixels)·O(area×patch)
+perception rungs. Measured pure-Python cost on this 1600×1200 VM: `find_color`
+full-frame ~200 ms, `find_color_blobs` ~580 ms, `match_template` (60×60 patch,
+full frame) did not finish in 90 s (O(area×patch), the docstring's own warning).
+These are the primitives an appearance-driven loop (mahjongg, match-3, sprite
+tracking, the Chimp/HB solvers) leans on hardest — the exact "效率不够快" the FPS
+arc hit.
+
+Added an optional NumPy fast path to each, byte-identical to the pure-Python
+body (proven live by `_test_accel.py` toggling `osctl._np` across full-frame /
+`step` / `search` / `mask` variants):
+- `find_color`, `find_color_blobs`: vectorise the tol-mask over the (strided)
+  search window; the blob path keeps its union-find over matched samples (row-
+  major `nonzero` order reproduces the y-outer/x-inner scan exactly).
+- `match_template`: compute the **full** SAD field. The pure-Python slide's
+  early-abandon only prunes provably-worse offsets, so the arg-min is identical,
+  and `numpy.argmin`'s first-min-in-C-order matches the strict `s < best_s`
+  tie-break. To stay O(offsets) in memory (not O(offsets×patch)), the score field
+  is accumulated one patch-pixel at a time by array-shifted subtraction rather
+  than materialising every window — so it works on a full-frame search too.
+  Measured **20×** on a bounded 200×200 search (989 ms → 50 ms); the previously
+  intractable full-frame case now returns.
+
+Still no new F-number — these speed F052/F053/F233/F234/F240/F271, they add no
+verb. All 33 floor tests green (32 + the accel invariant). 反者道之动,無為而無不為.

@@ -1805,6 +1805,20 @@ def find_color(target: tuple[int, int, int], tol: int = 24,
         bx1, by1 = min(w - 1, bx1), min(h - 1, by1)
     tr, tg, tb = target
     s = max(1, int(step))
+    if _np is not None:
+        sub = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(h, w, 3)
+               [by0:by1 + 1:s, bx0:bx1 + 1:s].astype(_np.int16))
+        d = _np.abs(sub - _np.array((tr, tg, tb), dtype=_np.int16))
+        mask = (d <= tol).all(axis=2)
+        n = int(mask.sum())
+        if n == 0:
+            return None
+        ys, xs = _np.nonzero(mask)
+        xa = xs * s + bx0
+        ya = ys * s + by0
+        return {"x": int(xa.sum()) // n, "y": int(ya.sum()) // n, "count": n,
+                "bbox": (int(xa.min()), int(ya.min()),
+                         int(xa.max()), int(ya.max()))}
     sx = sy = n = 0
     minx = miny = 1 << 30
     maxx = maxy = -1
@@ -1901,20 +1915,34 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
         if ra != rb:
             parent[rb] = ra
 
-    for y in range(by0, by1 + 1, s):
-        row = y * stride
-        base = y * w
-        up_base = base - s * w
-        for x in range(bx0, bx1 + 1, s):
-            i = row + x * 3
-            if (abs(rgb[i] - tr) <= tol and abs(rgb[i + 1] - tg) <= tol
-                    and abs(rgb[i + 2] - tb) <= tol):
-                key = base + x
-                parent[key] = key
-                if x - s >= bx0 and (key - s) in parent:
-                    union(key - s, key)
-                if y - s >= by0 and (up_base + x) in parent:
-                    union(up_base + x, key)
+    if _np is not None:
+        sub = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(h, w, 3)
+               [by0:by1 + 1:s, bx0:bx1 + 1:s].astype(_np.int16))
+        d = _np.abs(sub - _np.array((tr, tg, tb), dtype=_np.int16))
+        mask = (d <= tol).all(axis=2)
+        ys, xs = _np.nonzero(mask)  # row-major: matches the y-outer x-inner loop
+        for x, y in zip((xs * s + bx0).tolist(), (ys * s + by0).tolist()):
+            key = y * w + x
+            parent[key] = key
+            if x - s >= bx0 and (key - s) in parent:
+                union(key - s, key)
+            if y - s >= by0 and (key - s * w) in parent:
+                union(key - s * w, key)
+    else:
+        for y in range(by0, by1 + 1, s):
+            row = y * stride
+            base = y * w
+            up_base = base - s * w
+            for x in range(bx0, bx1 + 1, s):
+                i = row + x * 3
+                if (abs(rgb[i] - tr) <= tol and abs(rgb[i + 1] - tg) <= tol
+                        and abs(rgb[i + 2] - tb) <= tol):
+                    key = base + x
+                    parent[key] = key
+                    if x - s >= bx0 and (key - s) in parent:
+                        union(key - s, key)
+                    if y - s >= by0 and (up_base + x) in parent:
+                        union(up_base + x, key)
 
     agg: dict[int, dict] = {}
     for key in parent:
@@ -4012,6 +4040,38 @@ def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
     # multiplies. A tightly scoped 240x240 search still cost ~33s, far too slow
     # to track a moving sprite frame-to-frame. One luma pass over the area
     # (``aw*ah`` pixels) collapses the inner loop to a bare integer subtract.
+    if _np is not None:
+        # Vectorised SAD (accelerates F053/F233): compute the *full* score field
+        # over every offset. The pure-Python slide's early-abandon only prunes
+        # provably-worse offsets, so the arg-min is identical; and numpy.argmin
+        # returns the first minimum in C order (oy outer, ox inner) — the same
+        # offset the strict ``s < best_s`` scan keeps. To stay O(offsets) in
+        # memory (not O(offsets x patch)), accumulate one patch pixel at a time
+        # by array-shifted subtraction rather than materialising every window.
+        srca = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(h, w, 3)
+                [sy0:sy1 + 1, sx0:sx1 + 1].astype(_np.int32))
+        al_np = (srca[:, :, 0] * 299 + srca[:, :, 1] * 587
+                 + srca[:, :, 2] * 114) // 1000
+        pv = _np.frombuffer(patch, dtype=_np.uint8)[:pw * ph * 3].reshape(ph, pw, 3).astype(_np.int32)
+        pl_np = (pv[:, :, 0] * 299 + pv[:, :, 1] * 587 + pv[:, :, 2] * 114) // 1000
+        m_np = (None if mask is None
+                else _np.frombuffer(mask, dtype=_np.uint8)[:pw * ph].reshape(ph, pw) != 0)
+        noy = (ah - ph) // step + 1
+        nox = (aw - pw) // step + 1
+        acc = _np.zeros((noy, nox), dtype=_np.int32)
+        for dy in range(ph):
+            rowsel = al_np[dy:dy + (noy - 1) * step + 1:step]  # (noy, aw)
+            for dx in range(pw):
+                if m_np is not None and not m_np[dy, dx]:
+                    continue
+                block = rowsel[:, dx:dx + (nox - 1) * step + 1:step]  # (noy, nox)
+                acc += _np.abs(block - int(pl_np[dy, dx]))
+        flat = int(acc.argmin())
+        oy, ox = (flat // nox) * step, (flat % nox) * step
+        score = int(acc.flat[flat])
+        tx, ty = sx0 + ox, sy0 + oy
+        return {"x": tx + pw // 2, "y": ty + ph // 2, "score": score,
+                "bbox": (tx, ty, tx + pw - 1, ty + ph - 1)}
     al = bytearray(aw * ah)
     for ry in range(ah):
         src = ((sy0 + ry) * w + sx0) * 3

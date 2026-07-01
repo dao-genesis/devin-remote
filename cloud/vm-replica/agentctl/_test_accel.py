@@ -62,6 +62,32 @@ n, p = both(lambda: osctl.sample_grid((100, 100, 900, 900), 12, 12,
                                       rgb=f0, size=(w, h)))
 assert n == p, "sample_grid mean mismatch"
 
+# 6) find_color — centroid of a colour (full frame, step, search window)
+px = osctl.pixel(30, min(h - 1, 1150))
+for kw in (dict(tol=10), dict(tol=10, step=3),
+           dict(tol=10, search=(200, 200, 900, 900))):
+    n, p = both(lambda kw=kw: osctl.find_color(px, rgb=f0, size=(w, h), **kw))
+    assert n == p, ("find_color mismatch", kw, n, p)
+
+# 7) find_color_blobs — connected components of a colour
+for kw in (dict(tol=10, min_count=5), dict(tol=10, step=2, min_count=3),
+           dict(tol=10, search=(200, 200, 900, 900), min_count=5)):
+    n, p = both(lambda kw=kw: osctl.find_color_blobs(px, rgb=f0, size=(w, h),
+                                                     **kw))
+    assert n == p, ("find_color_blobs mismatch", kw, len(n), len(p))
+
+# 8) match_template — SAD arg-min (bounded search so pure-Python is quick);
+#    also step>1 and a mask, since both change which pixels are summed.
+patch, pw, ph = osctl.crop_rgb(f0, (w, h), (760, 560, 809, 609))
+sr = (700, 500, 900, 700)
+n, p = both(lambda: osctl.match_template(patch, pw, ph, rgb=f0, size=(w, h),
+                                        search=sr))
+assert n == p, ("match_template mismatch", n, p)
+msk = bytes([1 if (i // pw + i % pw) % 2 == 0 else 0 for i in range(pw * ph)])
+n, p = both(lambda: osctl.match_template(patch, pw, ph, rgb=f0, size=(w, h),
+                                        search=sr, step=2, mask=msk))
+assert n == p, ("match_template (step+mask) mismatch", n, p)
+
 # speed: the vectorised path must not be *slower* than pure-Python on a big ROI
 osctl._np = _NP
 a = time.time()
