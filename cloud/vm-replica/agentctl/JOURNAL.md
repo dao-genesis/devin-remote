@@ -10294,3 +10294,26 @@ setup would cost more than the loop it replaces — 道法自然, left as-is.
 Twelve rungs now vectorise byte-identically (16 invariant blocks in
 `_test_accel.py`); zero new F-numbers; zero-hard-dependency fallback intact.
 33 tests green.
+
+### Inward parity — the capture boundary (measured, deliberately not "accelerated")
+
+The FPS probe's real wall was capture *latency*, so I profiled the grab itself.
+On this 1600×1200 software-X VM a full `capture_rgb()` is ~11–15 ms, and the
+split is decisive: `XGetImage` + `string_at` alone is ~10–14 ms; the BGRX→RGB
+conversion is the small remainder. The grab is the floor, not the conversion.
+
+I did try a numpy conversion. In *isolation* it is ~2× the slice path
+(4.3 ms → 2.2 ms) — a real speedup of that step. But end to end it vanished:
+full-grab timing with vs without numpy was within noise (numpy even measured
+slightly slower on some runs), because `XGetImage` dominates and its own
+variance is larger than the conversion saving. So I **reverted** the backend
+change. 損之又損 — adding an optional-numpy branch to the backend that does not
+move the real metric is an ornament, not an improvement; the slice conversion
+stays as the honest, dependency-free floor.
+
+The right tool for high-rate loops already exists and needs no change: the
+*foveal* `capture_rgb(x, y, w, h)` grab is ~0.13 ms for a 200×200 window (≈100×
+cheaper than the full screen). The lesson from the FPS ceiling holds — sample a
+small window fast, don't re-grab the whole desktop — and that is a harness
+choice, not a missing or slow primitive. Genuine boundary, mapped and left
+un-forced.
