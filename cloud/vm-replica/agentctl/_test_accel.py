@@ -147,6 +147,17 @@ assert n == p, ("classify_boxes (max_score) mismatch", n, p)
 n, p = both(lambda: osctl.cluster_boxes(bxs, rgb=f0, size=(w, h)))
 assert n == p, ("cluster_boxes mismatch", n, p)
 
+# 16) sample_grid stat="mode" — the modal-fill histogram (max-count bin, ties by
+# earliest insertion) across several quant levels and an odd-sized lattice.
+for q in (8, 16, 24, 32, 64):
+    n, p = both(lambda q=q: osctl.sample_grid((100, 100, 595, 451), 5, 4,
+                                              stat="mode", quant=q,
+                                              rgb=f0, size=(w, h)))
+    assert n == p, ("sample_grid(mode) mismatch", q)
+n, p = both(lambda: osctl.sample_grid((0, 0, 31, 23), 4, 3, stat="mode",
+                                      quant=24, rgb=f0, size=(w, h)))
+assert n == p, ("sample_grid(mode) odd-cell mismatch", n, p)
+
 # speed: the vectorised path must not be *slower* than pure-Python on a big ROI
 osctl._np = _NP
 a = time.time()

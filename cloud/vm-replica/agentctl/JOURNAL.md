@@ -10273,3 +10273,24 @@ where forcing it would trade correctness for speed.
 Tally: eleven rungs now vectorise byte-identically behind an optional-numpy
 guard (perception, appearance-search, structure, classification), 15 invariant
 blocks, zero new F-numbers, zero-hard-dependency fallback intact. 33 tests green.
+
+### Inward parity, fifth pass — the modal-fill histogram
+
+Sweep of the whole file for remaining unguarded luma / per-pixel loops turned up
+one live hot rung: `sample_grid(stat="mode")`. Its "mean" branch was already
+vectorised, but the modal branch still bucketed every cell pixel into a Python
+dict colour histogram to find the most-populated (fill) bin. Now vectorised:
+codes = quantised RGB packed to one integer, `np.unique(return_index,
+return_inverse, return_counts)` + `np.add.at` for exact per-bin channel sums.
+The winner reproduces `max(values, key=count)` exactly — greatest count, ties
+broken by earliest insertion (smallest first-seen index) — so the returned
+fill colour is byte-identical across quant 8/16/24/32/64 and odd-sized cells.
+
+Remaining `* 299` sites are all already guarded (match_template / _screen /
+_luma_resample / _box_signature) or are tiny fixed-size helpers (`_lum` closures
+inside detect_grid boundary scans, per-row template flattening) where a numpy
+setup would cost more than the loop it replaces — 道法自然, left as-is.
+
+Twelve rungs now vectorise byte-identically (16 invariant blocks in
+`_test_accel.py`); zero new F-numbers; zero-hard-dependency fallback intact.
+33 tests green.

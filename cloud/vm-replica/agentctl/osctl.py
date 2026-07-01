@@ -2632,6 +2632,28 @@ def sample_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
                 # Modal fill: bucket pixels into a coarse colour histogram,
                 # accumulating each bin's exact channel sums, then return the
                 # mean of the most-populated bin — the fill outvotes any mark.
+                if arr is not None:
+                    cell = arr[iy0:iy1, ix0:ix1].reshape(-1, 3).astype(_np.int64)
+                    kb = 256 // quant + 1
+                    codes = (cell[:, 0] // quant * kb
+                             + cell[:, 1] // quant) * kb + cell[:, 2] // quant
+                    uniq, first_idx, inv, counts = _np.unique(
+                        codes, return_index=True, return_inverse=True,
+                        return_counts=True)
+                    sr = _np.zeros(uniq.size, dtype=_np.int64)
+                    sg = _np.zeros(uniq.size, dtype=_np.int64)
+                    sb = _np.zeros(uniq.size, dtype=_np.int64)
+                    _np.add.at(sr, inv, cell[:, 0])
+                    _np.add.at(sg, inv, cell[:, 1])
+                    _np.add.at(sb, inv, cell[:, 2])
+                    # match ``max(values, key=count)``: greatest count, ties
+                    # broken by earliest insertion (smallest first-seen index).
+                    cand = _np.nonzero(counts == counts.max())[0]
+                    win = int(cand[_np.argmin(first_idx[cand])])
+                    bn = int(counts[win])
+                    row.append({"r": int(sr[win]) // bn, "g": int(sg[win]) // bn,
+                                "b": int(sb[win]) // bn, "count": bn})
+                    continue
                 bins: "dict[tuple[int, int, int], list[int]]" = {}
                 for yy in range(iy0, iy1):
                     base = (yy * w + ix0) * 3
