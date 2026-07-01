@@ -2,6 +2,22 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.330 · 治本 · 扩展↔LS 握手 wedge 自愈(从根解「连不上官方服务」反复复发)
+: 真机根因定位:反代 :8937 健康、锚定亦在、预热帧已跨重启常驻(#937),但 Cascade 仍反复
+卡「Connecting to server…」。真源**不是网络/配额/预热帧**,而是 codeium 扩展客户端的
+**LS 状态机 wedge**——LS 进程 `exited before sending start data` 后管理器卡在
+`Already waiting for language server start` 死循环、不再重启新 LS;旧看门狗只看
+`/origin/ping` 健康 →「安心」早返,从不感知此 wedge,故复发不止。
+- `source.js`:新增 **LS 心跳活性观照** `_lastLsReqAt`——仅在「真 LS→上游」请求(排除
+  `/origin/*` 控制面与 `/v1/` 外接反代)时刷新;`/origin/ping` 暴露 `ls_last_req_at` +
+  `ls_idle_s`。LS 活时每 ~5s 心跳、idle 恒低;wedge/死则 idle 持续增长 → 成 wedge 判据。
+- `extension.js`:看门狗「安心」分支前置 `_maybeHealLsWedge(ping)`——`proxy 健康 + 锚定本口 +
+  ls_idle_s≥90s` 即判扩展↔LS wedge → 执行 `windsurf.restartLanguageServer` 重置状态机
+  (回落 kill LS 进程令其重生),带 90s 启动危窗 + 180s 冷却防风暴。**无为而无不为:机器自愈,
+  无需人工重启语言服务器**。
+- 新增自检 `_lswedge_selftest.js`(`npm run test:lswedge`):7 断言全过——控制面 ping 不算 LS
+  心跳(idle 持续增长)、真 LS 流量刷新心跳戳(idle 归零)。
+
 v9.9.326 · ④ 模型反代档位热切换(朴散则为器 · 家族归组 + 档位热切 + 别名直调)
 : 把 Devin Desktop 的「选档」底层逻辑迁入 ④ 模型反代——同族多档(none/low/medium/high/xhigh/max,
 +thinking/+fast)按**家族归组**呈现,行内一个**档位下拉**可热切该族「当前活跃档」,热生效无需重启。

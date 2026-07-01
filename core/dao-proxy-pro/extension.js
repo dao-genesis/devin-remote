@@ -173,6 +173,7 @@ let _proxyHealthy = false; // 仅当本地/远端 dao 反代确认存活时为 t
 let _livePort = null; // 实际绑定端口 (软编码 · 可能为 OS 分配的空闲端口)
 let _extContext = null; // 扩展上下文 · 用于推导本实例 settings.json 路径 (跨产品名)
 let _lastLsRestart = 0; // LS 重启去抖时间戳 · 防多实例重启风暴
+let _lastLsWedgeHeal = 0; // v9.9.330 · 扩展↔LS wedge 自愈去抖时间戳
 // ★ 解锁自愈追踪 · 治"新用户只剩 SWE-1.6 Slow·其余全灰"之莫名顽疾
 let _lsSpawnSeen = false; // 本会话是否见过 language_server spawn
 let _lsRewroteCount = 0; // spawn hook 成功改写 LS 端口的次数 (>0 即 LS 经反代)
@@ -743,6 +744,57 @@ function _maybeRestartLS(reason) {
   try {
     forceRestartLS();
   } catch {}
+}
+
+// ── v9.9.330 · 治本 · 扩展↔LS 握手 wedge 自愈 (从根解「连不上官方服务」反复复发) ──
+// 病灶(本源·非网络/非配额/非预热帧): 反代 :8937 健康、锚定亦在, 但 codeium 扩展
+//   客户端的 LS 状态机卡在 "Already waiting for language server start" 死循环
+//   (LS 进程 "exited before sending start data" 后管理器不再重启新 LS) →
+//   Cascade 永停「Connecting to server…」。旧看门狗只看 /origin/ping 健康 →
+//   "安心"早返, 从不感知此 wedge, 故复发不止。
+// 本源信号(道法自然·自观): LS 活时每 ~5s 经 :8937 心跳; wedge/死则该流断。
+//   故「proxy 健康 + 锚定本口 + ls_idle_s 超阈」= 扩展↔LS wedge 的充分判据。
+// 药: 执行 windsurf.restartLanguageServer 重置扩展侧状态机(回落 kill LS 进程令其重生),
+//   带 90s 阈值 + 90s 启动危窗 + 180s 冷却, 无为而无不为 · 机器自愈, 无需人工。
+async function _maybeHealLsWedge(ping) {
+  try {
+    if (!ping || !ping.ok) return;
+    if (!_cachedAnchored) return; // 未锚本反代 · LS 走官方 · 本口无心跳属正常
+    const idle = Number(ping.ls_idle_s);
+    if (!Number.isFinite(idle)) return; // 旧版 source 无此字段 · 兼容跳过
+    if (Number(ping.uptime_s) < 90) return; // proxy 启动危窗 · LS 首连需时 · 不误判
+    if (idle < 90) return; // 正常 ~5s 心跳 · 90s 无流才判 wedge
+    const now = Date.now();
+    if (now - _lastLsWedgeHeal < 180000) {
+      L.info("ls-wedge", `skip heal (cooldown 180s) · ls_idle=${idle}s`);
+      return;
+    }
+    _lastLsWedgeHeal = now;
+    L.warn(
+      "ls-wedge",
+      `扩展↔LS 握手疑 wedge · ls_idle=${idle}s (proxy健康·锚定本口) · 触自愈重启 LS`,
+    );
+    let ok = false;
+    try {
+      await vscode.commands.executeCommand("windsurf.restartLanguageServer");
+      ok = true;
+      L.info("ls-wedge", "windsurf.restartLanguageServer 已执行 · 状态机将重置");
+    } catch (e) {
+      L.warn(
+        "ls-wedge",
+        `restartLanguageServer 命令失败(${e && e.message}) · 回落 kill LS 进程`,
+      );
+    }
+    if (!ok) {
+      try {
+        await forceRestartLS();
+        L.info("ls-wedge", "forceRestartLS 回落执行毕 · 扩展将重生 LS");
+      } catch {}
+    }
+    _lastLsRestart = Date.now();
+  } catch (e) {
+    L.warn("ls-wedge", `heal err: ${e && e.message}`);
+  }
 }
 
 async function proxyStart(port, mode, _retried, _altAttempts) {
@@ -4342,6 +4394,9 @@ function activate(ctx) {
               ).catch(() => {});
               await new Promise((r) => setTimeout(r, 1500));
             } else {
+              // v9.9.330 · proxy 健康且版本最新 → 再观照扩展↔LS 心跳
+              //   若锚定本口却 LS 心跳久断 = 扩展↔LS wedge → 自愈重启 LS
+              await _maybeHealLsWedge(ping);
               return; // 活且版本最新 · 安心
             }
           }
