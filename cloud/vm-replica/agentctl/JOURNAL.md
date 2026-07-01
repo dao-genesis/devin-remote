@@ -10026,3 +10026,52 @@ The through-line of F271–F276: the floor grew *eyes that resolve a board* and 
 structure (`grid_lattice`, `grid_index`), consensus over time (`frame_consensus`),
 and finally the closed loop back onto its own action (`click_verify`). Each was
 born from a real miss watched happen on a live screen, not imagined. 道法自然.
+
+### Chimp Test — a whole new game falls out of composition (no new primitive)
+
+Visual Memory rewards knowing *where* a blob lit up; the Human Benchmark **Chimp
+Test** demands the rung above it — knowing *which number* each tile carries, then
+clicking 1..N in ascending order after the numbers vanish. The interesting claim
+to test was whether the floor already had that rung, or whether reading digits
+was honest new friction. It was not new friction: the floor read every tile with
+primitives already on the shelf, and I invented **no F-number** for it.
+
+The pipeline is pure composition: `find_color_blobs` (F052) locates each white
+glyph with its exact bbox; `edge_signature` (F056) reduces that bbox to a
+scale-free structural fingerprint; `read_glyph`/`edge_hamming` (F058) names it by
+nearest atlas entry; `click` lands the move. `_game_chimp.py` wires only these.
+
+Two wrinkles the floor answered without new code:
+
+* **Multi-digit tiles.** "10".."15" segment into two white components, so
+  `find_color_blobs` returns two blobs for one tile. `group_tiles` re-joins blobs
+  that fall within a single tile's span (dx<55, dy<28) and reads them
+  left-to-right into one number — the same segment-then-read idiom `read_text`
+  uses for canvas runs.
+
+* **The atlas is self-supervised — the game teaches it its own alphabet.** The
+  digit atlas ({digit: edge_signature}) was *bootstrapped from the game itself*.
+  A board always shows exactly the set {1..N}, so a glyph the atlas cannot yet
+  name is pinned by elimination: a fresh single digit shows up as a *duplicate*
+  of a look-alike, and the true new glyph is the duplicate whose signature sits
+  *farthest* from that look-alike's atlas entry (nearest wins → the impostor is
+  farthest); a digit that only appears *inside* a multi-digit number (0 inside
+  "10") makes that number fall outside {1..N}, and the odd glyph is the one that,
+  relabelled the missing number's digit, brings it back into range. `grow_atlas`
+  runs this at play time, so an atlas seeded with only **1..5 heals itself up to
+  the full 0..9** as it climbs — verified live: from a 1–5 seed it grew 6,7,8,9
+  by level 6 and 0 by level 7, then cleared on.
+
+Live proof (both from a cold process): with the committed `chimp_atlas.json` and
+with a deliberately truncated **1–5 seed**, the floor cleared the Chimp Test
+through **level 12 — fifteen numbers, 1..15**, every level read exactly 1..N with
+**zero strikes**, stopping only at the harness's `max_levels` cap. Chimps remember
+~9 over 90% of the time; the floor read fifteen clean and could keep going.
+
+The lesson is the friction-driven principle stated in the positive: before
+inventing F277 for "digit reading", I checked whether the existing rungs already
+composed to the task — and they did. A new *game* is not the same as a new
+*primitive*. The floor grew eyes that resolve a board (F273–F275) and a hand that
+confirms its touch (F276); reading the board's symbols and ordering the hand by
+what they say is just those same eyes and hand pointed at a new surface. 道法自然,
+无为而无不为 — accomplish the new thing by adding nothing.
