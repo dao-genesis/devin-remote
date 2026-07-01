@@ -1621,6 +1621,52 @@ def wait_pixel(x: int, y: int, rgb: "tuple[int, int, int]", tol: int = 12,
         time.sleep(interval)
 
 
+def click_verify(x: int, y: int, check, tries: int = 3, settle: float = 0.3,
+                 right: bool = False) -> dict:
+    """Click a point and *confirm the effect landed*, re-clicking until it does
+    or ``tries`` is spent (F276).
+
+    :func:`click` is fire-and-forget: it presses and returns, blind to whether the
+    press did anything. Most of the time it did — but a click fired a hair too
+    early (the target still animating in, the recall phase not yet armed), landing
+    a pixel off a control's live edge, or swallowed while the page was busy simply
+    *vanishes*: no effect, no error, no life lost. On a memory board this shows as
+    one tile that never lights though its neighbours clicked from the same batch
+    do — a *systematic* miss no amount of frame-voting (F275) can recover, because
+    the reading was right; the actuation dropped. The only cure is the loop a human
+    does without thinking: click, glance to see it took, click again if it didn't.
+    This owns that loop.
+
+    ``check`` is a zero-argument predicate returning truthy once the click's own
+    visible effect is present — typically ``lambda: osctl.pixel(x, y) matched`` or
+    ``lambda: bool(find_color(lit, search=cell_bbox))``; :func:`wait_pixel` /
+    :func:`find_color` compose straight in. After each press it waits up to
+    ``settle`` for the effect (polling ``check`` a few times across that window, so
+    a fast effect returns early), and re-presses only if still unconfirmed. If
+    ``check`` is already truthy *before* the first press — the effect is present,
+    the target was already in the wanted state — it returns immediately with
+    ``clicks == 0``, so this is idempotent and safe to call on an already-set tile.
+
+    Returns ``{"ok": bool, "clicks": how_many_presses_fired, "tries": tries}``.
+    ``ok`` is whether ``check`` ever turned truthy; ``clicks`` lets a caller tell a
+    first-try landing from one that needed nagging (a cheap health signal on how
+    flaky actuation is)."""
+    if check():
+        return {"ok": True, "clicks": 0, "tries": tries}
+    clicks = 0
+    for _ in range(max(1, tries)):
+        click(x, y, right=right)
+        clicks += 1
+        deadline = time.monotonic() + settle
+        while True:
+            if check():
+                return {"ok": True, "clicks": clicks, "tries": tries}
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(min(0.05, settle / 4) if settle > 0 else 0)
+    return {"ok": bool(check()), "clicks": clicks, "tries": tries}
+
+
 def react_pixel(x: int, y: int, rgb: "tuple[int, int, int]", tol: int = 24,
                 timeout: float = 5.0, interval: float = 0.0,
                 act="click") -> dict:

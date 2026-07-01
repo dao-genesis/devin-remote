@@ -9956,3 +9956,52 @@ phantom that is *stably* mis-detected every frame (a click landing a hair off a
 real tile's edge, say) has full frame support and rightly survives the vote. The
 vote removes flicker, not a systematic error; that is a job for the detector, not
 the tally. Count frames, not detections. 道法自然.
+
+## F276 — click_verify: click, confirm it landed, re-press the ones that dropped
+
+F273–F275 made *reading* the board airtight — recover the lattice, snap the flash
+onto it, vote out flicker. Yet a correctly-read tile still failed to clear the
+level: one recall click, reliably the top row, simply dropped — the tile stayed
+blue, no life lost, no error. The diagnostic settled it: I clicked all three
+consensus cells `(0,0),(0,2),(1,1)`; two lit, `(0,0)` stayed blue with all three
+lives intact. The press vanished. That is an *actuation* miss — a click fired a
+hair too early (the recall phase not yet armed while the flash finished fading),
+landing in dead time — and no amount of frame-voting recovers it, because the
+reading was right; the click dropped. `frame_consensus` removes flicker, not a
+dropped actuation.
+
+`click_verify(x, y, check, tries=3, settle=0.3)` owns the loop a human does
+without thinking: click, glance to see it took, click again if it didn't. `check`
+is a zero-arg predicate that goes truthy once the click's *own* visible effect is
+present — here `lambda: find_color_blobs(WHITE, search=cell_box)`, i.e. *this*
+cell turned white. It presses, waits up to `settle` (polling `check` so a fast
+effect returns early), and re-presses only if still unconfirmed, up to `tries`. If
+`check` is already truthy before the first press it returns with `clicks == 0` —
+idempotent, safe to call on an already-set control. Returns `{ok, clicks, tries}`;
+`clicks` is a health signal (1 = landed first try, >1 = flaky actuation, `tries`
+with `ok=False` = never took).
+
+Proof. `_test_f276.py` (11 checks, no display; `osctl.click` stubbed with a press
+counter): idempotent zero-click when already satisfied; lands on the first press;
+a systematic miss that needs exactly three presses; never-lands giving `ok=False`
+after `tries` presses; `clicks` as health signal; `tries` floored at 1; a
+`settle=0` tight loop that returns promptly without hanging; the right-click path;
+and `check` consulted *before* the first press. All thirty-two floor tests pass.
+
+Live `_game_f276.py` on Visual Memory closed the loop the earlier three could not.
+Waiting for the flash to fully clear to blue (recall armed) then routing every
+recall click through `click_verify`: **level 1 advanced to level 2** — the exact
+step that was stuck forever before — with each of its three clicks landing on the
+first press and verifying white (`clicks=1, ok=True`). And on level 2, where grid
+recovery over-detected, `click_verify` *refused to lie*: it re-pressed the phantom
+cells four times each and returned `ok=False` rather than falsely reporting a
+landing — turning a silent miss into a legible, per-click actuation verdict.
+
+Lesson. The floor had watched pixels (`wait_pixel`) and reacted to them
+(`react_pixel`), but never *closed the loop back onto its own action* — every
+`click` was fire-and-forget, trusting the actuation blindly. `click_verify` is the
+first primitive where perception judges the floor's *own* effect and retries: the
+difference between doing and confirming-you-did. It also draws the honest line
+between a *dropped* click (re-pressing fixes it) and a *phantom* target (re-pressing
+can't, and `ok=False` says so) — the tally that finally distinguishes "my hand
+slipped" from "there was nothing there." 道法自然.
