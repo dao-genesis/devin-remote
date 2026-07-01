@@ -10247,3 +10247,29 @@ that is *provably* the same output as the pure-Python body (14 invariant blocks
 in `_test_accel.py`, all toggling `osctl._np`), and the floor keeps its
 zero-hard-dependency guarantee when numpy is absent. 33 floor tests green.
 損之又損,以至於無為 — the pixel-loop seam is now essentially closed end to end.
+
+### Inward parity, fourth pass — the scatter-classify core
+
+The last O(pixels) rung left on the classification path: `_box_signature`'s
+ink-gate loop (build the inset crop's luma, mean it, count deviating pixels) and
+`_classify_box`'s per-template mean-abs-diff score. Both now carry a numpy fast
+path:
+- ink-gate: luma + `|v-mean|>ink_tol` count vectorised. The pure-Python loop's
+  early break only bounded *cost*, not the `ink < ink_min` decision, so the gate
+  is byte-identical.
+- score: `|sig - tv|.sum()` per template with the same first-min tie-break.
+This is the shared core of `classify_boxes` / `cluster_boxes` (and `classify_grid`
+already covered), so the whole scatter-read path — segment by colour, read what
+each box is — is now vectorised. Byte-identical end-to-end (invariant blocks 14-15
+in `_test_accel.py` cover classify_grid, classify_boxes incl. the max_score→unknown
+branch, and cluster_boxes).
+
+`radial_profile` (F057) was left pure-Python on purpose: its histogram bin index
+`int(d/mr*(bins-1)+0.5)` is ULP-sensitive, so a numpy `sqrt`/`sum` reordering
+could flip a bin and break byte-identity — and its `edge_map` base is already
+accelerated. 道法自然: accelerate where it is provably safe, accept the boundary
+where forcing it would trade correctness for speed.
+
+Tally: eleven rungs now vectorise byte-identically behind an optional-numpy
+guard (perception, appearance-search, structure, classification), 15 invariant
+blocks, zero new F-numbers, zero-hard-dependency fallback intact. 33 tests green.

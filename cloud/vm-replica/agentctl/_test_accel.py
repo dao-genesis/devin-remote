@@ -135,6 +135,18 @@ n, p = both(lambda: osctl.classify_grid((300, 300, 495, 431), 3, 2, tpl,
                                         rgb=f0, size=(w, h)))
 assert n == p, ("classify_grid mismatch", n, p)
 
+# 15) classify_boxes / cluster_boxes — the scatter classify path (ink-gate +
+# scoring loop), including the max_score → unknown branch.
+bxs = [(300, 300, 331, 331), (360, 300, 391, 331), (400, 400, 431, 431),
+       (10, 10, 41, 41)]
+n, p = both(lambda: osctl.classify_boxes(bxs, tpl, rgb=f0, size=(w, h)))
+assert n == p, ("classify_boxes mismatch", n, p)
+n, p = both(lambda: osctl.classify_boxes(bxs, tpl, rgb=f0, size=(w, h),
+                                         max_score=1))
+assert n == p, ("classify_boxes (max_score) mismatch", n, p)
+n, p = both(lambda: osctl.cluster_boxes(bxs, rgb=f0, size=(w, h)))
+assert n == p, ("cluster_boxes mismatch", n, p)
+
 # speed: the vectorised path must not be *slower* than pure-Python on a big ROI
 osctl._np = _NP
 a = time.time()

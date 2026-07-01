@@ -2957,6 +2957,18 @@ def _box_signature(rgb: bytes, w: int, h: int,
         iy1 = iy0 + 1
     iy0 = max(0, min(iy0, h - 1))
     iy1 = max(iy0 + 1, min(iy1, h))
+    if _np is not None:
+        reg = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(-1, w, 3)
+               [iy0:iy1, ix0:ix1].astype(_np.int32))
+        lum = (reg[:, :, 0] * 299 + reg[:, :, 1] * 587
+               + reg[:, :, 2] * 114) // 1000
+        n = lum.size
+        mean = int(lum.sum()) // n if n else 0
+        # the loop's early break only affects speed, not the ink < ink_min gate
+        ink = int((_np.abs(lum - mean) > ink_tol).sum())
+        if ink < ink_min:
+            return None
+        return _luma_resample(rgb, w, ix0, iy0, ix1, iy1, norm)
     lums = []
     for yy in range(iy0, iy1):
         base = (yy * w + ix0) * 3
@@ -2993,14 +3005,22 @@ def _classify_box(rgb: bytes, w: int, h: int,
         return empty_label
     best = None
     best_label = unknown_label
-    for label, tv in lib:
-        s = 0
-        for a, b in zip(sig, tv):
-            d = a - b
-            s += d if d >= 0 else -d
-        if best is None or s < best:
-            best = s
-            best_label = label
+    if _np is not None:
+        sa = _np.asarray(sig, dtype=_np.int32)
+        for label, tv in lib:
+            s = int(_np.abs(sa - _np.asarray(tv, dtype=_np.int32)).sum())
+            if best is None or s < best:
+                best = s
+                best_label = label
+    else:
+        for label, tv in lib:
+            s = 0
+            for a, b in zip(sig, tv):
+                d = a - b
+                s += d if d >= 0 else -d
+            if best is None or s < best:
+                best = s
+                best_label = label
     if max_score is not None and best is not None and best / npix > max_score:
         return unknown_label
     return best_label
