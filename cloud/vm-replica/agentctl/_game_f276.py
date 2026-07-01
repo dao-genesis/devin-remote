@@ -62,6 +62,15 @@ def main():
     reached, flaky = 0, 0
     for level in range(1, 12):
         frame_pts = catch_flash_frames(2.0 + level * 0.4)
+        # wait for the flash to fully clear to blue (recall phase armed) BEFORE
+        # reading the grid: reading mid-fade sees only the still-blue tiles and
+        # grid_lattice then infers a wrong, under-sized lattice from them.
+        osctl.move(300, 400)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if not blobs(WHITE, 40, 40, step=2):   # strict: wait for truly-blue board
+                break
+            time.sleep(0.12)
         g = read_grid()
         if g["rows"] * g["cols"] == 0:
             print(f"level {level}: lost the grid; stopping"); break
@@ -70,14 +79,6 @@ def main():
                for fr in frame_pts]
         cells = osctl.frame_consensus(per, min_frac=0.5)["kept"]
         half = min(px, py) * 0.28
-        # wait for the flash to fully clear to blue (recall phase armed) so a
-        # click actually counts and click_verify measures the click's own effect
-        osctl.move(300, 400)
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            if not any(lit(g["xs"][c], g["ys"][r], half) for (r, c) in cells):
-                break
-            time.sleep(0.15)
         report = []
         for (r, c) in sorted(cells):
             tx, ty = int(g["xs"][c]), int(g["ys"][r])
