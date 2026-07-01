@@ -10005,3 +10005,24 @@ difference between doing and confirming-you-did. It also draws the honest line
 between a *dropped* click (re-pressing fixes it) and a *phantom* target (re-pressing
 can't, and `ok=False` says so) — the tally that finally distinguishes "my hand
 slipped" from "there was nothing there." 道法自然.
+
+### F273–F276 deep validation — the read→act→verify arc conquers Visual Memory
+
+With `click_verify` landing every press, the whole stack was let run past level 1:
+recover the lattice (F273), snap each captured flash onto it (F274), vote out
+flicker across frames (F275), then click every consensus cell through `click_verify`
+(F276). It **cleared level after level, boards growing 3×3 → 4×4 → 5×5 → 6×6 →
+7×7 → 8×8**, and every single click on every level reported `clicks=1, ok=True` —
+no dropped actuation, no phantom, all the way to **level 19**. The run finally
+stalled at level 20 with an *empty flash read* on the 8×8 board: at that tile
+density the fixed `find_color_blobs` sensitivity (min_count / step) begins to miss
+the smaller, tighter-packed lit tiles. That is the honest next friction — an
+adaptive, density-aware blob acuity for extreme boards — logged for a future F,
+not forced now: nineteen cleared levels is already far past human recall, and the
+four primitives that got there are each proven in isolation and in composition.
+
+The through-line of F271–F276: the floor grew *eyes that resolve a board* and then
+*a hand that confirms its own touch*. Perception (`find_color_blobs` acuity),
+structure (`grid_lattice`, `grid_index`), consensus over time (`frame_consensus`),
+and finally the closed loop back onto its own action (`click_verify`). Each was
+born from a real miss watched happen on a live screen, not imagined. 道法自然.
