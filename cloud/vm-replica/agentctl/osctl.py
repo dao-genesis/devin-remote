@@ -2885,6 +2885,15 @@ def _luma_resample(rgb: bytes, w: int, ix0: int, iy0: int, ix1: int, iy1: int,
     template) of *different* sizes are still comparable pixel-for-pixel."""
     cwid = ix1 - ix0
     chei = iy1 - iy0
+    if _np is not None:
+        flat = _np.frombuffer(rgb, dtype=_np.uint8)
+        sy = iy0 + (_np.arange(norm) * chei) // norm
+        sx = ix0 + (_np.arange(norm) * cwid) // norm
+        base = (sy[:, None] * w + sx[None, :]) * 3
+        r = flat[base].astype(_np.int32)
+        g = flat[base + 1].astype(_np.int32)
+        b = flat[base + 2].astype(_np.int32)
+        return ((r * 299 + g * 587 + b * 114) // 1000).reshape(-1).tolist()
     out = []
     for j in range(norm):
         sy = iy0 + (j * chei) // norm
@@ -4156,60 +4165,96 @@ def match_template_all(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
     aw, ah = sx1 - sx0 + 1, sy1 - sy0 + 1
     if aw < pw or ah < ph:
         return []
-    pl = bytearray(pw * ph)
-    for i in range(pw * ph):
-        pl[i] = (patch[i * 3] * 299 + patch[i * 3 + 1] * 587
-                 + patch[i * 3 + 2] * 114) // 1000
     if mask is None:
-        cols = [tuple(range(pw))] * ph
         scored = pw * ph
     else:
-        cols = [tuple(px for px in range(pw) if mask[py * pw + px])
-                for py in range(ph)]
-        scored = sum(len(c) for c in cols)
-    al = bytearray(aw * ah)
-    for ry in range(ah):
-        src = ((sy0 + ry) * w + sx0) * 3
-        dst = ry * aw
-        for rx in range(aw):
-            j = src + rx * 3
-            al[dst + rx] = (rgb[j] * 299 + rgb[j + 1] * 587
-                            + rgb[j + 2] * 114) // 1000
-    # Single pass with the same arg-min early-abandon as ``match_template`` so
-    # finding *all* hits costs no more per offset than finding the best one.
-    # When ``max_score`` is absent the ceiling is relative (best + margin); the
-    # abort bound tracks ``best_so_far + margin`` and only ever tightens, so a
-    # true hit (s <= best_final + margin <= best_seen + margin) is never aborted,
-    # while doomed offsets bail after a row or two instead of summing every pixel.
-    # Stale candidates kept while ``best`` was higher are filtered by final ceil.
+        scored = sum(1 for i in range(pw * ph) if mask[i])
+    # When ``max_score`` is absent the ceiling is relative (best + margin).
     margin = int(0.04 * 255 * scored)
     fixed_ceil = max_score is not None
-    ceil = max_score
-    hits: list[tuple[int, int, int]] = []
-    best_s: int | None = None
-    for oy in range(0, ah - ph + 1, step):
-        for ox in range(0, aw - pw + 1, step):
-            s = 0
-            abort = ceil if fixed_ceil else (
-                best_s + margin if best_s is not None else None)
-            for py in range(ph):
-                abase = (oy + py) * aw + ox
-                pbase = py * pw
-                for px in cols[py]:
-                    d = al[abase + px] - pl[pbase + px]
-                    s += d if d >= 0 else -d
-                if abort is not None and s > abort:
-                    break
-            else:
-                if best_s is None or s < best_s:
-                    best_s = s
-                if ceil is None or s <= ceil:
-                    hits.append((s, sx0 + ox, sy0 + oy))
-    if best_s is None:
-        return []
-    if not fixed_ceil:
-        ceil = best_s + margin
-        hits = [ht for ht in hits if ht[0] <= ceil]
+    hits: list[tuple[int, int, int]]
+    if _np is not None:
+        # Vectorised SAD field (accelerates F241, same math as match_template).
+        # The pure-Python early-abandon only prunes offsets that provably exceed
+        # the ceiling, so the surviving set is exactly {offset : SAD <= ceil};
+        # numpy computes the full field and thresholds it identically. Hits are
+        # taken in row-major order (numpy.nonzero) — the same order the double
+        # loop appends — so the later stable sort-by-score ties break the same.
+        srca = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(h, w, 3)
+                [sy0:sy1 + 1, sx0:sx1 + 1].astype(_np.int32))
+        al_np = (srca[:, :, 0] * 299 + srca[:, :, 1] * 587
+                 + srca[:, :, 2] * 114) // 1000
+        pv = _np.frombuffer(patch, dtype=_np.uint8)[:pw * ph * 3].reshape(ph, pw, 3).astype(_np.int32)
+        pl_np = (pv[:, :, 0] * 299 + pv[:, :, 1] * 587 + pv[:, :, 2] * 114) // 1000
+        m_np = (None if mask is None
+                else _np.frombuffer(mask, dtype=_np.uint8)[:pw * ph].reshape(ph, pw) != 0)
+        noy = (ah - ph) // step + 1
+        nox = (aw - pw) // step + 1
+        acc = _np.zeros((noy, nox), dtype=_np.int32)
+        for dy in range(ph):
+            rowsel = al_np[dy:dy + (noy - 1) * step + 1:step]
+            for dx in range(pw):
+                if m_np is not None and not m_np[dy, dx]:
+                    continue
+                block = rowsel[:, dx:dx + (nox - 1) * step + 1:step]
+                acc += _np.abs(block - int(pl_np[dy, dx]))
+        best_s = int(acc.min())
+        ceil = max_score if fixed_ceil else best_s + margin
+        ys, xs = _np.nonzero(acc <= ceil)  # row-major, matches the loop order
+        svals = acc[ys, xs].tolist()
+        xl = (xs * step).tolist()
+        yl = (ys * step).tolist()
+        hits = [(svals[k], sx0 + xl[k], sy0 + yl[k]) for k in range(len(svals))]
+    else:
+        pl = bytearray(pw * ph)
+        for i in range(pw * ph):
+            pl[i] = (patch[i * 3] * 299 + patch[i * 3 + 1] * 587
+                     + patch[i * 3 + 2] * 114) // 1000
+        if mask is None:
+            cols = [tuple(range(pw))] * ph
+        else:
+            cols = [tuple(px for px in range(pw) if mask[py * pw + px])
+                    for py in range(ph)]
+        al = bytearray(aw * ah)
+        for ry in range(ah):
+            src = ((sy0 + ry) * w + sx0) * 3
+            dst = ry * aw
+            for rx in range(aw):
+                j = src + rx * 3
+                al[dst + rx] = (rgb[j] * 299 + rgb[j + 1] * 587
+                                + rgb[j + 2] * 114) // 1000
+        # Single pass with the same arg-min early-abandon as ``match_template`` so
+        # finding *all* hits costs no more per offset than finding the best one.
+        # The abort bound tracks ``best_so_far + margin`` and only ever tightens,
+        # so a true hit (s <= best_final + margin <= best_seen + margin) is never
+        # aborted, while doomed offsets bail after a row or two instead of summing
+        # every pixel. Stale candidates are filtered by the final ceiling below.
+        ceil = max_score
+        hits = []
+        best_s = None
+        for oy in range(0, ah - ph + 1, step):
+            for ox in range(0, aw - pw + 1, step):
+                s = 0
+                abort = ceil if fixed_ceil else (
+                    best_s + margin if best_s is not None else None)
+                for py in range(ph):
+                    abase = (oy + py) * aw + ox
+                    pbase = py * pw
+                    for px in cols[py]:
+                        d = al[abase + px] - pl[pbase + px]
+                        s += d if d >= 0 else -d
+                    if abort is not None and s > abort:
+                        break
+                else:
+                    if best_s is None or s < best_s:
+                        best_s = s
+                    if ceil is None or s <= ceil:
+                        hits.append((s, sx0 + ox, sy0 + oy))
+        if best_s is None:
+            return []
+        if not fixed_ceil:
+            ceil = best_s + margin
+            hits = [ht for ht in hits if ht[0] <= ceil]
     hits.sort(key=lambda t: t[0])
     if min_sep is None:
         sepx, sepy = pw, ph
@@ -5109,6 +5154,18 @@ def edge_map(rgb: bytes, size: tuple[int, int],
     w, _h = size
     x0, y0, x1, y1 = bbox
     bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    if _np is not None:
+        lum = ((_np.frombuffer(rgb, dtype=_np.uint8).reshape(-1, w, 3)
+                [y0:y0 + bh, x0:x0 + bw].astype(_np.int32)))
+        lum = (lum[:, :, 0] * 299 + lum[:, :, 1] * 587
+               + lum[:, :, 2] * 114) // 1000
+        edges = _np.zeros((bh, bw), dtype=_np.int64)
+        if bh > 2 and bw > 2:
+            gx = lum[1:bh - 1, 2:bw] - lum[1:bh - 1, 0:bw - 2]
+            gy = lum[2:bh, 1:bw - 1] - lum[0:bh - 2, 1:bw - 1]
+            g = _np.abs(gx) + _np.abs(gy)
+            edges[1:bh - 1, 1:bw - 1] = (g > thr)
+        return edges.reshape(-1).tolist(), bw, bh
     lum = [0] * (bw * bh)
     for yy in range(bh):
         base = ((y0 + yy) * w + x0) * 3
@@ -5132,6 +5189,8 @@ def edge_map(rgb: bytes, size: tuple[int, int],
 
 def edge_hamming(a: list[int], b: list[int]) -> int:
     """Count differing pixels between two equal-length edge masks."""
+    if _np is not None:
+        return int((_np.asarray(a) != _np.asarray(b)).sum())
     return sum(1 for i in range(len(a)) if a[i] != b[i])
 
 
@@ -5206,6 +5265,31 @@ def edge_signature(rgb: bytes, size: tuple[int, int],
     w, _h = size
     x0, y0, x1, y1 = bbox
     bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    if _np is not None:
+        lum = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(-1, w, 3)
+               [y0:y0 + bh, x0:x0 + bw].astype(_np.int64))
+        lum = (lum[:, :, 0] * 299 + lum[:, :, 1] * 587
+               + lum[:, :, 2] * 114) // 1000
+        # Integral image → every variable-size cell mean in one shot, exactly the
+        # per-cell ``s // cnt`` the loop computes (floor division on non-neg sums).
+        ii = _np.zeros((bh + 1, bw + 1), dtype=_np.int64)
+        ii[1:, 1:] = lum.cumsum(0).cumsum(1)
+        r0 = _np.array([ny * bh // nh for ny in range(nh)])
+        r1 = _np.maximum(_np.array([(ny + 1) * bh // nh for ny in range(nh)]),
+                         r0 + 1)
+        c0 = _np.array([nx * bw // nw for nx in range(nw)])
+        c1 = _np.maximum(_np.array([(nx + 1) * bw // nw for nx in range(nw)]),
+                         c0 + 1)
+        s = (ii[r1[:, None], c1[None, :]] - ii[r0[:, None], c1[None, :]]
+             - ii[r1[:, None], c0[None, :]] + ii[r0[:, None], c0[None, :]])
+        cnt = (r1 - r0)[:, None] * (c1 - c0)[None, :]
+        gg = s // cnt  # (nh, nw)
+        sig = _np.zeros((nh, nw), dtype=_np.int64)
+        if nh > 2 and nw > 2:
+            gx = gg[1:nh - 1, 2:nw] - gg[1:nh - 1, 0:nw - 2]
+            gy = gg[2:nh, 1:nw - 1] - gg[0:nh - 2, 1:nw - 1]
+            sig[1:nh - 1, 1:nw - 1] = (_np.abs(gx) + _np.abs(gy) > thr)
+        return sig.reshape(-1).tolist()
     g = [0] * (nw * nh)
     for ny in range(nh):
         sy0 = y0 + ny * bh // nh

@@ -10220,3 +10220,30 @@ body (proven live by `_test_accel.py` toggling `osctl._np` across full-frame /
 
 Still no new F-number — these speed F052/F053/F233/F234/F240/F271, they add no
 verb. All 33 floor tests green (32 + the accel invariant). 反者道之动,無為而無不為.
+
+### Inward parity, third pass — the structural / classification rungs
+
+Same seam, deeper: the shape- and sprite-matching primitives, all O(pixels) or
+O(offsets×area) in pure Python.
+- `match_template_all` (F241): the all-hits slide. Vectorised to the full SAD
+  field (identical math to `match_template`) then threshold + row-major hit order
+  → the later stable sort-by-score breaks ties exactly as the double loop did.
+  **53×** on a 400×300 search (3948 ms → 75 ms); byte-identical across relative
+  ceiling, fixed `max_score`, and `step`+`mask` variants.
+- `edge_map` (F055) + `edge_hamming`: gradient mask and its diff — vectorised
+  (`|dL/dx|+|dL/dy|>thr`, border zeros preserved). This is the hot recompute
+  inside `match_edges`, which drops **5×** (14.6 s → 2.9 s on a 200×200 search),
+  byte-identical, purely by the sped-up `edge_map` beneath it.
+- `edge_signature` (F056): the scale-free fingerprint. Its variable-size cell
+  means are now one **integral-image** lookup (exactly the loop's `s // cnt`),
+  then a vectorised gradient. ~**11×** on a 240×240 region, byte-identical.
+- `_luma_resample`: the nearest-neighbour signature core shared by
+  `classify_grid` / `classify_boxes` / `cluster_boxes` / `detect_grid`. Now a
+  single numpy gather of the sampled pixels; byte-identical (verified directly
+  and end-to-end through `classify_grid`).
+
+Still no new F-number — nine primitives now carry an optional numpy fast path
+that is *provably* the same output as the pure-Python body (14 invariant blocks
+in `_test_accel.py`, all toggling `osctl._np`), and the floor keeps its
+zero-hard-dependency guarantee when numpy is absent. 33 floor tests green.
+損之又損,以至於無為 — the pixel-loop seam is now essentially closed end to end.

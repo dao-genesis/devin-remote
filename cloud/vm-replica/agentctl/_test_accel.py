@@ -88,6 +88,53 @@ n, p = both(lambda: osctl.match_template(patch, pw, ph, rgb=f0, size=(w, h),
                                         search=sr, step=2, mask=msk))
 assert n == p, ("match_template (step+mask) mismatch", n, p)
 
+# 9) match_template_all — all hits (relative ceil, fixed ceil, step+mask)
+n, p = both(lambda: osctl.match_template_all(patch, pw, ph, rgb=f0, size=(w, h),
+                                            search=sr, min_sep=(8, 8)))
+assert n == p, ("match_template_all mismatch", len(n), len(p))
+n, p = both(lambda: osctl.match_template_all(patch, pw, ph, rgb=f0, size=(w, h),
+                                            search=sr, max_score=6000,
+                                            min_sep=(6, 6)))
+assert n == p, ("match_template_all (max_score) mismatch", len(n), len(p))
+n, p = both(lambda: osctl.match_template_all(patch, pw, ph, rgb=f0, size=(w, h),
+                                            search=sr, step=2, mask=msk,
+                                            min_sep=(6, 6)))
+assert n == p, ("match_template_all (step+mask) mismatch", len(n), len(p))
+
+# 10) edge_map / edge_hamming — binary edge mask and its diff
+eb = (300, 300, 380, 380)
+n, p = both(lambda: osctl.edge_map(f0, (w, h), eb, thr=40))
+assert n == p, "edge_map mismatch"
+ref = osctl.edge_map(f0, (w, h), eb, thr=40)[0]
+cnd = osctl.edge_map(f0, (w, h), (305, 305, 385, 385), thr=40)[0]
+n, p = both(lambda: osctl.edge_hamming(ref, cnd))
+assert n == p, ("edge_hamming mismatch", n, p)
+
+# 11) match_edges — locate by shape (bounded search)
+re2, ew, eh = osctl.edge_map(f0, (w, h), (760, 560, 799, 599), thr=40)
+n, p = both(lambda: osctl.match_edges(re2, ew, eh, rgb=f0, size=(w, h),
+                                     search=(720, 520, 860, 660), thr=40))
+assert n == p, ("match_edges mismatch", n, p)
+
+# 12) edge_signature — scale-free structural fingerprint
+for eb in ((300, 300, 540, 540), (100, 100, 131, 131)):
+    n, p = both(lambda eb=eb: osctl.edge_signature(f0, (w, h), eb))
+    assert n == p, ("edge_signature mismatch", eb)
+
+# 13) _luma_resample — the classify/cluster/detect_grid nearest-neighbour core
+for (a, b2, c, d, nm) in ((100, 100, 231, 199, 32), (0, 0, 7, 7, 8),
+                          (500, 400, 637, 533, 16), (10, 10, 11, 12, 32)):
+    n, p = both(lambda a=a, b2=b2, c=c, d=d, nm=nm:
+                osctl._luma_resample(f0, w, a, b2, c, d, nm))
+    assert n == p, ("_luma_resample mismatch", a, b2, c, d, nm)
+
+# 14) classify_grid — end-to-end sprite lattice classification (uses resample)
+tpl = [("a", osctl.crop_rgb(f0, (w, h), (300, 300, 331, 331))[0], 32, 32),
+       ("b", osctl.crop_rgb(f0, (w, h), (400, 400, 431, 431))[0], 32, 32)]
+n, p = both(lambda: osctl.classify_grid((300, 300, 495, 431), 3, 2, tpl,
+                                        rgb=f0, size=(w, h)))
+assert n == p, ("classify_grid mismatch", n, p)
+
 # speed: the vectorised path must not be *slower* than pure-Python on a big ROI
 osctl._np = _NP
 a = time.time()
