@@ -1885,6 +1885,107 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
     return blobs
 
 
+def grid_lattice(points, tol=None) -> dict:
+    """Structure an unordered bag of cell centres into a regular grid (F273).
+
+    :func:`find_color` / :func:`find_color_blobs` hand back *where* the tiles are
+    as an unordered bag of centroids; a board game needs them as a GRID — which
+    row and column each occupies, the cell pitch, and the full lattice *including
+    the cells that produced no blob* (an un-lit / empty / covered tile has no
+    colour to segment, so it is simply missing from the bag). Boards also move:
+    Visual Memory re-centres and *grows* its grid every level (3x3, then 4x4, …),
+    so hard-coded cell coordinates rot immediately — the layout has to be inferred
+    from what is on screen this frame. Nothing on the floor turned scattered
+    centroids into that lattice; this does.
+
+    ``points`` is an iterable of ``(x, y)`` or mappings with ``x``/``y`` (any other
+    keys are preserved in the indexed output). Column lines are found by sorting
+    the xs and splitting wherever the gap to the next exceeds ``tol`` — a run of
+    near-equal xs is one column, its mean the line position — and rows likewise on
+    the ys. ``tol`` defaults *per axis* to half that axis's median adjacent-line
+    spacing (the pitch), so it scales to the tile size and is immune to sub-pixel
+    centroid jitter without merging genuinely distinct lines. Each point is then
+    indexed to its nearest column and row.
+
+    Returns::
+
+        {"rows": R, "cols": C,
+         "xs": [x per column], "ys": [y per row],   # inferred line centres
+         "pitch": (px, py),                          # median adjacent spacing
+         "cells": [[pt or None] * C] * R,            # row-major; None where no point
+         "points": [{**pt, "x", "y", "row", "col"}]} # every input, indexed
+
+    ``cells`` is the click map (index ``[r][c]`` for the tile at that grid slot,
+    ``None`` if nothing was detected there); ``xs``/``ys``/``pitch`` reconstruct a
+    slot's centre even when it held no blob, so a solver can click a cell that is
+    currently blank. Empty input yields a 0x0 lattice."""
+    pts = []
+    for p in points:
+        if isinstance(p, dict):
+            pts.append((float(p["x"]), float(p["y"]), p))
+        else:
+            pts.append((float(p[0]), float(p[1]), {"x": p[0], "y": p[1]}))
+    if not pts:
+        return {"rows": 0, "cols": 0, "xs": [], "ys": [],
+                "pitch": (0.0, 0.0), "cells": [], "points": []}
+
+    def cluster(vals, t):
+        vs = sorted(vals)
+        gaps = [vs[i + 1] - vs[i] for i in range(len(vs) - 1)]
+        if t is None:
+            # Split the adjacent gaps into two populations — small (jitter within
+            # a line) and large (the pitch between lines) — at the biggest ratio
+            # jump on a sorted, sub-pixel-floored copy. A ratio jump below ~3x
+            # means one population (a single line): keep it whole.
+            if not gaps:
+                t = 1e9
+            elif len(gaps) == 1:
+                # two points: distinct coordinates are two lines
+                t = gaps[0] * 0.5 if gaps[0] > 2.0 else gaps[0] + 1.0
+            else:
+                fg = sorted(max(g, 1.0) for g in gaps)
+                best, bi = 1.0, -1
+                for i in range(len(fg) - 1):
+                    r = fg[i + 1] / fg[i]
+                    if r > best:
+                        best, bi = r, i
+                if best >= 3.0:
+                    t = (fg[bi] * fg[bi + 1]) ** 0.5
+                else:
+                    t = fg[-1] + 1.0
+        lines, cur = [], [vs[0]]
+        for i, g in enumerate(gaps):
+            if g > t:
+                lines.append(cur)
+                cur = []
+            cur.append(vs[i + 1])
+        lines.append(cur)
+        centres = [sum(c) / len(c) for c in lines]
+        pitches = [centres[i + 1] - centres[i] for i in range(len(centres) - 1)]
+        pitch = sorted(pitches)[len(pitches) // 2] if pitches else 0.0
+        return centres, pitch
+
+    tx, ty = (tol, tol) if not isinstance(tol, (tuple, list)) else tol
+    xs, px = cluster([p[0] for p in pts], tx)
+    ys, py = cluster([p[1] for p in pts], ty)
+
+    def nearest(v, lines):
+        return min(range(len(lines)), key=lambda i: abs(lines[i] - v))
+
+    cells = [[None] * len(xs) for _ in range(len(ys))]
+    indexed = []
+    for x, y, orig in pts:
+        c = nearest(x, xs)
+        r = nearest(y, ys)
+        rec = dict(orig)
+        rec["x"], rec["y"], rec["row"], rec["col"] = x, y, r, c
+        indexed.append(rec)
+        if cells[r][c] is None:
+            cells[r][c] = rec
+    return {"rows": len(ys), "cols": len(xs), "xs": xs, "ys": ys,
+            "pitch": (px, py), "cells": cells, "points": indexed}
+
+
 def foveate(target: tuple[int, int, int], center: tuple[int, int],
             radius: int = 80, tol: int = 24,
             locate=None) -> dict | None:

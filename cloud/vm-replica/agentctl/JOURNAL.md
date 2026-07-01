@@ -9818,3 +9818,48 @@ The fix is composition, not a new knob: pin `peak` to the *known* active level
 (here white, 255) so an idle region is judged against the real signal, not
 against its own jitter. Auto min/max is a convenience for regions you know all
 activate; when some may stay dark, tell the verb what "on" looks like. 道法自然.
+
+## F273 — grid_lattice: scattered centroids become a row/col board
+
+`find_color_blobs` (with F271's `step`) hands back *where* the tiles are — an
+unordered bag of centroids. A board game needs them as a GRID: which row and
+column each tile occupies, the cell pitch, and the full lattice *including the
+slots that produced no blob* (an un-lit / covered tile has no colour to segment,
+so it is simply absent from the bag). Boards also move: **Visual Memory**
+re-centres and *grows* its grid every level (3×3, then 4×4, …), so hard-coded
+cell coordinates rot immediately — the layout has to be inferred from what is on
+screen this frame. Nothing on the floor turned scattered centroids into that
+lattice; the caller hand-rolled it every time.
+
+`grid_lattice(points, tol=None)` owns it as a pure function. It clusters the xs
+into column lines and the ys into row lines by sorting each axis and splitting
+wherever the gap to the next value is "large". `tol` defaults *per axis* from a
+bimodal gap-ratio split: floor the adjacent gaps at a pixel, sort them, and find
+the biggest ratio jump — a jump ≥3× is the boundary between *within-line jitter*
+(sub-pixel centroid wobble) and *between-line pitch*, and the geometric mean of
+that gap pair is the threshold. So it scales to the tile size and shrugs off
+centroid jitter without merging genuinely distinct lines; two points fall back
+to a half-gap split, one line stays whole. Each point is then indexed to its
+nearest column and row. Returns `{rows, cols, xs, ys, pitch, cells, points}`:
+`cells` is the row-major click map (`[r][c]` is the tile there, `None` if none
+was detected), and `xs`/`ys`/`pitch` reconstruct a slot's centre *even when it
+held no blob*, so a solver can click a currently-blank cell. Empty input → 0×0.
+
+Proof. `_test_f273.py` (18 checks, no display): a clean 3×3 recovered with row-
+major ordering and pitch; ±4-unit jitter on a 4×4 that does *not* split the
+lines; missing cells left as `None` at the right slots; non-square grids; blank-
+slot centre reconstruction from `xs`/`ys`; explicit scalar and per-axis `tol`;
+dict points with extra keys preserved; a single point (1×1); empty input (0×0).
+All twenty-nine floor tests pass. Live `_game_f273.py` on **Visual Memory**: from
+a bag of ~20 idle-tile centroids `grid_lattice` recovers the board every frame —
+3×3, pitch 132, `xs=[660,792,924]`, `ys=[315,447,579]` — and the same indexing
+de-dupes a flash's ~20 white detections down to its handful of distinct cells;
+clicks computed from the lattice register and drove the board from level 1 to 2.
+
+Lesson. The first auto-`tol` used "half the median adjacent gap" and split a
+jittered 4×4 into 12×10. Within-line jitter gaps are often as large as the true
+inter-line pitch, so the median of *all* gaps is dragged down to jitter scale and
+the threshold lands mid-jitter. The gaps are bimodal — a tight cluster of jitter
+and a tight cluster of pitch — so the split belongs *between* the two
+populations, at the largest ratio jump, not at a statistic of the pooled set.
+Reading the shape of the distribution beats reading its average. 道法自然.
