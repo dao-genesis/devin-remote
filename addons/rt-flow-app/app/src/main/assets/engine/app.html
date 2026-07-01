@@ -355,17 +355,47 @@
 
   // ── 菜单 (复刻 APK 板块入口 + 页面工具) ──
   var menuPop=document.getElementById("menuPop");
+  // ── 页面工具 (与 APK ☰「页面」子菜单 / console.html 同款·纯客户端·作用于当前标签 iframe) ──
+  function curTab(){ return tabs[active]||null; }
+  function tabNav(dir){ var t=curTab(); if(!t||!t.fr){ shToast("无当前标签"); return; }
+    try{ var h=t.fr.contentWindow.history; dir<0?h.back():h.forward(); }catch(e){ shToast("此标签不支持前进/后退"); } }
+  function tabDoc(t){ try{ return t&&t.fr&&(t.fr.contentDocument||t.fr.contentWindow.document); }catch(e){ return null; } }
+  function tabFind(){ var t=curTab(); if(!t){ shToast("无当前标签"); return; }
+    var kw=prompt("页内查找:"); if(!kw) return;
+    var w; try{ w=t.fr.contentWindow; }catch(e){ w=null; }
+    if(w&&w.find){ try{ w.focus(); var ok=w.find(kw,false,false,true,false,true,false); shToast(ok?("已定位「"+kw+"」"):("未找到「"+kw+"」")); return; }catch(e){} }
+    shToast("此页不支持页内查找"); }
+  function tabDesktop(){ var t=curTab(); if(!t||!t.fr){ shToast("无当前标签"); return; }
+    t.desktop=!t.desktop;
+    // 网页端无服务端 UA 切换: 以等宽桌面视口 + 缩放近似呈现桌面版布局 (同 console.html)。
+    if(t.desktop){ t.fr.style.width="1280px"; t.fr.style.zoom=String(Math.min(1,(t.fr.parentElement.clientWidth||360)/1280)); shToast("桌面版布局 (宽视口近似)"); }
+    else { t.fr.style.width=""; t.fr.style.zoom=""; applyZoom(); shToast("移动版布局"); } }
+  function tabReader(){ var t=curTab(); var d=tabDoc(t);
+    if(!d||!d.body){ shToast("此页不支持阅读模式 (跨源)"); return; }
+    if(t._reader){ if(t._readerPrev!=null) d.body.style.cssText=t._readerPrev; t._reader=false; shToast("阅读模式关"); return; }
+    t._readerPrev=d.body.style.cssText; t._reader=true;
+    try{ d.body.style.cssText="max-width:720px;margin:0 auto;padding:18px 22px;line-height:1.75;font-size:17px;background:#fbfaf7;color:#222"; shToast("阅读模式开 (本标签)"); }
+    catch(e){ shToast("此页不支持阅读模式"); } }
+  function tabNight(){ var t=curTab(); if(!t||!t.fr){ shToast("无当前标签"); return; }
+    t.night=!t.night; t.fr.style.filter = t.night ? "invert(1) hue-rotate(180deg)" : "";
+    shToast(t.night?"夜间模式开 (本标签)":"夜间模式关"); }
   function buildMenu(){
     menuPop.innerHTML="";
     PAGES.forEach(function(p){ mi(p.ic, p.label, function(){ openPage(p.key); }); });
     mi("🟢","新标签 (Devin)", function(){ openWeb("https://app.devin.ai/"); });
     sep();
-    mi("◀","后退", function(){ var t=tabs[active]; if(t){ try{t.fr.contentWindow.history.back();}catch(e){} } });
-    mi("▶","前进", function(){ var t=tabs[active]; if(t){ try{t.fr.contentWindow.history.forward();}catch(e){} } });
+    mi("◀","后退", function(){ tabNav(-1); });
+    mi("▶","前进", function(){ tabNav(1); });
     mi("⌂","主页 (切号面板)", function(){ openPage("switch"); });
+    mi("🔍","页内查找", tabFind);
+    mi("🖥","桌面版网站", tabDesktop);
+    mi("📖","阅读模式", tabReader);
+    mi("🌙","夜间模式", tabNight);
+    sep();
     mi("🔗","复制本标签网址", function(){ var t=tabs[active]; if(!t) return;
       var u = t.kind==="web"? (t.origUrl||t.src) : (location.origin+pageSrc(pageByKey(t.pageKey)));
-      try{ navigator.clipboard.writeText(u); }catch(e){} });
+      try{ navigator.clipboard.writeText(u); shToast("已复制网址"); }catch(e){} });
+    mi("⟳","检查更新 · 网页端", function(){ shToast("网页端始终为最新 (随中继下发); 正在硬刷新…"); setTimeout(function(){ location.reload(); }, 600); });
   }
   function mi(ic,label,fn){ var d=document.createElement("div"); d.className="mi";
     d.innerHTML='<span class="ic">'+ic+'</span><span>'+label+'</span>';
