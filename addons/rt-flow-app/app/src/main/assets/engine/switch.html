@@ -1523,7 +1523,7 @@ async function autoQuotaTick(force){
     for(var n=0;n<idleN && idle.length;n++){ batch.push(idle[_idleCursor%idle.length]); _idleCursor++; }
     var seen={};
     for(var i=0;i<batch.length;i++){ var a=batch[i]; if(!a||seen[a.id])continue; seen[a.id]=1;
-      try{ await DaoCore.refreshQuotaFor(a.id); }catch(e){}
+      try{ await DaoCore.refreshQuotaFor(a.id, force); }catch(e){}   // force=用户手动刷新 → 绕过额度合并短缓存, 取真最新
       var fresh=DaoCore.findAcc(a.id)||a; _balAlert(fresh); await applyConvCapFor(fresh);
       try{ await autoCleanFor(fresh); }catch(e){}    // 低额且无对话 → 备份+清理(归零移出库)
     }
