@@ -671,6 +671,17 @@ async function runCacheCheck() {
     name: "OpenAI Chat usage cached (prompt_tokens_details.cached_tokens)",
     pass: oaUsage.usage && oaUsage.usage.cached === 80,
   });
+  // ★ include_usage 末帧 choices:[] 空数组 · 不可被 skip 吞掉 (真实 OpenAI 行为)
+  const tailUsage = chat.parseSSELine(
+    JSON.stringify({
+      choices: [],
+      usage: { prompt_tokens: 1000, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 800 } },
+    }),
+  );
+  checks.push({
+    name: "OpenAI Chat 末帧 usage (choices:[]) 不被 skip",
+    pass: tailUsage.type === "delta" && tailUsage.usage && tailUsage.usage.cached === 800,
+  });
   checks.push({
     name: "DeepSeek usage cached (prompt_cache_hit_tokens)",
     pass: dsUsage.usage && dsUsage.usage.cached === 60,
