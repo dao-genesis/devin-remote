@@ -11091,3 +11091,19 @@ Antarctica, HUD coin counter ticking 100 -> 101 (OCR needs the widest
 ROI; the count renders right-edge-anchored). Event-queue GUIs (Qt/GTK)
 buffer keystrokes; game loops *sample* them. Duration is not a nicety in
 the game domain — it is the difference between an event existing and not.
+
+## F346 — LibreOffice Calc: the spreadsheet floor is a keyboard grid
+
+Office domain. Surprise on the semantic floor: LibreOffice Calc exposes
+*zero* AT-SPI nodes here (its a11y bridge doesn't register the way KDE/Qt
+apps do), so despite being the archetypal "rich widget" app it behaves
+like a game engine for our purposes — keyboard-first, pixels as witness,
+artifact as truth. And keyboard-first is enough: the grid is itself an
+addressing scheme. Typed '5' Enter '7' Enter '=SUM(A1:A2)*3' Enter,
+Ctrl+S, typed /tmp/f346.ods into the Save dialog, Return through the
+Keep-format prompt. The .ods artifact (another XML-in-zip) carries the
+whole receipt: content.xml holds of:=SUM([.A1:.A2])*3 with
+office:value="36" — the formula *and* the app's own evaluation of it,
+5+7=12, x3=36 confirmed. Office files echo CAD/EDA: artifact-as-source.
+Lesson: never assume the semantic floor from an app's pedigree; probe it,
+and when it's empty, the artifact floor usually pays double.
