@@ -10823,3 +10823,15 @@ every 'beta' now 'BETA', the untouched words untouched. Search bar fields,
 buttons and the editor area all speak in the tree; no floor gap. (kate was
 not preinstalled; launch's missing-binary error (F306 fix) said so plainly
 instead of hanging.)
+
+## F328 — FreeCAD: parametric 3D modeling, verified inside the archive
+
+The 0.19 tree is rich once the window has actually settled — an immediate
+post-launch uia_find_all read 0 nodes, three seconds later 531 (a11y tree
+builds lazily; wait for the window, then wait for the tree). The arc:
+Ctrl+N, switch workbench through the combo ('Start' → dropdown → 'Part' —
+the closed combo's own list item was the SHOWING one, F316 paying rent),
+toolbar 'Cube' by name, Ctrl+S through the save dialog. Ground truth from
+inside the .FCStd zip: Document.xml carries Part::Box. A full parametric
+CAD arc — workbench switch, primitive creation, document save — entirely by
+meaning.
