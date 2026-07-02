@@ -1861,7 +1861,11 @@ def _impl_uia_find_all(win: int, name=None, ctype=None, max_scan=6000,
                                          "filler", "image", "icon"):
                     return None
             uia_type = _ROLE_TO_UIA.get(rl.lower(), rl)
-            out.append({"name": nm, "type": uia_type, "aid": "", "help": "",
+            # F322: records speak both key spellings — uia_find_all said
+            # "type" while uia_table_cell said "ctype", so every consumer
+            # had to remember which verb it asked. Both keys, same value.
+            out.append({"name": nm, "type": uia_type, "ctype": uia_type,
+                        "aid": "", "help": "",
                         "rect": _acc_rect(at, acc),
                         "desc": _acc_desc(at, acc)})
             return None
@@ -2541,7 +2545,8 @@ def _impl_uia_table_cell(win: int, row: int = 0, col: int = 0, name=None,
                 _unref(ti)
                 if not cell:
                     return "MISS"
-                rec = {"name": _acc_name(at, cell), "ctype": _acc_role(at, cell),
+                role = _acc_role(at, cell)
+                rec = {"name": _acc_name(at, cell), "ctype": role, "type": role,
                        "rect": _acc_rect(at, cell), "desc": _acc_desc(at, cell),
                        "text": ""}
                 if focus:

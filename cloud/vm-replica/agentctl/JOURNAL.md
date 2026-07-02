@@ -10756,3 +10756,15 @@ vector arc: 'r' rectangle tool, drag across canvas centre — sampled canvas
 pixel flips white→red — Ctrl+S, type path, Enter. Ground truth from the
 saved document itself: `grep -c '<rect'` = 1 in ink_out.svg. Semantic chrome
 + pixel canvas + on-disk artifact: all three tiers agreeing.
+
+## F322 — GNU Octave: the mute console and the workspace that speaks
+
+Octave's GUI console (a QTerminal descendant) exposes no Text iface —
+uia_text on the Command Window reads nothing. But the floor never needed the
+console: the *Workspace* panel exposes every variable as DataItems — after
+typing `x = 6*7`, the pair ('x', '42') sits right in the tree. Computation
+verified by meaning, not glyphs. `plot(sin(...))` raises 'Figure 1' — pure
+pixel ground, blue curve samples confirm the render. Along the way the
+record-key split surfaced: uia_find_all said "type" where uia_table_cell
+said "ctype"; every consumer had to remember which verb it asked. Records
+now carry both spellings.
