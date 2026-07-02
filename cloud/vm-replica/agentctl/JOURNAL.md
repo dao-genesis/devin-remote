@@ -10862,3 +10862,15 @@ the typed name (f330_scene.blend on disk). So GHOST fields take the
 standard recipe fine; the failure was 14 px of aim. Method note folded in:
 when a pixel-floor click seems ignored, crop the target and *measure* the
 row before blaming the widget.
+
+## F331 — KPatience: drag-and-drop under a solver's eye
+
+The card-game drag domain. Chrome speaks (41 nodes: menus, 'Solver: This
+game is winnable.', an 'N moves' status label); the board is pixels. From
+the Klondike deal's screenshot: 3♦ sat playable onto 4♠ — drag(985,740 →
+578,600) and the status label ticked '2 moves' → '4 moves' (KPatience
+counts the flip too); a stock click made it 5. So the drag verb carries a
+real card across a QGraphicsScene, and the semantic moves counter is the
+ground truth that the drop *registered as a legal move* rather than
+snapping back — a nice cross-floor assertion: pixel gesture, semantic
+receipt.
