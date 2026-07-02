@@ -11242,3 +11242,22 @@ the app's own engine: blender --background --python-expr read back
 LOC (2,0,0) SCALE (1.5,1.5,1.5) — exactly the modal keystrokes. When an
 app has a CLI, the artifact floor can be *queried in the app's own
 words* rather than parsed by hand.
+
+## F355 — Inkscape: a welcome dialog that swallows the whole first act
+
+Vector-graphics domain. The trap fired *before* the arc began: Inkscape
+1.1 opens a Welcome/Quick-Setup dialog that shares the app's window
+title ('Inkscape 1.1'), so launch-by-title acquired the *dialog*, the
+maximize bounced off it, and an entire first pass of tool keys, drags
+and Ctrl+Shift+S was swallowed by a settings panel — every gesture
+"succeeded" and nothing happened. The tell was geometric: the acquired
+rect stayed 752x697 after a maximize. Escape dismissed the dialog and
+the real window announced itself with a *different* title ('New
+document 1 - Inkscape'). Then the arc ran clean: R-drag a rectangle,
+E-drag an ellipse, Ctrl+Shift+S -> a properly titled 'Select file to
+save to' dialog, path typed into the name field, saved. Artifact floor:
+parsed the SVG XML — one rect 144.6x103.3, one ellipse rx 41.3 ry 31.0,
+both proportional to the drags at the 64% zoom. Lesson (F343's splash
+trap, sharpened): title match is identity, not state — after acquiring
+a window, verify its *rect responds* to a state change before spending
+gestures on it.
