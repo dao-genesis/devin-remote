@@ -11139,3 +11139,21 @@ pixel diffing, no zip parsing: when the app's whole job *is* the
 filesystem, the artifact floor is the filesystem, and verification cost
 rounds to zero. The healthy pattern to reuse: semantic to act (find by
 name, click), artifact to judge (stat the path), pixels not needed at all.
+
+## F349 — Konsole: the terminal is a GUI wrapper around the artifact floor
+
+Terminal-emulator domain. Konsole's chrome is semantic (251 nodes: tabs,
+menus, scrollbar) but the terminal *content* is not — the character grid
+exposes no AT-SPI text nodes, so what looks like the most text-native
+app on the desktop is, to the tree, a black pixel rectangle. The arc
+typed a live command through XTest ('echo $((6*7)) > /tmp/f349_out.txt
+&& date', Return) and the artifact floor answered instantly: the file
+holds 42. That loop — GUI keystrokes in, filesystem receipt out — makes
+terminals the easiest possible app to *drive* and the hardest to *read*:
+OCR of the glyph grid is possible but brittle, and my one attempt to
+OCR the prompt used display-absolute coordinates while the unmaximized
+window sat elsewhere — read garbage from the wrong region. Two lessons:
+(1) window-relative ROIs, always derive OCR regions from the window
+rect, never from display constants; (2) when driving a shell through a
+GUI, skip reading the screen — have every command write its own receipt
+to disk.
