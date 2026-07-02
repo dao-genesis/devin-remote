@@ -10978,3 +10978,17 @@ submenu needed a VK_RIGHT nudge to post before 'Export as WAV' became
 clickable — filename typed into the export dialog, metadata OK'd. Ground
 truth beyond pixels: the WAV on disk FFTs to a 440.0 Hz peak, mono,
 44.1 kHz, 30.0 s, amplitude 0.8 — the tone Audacity promised, byte-provable.
+
+## F339 — Dia: a silent tree, a talkative file
+
+Diagramming domain, and the starkest split yet: Dia (GTK2) exposes zero
+AT-SPI nodes — uia_find_all returns an empty tree, so the entire session
+is pixel geometry: palette clicks (Flowchart box at (18,287), diamond at
+(82,287)), drags on the canvas to size each shape, type_unicode straight
+into the diamond's in-place text cursor. The pixel receipt is honest but
+thin (0.64% ROI diff — line art is sparse). The real proof lives on disk:
+Ctrl+Shift+S posts a GTK Save dialog that *does* accept a full typed path,
+and the saved .dia is gzip'd XML naming exactly the truth — object types
+'Flowchart - Box' and 'Flowchart - Diamond', the 'decide' label embedded.
+When the accessibility floor is void, the artifact format is the semantic
+floor: parse what the app writes, not what it paints.
