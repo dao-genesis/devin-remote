@@ -237,8 +237,24 @@ const OpenAIChatAdapter = {
       return { type: "skip" };
     }
 
+    // ★ 提示缓存: usage 常在末尾单独一帧下发 (choices:[] 空数组 · stream_options.include_usage)
+    //   须在 choice 空守卫之前提取 → 否则末帧被 skip · cached 永为 0 (命中率假零根因之一)
+    const _usage = obj.usage
+      ? {
+          input: obj.usage.prompt_tokens || 0,
+          output: obj.usage.completion_tokens || obj.usage.output_tokens || 0,
+          cached:
+            obj.usage.prompt_tokens_details?.cached_tokens ||
+            obj.usage.prompt_cache_hit_tokens ||
+            0,
+        }
+      : null;
+
     const choice = obj.choices && obj.choices[0];
-    if (!choice) return { type: "skip" };
+    if (!choice) {
+      if (_usage) return { type: "delta", usage: _usage };
+      return { type: "skip" };
+    }
 
     const delta = choice.delta || {};
     const result = { type: "delta" };
@@ -277,16 +293,7 @@ const OpenAIChatAdapter = {
     }
 
     // Token 使用 (cached: OpenAI prompt_tokens_details.cached_tokens · DeepSeek prompt_cache_hit_tokens)
-    if (obj.usage) {
-      result.usage = {
-        input: obj.usage.prompt_tokens || 0,
-        output: obj.usage.completion_tokens || obj.usage.output_tokens || 0,
-        cached:
-          obj.usage.prompt_tokens_details?.cached_tokens ||
-          obj.usage.prompt_cache_hit_tokens ||
-          0,
-      };
-    }
+    if (_usage) result.usage = _usage;
 
     return result;
   },
