@@ -5071,11 +5071,18 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
     # empty *and* the crop holds ink — never overriding a hit, and leaving a
     # genuinely blank cell empty (``g`` is the pre-upscale greyscale; ``bg`` is
     # its brightest = background, so a count of clearly-darker pixels is ink).
-    if (not res and whitelist and fallback_psm and fallback_psm != psm):
+    # F324: the same silent drop hits unconstrained reads — a multi-line
+    # region (a sidebar, a dialog) under the line-mode default (psm=7) reads
+    # as one junk token while block mode reads every row. A near-empty
+    # unwhitelisted result over an inked crop takes the same retry.
+    if (fallback_psm and fallback_psm != psm
+            and (not res if whitelist else len(res) <= 2)):
         bg = max(g) if g else 0
         ink = sum(1 for v in g if v < bg - 40)
         if ink >= max(8, (rw * rh) * 3 // 200):
-            res = _run(fallback_psm)
+            r2 = _run(fallback_psm)
+            if len(r2) > len(res):
+                res = r2
     if len(_OCR_CACHE) >= _OCR_CACHE_MAX:
         _OCR_CACHE.pop(next(iter(_OCR_CACHE)))
     _OCR_CACHE[key] = res

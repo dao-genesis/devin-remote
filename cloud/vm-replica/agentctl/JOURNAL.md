@@ -10778,3 +10778,16 @@ stays semantic. The floor flaw was in its own mouth: `tap(VK_SPACE)` raised
 AttributeError while `hotkey('space')` worked — hotkey's word alphabet
 (F284) and the VK_* constants had drifted apart. Every name hotkey speaks is
 now also a VK_* constant, one alphabet in two spellings.
+
+## F324 — KDE System Settings: the QML sidebar, and OCR's one-line default
+
+System Settings' module sidebar is QML — 17 chrome nodes in the tree, none
+of them the module list. The pixel floor takes over: capture the sidebar
+strip and OCR it. That exposed the flaw: `ocr_text` on the multi-line strip
+returned '-' — one junk token — because the *default* psm=7 means "one text
+line", and tesseract's line segmenter collapses a column of rows. The F235
+ink-gated retry only armed itself for whitelisted reads; it now also fires
+on a near-empty unconstrained read over an inked crop, retrying in block
+mode (never overriding a longer hit). After the fix the same strip reads
+every module name; a pixel click on the located 'Appearance' row lands in
+'Global Theme' — title change as ground truth.
