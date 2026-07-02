@@ -7039,8 +7039,14 @@ def launch(argv, wait_title: str | None = None, timeout: float = 20.0,
     if env:
         e.update(env)
     before = {w["id"] for w in list_windows()}
-    proc = subprocess.Popen(argv, env=e, start_new_session=True,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        proc = subprocess.Popen(argv, env=e, start_new_session=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        # F306: an absent binary is an ordinary answer, not a crash \u2014 the floor
+        # speaks in None (like every locate verb) so the caller can decide to
+        # install, substitute, or report.
+        return None
     deadline = time.time() + timeout
     while time.time() < deadline:
         for w in list_windows():

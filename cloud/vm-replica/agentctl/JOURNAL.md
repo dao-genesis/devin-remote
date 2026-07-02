@@ -10552,3 +10552,48 @@ type two lines → `uia_text` reads them back → `uia_find_all(ctype="button")`
 enumerates the toolbar → `uia_find(name="New")` resolves exactly → file
 clipboard round-trips through Dolphin's protocol → the workspace count walks
 1→4→2→1. 道生一 — find the ground first, and everything built on it stands.
+
+## F304 — Dolphin: the file clipboard proves itself in a real file manager
+
+Launch Dolphin on an empty directory, put two files on the clipboard with
+`set_clipboard_files`, hotkey Ctrl+V — both files appear on disk in the target
+directory. The F285 protocol (text/uri-list + x-special/gnome-copied-files) is
+exactly what KDE's paste consumes. Pass, no flaw.
+
+## F305 — the running browser: omnibox_go aims, navigates, and the title tells
+
+Against the already-running Chrome (never relaunch the user's browser):
+`omnibox_go('https://example.com')` finds and raises the Chrome window (F280),
+does the atomic Ctrl+L/paste/Enter, and within seconds `list_windows` shows
+"Example Domain - Google Chrome for Testing". Navigation confirmed purely
+through the floor's own reads. Pass, no flaw.
+
+## F306 — KCalc: a missing binary is an answer, not a crash
+
+First attempt exposed a flaw: `launch('kcalc')` on a machine without kcalc
+raised FileNotFoundError out of Popen — a crash where the floor's grammar says
+None (every locate verb answers None for "not there"). Fixed: launch returns
+None on an absent binary, so the caller can install, substitute, or report.
+Then the domain itself: install kcalc, launch, click 7 × 6 = purely by
+`uia_find(name, ctype='button')` + `click_center`, read back through
+`uia_text`: "7 × 6 = 42". Semantic in, semantic out.
+
+## F307 — KWrite save dialog: the modal workflow end-to-end
+
+Type two lines (F278 newline), Ctrl+S (F284), find the "Save File" dialog in
+`list_windows`, focus its edit field by role, `replace_text` the full path
+(F300 — the field is prefilled with "Untitled"), Enter — and the file is on
+disk with exactly the typed content, newline included. The whole chain
+launch → type → hotkey → dialog → field → disk runs on floor verbs alone.
+Pass, no flaw.
+
+## F308 — the workspace lifecycle, live
+
+`set_num_desktops(3)` (F292) → launch Konsole → `move_window_to_desktop(w, 2)`
+→ `window_on_current_desktop` says False here, True after `set_desktop(2)` →
+restore to one desktop. Grow, populate, walk, shrink: the full lifecycle a
+tiling power-user exercises daily, each step confirmed by the floor's own
+reads. Pass, no flaw.
+
+Regression: all 33 test files green after the arc (NumPy installed on this
+ground for `_test_accel`; byte-identical fast paths, locate_change 12× faster).
