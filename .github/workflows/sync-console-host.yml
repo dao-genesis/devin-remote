@@ -36,7 +36,7 @@ jobs:
       DEST_REPO: hdougle/dao-console
       SRC: addons/rt-flow-app/app/src/main/assets/engine
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Guard — skip if token missing
         id: guard

@@ -39,7 +39,7 @@ jobs:
       modules: ${{ steps.d.outputs.modules }}
       any: ${{ steps.d.outputs.any }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v6
@@ -75,7 +75,7 @@ jobs:
       matrix:
         key: ${{ fromJson(needs.detect.outputs.modules) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
@@ -123,7 +123,7 @@ jobs:
     if: needs.detect.outputs.any == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
