@@ -12887,6 +12887,11 @@ async function genericWebProxy(targetUrl, depth = 0, reqCtx: any = null, isSub =
                 + 'try{window.location.assign=function(u){return _asn(wrap(u))};}catch(e){}'
                 + 'try{var _rpl=window.location.replace.bind(window.location);window.location.replace=function(u){return _rpl(wrap(u))};}catch(e){}'
                 // 注: location.href= setter 无法重定义, 故靠上面 click 捕获 + assign/replace 包裹作双保险。
+                // 病灶(多级套嵌白屏): 站内嵌套 iframe/frame 的 src 经 <base> 解析回真源 → 被 XFO/CSP 拦死成白屏。
+                //   → 一律改经 /__web 递归代理(页中页同样剥 XFO/CSP), 并 MutationObserver 兜底动态插入的帧。
+                + 'function fixFrames(r){try{var fs=(r||document).querySelectorAll?(r||document).querySelectorAll("iframe[src],frame[src]"):null;if(!fs)return;for(var i=0;i<fs.length;i++){var s=fs[i].getAttribute("src");if(s&&!isProxied(s)&&!/^(about:|javascript:|data:|blob:|#)/i.test(s)){var a=ab(s);if(/^https?:/i.test(a))fs[i].setAttribute("src",P+encodeURIComponent(a))}}}catch(e){}}'
+                + 'try{if(document.readyState!=="loading")fixFrames();document.addEventListener("DOMContentLoaded",function(){fixFrames()});}catch(e){}'
+                + 'try{new MutationObserver(function(ms){for(var i=0;i<ms.length;i++){var an=ms[i].addedNodes||[];for(var j=0;j<an.length;j++){var n=an[j];if(n&&n.nodeType===1){if(n.tagName==="IFRAME"||n.tagName==="FRAME"){var s=n.getAttribute("src");if(s&&!isProxied(s)&&/^https?:/i.test(ab(s)))n.setAttribute("src",P+encodeURIComponent(ab(s)))}else fixFrames(n)}}}}).observe(document.documentElement,{childList:true,subtree:true});}catch(e){}'
                 + '})();<\/script>'
                 + '<script src="/__daobridge.js"><\/script>'; // 拖拽上传桥(下载文件/会话MD → 投递页面上传框)
             html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, '<head$1>' + inj) : (inj + html);
