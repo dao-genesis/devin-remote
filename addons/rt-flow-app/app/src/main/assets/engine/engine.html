@@ -1301,6 +1301,48 @@
         }
       }catch(e){}
     }
+    // ── 常驻后台·额度权威刷新 (道法自然·正本清源) ─────────────────────────────────
+    //   额度心跳过去只活在切号板(switch.html·受可见性门控): 用户不在切号板/切后台时全池额度冻结,
+    //   页签金额恒显旧值。今由常驻引擎接管(与对话追踪同源同拍): 有活跃对话的号每轮必刷(金额近实时),
+    //   空闲号每轮轮转 10 个(全池周期性全新); 刷毕把最新美金+状态直推原生页签 (N.setTabDollars/
+    //   setTabStatus 经 RelayService → MainActivity), 不依赖切号板存在/可见 → 标签金额与状态恒鲜。
+    var _bgIdleCursor = 0;
+    function _pushTabQuota(a){
+      try{
+        if(!a || typeof N.setTabDollars!=="function") return;
+        var q=a.quota||{};
+        if(typeof q.dPct!=="number" || typeof q.overageDollars!=="number") return;   // 未取到真值 → 不推, 绝不抹掉已显金额
+        var lbl="$"+Math.round(q.overageDollars);
+        N.setTabDollars(a.id||"", lbl); if(a.email) N.setTabDollars(String(a.email).toLowerCase(), lbl);
+      }catch(e){}
+    }
+    function _pushTabConvStatus(a, sess){
+      try{
+        if(!a || typeof N.setTabStatus!=="function" || !sess || !sess.length) return;
+        var pri={quota:4,blocked:3,action_required:3,awaiting:2,running:1}, top=null;
+        sess.forEach(function(s){ if(!top || (pri[s.reason]||0)>(pri[top.reason]||0)) top=s; });
+        if(!top) return;
+        var stt = top.reason==="running" ? "running" : "blocked";   // 与 switch.html _pollOneAcc 同映射
+        N.setTabStatus(a.id||"", top.title||"", stt); if(a.email) N.setTabStatus(a.email, top.title||"", stt);
+      }catch(e){}
+    }
+    async function bgQuotaTick(sessions, accs){
+      var byEmail=Object.create(null);
+      (sessions||[]).forEach(function(s){ var e=String(s.email||"").toLowerCase(); if(!e) return; (byEmail[e]=byEmail[e]||[]).push(s); });
+      var act=[], idle=[];
+      accs.forEach(function(a){ (byEmail[String(a.email||"").toLowerCase()] ? act : idle).push(a); });
+      var batch=act.slice();
+      for(var n=0; n<10 && idle.length; n++){ batch.push(idle[_bgIdleCursor % idle.length]); _bgIdleCursor++; }
+      var seen=Object.create(null);
+      for(var i=0;i<batch.length;i++){
+        var a=batch[i]; if(!a || seen[a.id]) continue; seen[a.id]=1;
+        try{ await DaoCore.refreshQuotaFor(a.id); }catch(e){}
+        var fresh=null; try{ fresh=DaoCore.findAcc(a.id); }catch(e){}
+        fresh=fresh||a;
+        _pushTabQuota(fresh);
+        _pushTabConvStatus(fresh, byEmail[String(a.email||"").toLowerCase()]);
+      }
+    }
     async function tick(){
       if (!watchEnabled()) return;
       var accs = []; try { accs = loadAcc().filter(function(x){ return x.auth1 && x.orgId; }); } catch(e){}
@@ -1367,6 +1409,8 @@
       // 额度通知 (真·系统推送, 与对话卡座同款): 已耗尽聚合 + 即将耗尽预警。
       try { quotaWatch(quotaByAcct, quotaTitleByAcct, now); } catch(e){}
       try { quotaLowWatch(accs, titleByAcct, now); } catch(e){}
+      // 额度权威刷新(同拍同轮): 活跃号必刷 + 空闲号轮转, 刷毕直推原生页签 → 金额/状态不再依赖切号板在前台
+      try { await bgQuotaTick(r.sessions, accs); } catch(e){}
     }
     setTimeout(function(){ tick(); setInterval(tick, POLL_MS); }, FIRST_DELAY);
     log("convwatch armed (对话追踪·全局通知, 轮询 " + (POLL_MS/1000) + "s)");
