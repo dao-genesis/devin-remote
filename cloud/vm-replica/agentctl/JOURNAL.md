@@ -11107,3 +11107,20 @@ office:value="36" — the formula *and* the app's own evaluation of it,
 5+7=12, x3=36 confirmed. Office files echo CAD/EDA: artifact-as-source.
 Lesson: never assume the semantic floor from an app's pedigree; probe it,
 and when it's empty, the artifact floor usually pays double.
+
+## F347 — GIMP: zoom is a coordinate transform, and the artifact proves it
+
+Raster-graphics domain. GIMP too exposes zero AT-SPI nodes (GTK2-era
+a11y), so the arc ran keyboard+pixels: Ctrl+N, Return through the New
+Image dialog (1920x1080 default), 'r' for rectangle-select, a 400x250
+screen drag, Ctrl+, to fill with FG black, Shift+Ctrl+E export, typed
+/tmp/f347.png, Return through the PNG options dialog. Screen sampling
+confirmed the fill live (region mean 0,0,0 inside vs 255,255,255
+outside). The artifact delivered the elegant receipt: the canvas was
+displayed at 50% zoom, and the exported PNG contains *exactly* 400,000
+black pixels — an 800x500 rectangle, the 400x250 screen drag doubled
+through the zoom transform. Every canvas app has this hidden scale
+factor between screen gesture and document coordinates; the artifact
+floor is where you find out whether you accounted for it. Also caught a
+self-API paper cut: sample_color takes (bbox) not (x,y) — misremembering
+one's own toolkit is a flaw class regression tests can't catch, only use.
