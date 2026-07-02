@@ -10791,3 +10791,14 @@ on a near-empty unconstrained read over an inked crop, retrying in block
 mode (never overriding a longer hit). After the fix the same strip reads
 every module name; a pixel click on the located 'Appearance' row lands in
 'Global Theme' — title change as ground truth.
+
+## F325 — KNetWalk: a maximize before the measure
+
+KNetWalk opened at a degenerate 383x100 — a fresh window that had not been
+given a size hint yet; ROI math over that sliver clicked the toolbar
+instead of the board (a High Scores dialog appeared over Chrome). Lesson
+folded into practice: set_window_state(w, 'maximized') *before* deriving
+board geometry. After the maximize: five board clicks rotate tiles (the
+Moves label ticks -20 → -15, semantic; ~6% board repaint, pixel), and the
+Move-menu 'Solve' repaints ~16% of the grid. Both floors held; the flaw was
+in the arc's own choreography, not the verbs.
