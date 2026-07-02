@@ -11297,3 +11297,20 @@ back the arc verbatim: LINE 10/20=0,0 11/21=100,50; CIRCLE 10/20=50,25
 gesture-to-artifact correspondence of any arc so far, tighter even
 than the spreadsheet (F346), because not even a formula evaluator
 stands between input and ground truth.
+
+## F358 — KReversi: reading a board is building a domain model out of colour
+
+Board-game-vs-AI domain. KReversi's board is pure custom painting (76
+nodes, all chrome — none for the 64 squares), so the arc built the
+game state itself: divide the board rect into an 8x8 lattice, sample a
+16x16 patch at each cell center, classify by colour (dark=Black,
+bright=White, else empty). The opening read back exactly as reversi
+law demands: 2B/2W in the center cross. Clicked d3 as Black; the AI
+answered within seconds, and the re-read lattice showed 3B/3W with
+Black's column flipped — a *legal position transition*, not just "pixels
+changed". That is the step up from region_diff: the floor didn't
+observe THAT the screen changed, it parsed WHAT the new position is and
+could check it against the rules of the domain. Colour classification
+over a geometric lattice turns any custom-drawn board game into a
+readable, playable state machine — the same trick as the sudoku OCR
+grid (F235), minus the fonts.
