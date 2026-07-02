@@ -249,6 +249,7 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 <button onclick="openBkPanel()" class="conv-btn" title="备份库悬浮窗: 跨账号检索 账号/对话名, 一键拉取本地备份(MD/全量ZIP)·含已移出库账号">&#128230; 备份库</button>
 <button onclick="dvWipeSel()" class="conv-btn conv-btn-s" title="水过无痕·清理已选账号的全部 Devin Cloud 痕迹">&#127754; 批量清理</button>
 <label class="auto-lbl" title="开启后定时自动增量备份运行/更新过的对话"><input type="checkbox" id="dvAutoBk" onchange="dvToggleAuto(this.checked)">自动备份</label>
+<label class="auto-lbl" title="默认开·省移动数据: 高消耗的自动备份/自动清理前置备份仅在 WiFi/不计费网络进行。关闭则蜂窝数据下也自动备份。手动备份/下载/拉取始终不受限"><input type="checkbox" id="dvBkWifiOnly" onchange="dvToggleBkWifiOnly(this.checked)">仅WiFi自动备份</label>
 <label class="auto-lbl" title="备份完成且额度低于阈值时自动清理 低额且24h未更新 的对话(账号始终保留在库)"><input type="checkbox" id="dvAutoClean" onchange="dvToggleCleanup(this.checked)">自动清理</label>
 <label class="auto-lbl" title="默认关闭: 额度归零的账号备份后自动移出账号库。关闭时归零账号也始终保留在库, 仅由用户手动移除">&#9888;<input type="checkbox" id="dvAutoRemove" onchange="dvToggleAutoRemove(this.checked)">归零移出库</label>
 <button onclick="dvRunAutoCleanNow()" class="conv-btn conv-btn-s" title="立即执行自动清理全流程: 刷额度→预览低额空闲账号→全量备份→清理 低额且24h未更新 的对话 (账号保留在库; 仅当勾选\u0027归零移出库\u0027时才移出归零账号)">&#9889; 立即清理</button>
@@ -1271,8 +1272,20 @@ function dvToggleConvCap(v){ _setCfg("convCap",!!v); toast(v?"对话缓冲已开
 function dvSetConvBuffer(v){ _setCfg("convBuffer",parseFloat(v)||3); _capApplied={}; applyConvCapsAll(); }
 function dvToggleDrain(v){ _setCfg("convDrain",!!v); _capApplied={}; applyConvCapsAll(); }
 function dvSetMode(v){ _setCfg("backupMode",v); toast("备份模式: "+v); }
+function dvToggleBkWifiOnly(v){ _setCfg("autoBackupWifiOnly",!!v); toast(v?"自动备份仅 WiFi/不计费网络·省移动数据(手动备份/下载始终不受限)":"蜂窝数据下也自动备份"); }
+// ── 重下载网络门控 (道法自然·省移动数据·功能全不变) ─────────────────────────────────
+//   高消耗的**自动**重下载(自动备份心跳 + 自动清理前置的完整备份)默认仅在 WiFi/不计费网络进行;
+//   用户可关掉「仅WiFi自动备份」放开蜂窝。**只门控自动心跳**: 一切手动(全部备份/导出全部对话/
+//   批量清理前置备份/备份库下载ZIP·打开MD)恒不受限。识别不到网络(网页外壳无原生桥/旧原生 netInfo
+//   缺失)→ 保守放行(返回未计费), 绝不因门控误伤既有功能。cadence/其它一切行为不变。
+function _netInfo(){ try{ if(N&&N.netInfo){ var j=JSON.parse(N.netInfo()||"{}"); return (j&&typeof j==="object")?j:{}; } }catch(e){} return {}; }
+function _autoDlBlocked(){
+  if(!_cfg("autoBackupWifiOnly",true)) return false;   // 用户允许蜂窝自动下载 → 从不拦
+  return _netInfo().metered===true;                    // 仅在**明确**计费网络(蜂窝/计费热点)拦自动重下载; 非计费/未知→放行
+}
 function _initCfgUI(){
   var ab=document.getElementById("dvAutoBk"); if(ab) ab.checked=_cfg("autoBackup",true);
+  var bw=document.getElementById("dvBkWifiOnly"); if(bw) bw.checked=_cfg("autoBackupWifiOnly",true);
   var ac=document.getElementById("dvAutoClean"); if(ac) ac.checked=_cfg("autoCleanup",true);
   var ar=document.getElementById("dvAutoRemove"); if(ar) ar.checked=_cfg("autoRemove",false);
   var at=document.getElementById("dvThreshold"); if(at) at.value=_cfg("autoThreshold",3);
@@ -1457,6 +1470,7 @@ async function fullBackupAccount(a){
 // 返回 {state:"skip|backup-fail|cleaned|removed", reason, bal, cleaned, kept}。
 async function autoCleanFor(a, force){
   if(!force && !_cfg("autoCleanup",true)) return {state:"skip",reason:"未开自动清理"};
+  if(!force && _autoDlBlocked()) return {state:"skip",reason:"计费网络·自动备份/清理暂缓(仅WiFi)"};   // 自动清理前置=完整备份(重下载); 计费网络下暂缓(手动「立即清理/批量清理」force=true 不受限)
   if(!hasAuth(a)) return {state:"skip",reason:"未登录"};
   var q=a.quota; if(!q||typeof q.dPct!=="number") return {state:"skip",reason:"额度未知"};
   if(typeof q.overageDollars!=="number") return {state:"skip",reason:"美金余额未取到·不清理"};   // 余额未知绝不当 $0 触发清理(问题①防误删)
@@ -1554,6 +1568,7 @@ var _bkBusy=false, _bkCursor=0;
 async function autoBackupTick(){
   if(_bkBusy || !_cfg("autoBackup",true)) return;
   if(!N.vaultSaveBackup && !N.saveTextFile) return;
+  if(_autoDlBlocked()) return;   // 计费网络+「仅WiFi自动备份」→ 本轮自动重下载暂缓(手动备份不受限); 回到WiFi下轮心跳自然续上
   // 让路给交互: 状态轮询/额度刷新进行时不启动重备份, 稍后(带抖动)重试 → 自动备份永不卡住"并发查看状态"。
   if(_trkBusy || _quotaBusy){ setTimeout(autoBackupTick, 3000+Math.floor(Math.random()*4000)); return; }
   var accs=loadAcc().filter(hasAuth); if(!accs.length) return;
