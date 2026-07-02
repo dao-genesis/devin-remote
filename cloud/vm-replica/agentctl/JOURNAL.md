@@ -11314,3 +11314,20 @@ could check it against the rules of the domain. Colour classification
 over a geometric lattice turns any custom-drawn board game into a
 readable, playable state machine — the same trick as the sudoku OCR
 grid (F235), minus the fonts.
+
+## F359 — Plasma System Monitor: the OS itself is the artifact floor
+
+System-management domain. A hybrid semantic surface: the Kirigami/QML
+shell exposes *sensor values* through AT-SPI (218 nodes carrying live
+strings like '1.3 GiB' used memory — the semantic floor can read
+telemetry directly), yet the sidebar's page items ('Processes') come
+back rect=None: name without a place, the inverse of F353's
+place-without-name. Pixel click on the sidebar landed the Processes
+page; typed 'sleep' into the filter; the planted `sleep 300` decoy
+appeared as the sole row. Selected it, hit End Process — and the kill
+was *not* where the click was: a confirmation dialog (in-window QML
+modal, invisible to list_windows) demanded a second End. The
+verification is the purest artifact floor yet: no file, no pixels —
+`pgrep -f 'sleep 300'` returned the PID before and *empty string
+after*. When the GUI's job is to manage the OS, the OS process table
+is the ground truth, and the kernel never lies about who is alive.
