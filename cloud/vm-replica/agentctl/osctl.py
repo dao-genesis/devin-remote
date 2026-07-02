@@ -6752,6 +6752,341 @@ def scroll_to_phrase(bbox: tuple[int, int, int, int],
     return None
 
 
+# ==== F277–F302: the application-floor arc (reconstructed) ================== #
+# The arc that took the floor from "controls a screen" to "operates the
+# machine as a user does": launching apps with the a11y bus lit, speaking
+# hotkeys as words, accepting window records everywhere, and reading text
+# through the AT-SPI Text interface.
+
+# uia_text (F286): read what a text-bearing surface *says* through the AT-SPI
+# Text iface (worker-isolated like every semantic verb). The tree dual of
+# read_selection: meaning for what is exposed, the copy channel for what is
+# only drawn.
+uia_text = getattr(_be, "uia_text", lambda win, name=None, ctype=None: "")
+# set_num_desktops (F292): the write dual of num_desktops — grow/shrink the
+# workspace set itself, completing the full workspace lifecycle.
+set_num_desktops = getattr(_be, "set_num_desktops", lambda n: False)
+num_desktops = getattr(_be, "num_desktops", lambda: 1)
+current_desktop = getattr(_be, "current_desktop", lambda: 0)
+set_desktop = getattr(_be, "set_desktop", lambda n: False)
+move_window_to_desktop = getattr(_be, "move_window_to_desktop", lambda win, n: False)
+window_desktop = getattr(_be, "window_desktop", lambda win: 0)
+
+
+def _win_id(win) -> int:
+    """F277: window-handle composition. list_windows/wait_window yield window
+    *records* ``{"id","title",…}`` but the verbs took bare ids, so every call
+    site paid a ``w["id"]`` toll and the one time it was forgotten the verb
+    silently acted on garbage. Every window-taking verb now accepts either."""
+    if isinstance(win, dict):
+        return int(win["id"])
+    return int(win)
+
+
+def _wrap_win_verbs():
+    g = globals()
+    for nm in ("activate_window", "close_window", "window_exists", "window_geometry",
+               "move_window", "window_state", "set_window_state", "window_pid",
+               "terminate_window", "set_window_topmost", "is_window_topmost",
+               "window_desktop", "move_window_to_desktop",
+               "uia_name", "uia_children", "uia_find", "uia_find_all", "uia_invoke",
+               "uia_get_value", "uia_set_value", "uia_focus", "uia_click",
+               "uia_select", "uia_is_selected", "uia_toggle", "uia_toggle_state",
+               "uia_expand", "uia_collapse", "uia_expand_state", "uia_text"):
+        fn = g.get(nm)
+        if fn is None:
+            continue
+
+        def mk(f):
+            def wrapped(win, *a, **kw):
+                return f(_win_id(win), *a, **kw)
+            wrapped.__name__ = getattr(f, "__name__", "wrapped")
+            wrapped.__doc__ = getattr(f, "__doc__", None)
+            return wrapped
+        g[nm] = mk(fn)
+
+
+_wrap_win_verbs()
+
+
+_type_unicode_raw = type_unicode
+
+
+def type_unicode(text: str) -> None:  # noqa: F811 — deliberate re-bind (F278)
+    """F278: '\\n' in typed text becomes a real Return press. The X keysym path
+    types LF as a glyph most toolkits ignore, so multi-line typing silently
+    collapsed to one line; splitting on newlines and tapping Return between
+    segments makes typed text mean what a person typing it would mean."""
+    parts = text.split("\n")
+    for i, part in enumerate(parts):
+        if part:
+            _type_unicode_raw(part)
+        if i < len(parts) - 1:
+            tap(VK_RETURN)
+            time.sleep(0.03)
+
+
+# F284: the full VK alphabet, and hotkeys as words. chord() took raw VK codes,
+# so every accelerator call site carried magic numbers; hotkey('ctrl+shift+e')
+# says what a keyboard shortcut *is*.
+_VK_BY_NAME = {
+    "ctrl": 0x11, "control": 0x11, "alt": 0x12, "menu": 0x12, "shift": 0x10,
+    "win": 0x5B, "super": 0x5B, "meta": 0x5B, "cmd": 0x5B,
+    "enter": 0x0D, "return": 0x0D, "esc": 0x1B, "escape": 0x1B, "tab": 0x09,
+    "space": 0x20, "backspace": 0x08, "delete": 0x2E, "del": 0x2E,
+    "insert": 0x2D, "home": 0x24, "end": 0x23,
+    "pageup": 0x21, "pgup": 0x21, "pagedown": 0x22, "pgdn": 0x22,
+    "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28,
+    "comma": 0xBC, "period": 0xBE, "minus": 0xBD, "plus": 0xBB, "equals": 0xBB,
+    "slash": 0xBF, "semicolon": 0xBA, "quote": 0xDE, "backslash": 0xDC,
+    "bracketleft": 0xDB, "bracketright": 0xDD, "grave": 0xC0,
+}
+for _c in range(26):
+    _VK_BY_NAME[chr(ord("a") + _c)] = 0x41 + _c
+for _c in range(10):
+    _VK_BY_NAME[str(_c)] = 0x30 + _c
+for _c in range(1, 13):
+    _VK_BY_NAME[f"f{_c}"] = 0x70 + _c - 1
+
+
+def hotkey(spec: str, hold: float = 0.0) -> None:
+    """F284: speak a keyboard shortcut as the word it is — ``'ctrl+shift+e'``,
+    ``'alt+f4'``, ``'ctrl+l'``. Presses in order, releases in reverse (the
+    chord discipline); ``hold`` keeps the chord down for state-sampling
+    surfaces (see :func:`tap`)."""
+    vks = []
+    for part in spec.replace(" ", "").split("+"):
+        vk = _VK_BY_NAME.get(part.lower())
+        if vk is None:
+            raise ValueError(f"hotkey: unknown key {part!r}")
+        vks.append(vk)
+    for vk in vks:
+        key_down(vk)
+    if hold > 0:
+        time.sleep(hold)
+    for vk in reversed(vks):
+        key_up(vk)
+
+
+def replace_text(text: str, settle: float = 0.08) -> None:
+    """F300: put a field into a KNOWN state before typing. Prefilled fields
+    (a highscore dialog with the previous name, a rename box with the old
+    name) make blind typing *append*, not replace — select-all, delete, then
+    type, so the field afterwards holds exactly ``text``."""
+    chord(VK_CONTROL, VK_A)
+    time.sleep(settle)
+    tap(0x2E)  # VK_DELETE
+    time.sleep(settle)
+    if text:
+        type_unicode(text)
+
+
+def bbox_of(obj):
+    """F289: one verb from *any* located thing to its screen box (x, y, w, h).
+    uia records carry ``rect=(x,y,w,h)``, windows carry geometry dicts, pixel
+    verbs hand back 4-tuples — every call site was recomposing corners by
+    hand. Returns None when the thing has no on-screen box."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        if "rect" in obj:
+            return tuple(obj["rect"]) if obj["rect"] else None
+        if "id" in obj:
+            g = window_geometry(obj)
+            return (g["x"], g["y"], g["w"], g["h"]) if g else None
+        if {"x", "y", "w", "h"} <= set(obj):
+            return (obj["x"], obj["y"], obj["w"], obj["h"])
+    if isinstance(obj, (tuple, list)) and len(obj) == 4:
+        return tuple(obj)
+    g = window_geometry(obj)   # bare window id
+    return (g["x"], g["y"], g["w"], g["h"]) if g else None
+
+
+def center_of(obj):
+    """Centre point of :func:`bbox_of` — where a click on it should land."""
+    r = bbox_of(obj)
+    if r is None:
+        return None
+    return (r[0] + r[2] // 2, r[1] + r[3] // 2)
+
+
+def click_center(obj, right: bool = False) -> bool:
+    """Click the centre of any located thing (uia record / window / rect)."""
+    c = center_of(obj)
+    if c is None:
+        return False
+    click(c[0], c[1], right=right)
+    return True
+
+
+def _session_bus() -> str | None:
+    """F303: FIND the session bus before speaking on it. On a VNC/plasma
+    ground the desktop's dbus-daemon was started by dbus-launch and its
+    address (an abstract socket) never reaches a fresh shell's environment —
+    so every dbus word (including lighting the a11y bus, hence the entire
+    semantic floor) fails with 'No such file or directory'. Discover it:
+    env var if set; else any same-uid process that carries it; else the
+    abstract ``@/tmp/dbus-*`` sockets in /proc/net/unix, probed with a real
+    dbus call. The winning address is exported so the AT-SPI workers and
+    every launched app inherit it."""
+    import os
+    import subprocess
+    cands = []
+    a = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+    if a:
+        cands.append(a)
+    uid = os.getuid()
+    try:
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            p = f"/proc/{pid}"
+            try:
+                if os.stat(p).st_uid != uid:
+                    continue
+                with open(p + "/environ", "rb") as f:
+                    for kv in f.read().split(b"\0"):
+                        if kv.startswith(b"DBUS_SESSION_BUS_ADDRESS="):
+                            cands.append(kv.split(b"=", 1)[1].decode())
+            except OSError:
+                continue
+    except OSError:
+        pass
+    try:
+        with open("/proc/net/unix") as f:
+            for ln in f:
+                cols = ln.split()
+                if cols and cols[-1].startswith("@/tmp/dbus-"):
+                    cands.append("unix:abstract=" + cols[-1][1:])
+    except OSError:
+        pass
+    for addr in dict.fromkeys(cands):
+        try:
+            # NB: probe with --session + env, not --address=: dbus-send in
+            # address mode speaks peer-to-peer and the daemon rejects it
+            # ('tried to send a message other than Hello').
+            env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=addr)
+            r = subprocess.run(
+                ["dbus-send", "--session", "--print-reply",
+                 "--dest=org.freedesktop.DBus", "/org/freedesktop/DBus",
+                 "org.freedesktop.DBus.GetId"],
+                capture_output=True, timeout=3, env=env)
+            if r.returncode == 0:
+                os.environ["DBUS_SESSION_BUS_ADDRESS"] = addr
+                return addr
+        except Exception:
+            continue
+    return None
+
+
+_a11y_lit = [False]
+
+
+def _light_a11y() -> None:
+    """F281: the semantic floor lights its own ground. AT-SPI registration is
+    gated on the session a11y flag; on a fresh VM it is off, so every launched
+    app would come up semantically dark. Flip org.a11y.Status.IsEnabled (and
+    the GTK gsettings twin) once per session before the first launch."""
+    if _a11y_lit[0]:
+        return
+    _a11y_lit[0] = True
+    _session_bus()          # F303: make sure we are on the desktop's bus
+    import subprocess
+    for cmd in (
+        ["dbus-send", "--session", "--type=method_call",
+         "--dest=org.a11y.Bus", "/org/a11y/bus",
+         "org.freedesktop.DBus.Properties.Set", "string:org.a11y.Status",
+         "string:IsEnabled", "variant:boolean:true"],
+        ["gsettings", "set", "org.gnome.desktop.interface",
+         "toolkit-accessibility", "true"],
+    ):
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=5)
+        except Exception:
+            pass
+
+
+def launch(argv, wait_title: str | None = None, timeout: float = 20.0,
+           env: dict | None = None):
+    """F282 (+F283, F287): start an application the way the floor needs it —
+    a11y-lit and tracked to its window.
+
+    * lights the session a11y bus first (F281) and exports the per-toolkit
+      bridge variables (``GTK_MODULES=gail:atk-bridge``, ``QT_ACCESSIBILITY=1``,
+      …) so the app registers on the semantic floor at *process birth* — a11y
+      is decided when the process starts, not later (F302);
+    * resolves the binary against PATH **plus /usr/games** (F287 — Debian puts
+      every game there and login shells see it, but a bare Popen does not);
+    * watches ``list_windows`` and returns the NEW window record that appears
+      (title containing ``wait_title`` if given), or None on timeout — so the
+      caller holds the window, not just a pid."""
+    import os
+    import shlex
+    import shutil
+    import subprocess
+    if isinstance(argv, str):
+        argv = shlex.split(argv)
+    argv = list(argv)
+    path = os.environ.get("PATH", "") + os.pathsep + "/usr/games"
+    exe = shutil.which(argv[0], path=path)
+    if exe:
+        argv[0] = exe
+    _light_a11y()
+    e = dict(os.environ)
+    e.update({"GTK_MODULES": "gail:atk-bridge", "QT_ACCESSIBILITY": "1",
+              "QT_LINUX_ACCESSIBILITY_ALWAYS_ON": "1", "GNOME_ACCESSIBILITY": "1"})
+    e.pop("NO_AT_BRIDGE", None)
+    if env:
+        e.update(env)
+    before = {w["id"] for w in list_windows()}
+    proc = subprocess.Popen(argv, env=e, start_new_session=True,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for w in list_windows():
+            if w["id"] in before:
+                continue
+            if wait_title is None or wait_title.lower() in (w.get("title") or "").lower():
+                w["pid"] = proc.pid
+                return w
+        if proc.poll() is not None and wait_title is None:
+            break
+        time.sleep(0.25)
+    return None
+
+
+_omnibox_go_raw = omnibox_go
+
+
+def omnibox_go(url: str) -> None:  # noqa: F811 — deliberate re-bind (F280)
+    """F280: the omnibox verb *aims at a browser* first. Ctrl+L means
+    'focus address bar' only inside a browser window; fired at whatever holds
+    focus it types into documents. Find and raise a browser window, then do
+    the atomic focus/paste/Enter."""
+    for w in list_windows():
+        t = (w.get("title") or "").lower()
+        if any(b in t for b in ("chrome", "chromium", "firefox", "falkon",
+                                "konqueror", "epiphany", "edge")):
+            activate_window(w)
+            time.sleep(0.25)
+            break
+    _omnibox_go_raw(url)
+
+
+def read_selection_retry(tries: int = 4, settle: float = 0.15,
+                         restore: bool = True) -> str:
+    """F279: X selection transfer is asynchronous — a fixed post-copy sleep
+    races the owner. Retry the read until the clipboard turns non-empty (or
+    tries run out), which converts a timing guess into an observed fact."""
+    out = ""
+    for _ in range(max(1, tries)):
+        out = read_selection(restore=restore, settle=settle)
+        if out:
+            return out
+        time.sleep(settle)
+    return out
+
+
 if __name__ == "__main__":
     print("screen:", screen_size())
     rt = "agentctl osctl clipboard round-trip \u2713"

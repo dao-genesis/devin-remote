@@ -10386,3 +10386,169 @@ What remains is exactly the essence: `osctl.py` (the floor), `_osbackend_x11.py`
 `_osbackend_win.py` (the two backends), the `_test_f*.py` + `_test_accel.py`
 regression suite, and this JOURNAL. 33/33 test files still green after the prune.
 损之又损 — the repo now carries only what earns its place.
+
+---
+
+## F277–F303 — the application-floor arc: operating the machine as a user does
+
+The F0–F276 arc built a floor that *controls a screen* — pixels in, gestures
+out, semantics where the a11y tree was already lit. This arc is what turns that
+into *operating the machine the way a person does*: opening applications with
+their accessibility exposed, speaking keyboard shortcuts as words, reading what
+a text surface says, and — the keystone (F303) — first finding the session bus
+the whole semantic floor stands on. Reconstructed and re-verified live on a
+fresh VNC/Plasma VM.
+
+### F277 — window verbs accept a window *record*, not just a bare id
+
+`list_windows()` / `launch()` hand back window records `{"id","title",…}`, but
+every window-taking verb (`activate_window`, `uia_find`, `close_window`, …) took
+a bare integer id. So every call site paid a `w["id"]` toll, and the one time it
+was forgotten the verb acted on a dict cast to garbage. `_win_id()` normalizes
+either form and `_wrap_win_verbs()` wraps the whole window/semantic surface once.
+A located window now flows straight back into the next verb — the composition a
+user's mental model already assumes.
+
+### F278 — a typed newline is a Return press, not a glyph
+
+`type_unicode("a\nb")` sent LF through the X keysym path, which most toolkits
+render as nothing — so multi-line typing silently collapsed to one line. Typed
+text now splits on `\n` and taps Return between segments, so what you type means
+what a person typing it would mean. Verified: two lines typed into KWrite come
+back as two lines through `uia_text`.
+
+### F279 — read_selection retries until the transfer actually lands
+
+X selection transfer is asynchronous; a fixed post-copy sleep races the owning
+app. `read_selection_retry()` polls until the clipboard turns non-empty (or the
+tries run out), converting a timing guess into an observed fact.
+
+### F280 — the omnibox aims at a browser first
+
+Ctrl+L means "focus the address bar" only inside a browser; fired at whatever
+holds focus it types into documents. `omnibox_go` now finds and raises a browser
+window before the atomic focus/paste/Enter.
+
+### F281 — the semantic floor lights its own ground
+
+AT-SPI registration is gated on the session a11y flag (`org.a11y.Status.
+IsEnabled`); on a fresh VM it is off, so every app comes up semantically dark.
+`_light_a11y()` flips it (and the GTK gsettings twin) once, before the first
+launch.
+
+### F282 — launch(): start an app and hold its window
+
+A bare `Popen` gives a pid, not a window, and comes up on a dark a11y bus.
+`launch()` lights a11y (F281), exports the per-toolkit bridge vars (F302),
+resolves the binary (F287), starts the process, then watches `list_windows`
+and returns the NEW window record that appears. The caller holds the window,
+not just a pid.
+
+### F283 — the a11y bridge is exported at process *birth*
+
+`GTK_MODULES=gail:atk-bridge`, `QT_ACCESSIBILITY=1`, … must be in the app's
+environment when it starts; setting them afterward is too late. `launch()` puts
+them in the child env and clears `NO_AT_BRIDGE`.
+
+### F284 — keyboard shortcuts spoken as words
+
+`chord()` took raw VK codes, so every accelerator carried magic numbers.
+`hotkey("ctrl+shift+e")` / `hotkey("alt+f4")` names the full VK alphabet
+(letters, digits, F-keys, punctuation, navigation) and presses-in-order /
+releases-in-reverse with the chord discipline.
+
+### F285 — the clipboard speaks *files*, not only text
+
+A file manager copy/paste is a `text/uri-list` (freedesktop) plus
+`x-special/gnome-copied-files` (which carries the copy-vs-cut verb), not a text
+string. `set_clipboard_files()` / `get_clipboard_files()` serve and read both,
+so a Ctrl+V in Dolphin/Nautilus copies — or moves — the given files. Verified:
+two files put on the clipboard read back as two paths, and a later
+`set_clipboard` text write correctly clears the file list.
+
+### F286 — uia_text: read what a text surface *says*
+
+`uia_get_value` reads a value-holding control; nothing read the prose of a
+terminal's scrollback or an editor's buffer. `uia_text()` walks the AT-SPI Text
+interface (worker-isolated like every semantic verb) and returns the text, scoped
+to a control by name/ctype or the whole window. The tree dual of read_selection:
+meaning for what is exposed, the copy channel for what is only drawn.
+
+### F288 — carry the accessible *description*, not just the name
+
+Grid games (gnome-mines) name their cells identically ("") and distinguish state
+only in the accessible *description*. `uia_children`/`uia_find_all` now carry
+`desc` alongside name/role, so a semantic reading of such a board is possible at
+all.
+
+### F289 — bbox_of / center_of: one box from anything located
+
+uia records carry `rect=(x,y,w,h)`, windows carry geometry dicts, pixel verbs
+hand back 4-tuples — every call site recomposed corners by hand. `bbox_of()`
+takes any of them (and a bare window id) and yields `(x,y,w,h)`; `center_of()` /
+`click_center()` build on it.
+
+### F290 — exact-name match wins over a substring match
+
+`uia_find(win, name="New")` could resolve to "New Window" if that node was
+walked first. Find now prefers an exact (ellipsis-stripped) name match with a
+rect, keeping a substring match only as fallback — in both the record-returning
+and accessible-returning paths. Verified: `find New` on KWrite returns exactly
+"New".
+
+### F292 — set_num_desktops: the write dual of the workspace count
+
+`num_desktops()` could read the workspace set but nothing resized it.
+`set_num_desktops(n)` writes `_NET_NUMBER_OF_DESKTOPS`, completing the workspace
+lifecycle (grow → populate → walk → shrink). Verified: 1→4→2→1 live.
+
+### F293 — showing-only: what the user can actually SEE
+
+A closed dialog can linger in the AT-SPI tree with valid rects. `uia_find_all(…,
+showing=True)` filters to nodes carrying `STATE_SHOWING`, separating what is on
+screen from what the toolkit merely remembers.
+
+### F299 — a named toplevel is a toplevel whatever its role
+
+Some toolkits hang a real toplevel under an odd role (VLC's preferences dialog
+is a named "filler"). Frame enumeration now accepts any *named* toplevel child;
+only anonymous non-frame roles are skipped.
+
+### F300 — replace_text: put a field into a known state before typing
+
+Prefilled fields (a highscore dialog with the previous name, a rename box with
+the old name) make blind typing *append*. `replace_text()` does select-all →
+delete → type, so the field afterward holds exactly what was given.
+
+### F302 — accessibility is decided at process start
+
+The consolidation of F281/F283: the bridge env vars and the lit a11y bus must
+both be in place *before* `Popen`, because a toolkit reads them once at startup.
+`launch()` is the single place that guarantees it.
+
+### F303 — FIND the session bus before speaking on it *(new this session)*
+
+The keystone, exposed the moment the arc was re-run on a fresh ground. On a
+VNC/Plasma VM the desktop's `dbus-daemon` is started by `dbus-launch`, and its
+address — an *abstract* socket `@/tmp/dbus-XXXX` — never reaches a freshly
+spawned shell's environment. So every dbus word failed with *"Failed to connect
+to socket /run/user/1000/bus: No such file or directory"*: `_light_a11y` could
+not flip the a11y flag, the AT-SPI workers could not reach the bus, and the
+entire semantic floor stayed dark even though the desktop was fully up and every
+app was individually accessible.
+
+`_session_bus()` discovers it without being told: honor `$DBUS_SESSION_BUS_
+ADDRESS` if set; else scan same-uid `/proc/*/environ` for a process that carries
+it; else read the abstract `@/tmp/dbus-*` listeners out of `/proc/net/unix`. Each
+candidate is *proved* with a real `org.freedesktop.DBus.GetId` call — and that
+probe must go through `--session` with the address in the child env, never
+`--address=` (address mode speaks peer-to-peer and the daemon rejects it:
+"tried to send a message other than Hello without being registered"). The
+winning address is exported into `os.environ`, so `_light_a11y`, the AT-SPI
+workers, and every app `launch()` starts all inherit the same live bus.
+
+With F303 in place the whole arc verifies end-to-end on this VM: launch KWrite →
+type two lines → `uia_text` reads them back → `uia_find_all(ctype="button")`
+enumerates the toolbar → `uia_find(name="New")` resolves exactly → file
+clipboard round-trips through Dolphin's protocol → the workspace count walks
+1→4→2→1. 道生一 — find the ground first, and everything built on it stands.

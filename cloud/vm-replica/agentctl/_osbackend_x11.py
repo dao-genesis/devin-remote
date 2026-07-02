@@ -32,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 
 _x = ctypes.CDLL("libX11.so.6")
 _xt = ctypes.CDLL("libXtst.so.6")
@@ -962,6 +963,15 @@ def set_desktop(n: int) -> bool:
         return _root_card_msg("_NET_CURRENT_DESKTOP", _root, int(n), 0)
 
 
+def set_num_desktops(n: int) -> bool:
+    """Resize the workspace set itself (``_NET_NUMBER_OF_DESKTOPS``, F292) —
+    the write dual of :func:`num_desktops`. With set_desktop /
+    move_window_to_desktop this completes the full workspace lifecycle: grow
+    the set, populate it, walk it, shrink it back."""
+    with _lock:
+        return _root_card_msg("_NET_NUMBER_OF_DESKTOPS", _root, int(n), 0)
+
+
 def move_window_to_desktop(win: int, n: int) -> bool:
     """Send a window to workspace ``n`` (``_NET_WM_DESKTOP``). With ``n`` equal to
     :func:`current_desktop` this *brings the window here* — onto the visible
@@ -1050,6 +1060,8 @@ def move_window(win: int, x: int, y: int, w: int = 0, h: int = 0) -> bool:
 # ---- clipboard (selection owner on its own display connection) ------------ #
 _clip_text = ""
 _clip_started = False
+_clip_files: list = []
+_clip_move = False
 
 
 def set_clipboard(text: str) -> None:
@@ -1058,12 +1070,50 @@ def set_clipboard(text: str) -> None:
     X has no global clipboard buffer: the owner hands the text to each paster on
     demand. A daemon thread on its own display connection answers SelectionRequest
     events, so Chrome's Ctrl+V (a request to the owner) receives ``text``."""
-    global _clip_text, _clip_started
+    global _clip_text, _clip_files, _clip_started
     _clip_text = text
+    _clip_files = []
     if not _clip_started:
         _clip_started = True
         threading.Thread(target=_clip_serve, daemon=True).start()
         time.sleep(0.05)
+
+
+def set_clipboard_files(paths, move: bool = False) -> bool:
+    """Put a FILE LIST on the X clipboard (F285) — the non-text clipboard
+    tongue. Serves both ``text/uri-list`` (the freedesktop standard every file
+    manager pastes from) and ``x-special/gnome-copied-files`` (the KDE/GNOME
+    flavour that carries the copy-vs-cut verb), so a Ctrl+V in Dolphin/Nautilus
+    copies — or moves, with ``move=True`` — the given files."""
+    global _clip_files, _clip_move, _clip_started
+    _clip_files = [os.path.abspath(p) for p in paths]
+    _clip_move = bool(move)
+    if not _clip_started:
+        _clip_started = True
+        threading.Thread(target=_clip_serve, daemon=True).start()
+        time.sleep(0.05)
+    return True
+
+
+def get_clipboard_files() -> list:
+    """Read the FILE LIST currently on the X clipboard (F285): ask the owner
+    for ``text/uri-list`` and return local paths. [] when the clipboard holds
+    text or nothing — the read dual of :func:`set_clipboard_files`."""
+    try:
+        r = subprocess.run(
+            ["xclip", "-o", "-selection", "clipboard", "-t", "text/uri-list"],
+            capture_output=True, timeout=2,
+        )
+        if r.returncode == 0:
+            out = []
+            for ln in r.stdout.decode("utf-8", "replace").splitlines():
+                ln = ln.strip()
+                if ln.startswith("file://"):
+                    out.append(urllib.parse.unquote(ln[7:]))
+            return out
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return []
 
 
 def get_clipboard() -> str:
@@ -1106,6 +1156,8 @@ def _clip_serve() -> None:
     CLIPBOARD = _x.XInternAtom(d, b"CLIPBOARD", 0)
     UTF8 = _x.XInternAtom(d, b"UTF8_STRING", 0)
     TARGETS = _x.XInternAtom(d, b"TARGETS", 0)
+    URILIST = _x.XInternAtom(d, b"text/uri-list", 0)
+    GNOMEFILES = _x.XInternAtom(d, b"x-special/gnome-copied-files", 0)
     win = _x.XCreateSimpleWindow(d, root, 0, 0, 1, 1, 0, 0, 0)
     _x.XSetSelectionOwner(d, CLIPBOARD, win, 0)
     _x.XSetSelectionOwner(d, PRIMARY, win, 0)
@@ -1137,13 +1189,27 @@ def _clip_serve() -> None:
             continue
         req = ctypes.cast(ctypes.byref(ev), ctypes.POINTER(XSelReq)).contents
         prop = req.property
-        if req.target in (UTF8, XA_STRING):
+        uris = "\r\n".join("file://" + urllib.parse.quote(p) for p in _clip_files)
+        if req.target in (UTF8, XA_STRING) and not _clip_files:
             data = _clip_text.encode("utf-8")
             _x.XChangeProperty(d, req.requestor, prop, req.target, 8, 0, data, len(data))
+        elif req.target == URILIST and _clip_files:
+            data = (uris + "\r\n").encode("utf-8")
+            _x.XChangeProperty(d, req.requestor, prop, req.target, 8, 0, data, len(data))
+        elif req.target == GNOMEFILES and _clip_files:
+            verb = "cut" if _clip_move else "copy"
+            data = (verb + "\n" + "\n".join(
+                "file://" + urllib.parse.quote(p) for p in _clip_files)).encode("utf-8")
+            _x.XChangeProperty(d, req.requestor, prop, req.target, 8, 0, data, len(data))
         elif req.target == TARGETS:
-            targs = (ctypes.c_ulong * 2)(UTF8, XA_STRING)
-            _x.XChangeProperty(d, req.requestor, prop, XA_ATOM, 32, 0,
-                               ctypes.cast(targs, ctypes.c_char_p), 2)
+            if _clip_files:
+                targs = (ctypes.c_ulong * 2)(URILIST, GNOMEFILES)
+                _x.XChangeProperty(d, req.requestor, prop, XA_ATOM, 32, 0,
+                                   ctypes.cast(targs, ctypes.c_char_p), 2)
+            else:
+                targs = (ctypes.c_ulong * 2)(UTF8, XA_STRING)
+                _x.XChangeProperty(d, req.requestor, prop, XA_ATOM, 32, 0,
+                                   ctypes.cast(targs, ctypes.c_char_p), 2)
         else:
             prop = 0  # refuse unknown targets
         note = XSelNotify(type=SELECTION_NOTIFY, serial=0, send_event=1, display=d,
@@ -1180,6 +1246,11 @@ _ATSPI_COORD_SCREEN = 0
 # public-ABI enum value (atspi-constants.h: INVALID=0…DEFUNCT=6). A live app
 # mutates its tree as we walk it; touching a defunct node is a use-after-free.
 _ATSPI_STATE_DEFUNCT = 6
+# AtspiStateType.SHOWING — the node (and all its ancestors) is actually mapped
+# on screen. Pinned empirically at 25 on this ground (F293): a dialog that was
+# closed can linger in the tree with valid rects; SHOWING is what separates
+# what a user *sees* from what the toolkit merely remembers.
+_ATSPI_STATE_SHOWING = 25
 
 # A control-type word the floor speaks -> the AT-SPI role name it means.
 _ROLE_ALIAS = {
@@ -1289,6 +1360,8 @@ def _atspi():
         at.atspi_accessible_get_name.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         at.atspi_accessible_get_role_name.restype = ctypes.c_void_p
         at.atspi_accessible_get_role_name.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        at.atspi_accessible_get_description.restype = ctypes.c_void_p
+        at.atspi_accessible_get_description.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         at.atspi_accessible_get_process_id.restype = ctypes.c_uint
         at.atspi_accessible_get_process_id.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         at.atspi_accessible_get_component_iface.restype = ctypes.c_void_p
@@ -1374,6 +1447,21 @@ def _acc_name(at, acc):
 
 def _acc_role(at, acc):
     return _gstr(at.atspi_accessible_get_role_name(acc, None))
+
+
+def _acc_desc(at, acc):
+    return _gstr(at.atspi_accessible_get_description(acc, None))
+
+
+def _acc_showing(at, acc):
+    """True when the node carries STATE_SHOWING — visible right now (F293)."""
+    ss = at.atspi_accessible_get_state_set(acc)
+    if not ss:
+        return False
+    try:
+        return bool(at.atspi_state_set_contains(ss, _ATSPI_STATE_SHOWING))
+    finally:
+        _unref(ss)
 
 
 def _acc_defunct(at, acc):
@@ -1470,10 +1558,14 @@ def _atspi_frame_for(at, win):
             pid_match = pid is not None and app_pid == pid
             for fr in _acc_children(at, app):
                 role = _acc_role(at, fr).lower()
-                if role not in ("frame", "window", "dialog", "alert"):
+                nm = _acc_name(at, fr).strip()
+                # F299: a toplevel is *usually* frame/window/dialog/alert, but
+                # some toolkits hang a real toplevel under an odd role — VLC's
+                # preferences dialog is a named "filler". Accept any NAMED
+                # toplevel child; only anonymous non-frame roles are skipped.
+                if role not in ("frame", "window", "dialog", "alert") and not nm:
                     _unref(fr)
                     continue
-                nm = _acc_name(at, fr).strip()
                 if title and nm == title and title_hit is None:
                     title_hit = fr      # keep, don't unref
                 elif pid_match:
@@ -1646,7 +1738,11 @@ def _impl_uia_children(win: int) -> list:
             if depth > 0 and (nm or rl in ("push button", "menu item", "check box",
                                            "radio button", "text", "page tab",
                                            "combo box", "link", "slider")):
-                out.append({"name": nm, "ctype": rl, "rect": _acc_rect(at, acc)})
+                # F288: carry the accessible *description* too — grid games
+                # (gnome-mines) name their cells identically but describe them
+                # distinctly, so desc is the only semantic handle on state.
+                out.append({"name": nm, "ctype": rl, "rect": _acc_rect(at, acc),
+                            "desc": _acc_desc(at, acc)})
             return None
 
         try:
@@ -1656,7 +1752,8 @@ def _impl_uia_children(win: int) -> list:
         return out
 
 
-def _impl_uia_find_all(win: int, name=None, ctype=None, max_scan=6000) -> list:
+def _impl_uia_find_all(win: int, name=None, ctype=None, max_scan=6000,
+                       showing=False) -> list:
     """The *plural* of :func:`uia_find` — every descendant of ``win`` matching
     the given meaning, as ``[{"name","type","aid","help","rect"}, …]``.
     ``ctype``/``name`` filter exactly as in :func:`uia_find`; omit both to
@@ -1690,6 +1787,10 @@ def _impl_uia_find_all(win: int, name=None, ctype=None, max_scan=6000) -> list:
                 want = _ROLE_ALIAS.get(want, want)
                 if want != rl.lower() and want not in rl.lower():
                     return None
+            if showing and not _acc_showing(at, acc):
+                # F293: a strict pass wants only what the user can SEE — a
+                # closed dialog's controls linger in the tree with valid rects.
+                return None
             if name is None and ctype is None:
                 if not nm and rl not in ("push button", "menu item", "check box",
                                          "radio button", "text", "page tab",
@@ -1701,7 +1802,8 @@ def _impl_uia_find_all(win: int, name=None, ctype=None, max_scan=6000) -> list:
                     return None
             uia_type = _ROLE_TO_UIA.get(rl.lower(), rl)
             out.append({"name": nm, "type": uia_type, "aid": "", "help": "",
-                        "rect": _acc_rect(at, acc)})
+                        "rect": _acc_rect(at, acc),
+                        "desc": _acc_desc(at, acc)})
             return None
 
         try:
@@ -1732,21 +1834,29 @@ def _impl_uia_find(win: int, name=None, ctype=None):
             return None
 
         first_any = [None]
+        first_sub = [None]      # substring match with rect (F290 fallback)
 
         def visit(acc, depth):
             if depth > 0 and _match(at, acc, name, ctype):
+                nm = _acc_name(at, acc)
                 r = _acc_rect(at, acc)
-                entry = {"name": _acc_name(at, acc), "ctype": _acc_role(at, acc),
-                         "rect": r}
+                entry = {"name": nm, "ctype": _acc_role(at, acc), "rect": r}
                 if first_any[0] is None:
                     first_any[0] = entry
                 if r is not None:
-                    return entry          # preferred: has screen rect
+                    # F290: exact-first — 'New' must not resolve to 'New Window'
+                    # just because the substring match was walked first. An
+                    # exact name (ellipsis-stripped) with a rect wins outright;
+                    # a substring match with a rect is kept as fallback.
+                    if name is None or _strip_ellipsis(nm.lower()) == _strip_ellipsis(name.lower()):
+                        return entry
+                    if first_sub[0] is None:
+                        first_sub[0] = entry
             return None
 
         try:
             hit = _walk(at, fr, visit)
-            return hit if hit else first_any[0]
+            return hit or first_sub[0] or first_any[0]
         finally:
             _unref(fr)
 
@@ -1758,6 +1868,7 @@ def _find_acc(at, fr, name, ctype):
     INT32_MIN-filtered).  Label/text shadows share a name with the operable
     control but carry no rect; returning them makes click/invoke always fail."""
     first_any = [None]
+    first_sub = [None]
 
     def visit(acc, depth):
         if depth > 0 and _match(at, acc, name, ctype):
@@ -1766,15 +1877,21 @@ def _find_acc(at, fr, name, ctype):
                 _ref(acc)
             r = _acc_rect(at, acc)
             if r is not None:
-                return acc            # preferred: has screen rect
+                nm = _acc_name(at, acc)
+                # F290: exact-first, mirroring _impl_uia_find.
+                if name is None or _strip_ellipsis(nm.lower()) == _strip_ellipsis(name.lower()):
+                    return acc
+                if first_sub[0] is None:
+                    first_sub[0] = acc
+                    _ref(acc)
         return None
 
     hit = _walk(at, fr, visit)
-    if hit:
-        if first_any[0] and first_any[0] != hit:
-            _unref(first_any[0])
-        return hit
-    return first_any[0]
+    keep = hit or first_sub[0] or first_any[0]
+    for held in (first_sub[0], first_any[0]):
+        if held and held is not keep:
+            _unref(held)
+    return keep
 
 
 def _click_rect(win: int, rect) -> bool:
@@ -2277,6 +2394,49 @@ def _impl_uia_is_selected(win: int, name=None, ctype=None):
 # truly pathological tree just yields the verb's honest empty — degradation, not
 # death. The verbs themselves are unchanged; only *where* they run moved.
 
+def _impl_uia_text(win: int, name=None, ctype=None) -> str:
+    """Read the *text content* of a window (or one control in it) through the
+    AT-SPI Text interface (F286). uia_get_value reads a value-holding control;
+    this reads what a text-bearing surface *says* — a terminal's scrollback, an
+    editor's buffer, a label-less document. With name/ctype the read is scoped
+    to the matching control; without, every text-carrying descendant
+    contributes a line, top-to-bottom in tree order. Empty string if the
+    surface draws its text instead of exposing it (see read_selection)."""
+    at = _atspi()
+    if not at:
+        return ""
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return ""
+        parts = []
+
+        def grab(acc):
+            ti = at.atspi_accessible_get_text_iface(acc)
+            if not ti:
+                return
+            n = at.atspi_text_get_character_count(ti, None)
+            if 0 < n <= 1000000:
+                s = _gstr(at.atspi_text_get_text(ti, 0, n, None))
+                if s:
+                    parts.append(s)
+            _unref(ti)
+
+        if name is not None or ctype is not None:
+            acc = _find_acc(at, fr, name, ctype)
+            if acc:
+                grab(acc)
+                _unref(acc)
+        else:
+            def visit(acc, depth):
+                if depth > 0:
+                    grab(acc)
+                return None
+            _walk(at, fr, visit)
+        _unref(fr)
+        return "\n".join(parts)
+
+
 _WORKER_IMPL = {
     "name": _impl_uia_name,
     "children": _impl_uia_children,
@@ -2294,13 +2454,14 @@ _WORKER_IMPL = {
     "expand": _impl_uia_expand,
     "collapse": _impl_uia_collapse,
     "expand_state": _impl_uia_expand_state,
+    "text": _impl_uia_text,
 }
 _WORKER_DEFAULT = {
     "name": "", "children": [], "find_all": [], "find": None, "invoke": False,
     "get_value": "", "set_value": False, "focus": False, "click": False,
     "select": False, "is_selected": None,
     "toggle": False, "toggle_state": "", "expand": False, "collapse": False,
-    "expand_state": "",
+    "expand_state": "", "text": "",
 }
 _WORKER_PATH = os.path.abspath(__file__)
 _RESULT_TAG = "\x01ATSPI_RESULT\x01"
@@ -2356,8 +2517,14 @@ def uia_children(win: int) -> list:
     return _atspi_call("children", win)
 
 
-def uia_find_all(win: int, name=None, ctype=None, max_scan: int = 6000) -> list:
-    return _atspi_call("find_all", win, name=name, ctype=ctype, max_scan=max_scan)
+def uia_find_all(win: int, name=None, ctype=None, max_scan: int = 6000,
+                 showing: bool = False) -> list:
+    return _atspi_call("find_all", win, name=name, ctype=ctype, max_scan=max_scan,
+                       showing=showing)
+
+
+def uia_text(win: int, name=None, ctype=None) -> str:
+    return _atspi_call("text", win, name=name, ctype=ctype)
 
 
 def uia_find(win: int, name=None, ctype=None):
