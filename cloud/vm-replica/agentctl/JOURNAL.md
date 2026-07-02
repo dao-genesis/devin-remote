@@ -10597,3 +10597,22 @@ reads. Pass, no flaw.
 
 Regression: all 33 test files green after the arc (NumPy installed on this
 ground for `_test_accel`; byte-identical fast paths, locate_change 12× faster).
+
+## F309 — KMines: a drawn board is pixel ground, its chrome is semantic ground
+
+KMines' board is a QGraphicsView — semantically dark (one button in the whole
+tree), the exact split F-series keeps meeting: *the game surface is drawn, the
+game chrome is exposed*. The two floors divide the work: `capture_patch` a board
+ROI, click the centre, `region_diff(tol=8)` reports 28.6% of the board repainted
+(the reveal cascade), while `uia_find_all` reads the chrome — "Mines: 0/10",
+"Time: 00:01" — confirming the game started and the timer ticks. Neither floor
+alone could verify the move; together it is one observation. Pass, no flaw.
+
+## F310 — Konsole scrollback read by meaning
+
+Before F303 this exact probe returned an empty string (the semantic floor was
+dark — the bus, not the verb, was the flaw). Now: launch Konsole, type
+`echo F310-$((6*7))`, and `uia_text` returns the scrollback with `F310-42` in
+it — the terminal's *text*, read through the Text interface, no OCR. The verb
+was right all along; the ground it stood on wasn't there. Pass — and the
+retro-confirmation of F303.
