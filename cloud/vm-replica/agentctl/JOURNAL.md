@@ -11277,3 +11277,23 @@ two-phase commit between screen-state and disk-state, and the artifact
 floor only settles after the second phase. Post-save sqlite3 read:
 [('apple',7),('pear',5),('grape',9)] — both statements landed. GUIs
 buffer; artifacts lag; verify after the flush, not the gesture.
+
+## F357 — LibreCAD: CAD speaks coordinates, and an unfocused dialog eats clicks
+
+2D-CAD domain. Two lessons. First, the click-eating dialog, now
+reproduced twice in one session (Inkscape F355, LibreCAD Welcome):
+XTest clicks at correct absolute coordinates *silently vanish* when the
+target dialog exists but does not hold focus — pointer events go
+somewhere, just not into the unfocused Qt dialog. activate_window()
+first, then click, and the same coordinates land. The rule is now
+firm: never click a dialog you have not activated.
+
+Second, the joy: CAD is the one GUI genre with a *native numeric
+language*. No pixel-guessing of endpoints — Ctrl+M focused LibreCAD's
+command line, and 'line 0,0 100,50', 'circle 50,25 25' drew exact
+geometry the way a keyboard-first floor loves. The DXF artifact read
+back the arc verbatim: LINE 10/20=0,0 11/21=100,50; CIRCLE 10/20=50,25
+40=25. Every digit typed is a digit in the file — the tightest
+gesture-to-artifact correspondence of any arc so far, tighter even
+than the spreadsheet (F346), because not even a formula evaluator
+stands between input and ground truth.
