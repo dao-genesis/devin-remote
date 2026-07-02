@@ -11024,3 +11024,18 @@ each move confirmed by the score labels ticking and the re-read board
 agreeing with the count (final 9–5, engine leading). Lesson: on rendered
 game art, classify regions, never points; and when an app publishes its
 own score semantically, use it as the referee for your pixel model.
+
+## F342 — Okteta: overwrite mode is a typed conversation with bytes
+
+Hex-editor domain. Okteta's tree is enormous (3088 nodes) and the status
+bar speaks live — 'Offset: 0000:0000', 'OVR' — so cursor state is
+semantically readable at every step. The arc: click the first hex cell,
+type '4a' (OVR mode consumes two nibbles and advances), Ctrl+G posts the
+Go-to-Offset dialog, type '20', Return, type '5a', Ctrl+S. Ground truth
+from xxd: byte 0 flipped 48→4A (H→J) and byte 0x20 flipped 45→5A (E→Z),
+nothing else disturbed — a byte-exact receipt for four keystrokes of
+payload. Notable floor detail: hex editing needed no uia_click at all;
+the whole edit was keyboard-shaped (cell click for caret, then nibbles +
+shortcuts), and the semantic layer served as the *witness* (offset label
+ticking 0000:0001 after the first byte) rather than the actor. Apps with
+modal-free, keyboard-first editing are the easiest citizens of the floor.
