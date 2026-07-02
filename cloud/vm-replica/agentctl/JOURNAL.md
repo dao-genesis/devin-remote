@@ -10616,3 +10616,43 @@ dark — the bus, not the verb, was the flaw). Now: launch Konsole, type
 it — the terminal's *text*, read through the Text interface, no OCR. The verb
 was right all along; the ground it stood on wasn't there. Pass — and the
 retro-confirmation of F303.
+
+## F311 — LibreOffice Calc: the sheet no walk can cross
+
+Engineering ground: the spreadsheet. Three flaws in one domain, each a layer
+deeper.
+
+First: the whole app was semantically dark — not a floor flaw but a *ground*
+flaw: LibreOffice ships its a11y bridge in a separate package
+(`libreoffice-gtk3`); without it the generic VCL plugin exposes nothing. The
+recovery dialog that had no buttons suddenly grew "Start / Discard" the moment
+the gtk3 plugin arrived. (And the recovery flow itself became a floor test:
+Discard → a *title-less* confirm window → its "Yes" — all found and clicked
+semantically.)
+
+Second, the real one: a sheet exposes ~17 billion lazy cells. No tree walk
+reaches A3; `find_all`'s node budget is right to give up. The toolkits built
+an O(1) door for exactly this — the AT-SPI **Table interface** — and the floor
+now opens it: `uia_table_cell(win, row, col)` / `sheet_cell(win, 'A3')` return
+the cell as a normal record plus its text.
+
+Third: Calc reports cell extents shifted by the header row — clicking a cell's
+rect lands one cell off. Clicking coordinates the app itself mis-reports is a
+dead end; `sheet_cell(..., focus=True)` grabs focus through the Component
+iface instead — coordinate-free, exact. Enter a ledger, `=SUM(E1:E3)`, read
+back "387" through the same door. Pass after three fixes.
+
+## F312 — the keymap-cache race: why '*' typed as 'a'
+
+Typing `=A1*A2` into Calc produced `=a1aa2`. The scratch-keycode remap
+(the xdotool technique) binds each char to a spare keycode per keystroke —
+but GTK apps cache the keyboard map and process MappingNotify
+*asynchronously*, so the strike resolves against a stale map. Qt requeries
+synchronously, which is why 34 F-numbers of Qt apps never saw it.
+
+Fix: chars the resident layout already carries are now struck through their
+**native keycode** (+Shift for level-1 syms) — no remap at all, so there is
+nothing to race. The remap path remains only for what the layout cannot say
+(CJK, emoji), and `'=A1*A2 hello WORLD 42 中文'` round-trips exactly through
+both paths. Also from this arc: `_win_id(None)` now names its caller's sin
+instead of throwing a bare int() TypeError.

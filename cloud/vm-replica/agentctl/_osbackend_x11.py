@@ -386,18 +386,70 @@ def _find_scratch_keycode() -> int:
 _scratch = _find_scratch_keycode()
 
 
+def _layout_map():
+    """keysym → (keycode, level) for every sym the *resident* layout already
+    carries (levels 0 = plain, 1 = shifted). Built once. F312: chars the layout
+    can type must be struck through their native keycode — GTK apps cache the
+    keymap and process MappingNotify asynchronously, so a per-char remap races
+    their cache and the strike resolves to whatever the scratch keycode used to
+    say (LibreOffice Calc turned '=A1*A2' into '=a1aa2'). Qt apps requery
+    synchronously, which is why the remap trick looked universal until now."""
+    m = {}
+    kmin = ctypes.c_int(); kmax = ctypes.c_int()
+    _x.XDisplayKeycodes(_dpy, ctypes.byref(kmin), ctypes.byref(kmax))
+    count = kmax.value - kmin.value + 1
+    nsyms = ctypes.c_int()
+    syms = _x.XGetKeyboardMapping(_dpy, kmin.value, count, ctypes.byref(nsyms))
+    per = nsyms.value
+    for k in range(count):
+        if kmin.value + k == _scratch:
+            continue
+        for lvl in (0, 1):
+            if lvl < per:
+                ks = syms[k * per + lvl]
+                if ks and ks not in m:
+                    m[ks] = (kmin.value + k, lvl)
+    _x.XFree(ctypes.cast(syms, ctypes.c_void_p))
+    return m
+
+
+_native_syms = None
+_SHIFT_KC = None
+
+
 def type_unicode(text: str) -> None:
     """Type ``text`` as trusted key events, any Unicode, without a layout.
 
-    Each char's X keysym (``cp`` for Latin-1, else ``0x01000000 | cp``) is bound
-    to a spare keycode via ``XChangeKeyboardMapping``, struck with XTEST, then the
-    keycode is cleared — so the press always resolves to exactly that glyph and a
-    stale binding can never autorepeat. The Win32 backend injects the same text
-    via ``KEYEVENTF_UNICODE``; both bypass the active keyboard layout."""
+    Chars the resident layout already carries are struck via their *native*
+    keycode (+Shift for level-1 syms) — no remap, so keymap-caching toolkits
+    (GTK) see exactly the right glyph (F312). Anything else (CJK, emoji) is
+    typed by binding its keysym (``0x01000000 | cp``) to a spare keycode via
+    ``XChangeKeyboardMapping``, striking it, then clearing the binding — the
+    xdotool technique. The Win32 backend injects the same text via
+    ``KEYEVENTF_UNICODE``; both bypass layout limitations."""
+    global _native_syms, _SHIFT_KC
     with _lock:
+        if _native_syms is None:
+            _native_syms = _layout_map()
+            _SHIFT_KC = _x.XKeysymToKeycode(_dpy, 0xFFE1)  # XK_Shift_L
         for ch in text:
             cp = ord(ch)
             keysym = cp if cp < 0x100 else (0x01000000 | cp)
+            native = _native_syms.get(keysym)
+            if native:
+                kc, lvl = native
+                if lvl:
+                    _xt.XTestFakeKeyEvent(_dpy, _SHIFT_KC, 1, 0)
+                    _x.XSync(_dpy, 0)
+                _xt.XTestFakeKeyEvent(_dpy, kc, 1, 0)
+                _x.XSync(_dpy, 0)
+                time.sleep(0.008)
+                _xt.XTestFakeKeyEvent(_dpy, kc, 0, 0)
+                if lvl:
+                    _xt.XTestFakeKeyEvent(_dpy, _SHIFT_KC, 0, 0)
+                _x.XSync(_dpy, 0)
+                time.sleep(0.008)
+                continue
             arr = (ctypes.c_ulong * 2)(keysym, keysym)
             _x.XChangeKeyboardMapping(_dpy, _scratch, 2, arr, 1)
             _x.XSync(_dpy, 0)
@@ -1402,6 +1454,14 @@ def _atspi():
         at.atspi_selection_select_child.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
         at.atspi_selection_is_child_selected.restype = ctypes.c_int
         at.atspi_selection_is_child_selected.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        at.atspi_accessible_get_table_iface.restype = ctypes.c_void_p
+        at.atspi_accessible_get_table_iface.argtypes = [ctypes.c_void_p]
+        at.atspi_table_get_accessible_at.restype = ctypes.c_void_p
+        at.atspi_table_get_accessible_at.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+        at.atspi_table_get_n_rows.restype = ctypes.c_int
+        at.atspi_table_get_n_rows.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        at.atspi_table_get_n_columns.restype = ctypes.c_int
+        at.atspi_table_get_n_columns.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         at.atspi_rect_free.restype = None
         at.atspi_rect_free.argtypes = [ctypes.c_void_p]
         g.g_free.argtypes = [ctypes.c_void_p]
@@ -2437,6 +2497,61 @@ def _impl_uia_text(win: int, name=None, ctype=None) -> str:
         return "\n".join(parts)
 
 
+def _impl_uia_table_cell(win: int, row: int = 0, col: int = 0, name=None,
+                         ctype=None, focus: bool = False):
+    """Reach one cell of a Table-bearing control (spreadsheet, grid, list view)
+    by (row, col) through the AT-SPI Table interface (F311). A sheet exposes
+    millions of lazy children — walking the tree to find 'A3' is hopeless and
+    find_all's node budget rightly never gets there. Table.get_accessible_at
+    is the O(1) semantic door the toolkits built for exactly this. Returns the
+    cell as a normal control record plus its text, or None. name/ctype scope
+    *which* table when a window holds several (default: first one found)."""
+    at = _atspi()
+    if not at:
+        return None
+    with _atspi_lock:
+        fr = _atspi_frame_for(at, win)
+        if not fr:
+            return None
+        try:
+            def visit(acc, depth):
+                ti = at.atspi_accessible_get_table_iface(acc)
+                if not ti:
+                    return None
+                if (name is not None or ctype is not None) and \
+                        not _match(at, acc, name, ctype):
+                    _unref(ti)
+                    return None
+                cell = at.atspi_table_get_accessible_at(ti, int(row), int(col), None)
+                _unref(ti)
+                if not cell:
+                    return "MISS"
+                rec = {"name": _acc_name(at, cell), "ctype": _acc_role(at, cell),
+                       "rect": _acc_rect(at, cell), "desc": _acc_desc(at, cell),
+                       "text": ""}
+                if focus:
+                    # Move the app's own cursor to this cell through the
+                    # Component iface — LibreOffice Calc reports cell extents
+                    # shifted by the header row, so clicking the rect lands one
+                    # cell off; grab_focus is coordinate-free and exact.
+                    comp = at.atspi_accessible_get_component_iface(cell)
+                    if comp:
+                        rec["focused"] = bool(at.atspi_component_grab_focus(comp, None))
+                        _unref(comp)
+                tx = at.atspi_accessible_get_text_iface(cell)
+                if tx:
+                    n = at.atspi_text_get_character_count(tx, None)
+                    if 0 < n <= 100000:
+                        rec["text"] = _gstr(at.atspi_text_get_text(tx, 0, n, None)) or ""
+                    _unref(tx)
+                _unref(cell)
+                return rec
+            hit = _walk(at, fr, visit)
+            return hit if isinstance(hit, dict) else None
+        finally:
+            _unref(fr)
+
+
 _WORKER_IMPL = {
     "name": _impl_uia_name,
     "children": _impl_uia_children,
@@ -2455,13 +2570,14 @@ _WORKER_IMPL = {
     "collapse": _impl_uia_collapse,
     "expand_state": _impl_uia_expand_state,
     "text": _impl_uia_text,
+    "table_cell": _impl_uia_table_cell,
 }
 _WORKER_DEFAULT = {
     "name": "", "children": [], "find_all": [], "find": None, "invoke": False,
     "get_value": "", "set_value": False, "focus": False, "click": False,
     "select": False, "is_selected": None,
     "toggle": False, "toggle_state": "", "expand": False, "collapse": False,
-    "expand_state": "", "text": "",
+    "expand_state": "", "text": "", "table_cell": None,
 }
 _WORKER_PATH = os.path.abspath(__file__)
 _RESULT_TAG = "\x01ATSPI_RESULT\x01"
@@ -2525,6 +2641,12 @@ def uia_find_all(win: int, name=None, ctype=None, max_scan: int = 6000,
 
 def uia_text(win: int, name=None, ctype=None) -> str:
     return _atspi_call("text", win, name=name, ctype=ctype)
+
+
+def uia_table_cell(win: int, row: int = 0, col: int = 0, name=None, ctype=None,
+                   focus: bool = False):
+    return _atspi_call("table_cell", win, row=row, col=col, name=name,
+                       ctype=ctype, focus=focus)
 
 
 def uia_find(win: int, name=None, ctype=None):
