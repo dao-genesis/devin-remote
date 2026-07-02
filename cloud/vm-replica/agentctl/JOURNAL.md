@@ -11175,3 +11175,18 @@ about. Fixed at the backend: X11 list_windows now carries
 window record is directly addressable for ROIs, patches, and OCR.
 Suite stays 33/33. Perception APIs should never hand you a name
 without a place.
+
+## F351 — KWrite: search & replace, where semantic names come in duplicate
+
+Text-editing domain. KWrite's find/replace bar (Ctrl+R) is a semantic
+minefield of *duplicate names*: 'Find:' exists as both a Text label and
+a ComboBox, ditto 'Replace:' — a blind uia_click(name='Find:') could
+land on the caption instead of the input. The arc filtered by
+(name, ctype) pairs, clicked the ComboBox rects directly, typed
+'the' -> 'ONE', hit the 'Replace All' Button node, Escape, Ctrl+S. The
+artifact floor read back the transformed document exactly: three lines,
+every leading 'the' now 'ONE' ('ONE quick brown fox / ONE lazy dog /
+ONE end'). The freshly-added window rect (F350) rode along: fields were
+found at y=1048 in a 1600x1200 screen without a single hardcoded
+coordinate. Lesson: a name is not an address — semantic targeting needs
+role plus name, because labels shadow the controls they describe.
