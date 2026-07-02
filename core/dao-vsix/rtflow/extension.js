@@ -579,16 +579,19 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 #addr:focus{border-color:#1f6feb}
 #eng{height:25px;background:#21262d;border:1px solid #30363d;color:#9aa4b2;border-radius:6px;font-size:11px;cursor:pointer}
 #zlbl{min-width:40px;text-align:center;color:#9aa4b2;font-size:11px;cursor:pointer;user-select:none}
-#tabs{display:flex;align-items:stretch;height:30px;background:#11151b;border-bottom:1px solid #21262d;overflow-x:auto;overflow-y:hidden;white-space:nowrap;flex:0 0 auto}
+#tabs{display:flex;align-items:stretch;height:30px;background:#11151b;border-bottom:1px solid #21262d;overflow-x:auto;overflow-y:hidden;white-space:nowrap;flex:0 0 auto;scrollbar-width:none;-ms-overflow-style:none}
+#tabs::-webkit-scrollbar{height:0;width:0;display:none;background:transparent}
+#daowin .cvtabs{scrollbar-width:none;-ms-overflow-style:none}#daowin .cvtabs::-webkit-scrollbar{height:0;width:0;display:none}
 .tab{display:inline-flex;align-items:center;gap:5px;padding:0 7px;max-width:160px;border-right:1px solid #21262d;cursor:pointer;color:#9aa4b2;font-size:12px;user-select:none;flex:0 0 auto}
 .tab:hover{background:#1b212b}
 .tab.on{background:#0e1116;color:#e6edf3;box-shadow:inset 0 -2px 0 #1f6feb}
 .tab.on2{background:#0e1116;color:#e6edf3;box-shadow:inset 0 -2px 0 #3fb950}
 .tab .dot{width:7px;height:7px;border-radius:50%;background:#6e7681;flex:0 0 auto}
-.tab .dot.running{background:#3fb950}.tab .dot.finished{background:#58a6ff}.tab .dot.blocked{background:#f0883e}.tab .dot.expired{background:#f85149}.tab .dot.awaiting{background:#d29922}
-.tab .no{min-width:16px;height:15px;line-height:15px;text-align:center;font-size:10px;font-weight:800;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:4px;padding:0 3px;flex:0 0 auto}
+.tab .dot.running{background:#3fb950;box-shadow:0 0 5px #3fb950}.tab .dot.finished{background:#58a6ff}.tab .dot.blocked{background:#f0883e}.tab .dot.expired{background:#f85149}.tab .dot.exhausted{background:#a371f7}.tab .dot.awaiting{background:#d29922}
+@keyframes dpul{0%,100%{opacity:1}50%{opacity:.35}}.tab .dot.running{animation:dpul 1.4s ease-in-out infinite}
+.tab .no{min-width:13px;height:13px;line-height:13px;text-align:center;font-size:8.5px;font-weight:700;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:3px;padding:0 2px;flex:0 0 auto;opacity:.9}
 .tab .lbl{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tab .amt{color:#3fb950;font-weight:700;flex:0 0 auto}
+.tab .amt{color:#3fb950;font-weight:700;font-size:10px;flex:0 0 auto}
 .tab .x{opacity:.5;font-size:14px;padding:0 2px;border-radius:3px;flex:0 0 auto}
 .tab .x:hover{opacity:1;background:#3a3a3a}
 #body{position:relative;flex:1;overflow:hidden}
@@ -752,6 +755,7 @@ html.m #hint{font-size:14px;padding:18px}
     <span id="zlbl" title="点击复位 100%">100%</span>
     <button class="tbtn" id="bZi" title="放大">A+</button>
     <button class="tbtn" id="bStar" title="收藏当前页">☆</button>
+    <button class="tbtn" id="bTr" title="整页翻译(Edge 引擎·对照手机 APK)·再点恢复原文">译</button>
     <button class="tbtn" id="bDl" title="下载 · 网页内下载的文件(浏览器下载管理)">⬇</button>
     <button class="tbtn" id="bBk" title="对话备份 · 近期对话 / 对话记录">📁</button>
     <button class="tbtn" id="bExt" title="用系统浏览器打开当前页">↗</button>
@@ -872,33 +876,44 @@ function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[
   var fr=document.createElement('iframe');fr.setAttribute('allow','clipboard-read; clipboard-write');fr.style.display='none';
   fr.addEventListener('load',function(){setLoading(id,false);});fr.addEventListener('error',function(){setLoading(id,false);});
   S.appendChild(fr);
-  tabs[id]={btn:btn,frame:fr,url:m.url,email:m.email||'',zoom:1,meta:m,loading:false,_loaded:false,_dot:dot,_lbl:lb,_amt:am};order.push(id);applyZoom(tabs[id]);setActive(id);sync();schedPersist();
+  tabs[id]={btn:btn,frame:fr,url:m.url,email:m.email||'',zoom:1,meta:m,loading:false,_loaded:false,_dot:dot,_lbl:lb,_amt:am};order.push(id);applyZoom(tabs[id]);setActive(id);sync();schedPersist();try{schedStatusSoon();}catch(e){}
   vscode.postMessage({type:'histPush',url:m.url,label:m.label||'Devin',kind:'acc'});}
 // 归一 · 状态字符串 → 状态点类名(对齐 devin_cloud.classifySession · 软兜底): 空=idle灰, 余映射 running/awaiting/blocked/finished。
 function _dotCls(s){s=String(s==null?'':s).toLowerCase().trim();if(!s)return '';
   if(s==='idle')return '';
-  if(s==='running'||s==='finished'||s==='blocked'||s==='awaiting'||s==='expired')return ' '+s;
+  if(s==='running'||s==='finished'||s==='blocked'||s==='awaiting'||s==='expired'||s==='exhausted')return ' '+s;
+  if(/out_of_quota|usage_limit|insufficient|overage|exceeded|quota|depleted|allowance|no.*credit/.test(s))return ' exhausted';
   if(/await|waiting|needs_input|user_input|ask_user|action_required/.test(s))return ' awaiting';
-  if(/out_of_quota|usage_limit|insufficient|overage|credit|billing|exceeded|quota|error|failed|stuck|crash|blocked/.test(s))return ' blocked';
+  if(/credit|billing|error|failed|stuck|crash|blocked|interrupt|abort|disconnect|timeout/.test(s))return ' blocked';
   if(/finished|completed|done|stopped|suspend|expired|exited|archived|deleted/.test(s))return ' finished';
   if(/running|working|in_progress|streaming|active|started|resumed|busy|thinking|executing|coding|planning|testing/.test(s))return ' running';
   return ' running';}
+// 归一 · 状态 → 中文提醒文案(对照手机 APK sessStatus 六态): exhausted 额度耗尽 / blocked 卡住·待处理 / awaiting 待输入。
+function _statusZh(s){s=String(s||'').toLowerCase();if(s==='exhausted')return '额度耗尽';if(s==='blocked')return '卡住·待处理';if(s==='awaiting')return '待输入';if(s==='finished')return '完成';if(s==='running')return '运行中';return s;}
 // 归一 · 标签状态实时刷新(对齐手机端): 宿主轮询会话状态 → 更新状态点/对话名/额度, 并在转入「卡住/待输入」时提示。
 function updateTab(m){var t=tabs[m.id];if(!t)return;var mt=t.meta||(t.meta={});
   if(m.statusClass!=null){var prev=mt.statusClass||'';mt.statusClass=m.statusClass;if(t._dot)t._dot.className='dot'+_dotCls(m.statusClass);
-    if(m.statusClass!==prev&&(m.statusClass==='blocked'||m.statusClass==='awaiting')){try{daoToast((m.statusClass==='blocked'?'⚠ 卡住/额度耗尽 · ':'⏳ 待输入 · ')+(mt.label||'Devin'),m.statusClass==='blocked');}catch(e){}}}
+    var _sc=m.statusClass;if(_sc!==prev&&(_sc==='blocked'||_sc==='awaiting'||_sc==='exhausted')){try{var _ic=(_sc==='exhausted'?'💳 ':(_sc==='blocked'?'⚠ ':'⏳ '));daoToast(_ic+_statusZh(_sc)+' · '+(mt.label||'Devin'),_sc!=='awaiting');}catch(e){}}}
   if(m.label){mt.label=m.label;if(t._lbl)t._lbl.textContent=m.label;}
   if(m.dollars!=null){mt.dollars=m.dollars;if(t._amt){t._amt.textContent=m.dollars?('$'+m.dollars):'';t._amt.style.display=m.dollars?'':'none';}}}
+// 归一 · /shell 标签状态实时轮询(补 shell 侧此前缺失·对照手机端): 收集打开中的账号标签(email+devinId) →
+//   宿主按号 listRunningSessions 判六态 → 回推 tabUpdate 上色/回填对话名/额度。web/board 标签不参与。
+var _shStatT=null;
+function shellStatusTick(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];if(id.indexOf('board:')===0||id.indexOf('web:')===0)continue;var t=tabs[id];var mt=(t&&t.meta)||{};if(mt.email&&mt.devinId)arr.push({id:id,email:mt.email,devinId:mt.devinId});}if(arr.length)vscode.postMessage({type:'shellStatus',tabs:arr});}catch(e){}}
+function schedStatusSoon(){clearTimeout(_shStatT);_shStatT=setTimeout(shellStatusTick,2500);}
+try{setInterval(shellStatusTick,12000);}catch(e){}
 // 归一 · 状态续接(对齐手机端会话保持): 持久化当前打开的标签集 → 宿主 globalState;
 //   重开 /shell 时宿主在 ready 回推 restoreTabs, 逐个还原(老用户停在原网页·新用户落主页)。
 var _persistT=null;
 function persistShell(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];
   if(id.indexOf('board:')===0){arr.push({kind:'board',board:id.slice(6)});}
+  else if(id.indexOf('web:')===0){var tw=tabs[id];var mw=(tw&&tw.meta)||{};var wu=mw.origUrl||'';if(wu)arr.push({kind:'web',url:wu,label:mw.label||wu});}
   else{var t=tabs[id];var mt=(t&&t.meta)||{};if(mt.email)arr.push({kind:'acc',email:mt.email,devinId:mt.devinId||'',title:mt.label||'',status:mt.status||''});}}
   vscode.postMessage({type:'shellSaveTabs',tabs:arr});}catch(e){}}
 function schedPersist(){clearTimeout(_persistT);_persistT=setTimeout(persistShell,400);}
 function restoreTabs(arr){if(!arr||!arr.length)return;for(var i=0;i<arr.length;i++){var s=arr[i]||{};try{
   if(s.kind==='board'){openBoard(s.board||'home');}
+  else if(s.kind==='web'&&s.url){vscode.postMessage({type:'openWebTab',url:s.url,label:s.label||s.url});}
   else if(s.kind==='acc'&&s.email){vscode.postMessage({type:'reopen',email:s.email,devinId:s.devinId||''});}}catch(e){}}}
 // 归一 · 站内新标签开任意网页/搜索(复刻手机端 APK · 不再弹外部系统浏览器):
 //   经本地 HTTP 代理 /__web?u= 直出(剥 XFO/CSP · 注入 base + 链接/表单拦截), 当 iframe 挂一张站内标签。
@@ -1256,6 +1271,32 @@ _dEl('dlwin').addEventListener('click',function(e){var el=e.target.closest&&e.ta
   hd.addEventListener('mousedown',function(e){if(e.target&&e.target.id==='dlClose')return;drag=true;var r=w.getBoundingClientRect();dx=e.clientX-r.left;dy=e.clientY-r.top;w.style.right='auto';w.style.left=r.left+'px';w.style.top=r.top+'px';e.preventDefault();});
   window.addEventListener('mousemove',function(e){if(!drag)return;var x=Math.max(0,Math.min(window.innerWidth-90,e.clientX-dx)),y=Math.max(0,Math.min(window.innerHeight-40,e.clientY-dy));w.style.left=x+'px';w.style.top=y+'px';});
   window.addEventListener('mouseup',function(){drag=false;});})();
+// ── 整页翻译(对照手机 APK translate.js·Edge 免费引擎) ──────────────────────
+//   手机: 原生桥 __dcTr 做 HTTP; 桌面: 宿主做 HTTP(translate 消息), 外壳直改同源 iframe 文本节点。
+//   遍历可见文本节点(含开放 Shadow DOM) → 分批送译 → 回填(保留原文可一键恢复) + MutationObserver 增量。
+var _trCbs={},_trSeq=0;
+function _trNative(texts,to){return new Promise(function(res){var id='t'+(++_trSeq)+'_'+Date.now();_trCbs[id]=res;setTimeout(function(){if(_trCbs[id]){delete _trCbs[id];res(null);}},20000);vscode.postMessage({type:'translate',reqId:id,texts:texts,to:to||'zh-Hans'});});}
+var _TR_SKIP={SCRIPT:1,STYLE:1,NOSCRIPT:1,TEXTAREA:1,CODE:1,PRE:1,KBD:1,SAMP:1,SVG:1,CANVAS:1,MATH:1};
+var _TR_LETTER=/[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0370-\u03FF\u3040-\u30FF\uAC00-\uD7AF]/;
+function _trRejectByParent(n){var p=n.parentNode;while(p&&p.nodeType===1){if(_TR_SKIP[p.tagName])return true;if(p.isContentEditable)return true;var tr=p.getAttribute&&p.getAttribute('translate');if(tr==='no')return true;var cls=(p.className&&p.className.baseVal!==undefined)?p.className.baseVal:p.className;if(typeof cls==='string'&&/(^|\s)notranslate(\s|$)/.test(cls))return true;p=p.parentNode;}return false;}
+function _trAllRoots(root){var roots=[root];try{var els=root.querySelectorAll?root.querySelectorAll('*'):[];for(var i=0;i<els.length;i++){var sr=els[i].shadowRoot;if(sr){var sub=_trAllRoots(sr);for(var j=0;j<sub.length;j++)roots.push(sub[j]);}}}catch(e){}return roots;}
+function _trCollect(S,doc,root){var out=[];var filter={acceptNode:function(n){if(n.__dcOrig!==undefined)return NodeFilter.FILTER_REJECT;var t=n.nodeValue;if(!t)return NodeFilter.FILTER_REJECT;var s=t.trim();if(s.length<2||!_TR_LETTER.test(s))return NodeFilter.FILTER_REJECT;if(_trRejectByParent(n))return NodeFilter.FILTER_REJECT;return NodeFilter.FILTER_ACCEPT;}};
+  var roots=_trAllRoots(root);for(var r=0;r<roots.length;r++){try{var w=doc.createTreeWalker(roots[r],NodeFilter.SHOW_TEXT,filter);var n;while((n=w.nextNode()))out.push(n);_trObserveRoot(S,roots[r]);}catch(e){}}return out;}
+function _trBatch(nodes){var batches=[],cur=[],chars=0;for(var i=0;i<nodes.length;i++){var len=nodes[i].nodeValue.length;if(cur.length&&(cur.length>=64||chars+len>7000)){batches.push(cur);cur=[];chars=0;}cur.push(nodes[i]);chars+=len;}if(cur.length)batches.push(cur);return batches;}
+function _trRunOnce(S,doc){var nodes=_trCollect(S,doc,doc.body||doc.documentElement);if(!nodes.length)return Promise.resolve(0);var batches=_trBatch(nodes),bi=0,done=0;
+  return new Promise(function(resolve){function next(){if(!S.active||bi>=batches.length){resolve(done);return;}var grp=batches[bi++];var texts=grp.map(function(n){return n.nodeValue;});
+    _trNative(texts).then(function(tr){if(tr&&tr.length){for(var i=0;i<grp.length;i++){var v=tr[i];if(v!=null&&v!==''&&v!==grp[i].nodeValue){grp[i].__dcOrig=grp[i].nodeValue;grp[i].nodeValue=v;done++;}else if(v!=null){grp[i].__dcOrig=grp[i].nodeValue;}}}next();});}next();});}
+function _trObserveRoot(S,root){try{if(!root||S.observed.indexOf(root)>=0)return;var mo=new MutationObserver(function(){clearTimeout(S.debounce);S.debounce=setTimeout(function(){if(S.active)_trRunOnce(S,S.doc);},700);});mo.observe(root,{childList:true,subtree:true,characterData:true});S.observed.push(root);S.mos.push(mo);}catch(e){}}
+function _trRestore(S){try{S.active=false;for(var i=0;i<S.mos.length;i++){try{S.mos[i].disconnect();}catch(e){}}S.mos=[];S.observed=[];var roots=_trAllRoots(S.doc.documentElement);for(var r=0;r<roots.length;r++){try{var w=S.doc.createTreeWalker(roots[r],NodeFilter.SHOW_TEXT,null);var n;while((n=w.nextNode())){if(n.__dcOrig!==undefined){n.nodeValue=n.__dcOrig;delete n.__dcOrig;}}}catch(e){}}}catch(e){}}
+function toggleTranslate(){var t=tabs[active];var fr=t?t.frame:(isBoard()&&BOARDS[activeBoardTab()]?BOARDS[activeBoardTab()].frame:null);
+  if(!fr){daoToast('请先打开一个页面再翻译',true);return;}
+  var doc;try{doc=fr.contentDocument||(fr.contentWindow&&fr.contentWindow.document);}catch(e){doc=null;}
+  if(!doc||!doc.documentElement){daoToast('本页不可翻译(跨源)',true);return;}
+  var win=fr.contentWindow;var S=win.__daoTrans;
+  if(S&&S.active){_trRestore(S);daoToast('已恢复原文');return;}
+  S=win.__daoTrans={active:true,doc:doc,observed:[],mos:[],debounce:null};
+  daoToast('🌐 翻译中…');
+  _trRunOnce(S,doc).then(function(c){if(!S.active)return;daoToast(c>0?('✓ 已翻译 '+c+' 段'):'本页无可翻译内容');});}
 document.getElementById('bDl').onclick=function(){dlOpen();};
 document.getElementById('bBk').onclick=function(){daoOpen('recent');};
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
@@ -1277,6 +1318,7 @@ document.getElementById('bStar').onclick=function(){
   else{vscode.postMessage({type:'favAdd',id:active});markStar(true);daoToast('★ 已收藏当前页');}
 };
 document.getElementById('bExt').onclick=function(){var t=tabs[active];if(t)vscode.postMessage({type:'openExternal',url:t.url});};
+document.getElementById('bTr').onclick=function(){toggleTranslate();};
 document.getElementById('ovClose').onclick=hideOverlay;
 ADDR.addEventListener('keydown',function(e){if(e.key==='Enter')navigate(ADDR.value);});
 document.addEventListener('click',function(){if(MENU.className)MENU.className='';});
@@ -1359,6 +1401,7 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='migDone'){try{daoToast(m.ok?('✓ 导入完成 · '+(m.summary||'')):('导入失败: '+(m.error||'')),!m.ok);}catch(e){}}
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}
   else if(m.type==='toast'){try{daoToast(m.text||'',!!m.bad);}catch(e){}}
+  else if(m.type==='translated'){try{var _tc=_trCbs[m.reqId];if(_tc){delete _trCbs[m.reqId];_tc(m.arr||null);}}catch(e){}}
   else if(m.type==='winOpen'&&m.url){try{window.open(m.url,'_blank','noopener');}catch(e){}}});
 buildMenu();
 vscode.postMessage({type:'ready',mobile:MOBILE});
@@ -1756,6 +1799,54 @@ async function shellHandleMessage(sid, m) {
       case 'shellSaveTabs':
         try { if (_ctx && _ctx.globalState) _ctx.globalState.update('dao.shellTabs', Array.isArray(m.tabs) ? m.tabs.slice(0, 40) : []); } catch (e) {}
         return;
+      case 'shellStatus': {
+        // 归一 · /shell 标签状态轮询(补 shell 侧此前缺失·对照手机 APK sessStatus 六态): 每账号一次
+        //   listRunningSessions → 命中: running/awaiting/blocked(额度类经账号实时额度对账 → 真无余量才 exhausted,
+        //   有余量归 finished 休眠·复刻手机 quotaLive 防误标); 未命中: finished。并回填对话名 + 实时额度。
+        const tabsIn = Array.isArray(m.tabs) ? m.tabs.slice(0, 60) : [];
+        if (!tabsIn.length) return;
+        const byEmail = new Map();
+        for (const t of tabsIn) { const e = String((t && t.email) || '').toLowerCase(); if (!e || !t.id) continue; if (!byEmail.has(e)) byEmail.set(e, []); byEmail.get(e).push(t); }
+        const QRE = /out_of_quota|usage_limit|insufficient|overage|exceeded|quota|depleted|allowance/i;
+        for (const [email, tl] of byEmail) {
+          try {
+            const auth = devinCloud.getCachedAuth(email);
+            if (!auth || !auth.auth1) continue;
+            let act = [];
+            try { act = await devinCloud.listRunningSessions(auth); } catch (e) {}
+            const amap = new Map();
+            for (const s of (act || [])) { const id2 = String(s.devinId || '').replace(/^devin-/, ''); if (id2) amap.set(id2, s); }
+            let h = null, dollars = null;
+            try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+            for (const t of tl) {
+              const sid = String(t.devinId || '').replace(/^devin-/, '');
+              const hit = amap.get(sid);
+              let cls = hit ? (hit.statusClass || 'running') : 'finished';
+              try {
+                if (hit && cls === 'blocked' && QRE.test(JSON.stringify(hit.latest_status_contents || '') + ' ' + String(hit.status || ''))) {
+                  const live = !!(h && (((typeof h.dPct === 'number') && h.dPct > 0) || ((typeof h.wPct === 'number') && h.wPct > 0) || ((typeof h.overageDollars === 'number') && h.overageDollars > 0)));
+                  cls = live ? 'finished' : 'exhausted';
+                }
+              } catch (e) {}
+              const upd = { type: 'tabUpdate', id: t.id, statusClass: cls };
+              const title = hit && String(hit.title || '').trim();
+              if (title && title !== '(未命名)') upd.label = title;
+              if (dollars != null) upd.dollars = dollars;
+              send(upd);
+            }
+          } catch (e) {}
+        }
+        return;
+      }
+      case 'translate': {
+        // 归一 · 整页翻译(对照手机 APK TranslateBridge): 宿主做 HTTP → Edge 免费引擎(无 key·国内可直连)。
+        const reqId = String(m.reqId || ''); if (!reqId) return;
+        const texts = Array.isArray(m.texts) ? m.texts.slice(0, 128).map((x) => String(x == null ? '' : x)) : [];
+        let arr = null;
+        try { arr = await _edgeTranslate(texts, String(m.to || 'zh-Hans')); } catch (e) { arr = null; }
+        send({ type: 'translated', reqId, arr: arr || [] });
+        return;
+      }
       case 'usList': send({ type: 'userscripts', list: _getUserScripts() }); return;
       case 'usSave': {
         const list = _getUserScripts();
@@ -1822,7 +1913,7 @@ async function shellHandleMessage(sid, m) {
         let abs = await _shellDevinSameOrigin(m.url);
         if (!abs) abs = '/__web?u=' + encodeURIComponent(m.url);
         if (m.hist) { try { _pushMultiHist(m.url, m.label || m.url, 'web'); send({ type: 'history', list: _getMultiHist() }); } catch (e) {} }
-        send({ type: 'open', id: 'web:' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), url: abs, label: String(m.label || m.url || '网页').slice(0, 60) });
+        send({ type: 'open', id: 'web:' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), url: abs, origUrl: String(m.url), label: String(m.label || m.url || '网页').slice(0, 60) });
         return;
       }
       case 'histPush': _pushMultiHist(m.url, m.label, m.kind); send({ type: 'history', list: _getMultiHist() }); return;
@@ -3441,11 +3532,65 @@ function _notifyTimed(level, msg, ttlMs, _convUuid) {
         }
         token.onCancellationRequested(() => {
           clearTimeout(timer);
-          if (_convUuid) _activeNotifyResolvers.delete(_convUuid);
+          if (_convUuid) {
+            _activeNotifyResolvers.delete(_convUuid);
+            // 用户点 × = 真 dismiss(与面板 × 同权): 落 dismiss 表并持久化跨窗口,
+            // 否则对话恢复→再卡的抖动会清掉一次性闸门致同一提醒反复复弹。
+            try {
+              _dismissedConvUuids.set(_convUuid, Date.now());
+              _saveDismissedToDisk();
+            } catch (e) {}
+          }
           resolve();
         });
       }),
   );
+}
+// ── 整页翻译 · Edge 免费引擎(对照手机 APK doTranslate/ensureTransToken) ─────
+//   令牌: GET edge.microsoft.com/translate/auth (JWT ~10min, 缓存 8min 复用)
+//   翻译: POST api-edge.cognitive.microsofttranslator.com/translate (无 key·国内可直连)
+let _trTok = "";
+let _trTokTs = 0;
+function _trHttp(opts, body) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(opts, (res) => {
+      const bufs = [];
+      res.on("data", (c) => bufs.push(c));
+      res.on("end", () => resolve({ code: res.statusCode || 0, body: Buffer.concat(bufs).toString("utf8") }));
+    });
+    req.on("error", reject);
+    req.setTimeout(15000, () => { try { req.destroy(new Error("timeout")); } catch (e) {} });
+    if (body) req.write(body);
+    req.end();
+  });
+}
+async function _ensureTransToken() {
+  if (_trTok && Date.now() - _trTokTs < 8 * 60 * 1000) return _trTok;
+  const r = await _trHttp({ hostname: "edge.microsoft.com", path: "/translate/auth", method: "GET", headers: { "User-Agent": "Mozilla/5.0" } });
+  const tok = String(r.body || "").trim();
+  if (r.code >= 200 && r.code < 300 && tok) { _trTok = tok; _trTokTs = Date.now(); }
+  return _trTok;
+}
+async function _edgeTranslate(texts, to) {
+  if (!Array.isArray(texts) || !texts.length) return [];
+  const token = await _ensureTransToken();
+  if (!token) return null;
+  const body = Buffer.from(JSON.stringify(texts.map((t) => ({ Text: String(t == null ? "" : t) }))), "utf8");
+  const tgt = to || "zh-Hans";
+  const r = await _trHttp({
+    hostname: "api-edge.cognitive.microsofttranslator.com",
+    path: "/translate?api-version=3.0&to=" + encodeURIComponent(tgt),
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=UTF-8", "Authorization": "Bearer " + token, "Content-Length": body.length },
+  }, body);
+  if (r.code === 401) _trTok = ""; // 令牌过期 → 下次重取
+  let res;
+  try { res = JSON.parse(r.body); } catch (e) { return null; }
+  if (!Array.isArray(res)) return null;
+  return res.map((it) => {
+    const tr = it && it.translations;
+    return Array.isArray(tr) && tr.length ? String(tr[0].text || "") : "";
+  });
 }
 // v3.12.1: 外部主动消除某对话的 toast (对话恢复时调用)
 function _resolveConvNotify(uuid) {
