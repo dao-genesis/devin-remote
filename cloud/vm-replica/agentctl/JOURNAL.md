@@ -9051,3 +9051,1504 @@ selects threats (2) vs wins (4) vs singletons (1); `directions` selects axes;
 `background` (single or set) bounds runs and is never itself a run; deterministic
 order and re-run identity; args validated. All seventeen floor friction tests pass
 (F259 plus the prior sixteen), no regressions.
+
+### F260 — react_pixel: the reflex wait_pixel couldn't be, where the act is the score
+
+**Friction.** I went looking for the floor's realtime ceiling and opened the Human
+Benchmark **Reaction Time** test — a box sits red ("wait for green"), turns green at a
+random instant, and the site scores the *milliseconds* from the green frame to your
+click. Every turn-based game the floor has played so far measures nothing about *when*
+you act; this game measures only that. So I played it the idiomatic way: `move` to the
+box, `wait_pixel(center, GREEN, interval=0)` to watch the one pixel, then `click` the
+instant it returns. The site read **34-38 ms**. Good — until I read where those
+milliseconds went. Two leaks, both structural, neither about the screen:
+
+1. **`wait_pixel` watches but cannot act.** It returns a *bool*, so the reflex is two
+   verbs: the watch returns into my Python, my Python decides, my Python calls `click`.
+   The detection edge and the action are separated by a whole round-trip back through
+   the caller — exactly the seam a reflex must not have.
+2. **`click` re-homes the pointer every time.** `click(x,y)` does `move(x,y)` then
+   `time.sleep(0.02)` (let the cursor land) *then* presses. In a reaction game the
+   cursor is already on the box — I put it there to start — so that move + **20 ms**
+   settle is pure dead latency that the game scores against me. Measured: of the
+   34-38 ms, ~20 ms was the settle alone. The floor had a patient *watch* (`wait_pixel`)
+   and a careful *click*, but no **reflex** — no way to fire on the same edge the eye
+   sees, in place, now.
+
+**Solution.** `react_pixel(x, y, rgb, tol=24, timeout=5.0, interval=0.0, act="click")`
+— the reactive twin of `wait_pixel`. It spin-reads the one pixel (a single-pixel grab
+is the floor's cheapest read, ~0.03 ms, so `interval=0.0` polls at tens of kHz) until
+within `tol` of `rgb`, then performs `act` **in the same breath**, with no return to
+the caller in between: `"click"`/`"press"` press+release the left button *where the
+cursor already sits* — no move, no settle; `"none"` just detects (a `wait_pixel` that
+reports latency instead of a bool); a zero-argument *callable* fires once at the
+detection instant (tap a key, click elsewhere, anything). It returns `{matched,
+wait_ms, act_ms, polls, rgb}` — `wait_ms` is call→detect, `act_ms` is
+detect→action-returned: the very gap the verb exists to crush, now reported so you can
+see it is gone. Pre-position with `move(x,y)` and the press path costs nothing the game
+can measure.
+
+**Lesson (architecture).** The floor's waiting verbs were all *observers* — they watch
+a state and hand a verdict back to the caller, who then acts. That seam is invisible
+when the deadline is "before the human notices" but it *is* the score when the deadline
+is the next monitor frame. The fix is not a faster `click`; it is collapsing
+perceive→decide→act into one primitive so there is no seam to leak through, and
+exposing the latency it removes (`act_ms`) so the saving is measurable rather than
+asserted. `wait_pixel` is to `react_pixel` what a glance is to a reflex: the same watch,
+but the hand moves on the same edge the eye sees. This is the first floor verb whose
+*whole value is temporal* — the realtime dual of the spatial reducers (`label_regions`,
+`line_runs`): those say *where*, this says *when*, and acts there.
+
+**Proof.** *Live, Human Benchmark Reaction Time*: a driver (`_game_reaction.py`)
+pre-positions the cursor and uses `react_pixel(center, GREEN, act="press")` as its whole
+reflex; across rounds it spun ~95k-135k times over the random 2-3 s red, then fired with
+`act_ms` of **0.2-1.9 ms** (versus `click`'s fixed 20 ms settle) and scored as low as
+**18 ms** on the site — against the human median of 273 ms shown on the same screen
+(the residual 18 ms is browser render + monitor latency, no longer the floor). The same
+driver plays one round the old `wait_pixel`+`click` way for contrast. *Synthetic*
+(`_test_f260.py`, no display — the screen and mouse are stubbed): the button fires
+exactly once, on the poll that first matches and never on any earlier one; `act="none"`
+detects mouse-free; a callable fires once at the detection instant; `timeout` returns
+`matched=False` having fired nothing; per-channel `tol` gates a near-miss so an
+anti-aliased edge won't false-fire; and `{wait_ms, act_ms, polls, rgb}` report the
+budget. All eighteen floor friction tests pass (F260 plus the prior seventeen), no
+regressions.
+
+### F261 — move_rel: the motion move() couldn't make, where the cursor isn't a place
+
+**Friction.** Pushing past single-player reaction trainers into a *complex* realtime
+GUI, I installed an open-source FPS (AssaultCube, software-GL, ~110 fps on the VM) — not
+to win, but to find what driving a 3D camera demands of the floor that flat desktops
+never did. The first wall was immediate and total: I could not turn the view. Every
+pointer verb the floor owns — `move`, `drag`, `glide`, every click — names an *absolute*
+screen pixel, which is exactly right for a desktop where the cursor and the coordinate
+are the same thing. But an FPS *grabs* the pointer and steers the camera from its
+**motion**, warping the OS cursor back to centre every frame and integrating the deltas.
+So `move(x,y)` — a warp to a fixed pixel — has nothing to say to it: I swept the cursor
+across the screen and the camera sat frozen. Worse, it also broke the game's *own* menus:
+the in-game menu pointer is decoupled from the OS cursor, so an absolute click landed
+nowhere. The floor had a rich vocabulary of *destinations* and not one word for a
+*delta*. (Where a relative-mode SDL backend happens to read warp-deltas the camera does
+drift, but it is an uncontrolled, irreversible nudge — you command a pixel, never a turn
+— and on raw-input games, Windows SendInput-absolute, or a Pointer-Lock browser canvas
+the absolute warp does precisely nothing.)
+
+**Solution.** `move_rel(dx, dy, steps=1, delay=0.0)` — relative pointer motion, the
+write-side dual of `move` that speaks deltas instead of destinations. It emits relative
+motion through the backend (XTEST `FakeRelativeMotionEvent` on X11, `SendInput` without
+`ABSOLUTE` on Windows — both newly wired leaf primitives). `steps` splits a large delta
+into that many equal relative events `delay` apart, because a big sweep sent as one giant
+jump can be clamped or dropped by a game that integrates per frame; the remainder is
+spread so the steps sum *exactly* to `(dx, dy)` with no rounding drift, and motion stays
+monotonic toward the target. `steps=1` is a single immediate event. It returns the
+integer `(dx, dy)` actually emitted, and raises rather than silently no-op'ing on a
+backend too old to have the leaf — a silent no-op would look exactly like a frozen camera.
+
+**Lesson (architecture).** The floor had quietly assumed that *the cursor is a place*:
+to act on a point you put the cursor there, and where it is *is* what you mean. A whole
+class of surfaces denies that — they take the pointer captive and care only how it
+*moves*. Absolute and relative motion are not two settings of one verb; they are two
+different relationships to the screen, and the floor only had one. `move_rel` is the
+other: the same hand, but a turn of the head instead of a step of the foot. It is the
+foundation under anything pointer-captured — FPS/3D camera look, orbit-drag in an editor,
+a Pointer-Lock canvas — and it pairs with F260's reflex (`react_pixel` decides *when*,
+`move_rel` decides *how much to turn*) toward driving a moving target rather than a still
+one.
+
+**Proof.** *Live, AssaultCube*: a driver (`_game_fps.py`) reaches gameplay by probing
+with a `move_rel` sweep (the camera turns only when live, so the sweep itself detects a
+menu and clears it), then sweeps the view right by a yaw delta of 600 and sweeps the same
+delta back. The viewport changed by mean-pixel-diff **23.1** at full right yaw and
+returned home after the reverse sweep with a residual of **0.000** — proportional,
+pixel-perfect *reversible* mouse-look, the controlled turn the absolute pointer family
+could never express (the compass rotates and settles back; before/after frames captured).
+*Synthetic* (`_test_f261.py`, no display — the backend's relative leaf is stubbed): one
+event carries the exact asked delta, floats round to integer pixels, a large sweep splits
+into `<= steps` events that sum *exactly* to the target with monotonic drift-free
+progress, zero-noise sub-events are skipped, a leaf-less backend raises instead of
+silently freezing, and arguments are validated. All nineteen floor friction tests pass
+(F261 plus the prior eighteen), no regressions.
+
+### F262 — servo: the loop move_rel couldn't close, where one shot can't aim
+
+**Friction.** With `move_rel` (F261) the AssaultCube camera finally *turned*, so I tried the
+obvious next thing: point at something. Lock `match_template` onto a feature, compute how
+far it is from the crosshair, turn that far, done — the way `move(x,y)` clicks a button in
+one shot. It does not work, and it cannot. `move(x,y)` lands on pixel `(x,y)` because the
+unit *is* the pixel; `move_rel` speaks mouse **counts**, and how many pixels a feature then
+slides depends on the field of view and the surface's own sensitivity — a number the floor
+does not know and cannot assume. I measured it live: near the crosshair AssaultCube slid the
+world ~1.3 px per count, but a count large enough to "snap" the feature to centre overshot
+and carried it clean out of the search window (the match score jumped from ~2200 to ~8800 —
+tracking lost). So the scale is both *unknown a priori* and *only locally linear*. There is
+no single delta to compute. Every realtime aim task hit this same wall: F260 (`react_pixel`)
+says *when* to act, F261 (`move_rel`) says *turn*, but nothing closed the loop between
+*seeing where a thing is* and *steering it where it belongs* — and without that loop the
+relative actuator is a hand that can move but not reach.
+
+**Solution.** `servo(locate, target, actuate=move_rel, *, gain=None, probe=30, tol=4,
+max_iter=16, damping=0.6, max_step=400, settle=0.03)` — the perceive→act loop itself, and
+nothing smaller. `locate()` returns the feature's current `(x,y)` (a `find_color` centroid,
+a `match_template` match) or `None` if lost; `target` is where it should end up; `actuate`
+emits a relative motion (defaults to `move_rel`). With `gain` unknown it first **calibrates**
+— one small `probe` nudge per axis, measuring the resulting pixel displacement to learn
+*signed* units-per-pixel, the sign too, so it is never told that turning the view right
+slides the world left. Then it steers proportionally, `step = error * gain * damping`,
+clamped to `max_step` so a rough estimate cannot fling the feature out of sight, re-locating
+after each move until the feature is within `tol` of `target` or `max_iter` runs out.
+`damping < 1` makes the loop converge geometrically instead of ringing. It returns
+`{hit, iters, err, gain, pos, start, reason}`; the learned `gain` is the reusable part —
+feed it back to skip re-probing, or call `servo` repeatedly to *track* a mover, each call a
+fresh closed-loop correction.
+
+**Lesson (architecture).** The floor's actuators were all *open-loop and self-calibrated*:
+`move` knew its own units (pixels), so acting was a single feed-forward write. A relative
+actuator severs that — it acts in units whose mapping to the world is unknown and
+non-constant — and the only honest response is to *measure by acting and watching*, then
+correct, repeatedly. That is the difference between a hand that moves and a hand that
+reaches. `servo` is the floor's first **closed-loop** primitive: it makes perception and
+action a single feedback verb rather than two open-loop ones the caller must stitch, and it
+sits over *any* locator and *any* relative actuator (FPS aim, 3D orbit framing, a
+Pointer-Lock canvas, a slider whose pixels-per-unit you don't know) — the general shape of
+controlling a world you can see but whose controls you must learn.
+
+**Proof.** *Live, AssaultCube* (`_game_servo.py`): `match_template` locks onto a wall
+feature placed **174.9 px** off the crosshair; `servo` measures the unknown scale
+(gain ≈ `(-0.78, -0.74)` counts/px — negative, learned, never told) and drives the feature
+onto the crosshair to within **5.7 px in 4 steps**, `hit=True` (before/after frames captured;
+the compass rotates and the recessed patch ends under the crosshair). *Synthetic*
+(`_test_f262.py`, no display — a fake world slides a feature opposite each actuation at an
+unknown, anisotropic, optionally nonlinear scale): convergence from off-target, learned gain
+sign and magnitude, anisotropic axes, pre-supplied gain skipping calibration, lost-at-start
+and lost-mid-flight handling, a zero-displacement probe raising rather than spinning,
+already-on-target as a zero-move hit, `max_step` clamping every emitted step, convergence
+under a locally-nonlinear scale, bounded error while *tracking* a drifting target across
+repeated calls, and argument validation. All twenty floor friction tests pass (F262 plus the
+prior nineteen), no regressions.
+
+### F263 — match_unique: the lock match_template couldn't be sure of, where a tie is a trap
+
+**Friction (and an honest correction).** Chasing F262's servo onto a *moving* bot,
+I expected the next wall to be prediction — leading a target the loop only knows the
+past of. Practice said otherwise, and then practice corrected *me*. Re-locating a
+patch frame-to-frame in OpenArena, I first ran a quick, *coarse* (4×-subsampled,
+`step=6`) SAD probe and it reported the global best landing on a *different* wall
+instance than the one I cut from — a textbook false-lock, with a runner-up scoring
+within ~1 % of the winner. It was a tidy story. It was also wrong: when I measured
+again with the *real* `match_template` at fine step, every one of 18 sampled
+surfaces — many wall angles and the tiled floor — located back at its true spot
+(max error 8 px). OpenArena's software-GL surfaces are simply not periodic enough
+to tie the arg-min. The "false-lock" was an artifact of my lossy probe, not the
+primitive. The lesson landed twice: *a coarse measurement manufactures the very
+ambiguity it claims to find*, and the honest gap is not "the matcher is wrong" but
+"the matcher cannot tell you **how sure** it is."
+
+Because the trap is real wherever a surface *is* periodic — a brick wall, a list of
+identical rows, a grid of like icons, a board of identical tiles — and there
+`match_template` returns *a* point with the same confidence it returns the *only*
+point. A tracker built on it cannot distinguish "the unique match" from "one of
+five copies the noise happened to pick," and silently jumps copies.
+
+**Solution.** `match_unique(patch, pw, ph, ..., min_margin=0.18, require_unique=True)`
+— it judges *trustworthiness* before returning a point. It scans for every instance
+(`match_template_all`, one pass, NMS so each copy yields one hit), takes the best and
+its strongest **rival** at least a patch-size away, and scores distinctiveness as
+`margin = (rival.score - best.score) / rival.score ∈ [0, 1)` — ~0 means a near-tie
+(ambiguous), 1.0 means the patch occurs once. With `require_unique` (default) an
+ambiguous match returns `None` — turning a silent false-lock into an honest "I can't
+uniquely place this," a safe drop-in for `match_template` inside a tracking loop.
+With `require_unique=False` it returns `{x, y, score, bbox, margin, unique, rival}`
+so a caller can read the confidence and decide.
+
+**Lesson (architecture).** Every locator the floor had — `find_color`, `match_template`,
+`detect_grid` — answered *where* with total confidence and no notion of *how sure*.
+That is fine on a unique feature and a trap on a repeated one, and GUIs are full of
+repeated ones. `match_unique` is the floor's first **ambiguity gate**: a locator that
+can say "not uniquely," converting a silent wrong-lock into an honest refusal. It is
+the perceptual analogue of `servo`'s honesty (which measures rather than assumes its
+gain) — here perception measures rather than assumes its own certainty. It sits under
+any tracker on any repetitive surface, FPS or filing cabinet.
+
+**Proof.** *Live, OpenArena* (`_game_f263.py`): across 18 sampled surfaces the real
+matcher never false-locked (max locate-error 8 px), while `match_unique` reported a
+graded distinctiveness margin from **1.00** (a patch that occurs once) down to
+**0.15** on a busy floor region — two frames it flagged *ambiguous* (`unique=False`),
+i.e. one near-tie away from the wrong region, a warning `match_template` cannot emit.
+Then, to show the failure where it genuinely bites, one live patch is tiled ×5 into a
+periodic strip (a brick wall / list / icon grid built from real game pixels):
+`match_template` confidently returns one of the five identical copies (chosen by
+noise), and `match_unique` *refuses* it (`margin=0.000`, `None`). *Synthetic*
+(`_test_f263.py`, no display — ambiguous and distinctive motifs on a fabricated
+canvas): the default refuses an ambiguous motif and trusts a distinctive one with
+correct coordinates and a large margin; `require_unique=False` exposes the margin and
+rival; the `min_margin` knob accepts a tie at `0.0` and still trusts a truly-alone
+match at a high threshold; a locality `search` window around one copy makes it unique
+again; a search smaller than the patch finds nothing; a coarse `step` still locates;
+and `min_margin` outside `[0, 1)` raises. All twenty-one floor friction tests pass
+(F263 plus the prior twenty), no regressions.
+
+---
+
+## F264 — `lead`: aim where the target is going, not where it has been
+
+**Friction (the one I predicted at F262, finally reached by practice).** `servo`
+relocates every step, then actuates toward where it *just* found the feature. For
+a still target that is exact; for a moving one it is forever one frame behind —
+it converges on the trail, never the target. I had named this at F262 ("目标在动 →
+需要预测/提前量") and detoured through F263; F264 is where I actually measured it.
+
+**A negative first (反者道之动).** My first guess for the moving-target wall was
+*egomotion*: when the camera turns, frame-differencing (`locate_change_blobs`)
+should drown in self-motion. It does — a still frame diffs at 4.5 % of pixels
+(the software-GL noise floor), but a small camera turn jumps to 18–25 % and
+`locate_change_blobs` shatters into **98 phantom regions**. So I reached for an
+`estimate_shift` primitive (median block displacement → compensate the global
+slide). Practice refused it: panning the view, a grid of tracked blocks scattered
+−34..+20 px in x and −36..+42 px in y, and compensating by the median shift barely
+moved the diff (0.168 → 0.112). FPS yaw is **not** a global translation — it is a
+rotational/perspective flow field (near walls slide fast, the far end barely), so
+a single-shift model is the wrong model, and the floor's `wait_until_stable`
+already covers the honest workaround (diff only when the view is at rest). I threw
+the shift primitive away rather than ship a clever thing that doesn't hold —
+前識者，道之華也. The egomotion probe's real yield was negative knowledge, and the
+narrower, truer friction underneath it: the lag itself.
+
+**Solution.** `lead(samples, horizon=0.0, min_samples=2)` — it turns a short
+history of `(t, x, y)` locations (each typically a `match_unique` /
+`locate_change_blobs` hit) into an image-plane **velocity** and a predicted lead
+point. Velocity is the least-squares slope of `x(t)` and `y(t)` (optimal for the
+zero-mean matcher jitter, and it down-weights a single bad locate instead of
+trusting the last pair); observations whose `x`/`y` is `None` — a frame the locate
+refused or lost — are skipped, so it pairs directly with `match_unique`'s honest
+`None` with no gap-stitching by the caller. It returns
+`{vx, vy, speed, x, y, t, n, px, py, horizon}`, where `(px, py) = (x + vx·horizon,
+y + vy·horizon)` is the point to feed `servo`/`move_rel` so the actuator targets
+the **interception**, not the trail. The model is constant-velocity by design —
+honest only over the short horizon a relocating loop predicts into, which is the
+only horizon it needs.
+
+**Lesson (architecture).** Every perception verb the floor had answered a question
+about *now*: where a feature is (`match_unique`), what changed (`locate_change`),
+whether motion has stopped (`wait_until_stable`). None held a belief *across* time.
+`lead` is the floor's first **temporal estimator** — the smallest such belief, a
+constant velocity — and the natural completion of the closed loop: `react_pixel`
+says *when*, `move_rel` says *how much*, `servo` measures its own *gain*,
+`match_unique` measures its own *certainty*, and `lead` measures the target's own
+*motion* so the loop can aim ahead of it. It sits under any "click/track the moving
+thing" task — a dragged window, a scrolling row, a cursor, a bot — none of which a
+now-only locator can lead.
+
+**Proof.** *Live, OpenArena* (`_game_f264.py`): panning a wall feature at a steady
+rate, `match_unique` tracks it frame to frame while `lead` fits a velocity of
+~45 px/s; one-step-ahead prediction errs **24.0 px** under the "assume it stays"
+model (servo's implicit one) versus **10.5 px** with `last + v·dt` — and the fit
+absorbs a single mis-located frame (one sample jumped 38 px and back) without
+chasing it. *Synthetic* (`_test_f264.py`, no display): exact velocity and
+prediction recovery on a clean constant-velocity track; lead beats "assume-stays"
+on a jittered track in the motion-dominates-noise regime practice measured; `None`
+rows are skipped and only valid points counted; refusal on too few points, on a
+single time instant (no time base), and below `min_samples`; `horizon=0` predicts
+the last point exactly; two-sample and negative/2-D velocities correct. 18
+assertions; all twenty-two floor friction tests pass (F264 plus the prior
+twenty-one), no regressions.
+
+## F265 — `consensus_shift`: one shift from a cloud of disagreeing votes
+
+**反者道之动 (reverse the motion) — a new game to test the old hypothesis.** F264
+rejected a global `estimate_shift` because FPS yaw is a *rotational* flow field
+(near walls slide fast, the far end barely) — no single translation fits it. But
+that rejection was about FPS geometry, not about the idea of a global shift. The
+honest move was not to bury the idea but to take it to a world where the camera
+motion genuinely *is* a single translation: a side-scroller. So F265 left the FPS
+and ran Tux right through a SuperTux ice level, where the camera-follow slides the
+whole world — one depth, one plane — under the view. There a per-block flow
+*should* read one uniform shift, and the hypothesis F264 couldn't honour in FPS
+gets its fair test.
+
+**The hypothesis half-held — and broke on measurement, not geometry.** Panning
+SuperTux, the world shift between two frames truly is one translation (measured:
+a clean −19 px/frame slide, all in x, none in y — exactly the side-scroller
+prediction). But recovering it from a block-flow is *not* clean. The repeating ice
+texture is the F263 trap in the flow domain: every block has near-identical
+periodic neighbours, so each `match_unique` vote lands a tile-fraction off the
+true shift, and a handful of blocks gross-mislock to the wrong tile entirely. The
+result is a **bag of disagreeing votes**, not a value. Standing perfectly still,
+an *ungated* `match_template` block-flow fabricated a confident −32 px shift at
+2 % internal agreement — the aliasing inventing motion where there is none. Even
+gated, a real −19 px pan produced per-block votes whose plain median read −16 px
+but with only **33 % of blocks within a pixel of it**; another frame's median read
+−22 px at **15 %** agreement. The median always returns *a number*; it cannot say
+that the number is meaningless.
+
+**Friction (what no floor verb did).** Nothing turned a cloud of displacement
+votes into one shift *with a stated confidence*, and nothing **refused** when the
+votes had no agreement at all (a scene cut, a death frame, motion past the search
+window scatters votes across the whole range with no dominant value). `match_unique`
+(F263) gates a *single* feature's match by best-vs-rival margin; this is its
+spatial-aggregate twin — gate the *fusion of many* features by how many agree.
+
+**Solution.** `consensus_shift(votes, tol=8.0, min_support=0.5, min_votes=4)` —
+the spatial dual of `lead` (F264 fits one feature's velocity over *time*; this
+fuses *many* features at one instant into one shift). It finds the `(dx, dy)` with
+the most votes within `tol` (Chebyshev) of it — a coarse 2-D translation mode /
+Hough vote — and refines to the mean of those inliers. It returns `None` when
+fewer than `min_votes` survive or the best shift's **support** (inlier fraction)
+is below `min_support`: report a shift only when one shift commands a majority,
+the flow-domain analog of `match_unique`'s margin gate. Votes with a `None`
+component (a block the matcher refused) are dropped, so it pairs with
+`match_unique`'s honest misses without the caller stitching gaps. It returns
+`{dx, dy, support, inliers, n, tol}` — the shift *and* the confidence the median
+could not state.
+
+**Lesson (architecture).** The floor's certainty verbs now come in two scales.
+`match_unique` asks "is *this one* match trustworthy?" (margin over the rival).
+`consensus_shift` asks "do *these many* measurements agree on one answer?"
+(support over the bag). Both refuse rather than fabricate — the recurring shape of
+this whole arc: a verb that knows when it does not know. And the F264 reversal is
+completed honestly: the global-shift idea was right, just mis-homed; it belongs to
+translational cameras (side-scrollers, map pans, scroll views, drag-to-pan
+canvases), not rotational ones, and even there it needs a dominance gate to
+survive periodic texture.
+
+**Proof.** *Live, SuperTux* (`_game_f265.py`): standing still, the ungated
+block-flow fabricates a −32 px shift at 2 % agreement while `consensus_shift`
+returns `None` (no majority) and the gated flow returns ~0 px at 95 % support;
+running right under real camera-follow, across five frames the naive median reads
+−16/−22/−24/−20/−24 px at only 15–33 % agreement every time, while
+`consensus_shift` recovers −19.3 px at **100 %** support (0 outliers), −35.8 px at
+62 % (rejecting 10 mislock votes), −33.9 px at 70 %, −26.6 px at 90 %, and on the
+fifth — a genuine scatter frame — honestly returns `None`. *Synthetic*
+(`_test_f265.py`, no display): exact recovery and full support on unanimous votes;
+recovery of a clustered shift while a plain mean is dragged toward gross outliers;
+the real SuperTux dt≈110 ms vote histogram resolved to the ~−26 px pan at majority
+support; ~zero with high support standing still; refusal on scattered votes with
+no dominance, on too few votes, and on all-`None` votes; `None` components dropped;
+input/argument hygiene. 21 assertions; all twenty-three floor friction tests pass
+(F265 plus the prior twenty-two), no regressions.
+
+## F266 — `distinctive` (refuted): self-similarity is the wrong frame to ask about trackability
+
+**反者道之动 — chase the residual, and find the hypothesis was the flower of the
+Way.** F265 left a loose thread: `consensus_shift` recovers the camera pan by
+out-voting periodic mislocks, but *which* blocks mislock? The tidy story was that
+a patch cut from the repeating ice field is intrinsically untrackable — it has
+identical twins one tile over, so any matcher hands it to the wrong twin — and
+that this could be judged from **one frame**, before a second frame even exists,
+by how alone the patch is in its own neighbourhood. I built that judge:
+`distinctive(rgb, size, box, radius, min_rival)` slides the patch over its own
+surroundings with `match_template_all` and reports `rival_per_px`, the SAD/px to
+the nearest non-self twin; a low rival means a periodic, un-seedable patch. A
+hand-picked probe (`_probe_f266b`) looked like a clean win: on chosen patches the
+rival distance separated a busy-but-periodic ice tile (twin at ~0 SAD/px) from a
+faint snow-cap edge (no twin within radius, ~18 SAD/px), and — the seductive part
+— luma *variance* did not (a var≈3050 tile was hopelessly periodic, a var≈139 edge
+was unique). It even passed a synthetic suite. The华 (flower) was beautiful.
+
+**Then the live grid refuted it — three times, decisively.** Taken off
+hand-picked patches and run across a real grid of SuperTux seeds during a pan,
+the rival score has **no monotonic relationship** to whether a seed actually
+tracks. `_probe_f266c` (156 seeds, 4 pairs) sorted seeds by rival and bucketed
+correctness (a seed is "correct" iff `match_unique` finds it AND its displacement
+equals the known pan): the two lowest quartiles were **both** `rival=0.0`, yet one
+tracked **0 %** and the other **100 %** — identical self-similarity, opposite
+outcomes — and the **most distinctive** quartile (rival 2.6–43) tracked the
+**worst** (62 %). As a downstream block-flow pre-gate the score was no better:
+across two runs it flipped from "ambiguous mislock 1.3× more" to "distinctive
+mislock *more*", i.e. noise. The single-frame self-similarity score simply does
+not predict live trackability.
+
+**Why — the F263 lesson, reincarnated.** What dooms a track is not whether a twin
+exists *somewhere in the same frame's neighbourhood*; it is whether the patch's
+true match is ambiguous *across frames, inside the bounded search window* the
+tracker actually looks in. A patch with an identical twin 32 px away in frame A
+tracks perfectly when the A→B search is bounded to ±16 px around the predicted
+spot and the true match dominates *there*. That cross-frame, search-local
+dominance is exactly what `match_unique` (F263) already measures. `distinctive`
+asks about ambiguity in the wrong frame and the wrong scope — the same mistake as
+F263's coarse probe that "manufactured the ambiguity it claimed to find", wearing
+a single-frame disguise. The clean separation on hand-picked patches was a
+selection artifact, not a law.
+
+**And the real failure mode is not per-seed at all.** `_probe_f266c`'s failures
+clustered in pair-sized blocks; `_probe_f266d` caught only clean pairs and tracked
+**100 %** in every quartile of both x-gradient energy and Shi-Tomasi cornerness
+(so the aperture-problem hypothesis is, here, untestable for lack of failures);
+`_probe_f266e` (8 pairs) showed every clean translational pair tracks 97–100 % at
+87–90 % consensus support, regardless of seed structure. In a clean pan,
+`match_unique` + `consensus_shift` already track essentially every
+variance-passing seed — **no per-seed quality gate earns its keep.** Failures,
+when they come, are global/pair-level (a non-rigid frame, a snap, a death frame),
+which `consensus_shift`'s support fraction already flags. There was no gap for a
+new primitive to fill.
+
+**Outcome — ship nothing; this is the deliverable.** Per 前識者，道之華也，而愚之
+首也 — foreknowledge is the flower of the Way and the beginning of folly — the
+clever single-frame gate is discarded rather than dressed up and shipped. `osctl.py`
+is unchanged; the floor gains no `distinctive`. What it gains is a sharpened, tested
+law: **trackability lives in the cross-frame match's bounded-window dominance
+(`match_unique`), not in a patch's single-frame self-similarity, and not, in clean
+pans, in any per-seed structure measure at all.** The proof scripts remain as the
+record (`_probe_f266c/d/e`, `_game_f266.py`); the synthetic-only test and the
+primitive were removed because a primitive whose live proof fails must not ship —
+that is the floor's standing rule (synthetic *and* live), honoured here by saying
+no. The next honest direction is pair-level: when a frame pair is *not* a clean
+rigid translation, name it (deformation / cut / occlusion), rather than gating the
+seeds within a pair that already tracks fine. All twenty-three floor friction tests
+(F243–F265) pass unchanged; no regressions.
+
+
+---
+
+## F267 · consensus_affine — the camera-rotation flow consensus_shift could only refuse
+
+`consensus_shift` (F265) fits one global translation and, in its own docstring,
+names FPS yaw as the case it refuses: a yaw is not a single shift. F264 had
+already rejected a global-shift model for yaw and called the flow
+"rotational / range-dependent". The open question for a multi-motion primitive
+was the **shape** of that flow: does it cluster into a few discrete coherent
+modes (a layer/segmentation primitive could recover those), or is it a smooth
+continuum (for which discrete modes are the wrong model)?
+
+**Practice answered it, and it overturned my own first guess.** I yawed the live
+OpenArena view by a fixed delta, laid a seed grid over the central viewport,
+measured each seed's displacement with `match_unique`, and bucketed `dx` by
+screen-Y. The probe's own comment predicted *uniform* `dx` ("a pure yaw is
+camera rotation, whose optical flow is depth-INDEPENDENT"). The data said
+otherwise — a clean, repeatable ramp down the frame, identical across three
+trials:
+
+```
+screen-y [  0..107]: median dx -72   IQR[-75,-66]
+screen-y [107..214]: median dx -60   IQR[-63,-57]
+screen-y [214..321]: median dx -48   IQR[-51,-42]
+screen-y [321..428]: median dx -36   IQR[-39,-30]
+```
+
+Two further probes killed the obvious confounders. `_probe_f267b` swept the yaw
+magnitude (10..320 counts) and found the per-count gain flat at ~0.95–1.05
+px/count over the usable range — **no acceleration**, so the ramp is not a
+gain nonlinearity. `_probe_f267c` held total yaw fixed and varied the step count
+(1..16); all produced the same ~42 px — **no per-step dead zone**. The ramp is a
+property of the *scene's projection under rotation*, not of the actuator.
+
+**So both rival models are wrong.** It is not one shift (`consensus_shift`
+returns `None`, correctly — no single value owns a majority). It is not discrete
+layers either: the `dx` histogram is a gap-free plateau from −36 to −72 with no
+clusters, and the per-band medians form a smooth line, not 2–3 modes. An FPS yaw
+is a **smooth affine flow gradient** — exactly what a camera rotation /
+perspective pan produces, image velocity affine in image position.
+
+**The honest generalisation is therefore a model, not a clusterer.** Where
+`consensus_shift` fits `dx = const` (a translation) and refuses anything else,
+`consensus_affine` fits `dx ≈ c0 + c1·x + c2·y` (and `dy` likewise) — a global
+affine field that *represents* the ramp `consensus_shift` can only reject, and
+**degrades back to a pure translation when its linear terms vanish** (a
+side-scroller pan, the F265 regime). Centring the seed positions collapses the
+normal equations to a 2×2 solve per component (the constant term is just the mean
+displacement); the fit is made robust by iteratively trimming seeds whose
+residual exceeds `median + k·MAD` and refitting, so a few gross mislocks — or a
+single independently-moving object in the frame — do not bend the global field.
+It refuses (`None`) on too few votes and on degenerate geometry (collinear seeds,
+where a gradient is unidentifiable — an honest refusal, not a wild
+extrapolation). Its quality signal is the inlier `rms`, which the caller reads.
+
+**Proof.** Synthetic `_test_f267.py` (22 assertions): recovers a pure gradient's
+centre-shift and per-pixel slope; degrades to a translation on a uniform pan and
+matches `consensus_shift` there; reproduces the measured OpenArena ramp as a
+gradient on the very vote-bag where `consensus_shift` returns `None`; rejects a
+compact independently-moving cluster without bending the field; refuses on too
+few votes and single-column geometry; drops `None` components; leaves a large
+`rms` on no-model votes. Live `_game_f267.py` on the running ioquake3 window:
+across three yaw round-trips, the two clean frames recovered a gradient of
++0.13 / +0.11 px/px at rms 1.7 px and ~73 % support while `consensus_shift`
+refused; the third frame was noisy and `consensus_affine`'s rms rose to ~20 px —
+the quality gate doing its job (honest "this fit is poor"), not a silent wrong
+answer. The measured slope matches the probe's ~0.11 px/px. All twenty-four floor
+friction tests (F243–F267) pass; no regressions.
+
+The closed-loop chain now reads: `react_pixel` (when) · `move_rel` (how much) ·
+`servo` (gain) · `match_unique` (is the lock trustworthy) · `lead` (where it is
+going) · `consensus_shift` (one shift, or honestly none) · `consensus_affine`
+(the rotational/perspective field a single shift can only refuse). 反者道之動：
+the model belongs to the geometry it was built for.
+
+
+## F268 — flow_residual: what moves independently of the camera
+
+Anchor (user, this session): the floor must *wholly replace* the official
+computer-use tool — superior robustness, adaptability, efficiency. That re-aims
+friction-discovery: each step targets a capability the official tool would cover
+that the floor cannot yet do robustly. The official tool spots a moving enemy by
+looking; the floor needs to spot it by geometry, and to do so *while the camera
+itself is moving* — the case where naive looking fails.
+
+反者道之動: F267's `consensus_affine` fits the camera's egomotion as a global
+affine flow and *discards* the seeds that disagree with it as outliers. Those
+discarded seeds are not noise — under a moving camera they are the signal: a
+strafing bot, the lift, a thrown grenade. The model built to model the world
+throws away exactly what moves in the world. That discard is the next primitive.
+
+The gap pinned in practice (live OpenArena): while the camera pans, raw
+frame-diff (`locate_change_blobs`) read **27% of the viewport as "changed", 219
+separate blobs** — a flood; it cannot point at a mover because the whole world is
+sweeping. Subtracting a single `consensus_shift` translation is wrong for a yaw
+(F267). Nothing in the floor turned "motion *relative to the modelled flow
+field*" into "here is an object moving on its own, at this position, this fast."
+
+`flow_residual(votes, field=None, min_resid, cluster_radius, min_cluster)`:
+subtract the affine field's prediction from each `(x,y,dx,dy)` seed; keep the
+seeds whose residual ≥ `min_resid`; single-link cluster the survivors (the
+`cluster_boxes` idiom) into objects `{x,y,rdx,rdy,speed,n,bbox}` — centroid is a
+clickable/aim point, `(rdx,rdy)` the motion *after the camera's is removed*. When
+`field` is None it fits `consensus_affine` itself. Returns an honest empty
+objects list for a pure pan over a static map — the answer frame-diff cannot give.
+
+Proof. Synthetic `_test_f268.py` (16 assertions): no object for pure egomotion;
+one object isolated at its true position and true residual velocity against a
+strong yaw field where frame-diff would flag the whole frame; an object under a
+still camera (field≈0, residual = raw motion); two movers → two clusters;
+`min_resid`/`min_cluster` gates; precomputed field; None-dropping; refusal below
+`min_votes`. Live `_game_f268.py` on a real ioquake3 bot skirmish, two regimes:
+
+  • STILL camera — the clean win. Field ≈ 0 (grad 0.000). `flow_residual`
+    isolated ONE compact mover (a bot) at (393,190), rel-vel (+4,−12), 13 px, and
+    reported a truthful EMPTY on quiet frames. No false positives.
+
+  • PANNING camera — field = the F267 yaw ramp (grad +0.122). Frame-diff flooded
+    (219 blobs, 27% changed); `flow_residual` narrowed to ~53/462 residual seeds.
+    Honest read: the panning clusters were **byte-identical across all three
+    trials** — a real bot would vary frame-to-frame, so they are NOT bots but the
+    structural residual a *first-order* field leaves: (a) the first-person
+    weapon/HUD band, which is camera-locked and so genuinely does not move with
+    the world (correctly flagged as independent), and (b) perspective curvature
+    at the frame edges that a linear affine field under-fits (largest where the
+    flow is largest).
+
+前識者，道之華也: the primitive is correct — it faithfully reports motion relative
+to the modelled world, which frame-diff cannot. The still regime certifies it.
+The panning regime honestly surfaces the next friction: the *trustworthiness of a
+residual depends on the field model's order*. A first-order affine field
+under-models perspective yaw curvature, so residual at high-flow regions is part
+model error, not all independent motion. The next step is residual confidence as
+a function of local field magnitude/curvature (or a higher-order field, or
+masking camera-locked overlays) — not a louder claim, a humbler gate.
+
+All twenty-five floor friction tests (F243–F268) pass; no regressions.
+
+The closed-loop chain now reads: `react_pixel` (when) · `move_rel` (how much) ·
+`servo` (gain) · `match_unique` (is the lock trustworthy) · `lead` (where it is
+going) · `consensus_shift` (one shift, or honestly none) · `consensus_affine`
+(the rotational/perspective field) · `flow_residual` (what moves *against* that
+field — the world model's leftover is the foreground). 道法自然.
+
+
+## F269 — an honest double-negative, and a correction to F268
+
+反者道之動 sent me to the friction F268 named for itself: under a pan,
+`flow_residual` reported objects that were byte-identical across trials (not
+bots). F268's entry attributed them to "perspective curvature at the frame
+edges that a first-order affine field under-fits", and proposed F269 = a
+residual gate normalised by local flow magnitude (curvature error should scale
+with flow). I went to measure it before building it (the whole session's
+lesson). The measurement refused both the theory and my own F268 words.
+
+`_probe_f269.py` (live OpenArena pan, 3 trials): bin every seed's residual by the
+local field flow magnitude |field(x,y)|. If curvature were the cause, median
+residual would rise with flow. It did not — median residual is **flat at ~1.5 px
+across all four flow quartiles** (flow 2→46 px), and the field's rms is ~1.5 px
+everywhere. **The affine field fits uniformly well.** So the F268 attribution was
+wrong: the panning false-positives are NOT field curvature, and a flow-normalised
+gate has nothing to normalise. 前識者，道之華也 — including when the 前識 is one's
+own prior entry; the honest record corrects it rather than hiding it.
+
+`_probe_f269b.py`: the one principled gate left — drop residual seeds whose
+*predicted correspondence leaves the captured frame* (boundary mismatch). It
+changed nothing (gated objects == raw objects, all 3 trials): the ~20–44 px flow
+never carries a match out of frame, so boundary loss is not the source either.
+Refuted.
+
+What the data actually shows: the false-positives are **scene-specific and
+deterministic** — a small left-edge cluster @(81,330) reproduced identically in
+all three trials, plus the camera-locked weapon/HUD band. They repeat because the
+pan is identical and the map is static, so the same features mismatch the same
+way every time. There is no clean single-frame geometric signal (flow magnitude,
+frame boundary) that separates them from a real mover — both produce a residual
+cluster. The genuine discriminator the data points to is **temporal**: a real
+mover moves *coherently across consecutive frames*, while a deterministic artifact
+repeats under identical camera motion and flickers under live play. That is a
+multi-frame validation, kin to `lead` (F264, the floor's time-domain estimator),
+not a single-pair gate.
+
+Decision (無為): ship no primitive. `flow_residual` (F268) stands — it correctly
+reports motion relative to the modelled world; its single-pair output simply
+should not be over-trusted under a pan, and the honest next step is temporal
+persistence, to be *probed* (F270) before any claim. The deliverable here is the
+correction and the archived refutations (`_probe_f269.py`, `_probe_f269b.py`),
+which is itself progress: the map of the territory is now true where it was
+wrong. All twenty-five floor friction tests still pass; no code changed.
+
+道法自然：去彼取此 — drop the flower of cleverness, keep the fruit of what the
+measurement actually said.
+
+
+## F270 — link_tracks: what disagreed coherently over time
+
+F269's negative left a positive pointer: a single frame-pair cannot tell a real
+mover from a deterministic match artifact (both make a residual cluster), but
+TIME can — a real mover persists across consecutive frames and translates
+coherently, a transient mismatch flickers (one frame), a camera-locked overlay
+persists but stays pinned. I probed it before building (`_probe_f270.py`): a slow
+live pan produced 17 single-pair `flow_residual` detections; linking them across
+the sequence collapsed them to 2 persistent translating tracks and 15 one-frame
+flickers, while the still-camera weapon band showed up as a single PINNED track
+(span 7 px). Persistence is a real discriminator. So the primitive is warranted.
+
+`link_tracks(frames, max_gap, max_skip, min_len)`: greedy nearest-neighbour data
+association, resolved per step in ascending-distance order so each detection and
+each open track is used at most once; a detection joins the nearest open track
+whose last point is within `max_gap` px and at most `max_skip+1` steps back (so
+`max_skip=1` bridges a one-frame drop-out), else it opens a new track. Each track
+reports `{points, length, span, net, bbox}`. The caller reads the gate the floor
+could not give from one pair: `length==1` is a flicker (drop it); `length>1` with
+`span≈0` is a pinned overlay (HUD/weapon); persistent *and* translating is a
+genuine mover. Inputs are dicts (`x`,`y`, any extra keys preserved under `det`)
+or `(x,y)` tuples — so it links `flow_residual` objects, `match_unique` hits, or
+any point detector's output.
+
+Proof. `_test_f270.py` (17 assertions, no display): a straight-line mover into
+one track with correct net translation; a constant point into one pinned track
+(span≈0); a lone detection as a length-1 flicker; a one-frame drop-out bridged at
+`max_skip=1` and split at `0`; two separated movers into two tracks; a contested
+step resolved one-to-one (nearest wins, the other opens its own); a >`max_gap`
+teleport not linked; `min_len`; payload preservation; tuple input; empty frames.
+Live `_game_f270.py` (panning ioquake3): **20 single-pair detections → 4
+persistent translating tracks, 11 flickers dropped by time** — the noise no
+single pair could reject, rejected. All twenty-six floor friction tests pass.
+
+The chain now closes a loop in time as well as space: `react_pixel` (when) ·
+`move_rel` (how much) · `servo` (gain) · `match_unique` (is this lock
+trustworthy) · `lead` (where it is going) · `consensus_shift` (one shift, or
+none) · `consensus_affine` (the camera's flow field) · `flow_residual` (what
+disagrees with that field *now*) · `link_tracks` (what disagreed *coherently
+over time* — the real mover the single frame could only suspect). 道法自然.
+
+## F271 — find_color_blobs gains `step`: the acuity find_color always had, finally for *several* targets
+
+The motion arc (F260–F270) gave the floor a clock and an ego-motion model; this
+turns back to the oldest verb in the spatial family and pays a debt. Playing the
+Human Benchmark **Aim Trainer** — 30 targets pop one at a time on a blue field,
+scored as average ms/target — the idiomatic reflex is purely spatial: segment the
+target's light-blue fill into blobs, take the largest, click its centroid, repeat.
+I probed where the per-target time went (`_probe_f271.py`): the **scan dominated**.
+A full-resolution `find_color_blobs` over the ~1.5 MP field measured **~70–130 ms**,
+versus **~20 ms** for the move+click it gated — the eye, not the hand, set the pace.
+
+The fix is not a new verb but a debt repaid. `find_color` has carried a `step`
+*acuity* knob since F144: sample every n-th pixel on every n-th row, do ~1/n² the
+work, and a solid blob's centroid is unbiased under regular subsampling — coarse
+to find *where*, then refine in a fovea. The *multi-region* segmenter never got
+it, so any tight perceive→act loop over **distinct** same-coloured targets had to
+pay full resolution every frame. F271 gives `find_color_blobs(..., step=n)` the
+same trade, with the one wrinkle a segmenter adds: connectivity is judged on the
+**sample lattice** — a matched sample unions with the matched sample `n` to its
+left / `n` above (a cross-row wrap guard keeps the left edge from joining the
+previous row's tail). `count` is now matched *samples* (≈ area/n²) so a `min_count`
+threshold must scale with `step`; `bbox` rounds to the sample grid. `step=1` is
+byte-identical to before (the default), so nothing downstream moves.
+
+Proof. `_test_f271.py` (8 checks, no display): `step=1` reproduces the old result
+exactly; at `step=4` two well-separated blobs keep their centroids (±2 px) for a
+quarter… a sixteenth of the samples; `min_count` reads in sample units; a 1-px
+line is the documented acuity casualty (skipped when its row isn't sampled); a
+gap wider than `step` splits and one narrower bridges (lattice connectivity); no
+cross-row union wrap; `step≤0` clamps to 1. Live `_game_f271.py` (the Aim Trainer):
+the same target found in **4.5 ms at step=4 vs 68.6 ms at step=1** (~15×), and the
+floor cleared all **30/30 targets at a site-scored 106 ms/target** — against the
+~400 ms human peak on the same page's histogram. The reflex is now bounded by the
+hand, not the eye.
+
+Lesson: when a knob proves itself on the single-target finder, the multi-target
+finder is not automatically richer for ignoring it — generality means the *whole*
+family carries the trade, or the loop that needs several targets quietly pays the
+price the loop that needs one stopped paying long ago. `find_color` · step (one
+centroid, cheap) → `find_color_blobs` · step (every centroid, just as cheap). 道法自然.
+
+## F272 — detect_sequence: which of several regions fired, and in what order
+
+`react_pixel` answers *when did this pixel cross a level* for one point. The
+**Sequence Memory** test asks it of nine tiles at once and cares only about
+ORDER: the board flashes tiles white one after another and you replay the order,
+one tile longer each level. Nothing on the floor turned "these regions' levels
+over time" into "which fired, in what order" — so the caller re-derived it by
+hand every time: poll each tile each frame, remember its previous level, detect
+the rising edge, and debounce a flash that spans several frames (`_probe_f272.py`
+does exactly this bookkeeping, and catching level 1's lone flash — cell 6 to 255
+while the other eight sat at 114 — showed why it wants owning).
+
+`detect_sequence(levels, thresh, refractory, baseline, peak)` owns it as a pure
+function over a time series. `levels` is one entry per frame, each a list of the
+regions' activation (or a `{name: scalar}` map). A region fires on the frame its
+level first *rises* across its gate — edge-triggered, not level: while it stays
+hot no further event fires; it must fall back for `refractory` frames to re-arm,
+so one flash is one event and a tile that flashes *twice* is two. The gate is
+per-region, `base_i + thresh*(peak_i - base_i)`, judged on each region's own
+dynamic range; `baseline`/`peak` may be pinned explicitly. Returns
+`[{region, frame, level}]` in fire order. It is the temporal sibling of the
+spatial `find_color_blobs`: that one says *where* the separate targets are, this
+one says *when*, in sequence.
+
+Proof. `_test_f272.py` (17 checks, no display): a lone flash; three flashes
+recovered in fire order; a flash held high across many frames as ONE event; a
+region flashing twice as two, collapsed back to one under `refractory=2`;
+per-region dynamic range; a flat region silent; dict input with key order; an
+explicit gate suppressing an auto-detected one; within-frame tie-break by region;
+empty input; `refractory<=0` clamp; ragged frames rejected. Live `_game_f272.py`
+(the real test): fed windowed `capture_rgb` tile luminances, it **solved through
+level 8** — `[8, 0, 1, 8, 2, 6, 4, 5]`, cell 8 flashing *twice* and detected as
+two ordered events by the live refractory. All twenty-eight floor tests pass.
+
+Lesson (paid in the live run, worth the scar). The first attempt let `baseline`/
+`peak` auto-fill from each region's own min/max over the window — and lit up all
+nine tiles at level 2. A tile that never flashes is not flat but *nearly* flat:
+~114 with a few counts of sensor noise, so its auto span is tiny and its gate
+sits a noise-hair above baseline, which that same noise then crosses. The
+docstring's "flat region never fires" is true only for a *perfectly* flat one;
+under real capture noise, auto-scaling manufactures a gate the noise clears.
+The fix is composition, not a new knob: pin `peak` to the *known* active level
+(here white, 255) so an idle region is judged against the real signal, not
+against its own jitter. Auto min/max is a convenience for regions you know all
+activate; when some may stay dark, tell the verb what "on" looks like. 道法自然.
+
+## F273 — grid_lattice: scattered centroids become a row/col board
+
+`find_color_blobs` (with F271's `step`) hands back *where* the tiles are — an
+unordered bag of centroids. A board game needs them as a GRID: which row and
+column each tile occupies, the cell pitch, and the full lattice *including the
+slots that produced no blob* (an un-lit / covered tile has no colour to segment,
+so it is simply absent from the bag). Boards also move: **Visual Memory**
+re-centres and *grows* its grid every level (3×3, then 4×4, …), so hard-coded
+cell coordinates rot immediately — the layout has to be inferred from what is on
+screen this frame. Nothing on the floor turned scattered centroids into that
+lattice; the caller hand-rolled it every time.
+
+`grid_lattice(points, tol=None)` owns it as a pure function. It clusters the xs
+into column lines and the ys into row lines by sorting each axis and splitting
+wherever the gap to the next value is "large". `tol` defaults *per axis* from a
+bimodal gap-ratio split: floor the adjacent gaps at a pixel, sort them, and find
+the biggest ratio jump — a jump ≥3× is the boundary between *within-line jitter*
+(sub-pixel centroid wobble) and *between-line pitch*, and the geometric mean of
+that gap pair is the threshold. So it scales to the tile size and shrugs off
+centroid jitter without merging genuinely distinct lines; two points fall back
+to a half-gap split, one line stays whole. Each point is then indexed to its
+nearest column and row. Returns `{rows, cols, xs, ys, pitch, cells, points}`:
+`cells` is the row-major click map (`[r][c]` is the tile there, `None` if none
+was detected), and `xs`/`ys`/`pitch` reconstruct a slot's centre *even when it
+held no blob*, so a solver can click a currently-blank cell. Empty input → 0×0.
+
+Proof. `_test_f273.py` (18 checks, no display): a clean 3×3 recovered with row-
+major ordering and pitch; ±4-unit jitter on a 4×4 that does *not* split the
+lines; missing cells left as `None` at the right slots; non-square grids; blank-
+slot centre reconstruction from `xs`/`ys`; explicit scalar and per-axis `tol`;
+dict points with extra keys preserved; a single point (1×1); empty input (0×0).
+All twenty-nine floor tests pass. Live `_game_f273.py` on **Visual Memory**: from
+a bag of ~20 idle-tile centroids `grid_lattice` recovers the board every frame —
+3×3, pitch 132, `xs=[660,792,924]`, `ys=[315,447,579]` — and the same indexing
+de-dupes a flash's ~20 white detections down to its handful of distinct cells;
+clicks computed from the lattice register and drove the board from level 1 to 2.
+
+Lesson. The first auto-`tol` used "half the median adjacent gap" and split a
+jittered 4×4 into 12×10. Within-line jitter gaps are often as large as the true
+inter-line pitch, so the median of *all* gaps is dragged down to jitter scale and
+the threshold lands mid-jitter. The gaps are bimodal — a tight cluster of jitter
+and a tight cluster of pitch — so the split belongs *between* the two
+populations, at the largest ratio jump, not at a statistic of the pooled set.
+Reading the shape of the distribution beats reading its average. 道法自然.
+
+## F274 — grid_index: snap a foreign reading onto an already-known board
+
+`grid_lattice` (F273) builds a lattice out of one point set and indexes *that*
+set. But the two sets are usually different things seen at different moments: the
+board's *resting* cell centres fix the lattice once (idle tiles, a `detect_grid`
+result), and then a *separate*, transient reading — the tiles that flashed this
+round, the pieces on the board now, every white blob of a move — has to be
+snapped onto that fixed lattice and collapsed to *which cells* it touched. The
+F273 live harness hand-rolled exactly this, per reading: two `min(lines,
+key=abs-distance)` nearest-line searches (one per axis) plus bucketing repeat
+detections of one tile into a single click by averaging their centroids. That
+bookkeeping wanted owning.
+
+`grid_index(lattice, points, max_dist=None)` owns it as a pure function.
+`lattice` is anything carrying `xs`/`ys` (a `grid_lattice` return, or a bare
+`{"xs":…,"ys":…}`); `points` is the reading in the same forms `grid_lattice`
+takes. Each point snaps to its nearest column and row. `max_dist` (scalar or
+per-axis `(dx, dy)`) drops a point as a *stray* when it lands farther than that
+from the nearest line on either axis — the guard that keeps a blob spilled off
+the board, or noise between cells, from being mis-snapped onto a real tile.
+Returns `{rows, cols, cells, occupied, points, dropped}`: `cells` is row-major
+and shaped like `grid_lattice`'s (so the two compose), each occupied slot holding
+`{x, y, n}` — the *centroid* of the points that fell in it (the click target,
+robust to duplicate detections) and *how many* there were; `occupied` is the
+sorted distinct touched cells; `points` keeps every kept detection indexed;
+`dropped` the strays. `n` doubles as a vote — a tile held white across many
+frames stacks a high `n`, a one-frame transient a low one.
+
+Proof. `_test_f274.py` (24 checks, no display): a three-tile reading snapped onto
+a fixed 3×3; repeats of one tile collapsed to a single averaged centroid with the
+right `n`; row-major `cells` matching `grid_lattice`'s shape; off-centre points
+snapped to the *nearest* line (not floored); dict keys preserved; a bare
+`{"xs","ys"}` lattice; `max_dist` scalar and per-axis stray rejection with
+`dropped` populated; a generous `max_dist` keeping everything; empty reading
+(dims still reported); a line-less lattice (all empty, no crash); and end-to-end
+composition with `grid_lattice` on a re-grown 4×4 board. All thirty floor tests
+pass. Live `_game_f274.py` on Visual Memory: building the lattice once from the
+idle tiles and calling `grid_index` on each memorise flash snapped **18 raw white
+detections down to the 3 distinct cells** every round, its per-cell `n` voting
+away transients — the F273 harness's hand bookkeeping, now one call.
+
+Lesson. The nearest-line snap has to break ties deterministically or the same
+reading indexes differently run to run; `min(range, key=abs)` keeps the *first*
+(lowest-index) line on a tie, which is the sane, stable choice — a point exactly
+between two columns belongs to the left one, every time. And the stray guard is
+per-axis on purpose: a blob can be dead-on in x yet a full cell low in y (a
+label, a shadow), and only a per-axis `max_dist` rejects it without also throwing
+away honest points that merely sit off-centre on the *other* axis. 道法自然.
+
+## F275 — frame_consensus: what persists across a burst of noisy frames
+
+A single grab of a transient event lies. One frame misses a tile that is really
+lit; the next invents a phantom from an anti-alias edge or a half-drawn fade. The
+memorise flash holds its tiles for a dozen frames while a stray blob shows for
+one or two — so reading the event across *many* frames and keeping only what
+recurs is how you tell signal from flicker. On the floor this got hand-rolled
+twice (F273's `vote_cells`, F274's per-cell `n`): count how many frames each
+thing appeared in, keep those above a fraction of the frame count. F275 owns that
+majority vote as a pure, domain-free function.
+
+`frame_consensus(frames, min_frac=0.5, key=None)` takes a list of frames, each an
+iterable of *items* (cells `(r, c)`, labels, blobs — anything). `key` maps an
+item to the identity voted on (default: the item itself). An identity seen twice
+*within one frame* still counts as **one** frame-vote — duplicate detections in a
+single grab do not stuff the ballot. An identity is kept when it appears in at
+least `ceil(min_frac * len(frames))` frames (`min_frac` clamped to `(0, 1]`).
+Returns `{kept, counts, frames, threshold, items}`: `kept` sorted most-persistent
+first, `items` the original items grouped per identity (deduped within a frame)
+so a caller can average their positions into a stable click target. It is the
+temporal-robustness sibling of F274: `grid_index` says *which cell* a reading
+touched, `frame_consensus` says *which of those held up* across the burst.
+
+Proof. `_test_f275.py` (19 checks, no display): majority keep by frame count;
+within-frame duplicates counted once; `threshold == ceil(min_frac*F)` across
+fractions; `min_frac` clamp (`>1` needs every frame, `<=0` keeps all seen);
+ordering by descending count then identity; a custom `key` bucketing raw points
+by cell with `items` recovering the centroid; single-frame and empty inputs; and
+composition with `grid_index` — three frames of occupied cells with a one-frame
+phantom, voted out. All thirty-one floor tests pass. Live `_game_f275.py` on
+Visual Memory: recording each flash frame's occupied cells *separately* and
+running `frame_consensus`, it deduped every round to the cells lit through the
+flash (level 1: three cells at 5/5 frames), a one-call replacement for the two
+earlier hand rolls.
+
+Lesson. The frame boundary is the whole point, and F274's flattened `n` blurs it:
+"one tile seen in five frames" and "five phantoms in one frame" both total five,
+so a per-detection count cannot distinguish a steady tile from a busy junk frame
+— only a *per-frame* vote can. Which also bounds what a consensus can fix: a
+phantom that is *stably* mis-detected every frame (a click landing a hair off a
+real tile's edge, say) has full frame support and rightly survives the vote. The
+vote removes flicker, not a systematic error; that is a job for the detector, not
+the tally. Count frames, not detections. 道法自然.
+
+## F276 — click_verify: click, confirm it landed, re-press the ones that dropped
+
+F273–F275 made *reading* the board airtight — recover the lattice, snap the flash
+onto it, vote out flicker. Yet a correctly-read tile still failed to clear the
+level: one recall click, reliably the top row, simply dropped — the tile stayed
+blue, no life lost, no error. The diagnostic settled it: I clicked all three
+consensus cells `(0,0),(0,2),(1,1)`; two lit, `(0,0)` stayed blue with all three
+lives intact. The press vanished. That is an *actuation* miss — a click fired a
+hair too early (the recall phase not yet armed while the flash finished fading),
+landing in dead time — and no amount of frame-voting recovers it, because the
+reading was right; the click dropped. `frame_consensus` removes flicker, not a
+dropped actuation.
+
+`click_verify(x, y, check, tries=3, settle=0.3)` owns the loop a human does
+without thinking: click, glance to see it took, click again if it didn't. `check`
+is a zero-arg predicate that goes truthy once the click's *own* visible effect is
+present — here `lambda: find_color_blobs(WHITE, search=cell_box)`, i.e. *this*
+cell turned white. It presses, waits up to `settle` (polling `check` so a fast
+effect returns early), and re-presses only if still unconfirmed, up to `tries`. If
+`check` is already truthy before the first press it returns with `clicks == 0` —
+idempotent, safe to call on an already-set control. Returns `{ok, clicks, tries}`;
+`clicks` is a health signal (1 = landed first try, >1 = flaky actuation, `tries`
+with `ok=False` = never took).
+
+Proof. `_test_f276.py` (11 checks, no display; `osctl.click` stubbed with a press
+counter): idempotent zero-click when already satisfied; lands on the first press;
+a systematic miss that needs exactly three presses; never-lands giving `ok=False`
+after `tries` presses; `clicks` as health signal; `tries` floored at 1; a
+`settle=0` tight loop that returns promptly without hanging; the right-click path;
+and `check` consulted *before* the first press. All thirty-two floor tests pass.
+
+Live `_game_f276.py` on Visual Memory closed the loop the earlier three could not.
+Waiting for the flash to fully clear to blue (recall armed) then routing every
+recall click through `click_verify`: **level 1 advanced to level 2** — the exact
+step that was stuck forever before — with each of its three clicks landing on the
+first press and verifying white (`clicks=1, ok=True`). And on level 2, where grid
+recovery over-detected, `click_verify` *refused to lie*: it re-pressed the phantom
+cells four times each and returned `ok=False` rather than falsely reporting a
+landing — turning a silent miss into a legible, per-click actuation verdict.
+
+Lesson. The floor had watched pixels (`wait_pixel`) and reacted to them
+(`react_pixel`), but never *closed the loop back onto its own action* — every
+`click` was fire-and-forget, trusting the actuation blindly. `click_verify` is the
+first primitive where perception judges the floor's *own* effect and retries: the
+difference between doing and confirming-you-did. It also draws the honest line
+between a *dropped* click (re-pressing fixes it) and a *phantom* target (re-pressing
+can't, and `ok=False` says so) — the tally that finally distinguishes "my hand
+slipped" from "there was nothing there." 道法自然.
+
+### F273–F276 deep validation — the read→act→verify arc conquers Visual Memory
+
+With `click_verify` landing every press, the whole stack was let run past level 1:
+recover the lattice (F273), snap each captured flash onto it (F274), vote out
+flicker across frames (F275), then click every consensus cell through `click_verify`
+(F276). It **cleared level after level, boards growing 3×3 → 4×4 → 5×5 → 6×6 →
+7×7 → 8×8**, and every single click on every level reported `clicks=1, ok=True` —
+no dropped actuation, no phantom, all the way to **level 19**. The run finally
+stalled at level 20 with an *empty flash read* on the 8×8 board: at that tile
+density the fixed `find_color_blobs` sensitivity (min_count / step) begins to miss
+the smaller, tighter-packed lit tiles. That is the honest next friction — an
+adaptive, density-aware blob acuity for extreme boards — logged for a future F,
+not forced now: nineteen cleared levels is already far past human recall, and the
+four primitives that got there are each proven in isolation and in composition.
+
+The through-line of F271–F276: the floor grew *eyes that resolve a board* and then
+*a hand that confirms its own touch*. Perception (`find_color_blobs` acuity),
+structure (`grid_lattice`, `grid_index`), consensus over time (`frame_consensus`),
+and finally the closed loop back onto its own action (`click_verify`). Each was
+born from a real miss watched happen on a live screen, not imagined. 道法自然.
+
+### Chimp Test — a whole new game falls out of composition (no new primitive)
+
+Visual Memory rewards knowing *where* a blob lit up; the Human Benchmark **Chimp
+Test** demands the rung above it — knowing *which number* each tile carries, then
+clicking 1..N in ascending order after the numbers vanish. The interesting claim
+to test was whether the floor already had that rung, or whether reading digits
+was honest new friction. It was not new friction: the floor read every tile with
+primitives already on the shelf, and I invented **no F-number** for it.
+
+The pipeline is pure composition: `find_color_blobs` (F052) locates each white
+glyph with its exact bbox; `edge_signature` (F056) reduces that bbox to a
+scale-free structural fingerprint; `read_glyph`/`edge_hamming` (F058) names it by
+nearest atlas entry; `click` lands the move. `_game_chimp.py` wires only these.
+
+Two wrinkles the floor answered without new code:
+
+* **Multi-digit tiles.** "10".."15" segment into two white components, so
+  `find_color_blobs` returns two blobs for one tile. `group_tiles` re-joins blobs
+  that fall within a single tile's span (dx<55, dy<28) and reads them
+  left-to-right into one number — the same segment-then-read idiom `read_text`
+  uses for canvas runs.
+
+* **The atlas is self-supervised — the game teaches it its own alphabet.** The
+  digit atlas ({digit: edge_signature}) was *bootstrapped from the game itself*.
+  A board always shows exactly the set {1..N}, so a glyph the atlas cannot yet
+  name is pinned by elimination: a fresh single digit shows up as a *duplicate*
+  of a look-alike, and the true new glyph is the duplicate whose signature sits
+  *farthest* from that look-alike's atlas entry (nearest wins → the impostor is
+  farthest); a digit that only appears *inside* a multi-digit number (0 inside
+  "10") makes that number fall outside {1..N}, and the odd glyph is the one that,
+  relabelled the missing number's digit, brings it back into range. `grow_atlas`
+  runs this at play time, so an atlas seeded with only **1..5 heals itself up to
+  the full 0..9** as it climbs — verified live: from a 1–5 seed it grew 6,7,8,9
+  by level 6 and 0 by level 7, then cleared on.
+
+Live proof (both from a cold process): with the committed `chimp_atlas.json` and
+with a deliberately truncated **1–5 seed**, the floor cleared the Chimp Test with
+every level read exactly 1..N and **zero strikes**. Pushed past the arbitrary cap,
+the full-atlas run cleared **through level 25 — twenty-eight numbers, 1..28**, each
+board (two-digit tiles 10..28 all grouped and read cleanly) perfect, stopping only
+when the harness `max_levels` loop ran out — not on any misread. Chimps remember
+~9 over 90% of the time; the floor read twenty-eight clean and showed no ceiling.
+
+The lesson is the friction-driven principle stated in the positive: before
+inventing F277 for "digit reading", I checked whether the existing rungs already
+composed to the task — and they did. A new *game* is not the same as a new
+*primitive*. The floor grew eyes that resolve a board (F273–F275) and a hand that
+confirms its touch (F276); reading the board's symbols and ordering the hand by
+what they say is just those same eyes and hand pointed at a new surface. 道法自然,
+无为而无不为 — accomplish the new thing by adding nothing.
+
+
+---
+
+## FPS Probe — AssaultCube (the honest boundary of the floor)
+
+The next surface was a real-time 3D FPS: AssaultCube 1.2 (open source), a Bot
+Deathmatch on the desert/edifice rotation, nine skill-1 bots, ~2Hz perception on
+this 2-CPU software renderer. The question was the same friction-driven one asked
+of Chimp and Visual Memory: does the floor already compose to this, and if not,
+what *primitive* is honestly missing?
+
+**Actuation composes — verified.** `move_rel` (F261) turns the camera on both
+axes: a single `move_rel(300,0)` yaws the view (~56% of the frame changes),
+`move_rel(0,±114)` pitches it (~64%), and small pitch is *not* dropped (a −60
+count still moves ~58%). `click` (F120) fires, `key_hold` (F127) walks and
+strafes, `tap('R')` reloads. So the hand reaches the FPS with no new verb.
+
+**A first genuine friction, named honestly.** Closed-loop aim (`servo`, F262)
+cannot close here. Its locate callback needs a *single-frame* enemy locator, and
+the floor's two candidates both fail in real time: frame-diff (`locate_change_blobs`,
+F136) is *blinded by the very camera motion aiming requires* — the instant you
+turn, the whole frame is "changed"; and `match_template` (SAD), the only
+appearance locator, is O(search·patch) — seconds per frame in pure Python on two
+cores. A per-frame feedback loop physically cannot run.
+
+**The feed-forward answer, and where it lands.** So `_game_fps2.py` composes the
+realtime structure instead: hold still, take several static diffs → the moving
+bot's centroid at several instants; `lead` (F264) fits its velocity and predicts
+the intercept; one calibrated `move_rel` turns there; `click` sprays. This is all
+existing rungs. Instrumented over hundreds of engagements it revealed, cleanly:
+
+* **Horizontal bearing composes.** After one feed-forward turn the crosshair's
+  *horizontal* error to the tracked bot converges to ≈±40–60 px, repeatedly. The
+  eyes-to-hand chain works in azimuth.
+* **Everything else is a hardware/perception-bandwidth wall, not a missing verb.**
+  Vertical error stays pinned near −185 px because ground-walking bots at combat
+  range all project to ≈one screen height, and at 2 Hz a re-confirm re-locks a
+  *different* running bot at that same height rather than the one just corrected
+  onto — the loop chases a moving population. Motion-only detection also tracks
+  ceiling lights, sky, and HUD-edge shimmer as "movers", throwing wild pitches
+  into the ceiling. Net result over a full match: **0 frags, 16 deaths** — thirty
+  feed-forward sprays, not one kill, against bots that read and shoot in <100 ms.
+
+**Why no F277.** The measurements refute every *primitive*-shaped fix. The one
+verb that would help — cheap single-frame enemy localization — cannot be a small
+floor rung: the bots are low-contrast camo (color-keying fails), SAD is too slow,
+and "detect the salient foreground object" is an ML-scale perceptor, not a verb.
+The other tempting rung, auto-calibrating mouse gain by measuring egomotion, was
+prototyped (`_probe_pitch.py`, 1-D projection cross-correlation of two frames) and
+*failed on principle*: a 3D turn is not an image translation (parallax moves near
+and far by different amounts), so there is no single global shift to divide by.
+Both dead ends are honest evidence that the wall is compute and perception
+bandwidth on a software renderer, **not** a gap in the floor's vocabulary.
+
+This is the boundary, and naming it *is* the result. The floor's hand fully
+operates an FPS; its motion-only eyes and 2 Hz clock cannot win a firefight, and
+no primitive small enough to belong on the floor closes that gap on this hardware.
+前識者，道之華也，而愚之首也 — to bolt on an F277 here would be ornament over a
+limit that is physical, not lexical. As with Human Benchmark (saturated by the
+existing readers) and Chimp (cleared by pure composition), the disciplined move is
+to add nothing and record the edge. 道法自然,无为而无不为.
+
+---
+
+## Inward Parity — the floor as a full-stack replacement for the official VM stack (反者道之动)
+
+Having mapped the outward game surfaces to their ceilings (HB saturated, Chimp
+pure composition, FPS a physical wall), the discipline turns inward: measure the
+floor *against the official operation stack it means to replace* — the built-in
+screenshot / click / type / key / scroll / read-DOM / shell verbs — and close
+whatever is missing, slow, or weaker. Ran a live parity probe (`_probe_parity.py`)
+on this Linux VM (X11 `:0`, 1600×1200). Findings, honest:
+
+**Actuation & perception compose at full breadth, far faster than the official
+verbs.** Every official gesture has a floor rung already, and the floor's clock is
+the surpass: `capture_rgb` full-frame **~12 ms**, `sample_color` a region, unicode
+`set_clipboard`→`get_clipboard` round-trips (道法自然→"道法自然"), `move_rel`/`click`/
+`key_hold`/`type_unicode` fire instantly, `list_windows`/`screen_observe` enumerate
+top-levels via EWMH in ~30 ms. Against a hosted computer-tool whose *per action*
+latency is seconds, a floor tick is ~100–250× faster — the floor is not a parity
+substitute, it is the fast path.
+
+**Two honest boundaries, both architectural, not missing-verb:**
+1. *No AT-SPI accessibility bus on this VM* (`org.a11y.Bus` unprovided; `at-spi2`
+   not installed). The official "read the DOM / element tree" move has no bus to
+   read here — which is exactly the condition the floor's pixel-first design was
+   built for. `screen_observe` degrades to window-level EWMH, and the floor reads
+   operable content by pixels/OCR (`ocr_text`, `find_color_blobs`, `classify_grid`,
+   `detect_grid`) — broader than a11y (works on any pixels), shallower on web
+   semantics. Raising the bus would be a dependency the floor deliberately refuses.
+2. *No CDP web-DOM semantics.* The floor operates the browser as pixels, not as a
+   privileged DOM — by design. Semantic web reading is the same class of boundary
+   as the FPS single-frame locator: a whole perceptor, not a floor verb.
+
+**The one closeable gap was speed, and it is now closed (no new F-number).** The
+FPS arc's 2 Hz ceiling traced partly to O(pixels) pure-Python loops: `sample_color`
+~90 ms over 0.9 Mpx, `region_diff`/`locate_change`/`locate_change_blobs` linear in
+the ROI, `sample_grid` per-cell summation. These are the floor's *底层* efficiency
+frictions — "效率不够快的地方." Added an **optional NumPy fast path** to each: when
+`numpy` imports, the whole-region loops vectorise to a C loop; when it does not, the
+pure-Python body runs unchanged, so the zero-hard-dependency guarantee holds. The
+fast path returns the **byte-identical** result of the fallback — proven live by
+`_test_accel.py`, which toggles `osctl._np` and asserts equality on real captures.
+Measured: `sample_color`/`region_diff`/`locate_change` **7–10×** faster (a 3-op
+perception tick 630 ms → 63 ms); `sample_grid` mean restored to 3.5× over the
+per-cell loop (F247 invariant preserved); `locate_change_blobs` mask build
+vectorised (its union-find stays linear in change area — inherent, not a loop to
+kill). All 32 floor tests green, plus the new accel invariant test.
+
+This is not a new verb — it speeds existing rungs (F134/F135/F136/F137/F247) — so
+it takes no F-number (前識者,道之華也: an F277 here would be ornament). The lesson
+matches the outward arcs inverted: the floor already *speaks* every official verb;
+where it lagged was raw pixel throughput, and that closes by making the same
+computation faster, not by inventing vocabulary. 反者道之动也 — 損之又損, 无为而无不为.
+
+### Inward parity, second pass — the appearance-search primitives (find_color / find_color_blobs / match_template)
+
+Continuing 損之又損 down the same seam: the remaining O(pixels)·O(area×patch)
+perception rungs. Measured pure-Python cost on this 1600×1200 VM: `find_color`
+full-frame ~200 ms, `find_color_blobs` ~580 ms, `match_template` (60×60 patch,
+full frame) did not finish in 90 s (O(area×patch), the docstring's own warning).
+These are the primitives an appearance-driven loop (mahjongg, match-3, sprite
+tracking, the Chimp/HB solvers) leans on hardest — the exact "效率不够快" the FPS
+arc hit.
+
+Added an optional NumPy fast path to each, byte-identical to the pure-Python
+body (proven live by `_test_accel.py` toggling `osctl._np` across full-frame /
+`step` / `search` / `mask` variants):
+- `find_color`, `find_color_blobs`: vectorise the tol-mask over the (strided)
+  search window; the blob path keeps its union-find over matched samples (row-
+  major `nonzero` order reproduces the y-outer/x-inner scan exactly).
+- `match_template`: compute the **full** SAD field. The pure-Python slide's
+  early-abandon only prunes provably-worse offsets, so the arg-min is identical,
+  and `numpy.argmin`'s first-min-in-C-order matches the strict `s < best_s`
+  tie-break. To stay O(offsets) in memory (not O(offsets×patch)), the score field
+  is accumulated one patch-pixel at a time by array-shifted subtraction rather
+  than materialising every window — so it works on a full-frame search too.
+  Measured **20×** on a bounded 200×200 search (989 ms → 50 ms); the previously
+  intractable full-frame case now returns.
+
+Still no new F-number — these speed F052/F053/F233/F234/F240/F271, they add no
+verb. All 33 floor tests green (32 + the accel invariant). 反者道之动,無為而無不為.
+
+### Inward parity, third pass — the structural / classification rungs
+
+Same seam, deeper: the shape- and sprite-matching primitives, all O(pixels) or
+O(offsets×area) in pure Python.
+- `match_template_all` (F241): the all-hits slide. Vectorised to the full SAD
+  field (identical math to `match_template`) then threshold + row-major hit order
+  → the later stable sort-by-score breaks ties exactly as the double loop did.
+  **53×** on a 400×300 search (3948 ms → 75 ms); byte-identical across relative
+  ceiling, fixed `max_score`, and `step`+`mask` variants.
+- `edge_map` (F055) + `edge_hamming`: gradient mask and its diff — vectorised
+  (`|dL/dx|+|dL/dy|>thr`, border zeros preserved). This is the hot recompute
+  inside `match_edges`, which drops **5×** (14.6 s → 2.9 s on a 200×200 search),
+  byte-identical, purely by the sped-up `edge_map` beneath it.
+- `edge_signature` (F056): the scale-free fingerprint. Its variable-size cell
+  means are now one **integral-image** lookup (exactly the loop's `s // cnt`),
+  then a vectorised gradient. ~**11×** on a 240×240 region, byte-identical.
+- `_luma_resample`: the nearest-neighbour signature core shared by
+  `classify_grid` / `classify_boxes` / `cluster_boxes` / `detect_grid`. Now a
+  single numpy gather of the sampled pixels; byte-identical (verified directly
+  and end-to-end through `classify_grid`).
+
+Still no new F-number — nine primitives now carry an optional numpy fast path
+that is *provably* the same output as the pure-Python body (14 invariant blocks
+in `_test_accel.py`, all toggling `osctl._np`), and the floor keeps its
+zero-hard-dependency guarantee when numpy is absent. 33 floor tests green.
+損之又損,以至於無為 — the pixel-loop seam is now essentially closed end to end.
+
+### Inward parity, fourth pass — the scatter-classify core
+
+The last O(pixels) rung left on the classification path: `_box_signature`'s
+ink-gate loop (build the inset crop's luma, mean it, count deviating pixels) and
+`_classify_box`'s per-template mean-abs-diff score. Both now carry a numpy fast
+path:
+- ink-gate: luma + `|v-mean|>ink_tol` count vectorised. The pure-Python loop's
+  early break only bounded *cost*, not the `ink < ink_min` decision, so the gate
+  is byte-identical.
+- score: `|sig - tv|.sum()` per template with the same first-min tie-break.
+This is the shared core of `classify_boxes` / `cluster_boxes` (and `classify_grid`
+already covered), so the whole scatter-read path — segment by colour, read what
+each box is — is now vectorised. Byte-identical end-to-end (invariant blocks 14-15
+in `_test_accel.py` cover classify_grid, classify_boxes incl. the max_score→unknown
+branch, and cluster_boxes).
+
+`radial_profile` (F057) was left pure-Python on purpose: its histogram bin index
+`int(d/mr*(bins-1)+0.5)` is ULP-sensitive, so a numpy `sqrt`/`sum` reordering
+could flip a bin and break byte-identity — and its `edge_map` base is already
+accelerated. 道法自然: accelerate where it is provably safe, accept the boundary
+where forcing it would trade correctness for speed.
+
+Tally: eleven rungs now vectorise byte-identically behind an optional-numpy
+guard (perception, appearance-search, structure, classification), 15 invariant
+blocks, zero new F-numbers, zero-hard-dependency fallback intact. 33 tests green.
+
+### Inward parity, fifth pass — the modal-fill histogram
+
+Sweep of the whole file for remaining unguarded luma / per-pixel loops turned up
+one live hot rung: `sample_grid(stat="mode")`. Its "mean" branch was already
+vectorised, but the modal branch still bucketed every cell pixel into a Python
+dict colour histogram to find the most-populated (fill) bin. Now vectorised:
+codes = quantised RGB packed to one integer, `np.unique(return_index,
+return_inverse, return_counts)` + `np.add.at` for exact per-bin channel sums.
+The winner reproduces `max(values, key=count)` exactly — greatest count, ties
+broken by earliest insertion (smallest first-seen index) — so the returned
+fill colour is byte-identical across quant 8/16/24/32/64 and odd-sized cells.
+
+Remaining `* 299` sites are all already guarded (match_template / _screen /
+_luma_resample / _box_signature) or are tiny fixed-size helpers (`_lum` closures
+inside detect_grid boundary scans, per-row template flattening) where a numpy
+setup would cost more than the loop it replaces — 道法自然, left as-is.
+
+Twelve rungs now vectorise byte-identically (16 invariant blocks in
+`_test_accel.py`); zero new F-numbers; zero-hard-dependency fallback intact.
+33 tests green.
+
+### Inward parity — the capture boundary (measured, deliberately not "accelerated")
+
+The FPS probe's real wall was capture *latency*, so I profiled the grab itself.
+On this 1600×1200 software-X VM a full `capture_rgb()` is ~11–15 ms, and the
+split is decisive: `XGetImage` + `string_at` alone is ~10–14 ms; the BGRX→RGB
+conversion is the small remainder. The grab is the floor, not the conversion.
+
+I did try a numpy conversion. In *isolation* it is ~2× the slice path
+(4.3 ms → 2.2 ms) — a real speedup of that step. But end to end it vanished:
+full-grab timing with vs without numpy was within noise (numpy even measured
+slightly slower on some runs), because `XGetImage` dominates and its own
+variance is larger than the conversion saving. So I **reverted** the backend
+change. 損之又損 — adding an optional-numpy branch to the backend that does not
+move the real metric is an ornament, not an improvement; the slice conversion
+stays as the honest, dependency-free floor.
+
+The right tool for high-rate loops already exists and needs no change: the
+*foveal* `capture_rgb(x, y, w, h)` grab is ~0.13 ms for a 200×200 window (≈100×
+cheaper than the full screen). The lesson from the FPS ceiling holds — sample a
+small window fast, don't re-grab the whole desktop — and that is a harness
+choice, not a missing or slow primitive. Genuine boundary, mapped and left
+un-forced.
+
+### Inward parity — the official operation surface, mapped verb-for-verb
+
+Fine-grained audit of the floor against the *official* agent operation surfaces
+(Devin's own `computer` tool + the desktop-op `pc_*` module), one action at a
+time, to find anything unmatched, missing, or slower.
+
+**GUI action surface — full parity, then surpass.** Every official `computer`
+action maps to a floor verb, and the floor carries the whole gesture ladder the
+official tool must fake by repetition:
+
+| official action     | floor verb                         | note                     |
+|---------------------|------------------------------------|--------------------------|
+| screenshot          | capture_rgb / crop_rgb / foveate   | + foveal sub-grab ~0.13ms|
+| cursor_position     | cursor_pos                         |                          |
+| mouse_move          | move                               |                          |
+| left/right_click    | click(right=)                      |                          |
+| middle_click        | middle_click (F123)                | true aux button          |
+| double/triple_click | double_click / triple_click        | OS-timed multiplicity    |
+| left_click_drag     | drag                               | stepped, hold-aware      |
+| mouse_down / up     | _mouse_button / press_hold (F126)  | sustained stationary hold|
+| key                 | tap / chord / mod_click (F124)     | modifier-through-click   |
+| hold_key            | key_hold                           |                          |
+| type                | type_unicode / paste_text          |                          |
+| scroll              | scroll                             |                          |
+| wait                | wait_pixel / wait_window / react_pixel | visual-state waiting |
+| zoom                | crop_rgb / foveate                 |                          |
+
+Beyond the table the floor adds a whole perception/reasoning tier the official
+tool has *none* of — find_color(+blobs), match_template(+all), edge_map/
+signature/match_edges, classify/cluster/detect_grid, OCR (read_text/glyph/grid),
+window enumeration+geometry+state, clipboard incl. files+image, and the
+combat/tracking arc (lead/servo/egomotion/link_tracks). 173 public verbs vs the
+official ~16 actions.
+
+**Deliberately out of the floor's scope (not deficiencies):**
+- `pc_exec` / `pc_file_read` / `pc_file_write` / `pc_ls` — shell + filesystem.
+  This module is the *perception+actuation* floor for the GUI; shell/FS are the
+  OS's own surface (and the agent's native exec/read/write). Folding them in
+  would be scope creep, not parity.
+- `pc_ui_tree` — an accessibility (a11y) tree. On Windows the floor already has
+  the `uia_*` family. On Linux there is no AT-SPI verb *by design*: the floor's
+  answer is pixel perception, which is strictly **more general** than an a11y
+  tree — it reads canvas/game/video surfaces that expose no a11y nodes at all.
+  A11y-tree reading is the narrower tool; the floor chose the wider one.
+
+**Efficiency:** every O(pixels) perception rung is now numpy-vectorised
+byte-identically (12 rungs, passes 1–5); the three pure-Python holdouts are each
+a mapped boundary (area-bound union-find, ULP-sensitive radial_profile,
+grab-latency-bound capture), not an un-mined slow path.
+
+Conclusion: on the GUI-operation axis the floor is at **full parity and past it**
+— nothing the official surface does is missing or slower, and the floor does a
+great deal the official surface cannot. No new F-number: parity was already met;
+this pass only mapped and documented it.
+
+### 去芜留精 — pruning the branch to the essence
+
+Consolidation pass. The arc had committed a large litter of scratch alongside the
+floor: 18 `_game_*.py` play harnesses, 18 `_probe_*.py` one-off experiments, and
+`chimp_atlas.json` (a game artifact). None of it is imported by `osctl.py`, the
+backends, or the regression suite — they were throwaway scaffolding used to *find*
+friction, not part of the floor. Removed from the branch (and the ~100 further
+uncommitted probe/game scratch files cleared from the working tree).
+
+What remains is exactly the essence: `osctl.py` (the floor), `_osbackend_x11.py` /
+`_osbackend_win.py` (the two backends), the `_test_f*.py` + `_test_accel.py`
+regression suite, and this JOURNAL. 33/33 test files still green after the prune.
+损之又损 — the repo now carries only what earns its place.
+
+---
+
+## F277–F303 — the application-floor arc: operating the machine as a user does
+
+The F0–F276 arc built a floor that *controls a screen* — pixels in, gestures
+out, semantics where the a11y tree was already lit. This arc is what turns that
+into *operating the machine the way a person does*: opening applications with
+their accessibility exposed, speaking keyboard shortcuts as words, reading what
+a text surface says, and — the keystone (F303) — first finding the session bus
+the whole semantic floor stands on. Reconstructed and re-verified live on a
+fresh VNC/Plasma VM.
+
+### F277 — window verbs accept a window *record*, not just a bare id
+
+`list_windows()` / `launch()` hand back window records `{"id","title",…}`, but
+every window-taking verb (`activate_window`, `uia_find`, `close_window`, …) took
+a bare integer id. So every call site paid a `w["id"]` toll, and the one time it
+was forgotten the verb acted on a dict cast to garbage. `_win_id()` normalizes
+either form and `_wrap_win_verbs()` wraps the whole window/semantic surface once.
+A located window now flows straight back into the next verb — the composition a
+user's mental model already assumes.
+
+### F278 — a typed newline is a Return press, not a glyph
+
+`type_unicode("a\nb")` sent LF through the X keysym path, which most toolkits
+render as nothing — so multi-line typing silently collapsed to one line. Typed
+text now splits on `\n` and taps Return between segments, so what you type means
+what a person typing it would mean. Verified: two lines typed into KWrite come
+back as two lines through `uia_text`.
+
+### F279 — read_selection retries until the transfer actually lands
+
+X selection transfer is asynchronous; a fixed post-copy sleep races the owning
+app. `read_selection_retry()` polls until the clipboard turns non-empty (or the
+tries run out), converting a timing guess into an observed fact.
+
+### F280 — the omnibox aims at a browser first
+
+Ctrl+L means "focus the address bar" only inside a browser; fired at whatever
+holds focus it types into documents. `omnibox_go` now finds and raises a browser
+window before the atomic focus/paste/Enter.
+
+### F281 — the semantic floor lights its own ground
+
+AT-SPI registration is gated on the session a11y flag (`org.a11y.Status.
+IsEnabled`); on a fresh VM it is off, so every app comes up semantically dark.
+`_light_a11y()` flips it (and the GTK gsettings twin) once, before the first
+launch.
+
+### F282 — launch(): start an app and hold its window
+
+A bare `Popen` gives a pid, not a window, and comes up on a dark a11y bus.
+`launch()` lights a11y (F281), exports the per-toolkit bridge vars (F302),
+resolves the binary (F287), starts the process, then watches `list_windows`
+and returns the NEW window record that appears. The caller holds the window,
+not just a pid.
+
+### F283 — the a11y bridge is exported at process *birth*
+
+`GTK_MODULES=gail:atk-bridge`, `QT_ACCESSIBILITY=1`, … must be in the app's
+environment when it starts; setting them afterward is too late. `launch()` puts
+them in the child env and clears `NO_AT_BRIDGE`.
+
+### F284 — keyboard shortcuts spoken as words
+
+`chord()` took raw VK codes, so every accelerator carried magic numbers.
+`hotkey("ctrl+shift+e")` / `hotkey("alt+f4")` names the full VK alphabet
+(letters, digits, F-keys, punctuation, navigation) and presses-in-order /
+releases-in-reverse with the chord discipline.
+
+### F285 — the clipboard speaks *files*, not only text
+
+A file manager copy/paste is a `text/uri-list` (freedesktop) plus
+`x-special/gnome-copied-files` (which carries the copy-vs-cut verb), not a text
+string. `set_clipboard_files()` / `get_clipboard_files()` serve and read both,
+so a Ctrl+V in Dolphin/Nautilus copies — or moves — the given files. Verified:
+two files put on the clipboard read back as two paths, and a later
+`set_clipboard` text write correctly clears the file list.
+
+### F286 — uia_text: read what a text surface *says*
+
+`uia_get_value` reads a value-holding control; nothing read the prose of a
+terminal's scrollback or an editor's buffer. `uia_text()` walks the AT-SPI Text
+interface (worker-isolated like every semantic verb) and returns the text, scoped
+to a control by name/ctype or the whole window. The tree dual of read_selection:
+meaning for what is exposed, the copy channel for what is only drawn.
+
+### F288 — carry the accessible *description*, not just the name
+
+Grid games (gnome-mines) name their cells identically ("") and distinguish state
+only in the accessible *description*. `uia_children`/`uia_find_all` now carry
+`desc` alongside name/role, so a semantic reading of such a board is possible at
+all.
+
+### F289 — bbox_of / center_of: one box from anything located
+
+uia records carry `rect=(x,y,w,h)`, windows carry geometry dicts, pixel verbs
+hand back 4-tuples — every call site recomposed corners by hand. `bbox_of()`
+takes any of them (and a bare window id) and yields `(x,y,w,h)`; `center_of()` /
+`click_center()` build on it.
+
+### F290 — exact-name match wins over a substring match
+
+`uia_find(win, name="New")` could resolve to "New Window" if that node was
+walked first. Find now prefers an exact (ellipsis-stripped) name match with a
+rect, keeping a substring match only as fallback — in both the record-returning
+and accessible-returning paths. Verified: `find New` on KWrite returns exactly
+"New".
+
+### F292 — set_num_desktops: the write dual of the workspace count
+
+`num_desktops()` could read the workspace set but nothing resized it.
+`set_num_desktops(n)` writes `_NET_NUMBER_OF_DESKTOPS`, completing the workspace
+lifecycle (grow → populate → walk → shrink). Verified: 1→4→2→1 live.
+
+### F293 — showing-only: what the user can actually SEE
+
+A closed dialog can linger in the AT-SPI tree with valid rects. `uia_find_all(…,
+showing=True)` filters to nodes carrying `STATE_SHOWING`, separating what is on
+screen from what the toolkit merely remembers.
+
+### F299 — a named toplevel is a toplevel whatever its role
+
+Some toolkits hang a real toplevel under an odd role (VLC's preferences dialog
+is a named "filler"). Frame enumeration now accepts any *named* toplevel child;
+only anonymous non-frame roles are skipped.
+
+### F300 — replace_text: put a field into a known state before typing
+
+Prefilled fields (a highscore dialog with the previous name, a rename box with
+the old name) make blind typing *append*. `replace_text()` does select-all →
+delete → type, so the field afterward holds exactly what was given.
+
+### F302 — accessibility is decided at process start
+
+The consolidation of F281/F283: the bridge env vars and the lit a11y bus must
+both be in place *before* `Popen`, because a toolkit reads them once at startup.
+`launch()` is the single place that guarantees it.
+
+### F303 — FIND the session bus before speaking on it *(new this session)*
+
+The keystone, exposed the moment the arc was re-run on a fresh ground. On a
+VNC/Plasma VM the desktop's `dbus-daemon` is started by `dbus-launch`, and its
+address — an *abstract* socket `@/tmp/dbus-XXXX` — never reaches a freshly
+spawned shell's environment. So every dbus word failed with *"Failed to connect
+to socket /run/user/1000/bus: No such file or directory"*: `_light_a11y` could
+not flip the a11y flag, the AT-SPI workers could not reach the bus, and the
+entire semantic floor stayed dark even though the desktop was fully up and every
+app was individually accessible.
+
+`_session_bus()` discovers it without being told: honor `$DBUS_SESSION_BUS_
+ADDRESS` if set; else scan same-uid `/proc/*/environ` for a process that carries
+it; else read the abstract `@/tmp/dbus-*` listeners out of `/proc/net/unix`. Each
+candidate is *proved* with a real `org.freedesktop.DBus.GetId` call — and that
+probe must go through `--session` with the address in the child env, never
+`--address=` (address mode speaks peer-to-peer and the daemon rejects it:
+"tried to send a message other than Hello without being registered"). The
+winning address is exported into `os.environ`, so `_light_a11y`, the AT-SPI
+workers, and every app `launch()` starts all inherit the same live bus.
+
+With F303 in place the whole arc verifies end-to-end on this VM: launch KWrite →
+type two lines → `uia_text` reads them back → `uia_find_all(ctype="button")`
+enumerates the toolbar → `uia_find(name="New")` resolves exactly → file
+clipboard round-trips through Dolphin's protocol → the workspace count walks
+1→4→2→1. 道生一 — find the ground first, and everything built on it stands.

@@ -20,11 +20,25 @@ PNG encoder is hand-rolled with ``zlib`` so a screenshot is always available.
 
 from __future__ import annotations
 
+import math
 import re
 import struct
 import sys
 import time
 import zlib
+
+# Optional acceleration (no new F-number — this speeds existing rungs F134/F135/
+# F136/F137/F247, it is not a new verb): the whole-region pixel loops below — mean
+# colour, change count, change localisation — are O(pixels) in pure Python and dominate a
+# perception tick over a large ROI (~90ms for sample_color on ~0.9Mpx). When NumPy
+# is importable, the hot paths vectorise to a C loop (10-100x) while returning the
+# *byte-identical* result; when it is not, the pure-Python body runs unchanged, so
+# the floor keeps its zero-hard-dependency guarantee (道法自然: faster where the
+# ground allows, correct everywhere).
+try:  # pragma: no cover - exercised at runtime, both branches
+    import numpy as _np
+except Exception:  # pragma: no cover
+    _np = None
 
 if sys.platform.startswith("win"):
     import _osbackend_win as _be
@@ -831,6 +845,163 @@ def cursor_pos() -> "tuple[int, int]":
     return _be.cursor_pos()
 
 
+def move_rel(dx: float, dy: float, steps: int = 1, delay: float = 0.0) -> "tuple[int, int]":
+    """Move the pointer by a *relative* delta ``(dx, dy)`` — the motion :func:`move`
+    cannot make (F261).
+
+    Every pointer verb the floor had — :func:`move`, :func:`drag`, :func:`glide`,
+    every click — addresses an *absolute* screen pixel. That is exactly right for a
+    desktop, where the cursor and the coordinate you name are the same thing. But a
+    whole class of surfaces *grabs* the pointer and reads only its **motion**: an FPS
+    in mouse-look, a 3D editor's orbit drag, any Pointer-Lock canvas (WebGL games,
+    map panners). They warp the OS cursor back to centre every frame and integrate
+    the deltas, so an absolute warp to a fixed pixel produces *zero* net delta and the
+    view never turns — verified live in AssaultCube: absolute ``move`` left the camera
+    frozen; relative motion swung it. There was no verb that spoke deltas at all.
+
+    This emits relative motion through the backend (XTEST ``FakeRelativeMotion`` on
+    X11, ``SendInput`` without ``ABSOLUTE`` on Windows). ``steps`` splits the delta
+    into that many equal relative events ``delay`` seconds apart: a large sweep sent as
+    one giant jump can be clamped or skipped by a game that integrates per frame, so
+    stepping makes a big turn land smoothly and predictably (the remainder is spread
+    so the steps sum *exactly* to ``(dx, dy)`` — no rounding drift). ``steps=1`` (the
+    default) is a single immediate event. Returns the integer ``(dx, dy)`` actually
+    emitted. It is to :func:`move` what a turn of the head is to a step of the foot:
+    the same body, but motion instead of a destination."""
+    if steps < 1:
+        raise ValueError("steps must be >= 1")
+    if delay < 0:
+        raise ValueError("delay must be >= 0")
+    move_rel_leaf = getattr(_be, "move_rel", None)
+    if move_rel_leaf is None:
+        raise NotImplementedError("this OS backend has no relative pointer motion")
+    tx, ty = int(round(dx)), int(round(dy))
+    # Spread the total over `steps` so the running sum hits each integer target
+    # exactly — no per-step rounding leaves the cursor short of the asked delta.
+    sx = sy = 0
+    for i in range(1, steps + 1):
+        nx = int(round(tx * i / steps))
+        ny = int(round(ty * i / steps))
+        ex, ey = nx - sx, ny - sy
+        if ex or ey or steps == 1:
+            move_rel_leaf(ex, ey)
+        sx, sy = nx, ny
+        if delay and i < steps:
+            time.sleep(delay)
+    return (tx, ty)
+
+
+def servo(locate, target: "tuple[float, float]", actuate=None, *,
+          gain: "tuple[float, float] | None" = None, probe: float = 30.0,
+          tol: float = 4.0, max_iter: int = 16, damping: float = 0.6,
+          max_step: float = 400.0, settle: float = 0.03) -> dict:
+    """Drive a *located* feature onto a *target* point through a relative actuator
+    of **unknown scale** — closing the perceive→act loop (F262).
+
+    F261 gave :func:`move_rel`: a relative actuator that turns an FPS camera (or
+    pans a Pointer-Lock canvas, orbits a 3D view) by emitting motion deltas. But a
+    relative actuator hides the one number absolute :func:`move` always knew — *how
+    far one unit travels on screen*. ``move(x, y)`` lands on pixel ``(x, y)``; one
+    ``move_rel`` count turns the camera by an angle, and how many **pixels** the
+    target then slides depends on the field of view and the surface's own
+    sensitivity — unknown to the floor, and (measured live in AssaultCube) only
+    locally linear: ~1.3 px/count near centre, but a count large enough to "snap"
+    overshoots and the feature leaves the window entirely. So a relative actuator
+    *cannot* aim in one shot the way :func:`move` clicks in one shot: there is no
+    delta to compute without first knowing the scale, and the scale must be
+    *measured*, not assumed. Every realtime target task hit this same wall — react
+    (F260) says *when*, move_rel (F261) says *turn*, but nothing *closed the loop*
+    between seeing where a thing is and steering it where it should be.
+
+    This is that loop, and nothing smaller is. ``locate()`` returns the feature's
+    current ``(x, y)`` (e.g. a :func:`find_color` centroid or a :func:`match_template`
+    match) or ``None`` if lost; ``target`` is where it should end up (e.g. the
+    crosshair / viewport centre); ``actuate(dx, dy)`` emits a relative motion of
+    ``dx, dy`` actuator units (defaults to :func:`move_rel`). With ``gain`` unknown
+    (the common case) it first **calibrates**: one small ``probe`` nudge per axis,
+    measuring the resulting pixel displacement to learn signed units-per-pixel —
+    the sign too, so it never has to be told that turning the view right slides the
+    world left. Then it steers proportionally — ``step = error * gain * damping``,
+    clamped to ``max_step`` so a rough estimate cannot fling the feature out of
+    sight — re-locating after each move (``settle`` lets the frame render) until the
+    feature is within ``tol`` pixels of ``target`` or ``max_iter`` steps run out.
+    ``damping`` < 1 keeps it from overshooting on an approximate gain (the loop
+    converges geometrically rather than ringing).
+
+    Returns ``{hit, iters, err, gain, pos, start, reason}``: ``hit`` True when the
+    feature settled within ``tol``; ``err`` the final pixel distance; ``gain`` the
+    ``(kx, ky)`` units-per-pixel used (the calibration is the reusable part — pass
+    it back as ``gain`` to skip re-probing once learned); ``reason`` is ``"hit"``,
+    ``"max_iter"``, or ``"lost"``. Call it once to snap onto a still target; call it
+    repeatedly to *track* a moving one (each call a fresh closed-loop correction).
+    It is to :func:`move_rel` what :func:`react_pixel` is to :func:`wait_pixel`: the
+    same motion, but with the eyes open and the loop closed."""
+    if probe == 0:
+        raise ValueError("probe must be non-zero")
+    if max_iter < 1:
+        raise ValueError("max_iter must be >= 1")
+    if damping <= 0:
+        raise ValueError("damping must be > 0")
+    if actuate is None:
+        actuate = lambda dx, dy: move_rel(dx, dy)
+    tx, ty = float(target[0]), float(target[1])
+
+    def _clamp(v: float) -> int:
+        return int(round(max(-max_step, min(max_step, v))))
+
+    start = locate()
+    if start is None:
+        return {"hit": False, "iters": 0, "err": float("inf"), "gain": gain,
+                "pos": None, "start": None, "reason": "lost"}
+
+    if gain is None:
+        # Calibrate: one probe per axis, measure the pixel displacement it causes.
+        # The feature slides opposite the view turn, so the learned units-per-pixel
+        # carries the correct sign and the steering below needs no sign convention.
+        p0 = start
+        actuate(probe, 0); time.sleep(settle)
+        p1 = locate()
+        if p1 is None:
+            return {"hit": False, "iters": 0, "err": float("inf"), "gain": None,
+                    "pos": None, "start": start, "reason": "lost"}
+        actuate(0, probe); time.sleep(settle)
+        p2 = locate()
+        if p2 is None:
+            return {"hit": False, "iters": 0, "err": float("inf"), "gain": None,
+                    "pos": None, "start": start, "reason": "lost"}
+        ddx, ddy = p1[0] - p0[0], p2[1] - p1[1]
+        if ddx == 0 or ddy == 0:
+            raise ValueError("could not calibrate gain: probe produced no "
+                             "displacement (feature occluded, or probe too small)")
+        gain = (probe / ddx, probe / ddy)
+
+    kx, ky = gain
+    iters = 0
+    pos = locate()
+    err = float("inf")
+    for _ in range(max_iter):
+        if pos is None:
+            return {"hit": False, "iters": iters, "err": float("inf"),
+                    "gain": gain, "pos": None, "start": start, "reason": "lost"}
+        ex, ey = tx - pos[0], ty - pos[1]
+        err = (ex * ex + ey * ey) ** 0.5
+        if err <= tol:
+            return {"hit": True, "iters": iters, "err": err, "gain": gain,
+                    "pos": pos, "start": start, "reason": "hit"}
+        sx, sy = _clamp(ex * kx * damping), _clamp(ey * ky * damping)
+        if sx == 0 and sy == 0:
+            # Sub-pixel residual the actuator's integer resolution cannot close.
+            return {"hit": err <= tol, "iters": iters, "err": err, "gain": gain,
+                    "pos": pos, "start": start, "reason": "hit" if err <= tol
+                    else "max_iter"}
+        actuate(sx, sy); time.sleep(settle)
+        iters += 1
+        pos = locate()
+    return {"hit": err <= tol, "iters": iters, "err": err, "gain": gain,
+            "pos": pos, "start": start, "reason": "hit" if err <= tol
+            else "max_iter"}
+
+
 def focus_window(match: str, settle: float = 0.25) -> dict | None:
     """Bring the window whose title contains ``match`` to the front, by name (F146).
 
@@ -1463,6 +1634,122 @@ def wait_pixel(x: int, y: int, rgb: "tuple[int, int, int]", tol: int = 12,
         time.sleep(interval)
 
 
+def click_verify(x: int, y: int, check, tries: int = 3, settle: float = 0.3,
+                 right: bool = False) -> dict:
+    """Click a point and *confirm the effect landed*, re-clicking until it does
+    or ``tries`` is spent (F276).
+
+    :func:`click` is fire-and-forget: it presses and returns, blind to whether the
+    press did anything. Most of the time it did — but a click fired a hair too
+    early (the target still animating in, the recall phase not yet armed), landing
+    a pixel off a control's live edge, or swallowed while the page was busy simply
+    *vanishes*: no effect, no error, no life lost. On a memory board this shows as
+    one tile that never lights though its neighbours clicked from the same batch
+    do — a *systematic* miss no amount of frame-voting (F275) can recover, because
+    the reading was right; the actuation dropped. The only cure is the loop a human
+    does without thinking: click, glance to see it took, click again if it didn't.
+    This owns that loop.
+
+    ``check`` is a zero-argument predicate returning truthy once the click's own
+    visible effect is present — typically ``lambda: osctl.pixel(x, y) matched`` or
+    ``lambda: bool(find_color(lit, search=cell_bbox))``; :func:`wait_pixel` /
+    :func:`find_color` compose straight in. After each press it waits up to
+    ``settle`` for the effect (polling ``check`` a few times across that window, so
+    a fast effect returns early), and re-presses only if still unconfirmed. If
+    ``check`` is already truthy *before* the first press — the effect is present,
+    the target was already in the wanted state — it returns immediately with
+    ``clicks == 0``, so this is idempotent and safe to call on an already-set tile.
+
+    Returns ``{"ok": bool, "clicks": how_many_presses_fired, "tries": tries}``.
+    ``ok`` is whether ``check`` ever turned truthy; ``clicks`` lets a caller tell a
+    first-try landing from one that needed nagging (a cheap health signal on how
+    flaky actuation is)."""
+    if check():
+        return {"ok": True, "clicks": 0, "tries": tries}
+    clicks = 0
+    for _ in range(max(1, tries)):
+        click(x, y, right=right)
+        clicks += 1
+        deadline = time.monotonic() + settle
+        while True:
+            if check():
+                return {"ok": True, "clicks": clicks, "tries": tries}
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(min(0.05, settle / 4) if settle > 0 else 0)
+    return {"ok": bool(check()), "clicks": clicks, "tries": tries}
+
+
+def react_pixel(x: int, y: int, rgb: "tuple[int, int, int]", tol: int = 24,
+                timeout: float = 5.0, interval: float = 0.0,
+                act="click") -> dict:
+    """Spin-watch the pixel at ``(x, y)`` and fire an action the *instant* it comes
+    within ``tol`` of ``rgb`` — the reactive twin of :func:`wait_pixel` (F260).
+
+    ``wait_pixel`` watches and returns a bool; the caller must then call
+    :func:`click`, and ``click`` *moves* the cursor and sleeps 20 ms to let it land
+    before pressing. In a reaction game the cursor is already on the target, so that
+    move + settle is pure dead latency that the game scores against you — measured on
+    the reaction-time test, a tight watch + ``click`` read 34-38 ms, ~20 ms of it the
+    settle alone. Two costs hide here: the perceive→act handoff crosses back into the
+    caller (a second verb call), and ``click`` always re-homes the pointer.
+
+    This fuses perceive and act so there is *no* gap between them. It reads ``(x, y)``
+    every ``interval`` seconds (``0.0`` = spin at full rate; a single-pixel read is the
+    floor's cheapest grab, ~0.03 ms) until within ``tol`` of ``rgb``, then performs
+    ``act`` in the same breath:
+
+    - ``"click"`` / ``"press"`` — press+release the left button **where the cursor
+      already sits**, with no move and no settle (pre-position with ``move(x, y)``
+      before calling: this is the whole point — the reaction case);
+    - ``"none"`` — only detect (``wait_pixel`` with a latency report instead of a bool);
+    - a zero-argument *callable* — invoked once, at the detection instant (tap a key,
+      click elsewhere, anything).
+
+    Returns ``{matched, wait_ms, act_ms, polls, rgb}``: ``wait_ms`` is call→detect,
+    ``act_ms`` is detect→action-returned (the gap this verb exists to crush), ``polls``
+    the number of reads, ``rgb`` the colour last seen. On ``timeout`` it returns
+    ``matched=False`` having fired nothing. It is to ``wait_pixel`` what a reflex is to
+    a glance: the same watch, but the hand moves on the same edge the eye sees."""
+    if not (isinstance(rgb, (tuple, list)) and len(rgb) == 3):
+        raise ValueError("rgb must be an (r, g, b) triple")
+    if timeout < 0 or interval < 0:
+        raise ValueError("timeout and interval must be >= 0")
+    if callable(act):
+        fire = act
+    elif act in ("click", "press"):
+        def fire():
+            _mouse_button("left", True)
+            _mouse_button("left", False)
+    elif act == "none":
+        fire = None
+    else:
+        raise ValueError("act must be 'click', 'press', 'none' or a callable")
+    tr, tg, tb = rgb
+    t0 = time.monotonic()
+    deadline = t0 + timeout
+    polls = 0
+    last = (0, 0, 0)
+    while True:
+        last = pixel(x, y)
+        polls += 1
+        r, g, b = last
+        if abs(r - tr) <= tol and abs(g - tg) <= tol and abs(b - tb) <= tol:
+            t_det = time.monotonic()
+            if fire is not None:
+                fire()
+            t_act = time.monotonic()
+            return {"matched": True, "wait_ms": (t_det - t0) * 1000.0,
+                    "act_ms": (t_act - t_det) * 1000.0, "polls": polls,
+                    "rgb": last}
+        now = time.monotonic()
+        if now >= deadline:
+            return {"matched": False, "wait_ms": (now - t0) * 1000.0,
+                    "act_ms": 0.0, "polls": polls, "rgb": last}
+        if interval > 0:
+            time.sleep(interval)
+
+
 def screenshot(path: str) -> str:
     """Capture the whole virtual desktop to a PNG via GDI BitBlt."""
     w, h, rgb = capture_rgb()
@@ -1518,6 +1805,20 @@ def find_color(target: tuple[int, int, int], tol: int = 24,
         bx1, by1 = min(w - 1, bx1), min(h - 1, by1)
     tr, tg, tb = target
     s = max(1, int(step))
+    if _np is not None:
+        sub = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(h, w, 3)
+               [by0:by1 + 1:s, bx0:bx1 + 1:s].astype(_np.int16))
+        d = _np.abs(sub - _np.array((tr, tg, tb), dtype=_np.int16))
+        mask = (d <= tol).all(axis=2)
+        n = int(mask.sum())
+        if n == 0:
+            return None
+        ys, xs = _np.nonzero(mask)
+        xa = xs * s + bx0
+        ya = ys * s + by0
+        return {"x": int(xa.sum()) // n, "y": int(ya.sum()) // n, "count": n,
+                "bbox": (int(xa.min()), int(ya.min()),
+                         int(xa.max()), int(ya.max()))}
     sx = sy = n = 0
     minx = miny = 1 << 30
     maxx = maxy = -1
@@ -1550,7 +1851,8 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
                      rgb: bytes | None = None,
                      size: tuple[int, int] | None = None,
                      min_count: int = 1,
-                     search: tuple[int, int, int, int] | None = None) -> list[dict]:
+                     search: tuple[int, int, int, int] | None = None,
+                     step: int = 1) -> list[dict]:
     """Segment a colour into its *separate* regions (F052).
 
     ``find_color`` collapses every matching pixel into one centroid — fine for a
@@ -1567,7 +1869,22 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
     and :func:`match_template`. Bounding the colour segmentation to the known
     region of interest stops same-coloured regions in other windows/chrome from
     appearing as spurious blobs and avoids a whole-screen scan when the target
-    occupies only a fraction of it. Returned coordinates stay absolute."""
+    occupies only a fraction of it. Returned coordinates stay absolute.
+
+    ``step`` (F271): *acuity*, exactly as :func:`find_color` already has it but the
+    multi-region segmenter never did. With ``step=1`` every pixel is examined; with
+    ``step=n`` only every n-th pixel on every n-th row is sampled, so the scan does
+    ``~1/n²`` the work and connectivity is judged on the *sample lattice* (a matched
+    sample unions with the matched sample ``n`` to its left / ``n`` above). A solid
+    blob's centroid is unbiased under regular subsampling, so a coarse pass finds
+    *where* separate targets are for a fraction of the cost — the same trade
+    ``find_color`` offers a lone target, now for *several*. ``count`` is matched
+    *samples* (≈ area/n²), so a ``min_count`` threshold must account for ``step``,
+    and ``bbox`` is rounded to the sample grid; re-locate at ``step=1`` in a small
+    window (see :func:`foveate`) when a blob needs pixel-exact extents. A tight
+    perceive→act loop over *distinct* same-coloured targets had to pay a full-
+    resolution segmentation every frame (measured ~130 ms on a 1.5 MP field, ~6×
+    the move+click it gated); ``step`` is how that loop buys back its rate."""
     if rgb is None:
         w, h, rgb = capture_rgb()
     else:
@@ -1581,6 +1898,7 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
         bx0, by0 = max(0, bx0), max(0, by0)
         bx1, by1 = min(w - 1, bx1), min(h - 1, by1)
     tr, tg, tb = target
+    s = max(1, int(step))
     stride = w * 3
     parent: dict[int, int] = {}
 
@@ -1597,20 +1915,34 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
         if ra != rb:
             parent[rb] = ra
 
-    for y in range(by0, by1 + 1):
-        row = y * stride
-        base = y * w
-        up_base = base - w
-        for x in range(bx0, bx1 + 1):
-            i = row + x * 3
-            if (abs(rgb[i] - tr) <= tol and abs(rgb[i + 1] - tg) <= tol
-                    and abs(rgb[i + 2] - tb) <= tol):
-                key = base + x
-                parent[key] = key
-                if x > 0 and (key - 1) in parent:
-                    union(key - 1, key)
-                if y > 0 and (up_base + x) in parent:
-                    union(up_base + x, key)
+    if _np is not None:
+        sub = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(h, w, 3)
+               [by0:by1 + 1:s, bx0:bx1 + 1:s].astype(_np.int16))
+        d = _np.abs(sub - _np.array((tr, tg, tb), dtype=_np.int16))
+        mask = (d <= tol).all(axis=2)
+        ys, xs = _np.nonzero(mask)  # row-major: matches the y-outer x-inner loop
+        for x, y in zip((xs * s + bx0).tolist(), (ys * s + by0).tolist()):
+            key = y * w + x
+            parent[key] = key
+            if x - s >= bx0 and (key - s) in parent:
+                union(key - s, key)
+            if y - s >= by0 and (key - s * w) in parent:
+                union(key - s * w, key)
+    else:
+        for y in range(by0, by1 + 1, s):
+            row = y * stride
+            base = y * w
+            up_base = base - s * w
+            for x in range(bx0, bx1 + 1, s):
+                i = row + x * 3
+                if (abs(rgb[i] - tr) <= tol and abs(rgb[i + 1] - tg) <= tol
+                        and abs(rgb[i + 2] - tb) <= tol):
+                    key = base + x
+                    parent[key] = key
+                    if x - s >= bx0 and (key - s) in parent:
+                        union(key - s, key)
+                    if y - s >= by0 and (up_base + x) in parent:
+                        union(up_base + x, key)
 
     agg: dict[int, dict] = {}
     for key in parent:
@@ -1639,6 +1971,229 @@ def find_color_blobs(target: tuple[int, int, int], tol: int = 24,
              for a in agg.values() if a["count"] >= min_count]
     blobs.sort(key=lambda b: b["count"], reverse=True)
     return blobs
+
+
+def grid_lattice(points, tol=None) -> dict:
+    """Structure an unordered bag of cell centres into a regular grid (F273).
+
+    :func:`find_color` / :func:`find_color_blobs` hand back *where* the tiles are
+    as an unordered bag of centroids; a board game needs them as a GRID — which
+    row and column each occupies, the cell pitch, and the full lattice *including
+    the cells that produced no blob* (an un-lit / empty / covered tile has no
+    colour to segment, so it is simply missing from the bag). Boards also move:
+    Visual Memory re-centres and *grows* its grid every level (3x3, then 4x4, …),
+    so hard-coded cell coordinates rot immediately — the layout has to be inferred
+    from what is on screen this frame. Nothing on the floor turned scattered
+    centroids into that lattice; this does.
+
+    ``points`` is an iterable of ``(x, y)`` or mappings with ``x``/``y`` (any other
+    keys are preserved in the indexed output). Column lines are found by sorting
+    the xs and splitting wherever the gap to the next exceeds ``tol`` — a run of
+    near-equal xs is one column, its mean the line position — and rows likewise on
+    the ys. ``tol`` defaults *per axis* to half that axis's median adjacent-line
+    spacing (the pitch), so it scales to the tile size and is immune to sub-pixel
+    centroid jitter without merging genuinely distinct lines. Each point is then
+    indexed to its nearest column and row.
+
+    Returns::
+
+        {"rows": R, "cols": C,
+         "xs": [x per column], "ys": [y per row],   # inferred line centres
+         "pitch": (px, py),                          # median adjacent spacing
+         "cells": [[pt or None] * C] * R,            # row-major; None where no point
+         "points": [{**pt, "x", "y", "row", "col"}]} # every input, indexed
+
+    ``cells`` is the click map (index ``[r][c]`` for the tile at that grid slot,
+    ``None`` if nothing was detected there); ``xs``/``ys``/``pitch`` reconstruct a
+    slot's centre even when it held no blob, so a solver can click a cell that is
+    currently blank. Empty input yields a 0x0 lattice."""
+    pts = []
+    for p in points:
+        if isinstance(p, dict):
+            pts.append((float(p["x"]), float(p["y"]), p))
+        else:
+            pts.append((float(p[0]), float(p[1]), {"x": p[0], "y": p[1]}))
+    if not pts:
+        return {"rows": 0, "cols": 0, "xs": [], "ys": [],
+                "pitch": (0.0, 0.0), "cells": [], "points": []}
+
+    def cluster(vals, t):
+        vs = sorted(vals)
+        gaps = [vs[i + 1] - vs[i] for i in range(len(vs) - 1)]
+        if t is None:
+            # Split the adjacent gaps into two populations — small (jitter within
+            # a line) and large (the pitch between lines) — at the biggest ratio
+            # jump on a sorted, sub-pixel-floored copy. A ratio jump below ~3x
+            # means one population (a single line): keep it whole.
+            if not gaps:
+                t = 1e9
+            elif len(gaps) == 1:
+                # two points: distinct coordinates are two lines
+                t = gaps[0] * 0.5 if gaps[0] > 2.0 else gaps[0] + 1.0
+            else:
+                fg = sorted(max(g, 1.0) for g in gaps)
+                best, bi = 1.0, -1
+                for i in range(len(fg) - 1):
+                    r = fg[i + 1] / fg[i]
+                    if r > best:
+                        best, bi = r, i
+                if best >= 3.0:
+                    t = (fg[bi] * fg[bi + 1]) ** 0.5
+                else:
+                    t = fg[-1] + 1.0
+        lines, cur = [], [vs[0]]
+        for i, g in enumerate(gaps):
+            if g > t:
+                lines.append(cur)
+                cur = []
+            cur.append(vs[i + 1])
+        lines.append(cur)
+        centres = [sum(c) / len(c) for c in lines]
+        pitches = [centres[i + 1] - centres[i] for i in range(len(centres) - 1)]
+        pitch = sorted(pitches)[len(pitches) // 2] if pitches else 0.0
+        return centres, pitch
+
+    tx, ty = (tol, tol) if not isinstance(tol, (tuple, list)) else tol
+    xs, px = cluster([p[0] for p in pts], tx)
+    ys, py = cluster([p[1] for p in pts], ty)
+
+    def nearest(v, lines):
+        return min(range(len(lines)), key=lambda i: abs(lines[i] - v))
+
+    cells = [[None] * len(xs) for _ in range(len(ys))]
+    indexed = []
+    for x, y, orig in pts:
+        c = nearest(x, xs)
+        r = nearest(y, ys)
+        rec = dict(orig)
+        rec["x"], rec["y"], rec["row"], rec["col"] = x, y, r, c
+        indexed.append(rec)
+        if cells[r][c] is None:
+            cells[r][c] = rec
+    return {"rows": len(ys), "cols": len(xs), "xs": xs, "ys": ys,
+            "pitch": (px, py), "cells": cells, "points": indexed}
+
+
+def grid_index(lattice, points, max_dist=None) -> dict:
+    """Index a *foreign* bag of points onto an *already-known* lattice (F274).
+
+    :func:`grid_lattice` builds a lattice out of one point set and indexes *that*
+    set. But the two point sets are often different things observed at different
+    moments: the board's resting cell centres establish the lattice once (idle
+    tiles, a :func:`detect_grid` result), and then a *separate*, transient reading
+    — the tiles that flashed this round, the pieces on the board now, every white
+    pixel-blob of a move — has to be snapped onto that fixed lattice and collapsed
+    to *which cells* it touched. On the floor that meant hand-rolling, per reading,
+    two ``min(lines, key=abs-distance)`` nearest-line searches (one per axis) and
+    then bucketing repeat detections of one tile into a single click by averaging
+    their centroids. This owns exactly that bookkeeping.
+
+    ``lattice`` is anything carrying ``xs`` (column line centres) and ``ys`` (row
+    line centres) — a :func:`grid_lattice` return, or a bare ``{"xs":…,"ys":…}``.
+    ``points`` is the reading, in the same forms :func:`grid_lattice` takes:
+    ``(x, y)`` tuples or mappings with ``x``/``y`` (extra keys are preserved).
+    Each point is snapped to its nearest column and row. ``max_dist`` (scalar, or
+    ``(dx, dy)`` per axis) drops a point as a *stray* when it lands farther than
+    that from the nearest line on either axis — the guard that keeps a blob spilled
+    outside the board, or noise between cells, from being mis-snapped onto a real
+    tile; ``None`` (default) keeps every point.
+
+    Returns::
+
+        {"rows": R, "cols": C,
+         "cells": [[agg or None] * C] * R,     # row-major, same shape as grid_lattice
+         "occupied": [(row, col), …],          # sorted distinct touched cells
+         "points": [{**pt, "x", "y", "row", "col"}],   # each kept point, indexed
+         "dropped": [{**pt, "x", "y"}]}        # strays beyond max_dist
+
+    ``agg`` for an occupied cell is ``{"x", "y", "n"}``: the centroid of the points
+    that fell in it (the click target, robust to duplicate detections) and how many
+    there were. Empty points, or a lattice with no lines, yield an empty result."""
+    xs = list(lattice["xs"]) if lattice and lattice.get("xs") else []
+    ys = list(lattice["ys"]) if lattice and lattice.get("ys") else []
+    if isinstance(max_dist, (tuple, list)):
+        mdx, mdy = float(max_dist[0]), float(max_dist[1])
+    elif max_dist is None:
+        mdx = mdy = None
+    else:
+        mdx = mdy = float(max_dist)
+
+    def snap(v, lines):
+        i = min(range(len(lines)), key=lambda k: abs(lines[k] - v))
+        return i, abs(lines[i] - v)
+
+    kept, dropped = [], []
+    buckets: "dict" = {}
+    if xs and ys:
+        for p in points:
+            if isinstance(p, dict):
+                x, y, orig = float(p["x"]), float(p["y"]), p
+            else:
+                x, y, orig = float(p[0]), float(p[1]), {"x": p[0], "y": p[1]}
+            c, dx = snap(x, xs)
+            r, dy = snap(y, ys)
+            if (mdx is not None and dx > mdx) or (mdy is not None and dy > mdy):
+                rec = dict(orig); rec["x"], rec["y"] = x, y
+                dropped.append(rec)
+                continue
+            rec = dict(orig)
+            rec["x"], rec["y"], rec["row"], rec["col"] = x, y, r, c
+            kept.append(rec)
+            buckets.setdefault((r, c), []).append((x, y))
+
+    cells = [[None] * len(xs) for _ in range(len(ys))]
+    for (r, c), pts in buckets.items():
+        n = len(pts)
+        cells[r][c] = {"x": sum(q[0] for q in pts) / n,
+                       "y": sum(q[1] for q in pts) / n, "n": n}
+    return {"rows": len(ys), "cols": len(xs), "cells": cells,
+            "occupied": sorted(buckets), "points": kept, "dropped": dropped}
+
+
+def frame_consensus(frames, min_frac=0.5, key=None) -> dict:
+    """Which observations persist across a *burst* of noisy frames (F275).
+
+    A single screen-grab of a transient event lies: one frame misses a tile that
+    is really lit, the next invents a phantom from an anti-alias edge or a
+    half-drawn fade. Reading the event over *many* frames and keeping only what
+    recurs is how you separate signal from flicker — the memorise flash holds its
+    tiles for a dozen frames while a stray blob shows for one or two. On the floor
+    this was hand-rolled twice: count how many frames each thing appeared in, keep
+    the ones above a fraction of the frame count. This owns that majority vote.
+
+    ``frames`` is a list of frames, each an iterable of *items* (cells ``(r, c)``,
+    labels, blobs — anything). ``key`` maps an item to the identity that is voted
+    on (default: the item itself, which must be hashable); an identity seen twice
+    *within one frame* still counts as **one** frame-vote, so duplicate detections
+    in a single grab do not stuff the ballot. An identity is kept when it appears
+    in at least ``ceil(min_frac * len(frames))`` frames (``min_frac`` clamped to
+    ``(0, 1]``; with it 0 or one frame, everything seen is kept).
+
+    Returns ``{"kept": [identity…], "counts": {identity: frames_seen},
+    "frames": F, "threshold": T, "items": {identity: [item…]}}`` — ``kept`` sorted
+    by descending count then identity (the most-persistent first), ``items`` the
+    original items grouped per identity (deduped within a frame) so a caller can
+    average their positions for a click target. Empty input yields empty."""
+    frames = list(frames)
+    F = len(frames)
+    idfn = key if key is not None else (lambda it: it)
+    counts: "dict" = {}
+    items: "dict" = {}
+    for fr in frames:
+        seen_here: "dict" = {}
+        for it in fr:
+            k = idfn(it)
+            if k not in seen_here:            # dedup within a frame
+                seen_here[k] = it
+        for k, it in seen_here.items():
+            counts[k] = counts.get(k, 0) + 1
+            items.setdefault(k, []).append(it)
+    frac = min(1.0, max(1e-9, min_frac))
+    thr = 1 if F == 0 else max(1, math.ceil(frac * F))
+    kept = sorted((k for k, n in counts.items() if n >= thr),
+                  key=lambda k: (-counts[k], k))
+    return {"kept": kept, "counts": counts, "frames": F,
+            "threshold": thr, "items": items}
 
 
 def foveate(target: tuple[int, int, int], center: tuple[int, int],
@@ -1954,6 +2509,10 @@ def sample_color(bbox: tuple[int, int, int, int], rgb: bytes | None = None,
     n = pw * ph
     if n == 0:
         raise ValueError("empty bbox")
+    if _np is not None:
+        s = _np.frombuffer(patch, dtype=_np.uint8).reshape(-1, 3).sum(axis=0)
+        return {"r": int(s[0]) // n, "g": int(s[1]) // n,
+                "b": int(s[2]) // n, "count": n}
     sr = sg = sb = 0
     for i in range(0, len(patch), 3):
         sr += patch[i]
@@ -2032,6 +2591,8 @@ def sample_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
     x0, y0, x1, y1 = bbox
     cw = (x1 - x0 + 1) / cols
     ch = (y1 - y0 + 1) / rows
+    arr = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(h, w, 3)
+           if _np is not None else None)
     grid = []
     for r in range(rows):
         cy0 = y0 + r * ch
@@ -2051,6 +2612,13 @@ def sample_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
             ix0 = max(0, min(ix0, w - 1))
             ix1 = max(ix0 + 1, min(ix1, w))
             if stat == "mean":
+                if arr is not None:
+                    cell = arr[iy0:iy1, ix0:ix1]
+                    n = cell.shape[0] * cell.shape[1]
+                    s = cell.reshape(-1, 3).sum(axis=0)
+                    row.append({"r": int(s[0]) // n, "g": int(s[1]) // n,
+                                "b": int(s[2]) // n, "count": n})
+                    continue
                 sr = sg = sb = n = 0
                 for yy in range(iy0, iy1):
                     base = (yy * w + ix0) * 3
@@ -2064,6 +2632,28 @@ def sample_grid(bbox: tuple[int, int, int, int], cols: int, rows: int,
                 # Modal fill: bucket pixels into a coarse colour histogram,
                 # accumulating each bin's exact channel sums, then return the
                 # mean of the most-populated bin — the fill outvotes any mark.
+                if arr is not None:
+                    cell = arr[iy0:iy1, ix0:ix1].reshape(-1, 3).astype(_np.int64)
+                    kb = 256 // quant + 1
+                    codes = (cell[:, 0] // quant * kb
+                             + cell[:, 1] // quant) * kb + cell[:, 2] // quant
+                    uniq, first_idx, inv, counts = _np.unique(
+                        codes, return_index=True, return_inverse=True,
+                        return_counts=True)
+                    sr = _np.zeros(uniq.size, dtype=_np.int64)
+                    sg = _np.zeros(uniq.size, dtype=_np.int64)
+                    sb = _np.zeros(uniq.size, dtype=_np.int64)
+                    _np.add.at(sr, inv, cell[:, 0])
+                    _np.add.at(sg, inv, cell[:, 1])
+                    _np.add.at(sb, inv, cell[:, 2])
+                    # match ``max(values, key=count)``: greatest count, ties
+                    # broken by earliest insertion (smallest first-seen index).
+                    cand = _np.nonzero(counts == counts.max())[0]
+                    win = int(cand[_np.argmin(first_idx[cand])])
+                    bn = int(counts[win])
+                    row.append({"r": int(sr[win]) // bn, "g": int(sg[win]) // bn,
+                                "b": int(sb[win]) // bn, "count": bn})
+                    continue
                 bins: "dict[tuple[int, int, int], list[int]]" = {}
                 for yy in range(iy0, iy1):
                     base = (yy * w + ix0) * 3
@@ -2317,6 +2907,15 @@ def _luma_resample(rgb: bytes, w: int, ix0: int, iy0: int, ix1: int, iy1: int,
     template) of *different* sizes are still comparable pixel-for-pixel."""
     cwid = ix1 - ix0
     chei = iy1 - iy0
+    if _np is not None:
+        flat = _np.frombuffer(rgb, dtype=_np.uint8)
+        sy = iy0 + (_np.arange(norm) * chei) // norm
+        sx = ix0 + (_np.arange(norm) * cwid) // norm
+        base = (sy[:, None] * w + sx[None, :]) * 3
+        r = flat[base].astype(_np.int32)
+        g = flat[base + 1].astype(_np.int32)
+        b = flat[base + 2].astype(_np.int32)
+        return ((r * 299 + g * 587 + b * 114) // 1000).reshape(-1).tolist()
     out = []
     for j in range(norm):
         sy = iy0 + (j * chei) // norm
@@ -2380,6 +2979,18 @@ def _box_signature(rgb: bytes, w: int, h: int,
         iy1 = iy0 + 1
     iy0 = max(0, min(iy0, h - 1))
     iy1 = max(iy0 + 1, min(iy1, h))
+    if _np is not None:
+        reg = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(-1, w, 3)
+               [iy0:iy1, ix0:ix1].astype(_np.int32))
+        lum = (reg[:, :, 0] * 299 + reg[:, :, 1] * 587
+               + reg[:, :, 2] * 114) // 1000
+        n = lum.size
+        mean = int(lum.sum()) // n if n else 0
+        # the loop's early break only affects speed, not the ink < ink_min gate
+        ink = int((_np.abs(lum - mean) > ink_tol).sum())
+        if ink < ink_min:
+            return None
+        return _luma_resample(rgb, w, ix0, iy0, ix1, iy1, norm)
     lums = []
     for yy in range(iy0, iy1):
         base = (yy * w + ix0) * 3
@@ -2416,14 +3027,22 @@ def _classify_box(rgb: bytes, w: int, h: int,
         return empty_label
     best = None
     best_label = unknown_label
-    for label, tv in lib:
-        s = 0
-        for a, b in zip(sig, tv):
-            d = a - b
-            s += d if d >= 0 else -d
-        if best is None or s < best:
-            best = s
-            best_label = label
+    if _np is not None:
+        sa = _np.asarray(sig, dtype=_np.int32)
+        for label, tv in lib:
+            s = int(_np.abs(sa - _np.asarray(tv, dtype=_np.int32)).sum())
+            if best is None or s < best:
+                best = s
+                best_label = label
+    else:
+        for label, tv in lib:
+            s = 0
+            for a, b in zip(sig, tv):
+                d = a - b
+                s += d if d >= 0 else -d
+            if best is None or s < best:
+                best = s
+                best_label = label
     if max_score is not None and best is not None and best / npix > max_score:
         return unknown_label
     return best_label
@@ -3104,6 +3723,18 @@ def locate_change(before: bytes, after: bytes, size: tuple[int, int],
         bx0, by0, bx1, by1 = search
         bx0, by0 = max(0, bx0), max(0, by0)
         bx1, by1 = min(w - 1, bx1), min(h - 1, by1)
+    if _np is not None:
+        fb = _np.frombuffer(before, dtype=_np.uint8).reshape(h, w, 3)[by0:by1 + 1, bx0:bx1 + 1].astype(_np.int16)
+        fa = _np.frombuffer(after, dtype=_np.uint8).reshape(h, w, 3)[by0:by1 + 1, bx0:bx1 + 1].astype(_np.int16)
+        mask = (_np.abs(fa - fb) > tol).any(axis=2)
+        n = int(mask.sum())
+        if n < min_count:
+            return None
+        ys, xs = _np.nonzero(mask)
+        xs = xs + bx0
+        ys = ys + by0
+        return {"x": int(xs.sum()) // n, "y": int(ys.sum()) // n, "count": n,
+                "bbox": (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))}
     sx = sy = n = 0
     minx = miny = 1 << 30
     maxx = maxy = -1
@@ -3181,21 +3812,34 @@ def locate_change_blobs(before: bytes, after: bytes, size: tuple[int, int],
         if ra != rb:
             parent[rb] = ra
 
-    for y in range(by0, by1 + 1):
-        row = y * stride
-        base = y * w
-        up_base = base - w
-        for x in range(bx0, bx1 + 1):
-            i = row + x * 3
-            if (abs(before[i] - after[i]) > tol
-                    or abs(before[i + 1] - after[i + 1]) > tol
-                    or abs(before[i + 2] - after[i + 2]) > tol):
-                key = base + x
-                parent[key] = key
-                if x > 0 and (key - 1) in parent:
-                    union(key - 1, key)
-                if y > 0 and (up_base + x) in parent:
-                    union(up_base + x, key)
+    if _np is not None:
+        fb = _np.frombuffer(before, dtype=_np.uint8).reshape(h, w, 3)[by0:by1 + 1, bx0:bx1 + 1].astype(_np.int16)
+        fa = _np.frombuffer(after, dtype=_np.uint8).reshape(h, w, 3)[by0:by1 + 1, bx0:bx1 + 1].astype(_np.int16)
+        mask = (_np.abs(fa - fb) > tol).any(axis=2)
+        ys, xs = _np.nonzero(mask)  # row-major: y outer, x inner — matches the loop
+        for x, y in zip((xs + bx0).tolist(), (ys + by0).tolist()):
+            key = y * w + x
+            parent[key] = key
+            if x > 0 and (key - 1) in parent:
+                union(key - 1, key)
+            if y > 0 and (key - w) in parent:
+                union(key - w, key)
+    else:
+        for y in range(by0, by1 + 1):
+            row = y * stride
+            base = y * w
+            up_base = base - w
+            for x in range(bx0, bx1 + 1):
+                i = row + x * 3
+                if (abs(before[i] - after[i]) > tol
+                        or abs(before[i + 1] - after[i + 1]) > tol
+                        or abs(before[i + 2] - after[i + 2]) > tol):
+                    key = base + x
+                    parent[key] = key
+                    if x > 0 and (key - 1) in parent:
+                        union(key - 1, key)
+                    if y > 0 and (up_base + x) in parent:
+                        union(up_base + x, key)
 
     agg: dict[int, dict] = {}
     for key in parent:
@@ -3256,6 +3900,12 @@ def region_diff(a: bytes, b: bytes, tol: int = 0) -> dict:
     total = len(a) // 3
     if a == b:
         return {"pixels": 0, "total": total, "frac": 0.0}
+    if _np is not None:
+        aa = _np.frombuffer(a, dtype=_np.uint8).reshape(-1, 3).astype(_np.int16)
+        bb = _np.frombuffer(b, dtype=_np.uint8).reshape(-1, 3).astype(_np.int16)
+        n = int((_np.abs(aa - bb) > tol).any(axis=1).sum())
+        return {"pixels": n, "total": total,
+                "frac": (n / total if total else 0.0)}
     n = 0
     for i in range(0, len(a), 3):
         if (abs(a[i] - b[i]) > tol or abs(a[i + 1] - b[i + 1]) > tol
@@ -3441,6 +4091,38 @@ def match_template(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
     # multiplies. A tightly scoped 240x240 search still cost ~33s, far too slow
     # to track a moving sprite frame-to-frame. One luma pass over the area
     # (``aw*ah`` pixels) collapses the inner loop to a bare integer subtract.
+    if _np is not None:
+        # Vectorised SAD (accelerates F053/F233): compute the *full* score field
+        # over every offset. The pure-Python slide's early-abandon only prunes
+        # provably-worse offsets, so the arg-min is identical; and numpy.argmin
+        # returns the first minimum in C order (oy outer, ox inner) — the same
+        # offset the strict ``s < best_s`` scan keeps. To stay O(offsets) in
+        # memory (not O(offsets x patch)), accumulate one patch pixel at a time
+        # by array-shifted subtraction rather than materialising every window.
+        srca = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(h, w, 3)
+                [sy0:sy1 + 1, sx0:sx1 + 1].astype(_np.int32))
+        al_np = (srca[:, :, 0] * 299 + srca[:, :, 1] * 587
+                 + srca[:, :, 2] * 114) // 1000
+        pv = _np.frombuffer(patch, dtype=_np.uint8)[:pw * ph * 3].reshape(ph, pw, 3).astype(_np.int32)
+        pl_np = (pv[:, :, 0] * 299 + pv[:, :, 1] * 587 + pv[:, :, 2] * 114) // 1000
+        m_np = (None if mask is None
+                else _np.frombuffer(mask, dtype=_np.uint8)[:pw * ph].reshape(ph, pw) != 0)
+        noy = (ah - ph) // step + 1
+        nox = (aw - pw) // step + 1
+        acc = _np.zeros((noy, nox), dtype=_np.int32)
+        for dy in range(ph):
+            rowsel = al_np[dy:dy + (noy - 1) * step + 1:step]  # (noy, aw)
+            for dx in range(pw):
+                if m_np is not None and not m_np[dy, dx]:
+                    continue
+                block = rowsel[:, dx:dx + (nox - 1) * step + 1:step]  # (noy, nox)
+                acc += _np.abs(block - int(pl_np[dy, dx]))
+        flat = int(acc.argmin())
+        oy, ox = (flat // nox) * step, (flat % nox) * step
+        score = int(acc.flat[flat])
+        tx, ty = sx0 + ox, sy0 + oy
+        return {"x": tx + pw // 2, "y": ty + ph // 2, "score": score,
+                "bbox": (tx, ty, tx + pw - 1, ty + ph - 1)}
     al = bytearray(aw * ah)
     for ry in range(ah):
         src = ((sy0 + ry) * w + sx0) * 3
@@ -3525,60 +4207,96 @@ def match_template_all(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
     aw, ah = sx1 - sx0 + 1, sy1 - sy0 + 1
     if aw < pw or ah < ph:
         return []
-    pl = bytearray(pw * ph)
-    for i in range(pw * ph):
-        pl[i] = (patch[i * 3] * 299 + patch[i * 3 + 1] * 587
-                 + patch[i * 3 + 2] * 114) // 1000
     if mask is None:
-        cols = [tuple(range(pw))] * ph
         scored = pw * ph
     else:
-        cols = [tuple(px for px in range(pw) if mask[py * pw + px])
-                for py in range(ph)]
-        scored = sum(len(c) for c in cols)
-    al = bytearray(aw * ah)
-    for ry in range(ah):
-        src = ((sy0 + ry) * w + sx0) * 3
-        dst = ry * aw
-        for rx in range(aw):
-            j = src + rx * 3
-            al[dst + rx] = (rgb[j] * 299 + rgb[j + 1] * 587
-                            + rgb[j + 2] * 114) // 1000
-    # Single pass with the same arg-min early-abandon as ``match_template`` so
-    # finding *all* hits costs no more per offset than finding the best one.
-    # When ``max_score`` is absent the ceiling is relative (best + margin); the
-    # abort bound tracks ``best_so_far + margin`` and only ever tightens, so a
-    # true hit (s <= best_final + margin <= best_seen + margin) is never aborted,
-    # while doomed offsets bail after a row or two instead of summing every pixel.
-    # Stale candidates kept while ``best`` was higher are filtered by final ceil.
+        scored = sum(1 for i in range(pw * ph) if mask[i])
+    # When ``max_score`` is absent the ceiling is relative (best + margin).
     margin = int(0.04 * 255 * scored)
     fixed_ceil = max_score is not None
-    ceil = max_score
-    hits: list[tuple[int, int, int]] = []
-    best_s: int | None = None
-    for oy in range(0, ah - ph + 1, step):
-        for ox in range(0, aw - pw + 1, step):
-            s = 0
-            abort = ceil if fixed_ceil else (
-                best_s + margin if best_s is not None else None)
-            for py in range(ph):
-                abase = (oy + py) * aw + ox
-                pbase = py * pw
-                for px in cols[py]:
-                    d = al[abase + px] - pl[pbase + px]
-                    s += d if d >= 0 else -d
-                if abort is not None and s > abort:
-                    break
-            else:
-                if best_s is None or s < best_s:
-                    best_s = s
-                if ceil is None or s <= ceil:
-                    hits.append((s, sx0 + ox, sy0 + oy))
-    if best_s is None:
-        return []
-    if not fixed_ceil:
-        ceil = best_s + margin
-        hits = [ht for ht in hits if ht[0] <= ceil]
+    hits: list[tuple[int, int, int]]
+    if _np is not None:
+        # Vectorised SAD field (accelerates F241, same math as match_template).
+        # The pure-Python early-abandon only prunes offsets that provably exceed
+        # the ceiling, so the surviving set is exactly {offset : SAD <= ceil};
+        # numpy computes the full field and thresholds it identically. Hits are
+        # taken in row-major order (numpy.nonzero) — the same order the double
+        # loop appends — so the later stable sort-by-score ties break the same.
+        srca = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(h, w, 3)
+                [sy0:sy1 + 1, sx0:sx1 + 1].astype(_np.int32))
+        al_np = (srca[:, :, 0] * 299 + srca[:, :, 1] * 587
+                 + srca[:, :, 2] * 114) // 1000
+        pv = _np.frombuffer(patch, dtype=_np.uint8)[:pw * ph * 3].reshape(ph, pw, 3).astype(_np.int32)
+        pl_np = (pv[:, :, 0] * 299 + pv[:, :, 1] * 587 + pv[:, :, 2] * 114) // 1000
+        m_np = (None if mask is None
+                else _np.frombuffer(mask, dtype=_np.uint8)[:pw * ph].reshape(ph, pw) != 0)
+        noy = (ah - ph) // step + 1
+        nox = (aw - pw) // step + 1
+        acc = _np.zeros((noy, nox), dtype=_np.int32)
+        for dy in range(ph):
+            rowsel = al_np[dy:dy + (noy - 1) * step + 1:step]
+            for dx in range(pw):
+                if m_np is not None and not m_np[dy, dx]:
+                    continue
+                block = rowsel[:, dx:dx + (nox - 1) * step + 1:step]
+                acc += _np.abs(block - int(pl_np[dy, dx]))
+        best_s = int(acc.min())
+        ceil = max_score if fixed_ceil else best_s + margin
+        ys, xs = _np.nonzero(acc <= ceil)  # row-major, matches the loop order
+        svals = acc[ys, xs].tolist()
+        xl = (xs * step).tolist()
+        yl = (ys * step).tolist()
+        hits = [(svals[k], sx0 + xl[k], sy0 + yl[k]) for k in range(len(svals))]
+    else:
+        pl = bytearray(pw * ph)
+        for i in range(pw * ph):
+            pl[i] = (patch[i * 3] * 299 + patch[i * 3 + 1] * 587
+                     + patch[i * 3 + 2] * 114) // 1000
+        if mask is None:
+            cols = [tuple(range(pw))] * ph
+        else:
+            cols = [tuple(px for px in range(pw) if mask[py * pw + px])
+                    for py in range(ph)]
+        al = bytearray(aw * ah)
+        for ry in range(ah):
+            src = ((sy0 + ry) * w + sx0) * 3
+            dst = ry * aw
+            for rx in range(aw):
+                j = src + rx * 3
+                al[dst + rx] = (rgb[j] * 299 + rgb[j + 1] * 587
+                                + rgb[j + 2] * 114) // 1000
+        # Single pass with the same arg-min early-abandon as ``match_template`` so
+        # finding *all* hits costs no more per offset than finding the best one.
+        # The abort bound tracks ``best_so_far + margin`` and only ever tightens,
+        # so a true hit (s <= best_final + margin <= best_seen + margin) is never
+        # aborted, while doomed offsets bail after a row or two instead of summing
+        # every pixel. Stale candidates are filtered by the final ceiling below.
+        ceil = max_score
+        hits = []
+        best_s = None
+        for oy in range(0, ah - ph + 1, step):
+            for ox in range(0, aw - pw + 1, step):
+                s = 0
+                abort = ceil if fixed_ceil else (
+                    best_s + margin if best_s is not None else None)
+                for py in range(ph):
+                    abase = (oy + py) * aw + ox
+                    pbase = py * pw
+                    for px in cols[py]:
+                        d = al[abase + px] - pl[pbase + px]
+                        s += d if d >= 0 else -d
+                    if abort is not None and s > abort:
+                        break
+                else:
+                    if best_s is None or s < best_s:
+                        best_s = s
+                    if ceil is None or s <= ceil:
+                        hits.append((s, sx0 + ox, sy0 + oy))
+        if best_s is None:
+            return []
+        if not fixed_ceil:
+            ceil = best_s + margin
+            hits = [ht for ht in hits if ht[0] <= ceil]
     hits.sort(key=lambda t: t[0])
     if min_sep is None:
         sepx, sepy = pw, ph
@@ -3595,6 +4313,596 @@ def match_template_all(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
         if len(kept) >= limit:
             break
     return kept
+
+
+def match_unique(patch: bytes, pw: int, ph: int, rgb: bytes | None = None,
+                 size: tuple[int, int] | None = None,
+                 search: tuple[int, int, int, int] | None = None,
+                 step: int = 1, mask: bytes | None = None,
+                 min_margin: float = 0.18, max_score: int | None = None,
+                 require_unique: bool = True) -> dict | None:
+    """Locate a patch, but only trust a match that is *distinctively* the best (F263).
+
+    ``match_template`` returns the single lowest-SAD offset — always *a* point,
+    with the same confidence whether the patch occurs once or many times, and no
+    way to tell which. On a *periodic* surface that is a trap: a brick wall, a row
+    of identical list items, a grid of like icons, a board of identical tiles all
+    repeat, and which copy wins the arg-min is then decided by sub-pixel noise. A
+    tracker that re-locates each frame silently jumps onto the wrong copy (a false
+    lock), and downstream :func:`servo`/aim chases a phantom — and the single-best
+    primitive cannot even report that the match was ambiguous. (Honesty note: in
+    OpenArena the live walls/floor were *not* periodic enough to tie the real
+    fine-step matcher — it located every sampled patch correctly; the measured gap
+    was the missing *confidence*, with live margins ranging 0.15 on a busy floor to
+    1.0 on a unique feature. The outright false-lock is reproduced where the motif
+    truly repeats: a live patch tiled into a periodic strip.)
+
+    This judges *trustworthiness* before returning a point. It scans for every
+    instance (:func:`match_template_all`, one pass, NMS so each copy yields one
+    hit), takes the best, and finds the best **rival** — the next instance at
+    least a patch-size away. The match is unique only if that rival is clearly
+    worse: ``margin = (rival.score - best.score) / rival.score`` in ``[0, 1)``,
+    where ~0 means the rival is just as good (ambiguous) and larger means the
+    winner stands alone. With ``require_unique`` (the default) an ambiguous match
+    returns ``None`` — turning a silent false-lock into an honest "I cannot
+    uniquely place this" — so it is a safe drop-in for ``match_template`` inside
+    a tracking loop. With ``require_unique=False`` it always returns the dict so
+    the caller can inspect ``unique``/``margin``/``rival`` and decide.
+
+    Returns ``{x, y, score, bbox, margin, unique, rival}`` (screen coords,
+    centred on the match; ``rival`` is the rival's ``{x, y, score}`` or ``None``
+    when the patch occurs only once — then ``margin`` is ``1.0``). ``min_margin``
+    is the distinctiveness threshold; ``max_score`` / ``search`` / ``step`` /
+    ``mask`` behave as in :func:`match_template_all`. Cost is one
+    ``match_template_all`` slide — constrain ``search`` for real-time use."""
+    if not 0.0 <= min_margin < 1.0:
+        raise ValueError("min_margin must be in [0, 1)")
+    hits = match_template_all(patch, pw, ph, rgb=rgb, size=size, search=search,
+                              step=step, mask=mask, max_score=max_score,
+                              min_sep=(pw, ph), limit=8)
+    if not hits:
+        return None
+    best = hits[0]
+    rival = hits[1] if len(hits) > 1 else None
+    if rival is None:
+        margin = 1.0
+    else:
+        margin = (rival["score"] - best["score"]) / max(rival["score"], 1)
+    unique = margin >= min_margin
+    if require_unique and not unique:
+        return None
+    return {"x": best["x"], "y": best["y"], "score": best["score"],
+            "bbox": best["bbox"], "margin": margin, "unique": unique,
+            "rival": ({"x": rival["x"], "y": rival["y"], "score": rival["score"]}
+                      if rival else None)}
+
+
+def lead(samples, horizon: float = 0.0, min_samples: int = 2) -> "dict | None":
+    """Estimate a tracked point's image-plane velocity and predict where it
+    will be after ``horizon`` seconds (F264).
+
+    ``servo`` (F262) drives a *located* feature onto a target, relocating each
+    step — but every step it aims at where the feature *was* when it last
+    looked. For a still target that is fine; for a moving one it is always a
+    step behind. Practice measured it: panning a wall feature across the view
+    at ~27 px/s, predicting the next frame by "assume it stays" (servo's
+    implicit model) erred 15 px, while ``last + v·dt`` erred 2.9 px — the lag
+    is one whole inter-frame displacement, and it is exactly the displacement a
+    velocity estimate removes. Nothing in the floor turned a short history of
+    locations into a *velocity*, so nothing could aim where the target is
+    going rather than where it has been.
+
+    ``samples`` is a sequence of ``(t, x, y)`` observations — ``t`` in seconds
+    (any common origin), ``x``/``y`` in pixels, typically the centre of each
+    :func:`match_unique` / :func:`locate_change_blobs` hit. Entries whose ``x``
+    or ``y`` is ``None`` (a frame where the locate refused or lost the target)
+    are skipped, so this pairs directly with the honest ``None`` of
+    ``match_unique`` without the caller stitching gaps. Velocity is the
+    least-squares slope of ``x(t)`` and ``y(t)`` — optimal for the zero-mean
+    locate jitter the matcher leaves and naturally down-weighting a single
+    noisy sample, rather than trusting the last pair alone.
+
+    Returns ``None`` when fewer than ``min_samples`` valid points survive or
+    every sample shares one instant (no time base to differentiate). Otherwise
+    returns ``{vx, vy, speed, x, y, t, n, px, py, horizon}``: ``vx``/``vy`` px/s,
+    ``x``/``y``/``t`` the latest observation, ``n`` points used, and ``px``/``py``
+    the predicted *lead* point ``(x + vx·horizon, y + vy·horizon)`` — feed that
+    to :func:`servo`/:func:`move_rel` as the aim point so the actuator targets
+    the interception, not the trail. The model is constant-velocity (no
+    acceleration): honest only out to roughly the horizon over which the
+    target's motion stays straight — a step or few frames, which is the regime
+    a relocating loop actually predicts into."""
+    if min_samples < 2:
+        min_samples = 2
+    pts = [(float(t), float(x), float(y)) for (t, x, y) in samples
+           if x is not None and y is not None]
+    if len(pts) < min_samples:
+        return None
+    n = len(pts)
+    tm = sum(p[0] for p in pts) / n
+    xm = sum(p[1] for p in pts) / n
+    ym = sum(p[2] for p in pts) / n
+    stt = sum((p[0] - tm) ** 2 for p in pts)
+    if stt <= 0.0:
+        return None
+    vx = sum((p[0] - tm) * (p[1] - xm) for p in pts) / stt
+    vy = sum((p[0] - tm) * (p[2] - ym) for p in pts) / stt
+    t_last, x_last, y_last = pts[-1]
+    px = x_last + vx * horizon
+    py = y_last + vy * horizon
+    return {"vx": vx, "vy": vy, "speed": (vx * vx + vy * vy) ** 0.5,
+            "x": x_last, "y": y_last, "t": t_last, "n": n,
+            "px": px, "py": py, "horizon": horizon}
+
+
+def consensus_shift(votes, tol: float = 8.0, min_support: float = 0.5,
+                    min_votes: int = 4) -> "dict | None":
+    """Recover the dominant image translation (camera / world shift) from a bag
+    of noisy per-feature displacement ``votes``, refusing when no single shift
+    actually explains the scene (F265).
+
+    ``lead`` (F264) fits a velocity from one feature's history over *time*; this
+    is its spatial twin — it fuses *many* features at one instant into a single
+    global shift. Practice forced it. Panning a side-scroller (SuperTux), a
+    block-flow over the foreground reads, between two frames, a uniform world
+    translation — the scene has one depth, so geometrically one shift is right
+    (unlike FPS yaw's rotational, range-dependent flow, which F264 rejected a
+    global shift for). But the *measurement* is not clean: the repeating ice
+    texture makes each :func:`match_unique` vote land a tile-fraction off, and a
+    few blocks gross-mislock — so a plain mean is dragged toward the outliers
+    and a median lands in the empty gap *between* vote clusters (measured: a
+    real ~-26 px pan produced per-block votes spread -48..0 px with two stray
+    votes at +128 and -128; the median read -20 px but only 31 % of blocks lay
+    within a few px of it, so its confidence was unreadable). Nothing in the
+    floor turned a cloud of disagreeing displacement votes into one shift *with
+    a stated confidence*, nor refused when the votes had no agreement at all
+    (a scene transition / death frame / motion past the search window scatters
+    votes across the whole range with no dominant value).
+
+    ``votes`` is an iterable of ``(dx, dy)`` displacements (e.g. one per tracked
+    block); entries with a ``None`` component are dropped, so this pairs with
+    :func:`match_unique`'s honest misses without the caller stitching gaps. The
+    dominant shift is the ``(dx, dy)`` with the most votes within ``tol`` pixels
+    (Chebyshev) of it — a coarse 2-D translation mode / Hough vote — refined to
+    the mean of those inliers. ``tol`` should be on the order of the locate
+    noise / feature spacing (a tile, here). Returns ``None`` when fewer than
+    ``min_votes`` valid votes survive or the best shift's support (inlier
+    fraction) is below ``min_support`` — the flow-domain analog of
+    ``match_unique``'s margin gate: report a shift only when one shift commands
+    a majority. Otherwise returns ``{dx, dy, support, inliers, n, tol}``:
+    ``dx``/``dy`` the refined shift, ``support`` the inlier fraction in
+    ``[0, 1]``, ``inliers`` their count, ``n`` total votes considered."""
+    pts = [(float(dx), float(dy)) for (dx, dy) in votes
+           if dx is not None and dy is not None]
+    n = len(pts)
+    if n < min_votes:
+        return None
+    best_idx = 0
+    best_count = -1
+    for i, (cx, cy) in enumerate(pts):
+        c = 0
+        for (dx, dy) in pts:
+            if abs(dx - cx) <= tol and abs(dy - cy) <= tol:
+                c += 1
+        if c > best_count:
+            best_count, best_idx = c, i
+    cx, cy = pts[best_idx]
+    inliers = [(dx, dy) for (dx, dy) in pts
+               if abs(dx - cx) <= tol and abs(dy - cy) <= tol]
+    support = len(inliers) / n
+    if support < min_support:
+        return None
+    mx = sum(p[0] for p in inliers) / len(inliers)
+    my = sum(p[1] for p in inliers) / len(inliers)
+    return {"dx": mx, "dy": my, "support": support,
+            "inliers": len(inliers), "n": n, "tol": tol}
+
+
+def consensus_affine(votes, min_votes: int = 8, max_iter: int = 4,
+                     outlier_k: float = 2.5, resid_floor: float = 2.0,
+                     min_support: float = 0.5) -> "dict | None":
+    """Fit a robust *affine* flow field to position-tagged displacement
+    ``votes`` — the model a camera rotation needs and that ``consensus_shift``
+    can only reject (F267).
+
+    ``consensus_shift`` (F265) fits one global translation and, honestly, refuses
+    a scene whose flow is not a single shift — its own docstring names FPS yaw as
+    that case. Practice then pinned down *why*, and what the right model is.
+    Yawing an OpenArena view by a fixed amount and reading per-block displacement
+    over the viewport, the horizontal flow was not one value and was not a few
+    discrete layers: it was a smooth, repeatable ramp down the frame — measured
+    ``dx`` ``-72`` px across the top band, ``-60``, ``-48``, ``-36`` across the
+    bottom, each band tight (IQR ~6 px), the histogram a gap-free plateau from
+    ``-36`` to ``-72`` with no clusters. ``consensus_shift`` returned ``None``
+    (correct: no single shift owns a majority), but nothing in the floor could
+    *represent* that flow. A camera rotation / perspective pan produces exactly
+    this — image velocity affine in image position — so the honest generalisation
+    of a global shift is a global *affine* field, which also degrades back to a
+    pure translation when its linear terms vanish (a side-scroller pan).
+
+    ``votes`` is an iterable of ``(x, y, dx, dy)``: the image position ``(x, y)``
+    of a tracked block and its measured displacement ``(dx, dy)`` (e.g. each from
+    a :func:`match_unique` hit). Entries with any ``None`` component are dropped,
+    pairing with the matcher's honest misses. Both components are fit as
+    ``d = c0 + c1·x + c2·y`` by least squares; centring the seed positions makes
+    the normal equations collapse to a 2x2 solve per component, with the constant
+    term the mean displacement. The fit is made robust by iteratively trimming
+    seeds whose residual exceeds ``median + outlier_k·MAD`` (never below
+    ``resid_floor`` px, so a near-perfect fit is not over-pruned) and refitting,
+    up to ``max_iter`` rounds or until the inlier set is stable — so a few gross
+    mislocks or an independently-moving object do not bend the global field.
+
+    Returns ``None`` when fewer than ``min_votes`` valid votes survive, when the
+    seed positions are degenerate (collinear / single column or row, so a
+    gradient is unidentifiable — an honest refusal rather than a wild
+    extrapolation), or when the inlier fraction falls below ``min_support``.
+    Otherwise returns ``{ax, bx, ay, by, support, inliers, n, rms, cx, cy}``:
+    ``ax`` is ``(c0, c1, c2)`` for ``dx`` and ``ay`` likewise for ``dy`` (absolute
+    image coords, so ``dx ≈ ax[0] + ax[1]·x + ax[2]·y``); ``bx``/``by`` are the
+    same coefficients re-expressed about the seed centroid ``(cx, cy)`` as
+    ``(mean_d, d/dx, d/dy)``, so ``bx[0]``/``by[0]`` are the shift at the frame
+    centre (what to feed an aim loop) and ``bx[1:]``/``by[1:]`` the gradient (zero
+    => a pure translation, i.e. the ``consensus_shift`` regime). ``support`` is
+    the inlier fraction, ``rms`` the inlier residual in px."""
+    pts = [(float(x), float(y), float(dx), float(dy))
+           for (x, y, dx, dy) in votes
+           if x is not None and y is not None and dx is not None and dy is not None]
+    n = len(pts)
+    if n < min_votes:
+        return None
+
+    def fit(idx):
+        k = len(idx)
+        cx = sum(pts[i][0] for i in idx) / k
+        cy = sum(pts[i][1] for i in idx) / k
+        sxx = sxy = syy = 0.0
+        sxdx = sydx = sxdy = sydy = 0.0
+        mdx = sum(pts[i][2] for i in idx) / k
+        mdy = sum(pts[i][3] for i in idx) / k
+        for i in idx:
+            xc = pts[i][0] - cx
+            yc = pts[i][1] - cy
+            sxx += xc * xc
+            sxy += xc * yc
+            syy += yc * yc
+            sxdx += xc * pts[i][2]
+            sydx += yc * pts[i][2]
+            sxdy += xc * pts[i][3]
+            sydy += yc * pts[i][3]
+        det = sxx * syy - sxy * sxy
+        if abs(det) < 1e-6:
+            return None
+        # centred linear terms for dx and dy
+        dx1 = (syy * sxdx - sxy * sydx) / det
+        dx2 = (sxx * sydx - sxy * sxdx) / det
+        dy1 = (syy * sxdy - sxy * sydy) / det
+        dy2 = (sxx * sydy - sxy * sxdy) / det
+        return cx, cy, mdx, mdy, dx1, dx2, dy1, dy2
+
+    idx = list(range(n))
+    res = None
+    for _ in range(max_iter):
+        res = fit(idx)
+        if res is None:
+            return None
+        cx, cy, mdx, mdy, dx1, dx2, dy1, dy2 = res
+        resid = []
+        for i in range(n):
+            xc = pts[i][0] - cx
+            yc = pts[i][1] - cy
+            ex = pts[i][2] - (mdx + dx1 * xc + dx2 * yc)
+            ey = pts[i][3] - (mdy + dy1 * xc + dy2 * yc)
+            resid.append((ex * ex + ey * ey) ** 0.5)
+        sr = sorted(resid)
+        med = sr[len(sr) // 2]
+        mad = sorted(abs(r - med) for r in resid)[len(sr) // 2]
+        thr = max(resid_floor, med + outlier_k * mad)
+        new_idx = [i for i in range(n) if resid[i] <= thr]
+        if len(new_idx) < min_votes:
+            break
+        if len(new_idx) == len(idx):
+            idx = new_idx
+            break
+        idx = new_idx
+
+    res = fit(idx)
+    if res is None:
+        return None
+    cx, cy, mdx, mdy, dx1, dx2, dy1, dy2 = res
+    inset = set(idx)
+    inl = 0
+    ss = 0.0
+    for i in range(n):
+        xc = pts[i][0] - cx
+        yc = pts[i][1] - cy
+        ex = pts[i][2] - (mdx + dx1 * xc + dx2 * yc)
+        ey = pts[i][3] - (mdy + dy1 * xc + dy2 * yc)
+        if i in inset:
+            inl += 1
+            ss += ex * ex + ey * ey
+    support = inl / n
+    if support < min_support:
+        return None
+    rms = (ss / inl) ** 0.5 if inl else 0.0
+    # absolute-coord coefficients: d = c0 + c1*x + c2*y
+    ax = (mdx - dx1 * cx - dx2 * cy, dx1, dx2)
+    ay = (mdy - dy1 * cx - dy2 * cy, dy1, dy2)
+    return {"ax": ax, "ay": ay,
+            "bx": (mdx, dx1, dx2), "by": (mdy, dy1, dy2),
+            "cx": cx, "cy": cy,
+            "support": support, "inliers": inl, "n": n, "rms": rms}
+
+
+def flow_residual(votes, field: "dict | None" = None, min_resid: float = 6.0,
+                  cluster_radius: float = 40.0, min_cluster: int = 3,
+                  min_votes: int = 8) -> "dict | None":
+    """Find what moves *independently of the camera* — the seeds whose
+    displacement disagrees with the global flow field, clustered into objects
+    (F268).
+
+    :func:`consensus_affine` (F267) fits the camera's egomotion as a global
+    affine flow and *discards* the seeds that disagree with it as outliers. But
+    those discarded seeds are not noise — under a moving camera they are the
+    signal: a strafing bot, a thrown grenade, a lift, anything moving in the
+    world rather than merely swept by the camera. Practice pins the gap:
+    :func:`locate_change_blobs` segments raw frame change, but while the camera
+    pans *every* pixel changes, so it floods — it cannot tell a moving object
+    from the moving world. Subtracting a single :func:`consensus_shift`
+    translation only works when the world's flow is one shift (it is not, for a
+    yaw — F267). Nothing in the floor turned "motion relative to the modelled
+    flow field" into "here is an object moving on its own, at this position,
+    this fast."
+
+    ``votes`` is an iterable of ``(x, y, dx, dy)`` (seed position + measured
+    displacement, e.g. each a :func:`match_unique` hit) — the same input
+    :func:`consensus_affine` takes. ``field`` is a fitted-affine result to
+    subtract; when ``None`` it is fit here from ``votes`` (so the global model
+    and the residual come from one call). Each seed's residual is its
+    displacement minus the field's prediction at its position; seeds whose
+    residual magnitude is at least ``min_resid`` px survive, and survivors are
+    grouped by single-link spatial proximity (within ``cluster_radius`` px, the
+    :func:`cluster_boxes` idiom) into objects. Each cluster of at least
+    ``min_cluster`` seeds is reported as one independently-moving object
+    ``{x, y, rdx, rdy, speed, n, bbox}``: ``x``/``y`` the residual-seed
+    centroid (a clickable/aim point), ``rdx``/``rdy`` the mean residual velocity
+    (its motion *after* the camera's is removed), ``speed`` its magnitude.
+
+    Returns ``None`` when fewer than ``min_votes`` valid votes survive or the
+    field cannot be fit (degenerate geometry). Otherwise returns
+    ``{field, objects, n_resid, n}``: ``objects`` sorted by seed count (largest
+    first), possibly empty — an honest "the whole scene is just the camera
+    moving, nothing moves on its own", which is the correct answer for a pan
+    over a static map and exactly what frame-diff cannot say."""
+    pts = [(float(x), float(y), float(dx), float(dy))
+           for (x, y, dx, dy) in votes
+           if x is not None and y is not None and dx is not None and dy is not None]
+    n = len(pts)
+    if n < min_votes:
+        return None
+    if field is None:
+        field = consensus_affine(pts, min_votes=min_votes)
+        if field is None:
+            return None
+    ax, ay = field["ax"], field["ay"]
+    resid = []
+    for (x, y, dx, dy) in pts:
+        px = ax[0] + ax[1] * x + ax[2] * y
+        py = ay[0] + ay[1] * x + ay[2] * y
+        rdx, rdy = dx - px, dy - py
+        if (rdx * rdx + rdy * rdy) ** 0.5 >= min_resid:
+            resid.append((x, y, rdx, rdy))
+    # single-link spatial clustering of the residual seeds (leader/union by radius)
+    m = len(resid)
+    parent = list(range(m))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    r2 = cluster_radius * cluster_radius
+    for i in range(m):
+        xi, yi = resid[i][0], resid[i][1]
+        for j in range(i + 1, m):
+            dxx = xi - resid[j][0]
+            dyy = yi - resid[j][1]
+            if dxx * dxx + dyy * dyy <= r2:
+                parent[find(i)] = find(j)
+    groups: "dict[int, list[int]]" = {}
+    for i in range(m):
+        groups.setdefault(find(i), []).append(i)
+    objects = []
+    for members in groups.values():
+        if len(members) < min_cluster:
+            continue
+        k = len(members)
+        sx = sum(resid[i][0] for i in members) / k
+        sy = sum(resid[i][1] for i in members) / k
+        srdx = sum(resid[i][2] for i in members) / k
+        srdy = sum(resid[i][3] for i in members) / k
+        xs = [resid[i][0] for i in members]
+        ys = [resid[i][1] for i in members]
+        objects.append({"x": sx, "y": sy, "rdx": srdx, "rdy": srdy,
+                        "speed": (srdx * srdx + srdy * srdy) ** 0.5, "n": k,
+                        "bbox": (min(xs), min(ys), max(xs), max(ys))})
+    objects.sort(key=lambda o: o["n"], reverse=True)
+    return {"field": field, "objects": objects, "n_resid": m, "n": n}
+
+
+def link_tracks(frames, max_gap: float = 60.0, max_skip: int = 1,
+                min_len: int = 1) -> "list[dict]":
+    """Associate per-frame point detections into temporal tracks (F270).
+
+    F269 proved that a single frame-pair cannot tell a real mover from a
+    deterministic match artifact — both make a residual cluster. The
+    discriminator the data pointed at is time: a real mover persists across
+    consecutive frames and translates coherently; a transient mismatch appears
+    once and is gone; a camera-locked overlay (a HUD, the weapon) persists but
+    stays pinned at a fixed screen position. :func:`flow_residual` says "what
+    disagrees with the world *this frame*"; nothing in the floor said "what
+    disagreed *coherently over time*". This is that verb.
+
+    ``frames`` is a list — one entry per time step — of detection lists; each
+    detection is a mapping with at least ``x`` and ``y`` (any other keys are
+    preserved untouched) or an ``(x, y)`` pair. Linking is greedy
+    nearest-neighbour, resolved per step in ascending-distance order so each
+    detection and each open track is used at most once: a detection joins the
+    nearest still-open track whose last point lies within ``max_gap`` px and at
+    most ``max_skip + 1`` steps back (so ``max_skip=1`` bridges a one-frame
+    drop-out), otherwise it starts a new track. Returns the tracks with at
+    least ``min_len`` points, sorted longest-first, each::
+
+        {"points": [{"t", "x", "y", "det"}, ...],
+         "length": int,                 # how many frames it survived
+         "span": float,                 # net start->end displacement (px)
+         "net": (dx, dy),               # net screen translation
+         "bbox": (minx, miny, maxx, maxy)}
+
+    The caller reads persistence and span as the gate the floor could not give
+    from one pair: ``length == 1`` is a flicker (transient noise); ``length > 1``
+    with ``span`` near zero is a pinned overlay (camera-locked HUD/weapon);
+    persistent *and* translating is a genuine independent mover. Live (panning
+    OpenArena): linking collapsed 17 single-pair detections to 2 persistent
+    tracks, dropping 15 flickers, and tagged the weapon band pinned."""
+    def xy(d):
+        if isinstance(d, dict):
+            return float(d["x"]), float(d["y"])
+        return float(d[0]), float(d[1])
+
+    g2 = max_gap * max_gap
+    tracks: "list[dict]" = []   # each: {"points": [...], "_last_t": int}
+    for t, dets in enumerate(frames):
+        norm = [(xy(d), d) for d in dets]
+        # candidate (dist^2, det_index, track_index) over still-linkable tracks
+        cands = []
+        for di, ((dx, dy), _d) in enumerate(norm):
+            for ti, tr in enumerate(tracks):
+                if t - tr["_last_t"] > max_skip + 1:
+                    continue
+                lp = tr["points"][-1]
+                dd = (dx - lp["x"]) ** 2 + (dy - lp["y"]) ** 2
+                if dd <= g2:
+                    cands.append((dd, di, ti))
+        cands.sort(key=lambda c: c[0])
+        used_d: "set[int]" = set()
+        used_t: "set[int]" = set()
+        for dd, di, ti in cands:
+            if di in used_d or ti in used_t:
+                continue
+            (dx, dy), d = norm[di]
+            tracks[ti]["points"].append({"t": t, "x": dx, "y": dy, "det": d})
+            tracks[ti]["_last_t"] = t
+            used_d.add(di)
+            used_t.add(ti)
+        for di, ((dx, dy), d) in enumerate(norm):
+            if di in used_d:
+                continue
+            tracks.append({"points": [{"t": t, "x": dx, "y": dy, "det": d}],
+                           "_last_t": t})
+    out = []
+    for tr in tracks:
+        pts = tr["points"]
+        if len(pts) < min_len:
+            continue
+        xs = [p["x"] for p in pts]
+        ys = [p["y"] for p in pts]
+        ndx, ndy = xs[-1] - xs[0], ys[-1] - ys[0]
+        out.append({"points": pts, "length": len(pts),
+                    "span": (ndx * ndx + ndy * ndy) ** 0.5,
+                    "net": (ndx, ndy),
+                    "bbox": (min(xs), min(ys), max(xs), max(ys))})
+    out.sort(key=lambda tr: tr["length"], reverse=True)
+    return out
+
+
+def detect_sequence(levels, thresh: float = 0.4, refractory: int = 1,
+                    baseline=None, peak=None) -> "list[dict]":
+    """Recover the ordered activation sequence of several regions (F272).
+
+    :func:`react_pixel` answers "when did *this* pixel cross a level" for a single
+    point. A grid/board game asks it of *several* regions at once and cares about
+    ORDER — Sequence Memory flashes N tiles one after another and you must
+    reproduce the order; a Simon/whack-a-mole board is the same shape. Nothing on
+    the floor turned "these regions' levels over time" into "which fired, and in
+    what order"; the caller kept re-deriving it by hand — poll every region every
+    frame, remember each one's previous level, detect the rising edge, and debounce
+    a flash that spans several frames. This owns that bookkeeping.
+
+    ``levels`` is a list — one entry per frame — of the regions' activation this
+    frame: either a sequence of ``N`` scalars (region *i*'s level, higher = more
+    active, e.g. mean/max luminance of a tile's patch) or a ``{name: scalar}``
+    mapping (keys taken from the first frame and required in every frame). An event
+    fires for a region on the frame its level first *rises* across that region's
+    gate — edge-triggered, not level: while it stays above the gate no further
+    event fires; it must fall back to the gate for ``refractory`` frames to re-arm,
+    so one flash spanning many frames is one event and a tile that flashes twice is
+    two. The gate is per-region, ``gate_i = base_i + thresh*(peak_i - base_i)``, so
+    a dim region and a bright one are each judged on their own dynamic range; a
+    flat region (``peak_i == base_i``) never fires. ``baseline`` / ``peak`` may be
+    given explicitly (list or ``{name: scalar}``); by default each region's min /
+    max over ``levels`` is used.
+
+    Returns events in fire order::
+
+        [{"region": i_or_name, "frame": int, "level": float}, ...]
+
+    ties within a frame breaking by region order; empty when nothing crosses. Feed
+    it a windowed :func:`capture_rgb` reduction per region per frame and it returns
+    the sequence to replay."""
+    ref = max(1, int(refractory))
+    frames = list(levels)
+    if not frames:
+        return []
+    first = frames[0]
+    if isinstance(first, dict):
+        keys = list(first.keys())
+
+        def row(f):
+            return [float(f[k]) for k in keys]
+    else:
+        keys = list(range(len(first)))
+
+        def row(f):
+            return [float(v) for v in f]
+
+    mat = [row(f) for f in frames]
+    n = len(keys)
+    for r in mat:
+        if len(r) != n:
+            raise ValueError("every frame must have the same region count")
+
+    def per_region(arg, default):
+        if arg is None:
+            return default
+        if isinstance(arg, dict):
+            return [float(arg[k]) for k in keys]
+        seq = [float(v) for v in arg]
+        if len(seq) != n:
+            raise ValueError("baseline/peak length must match region count")
+        return seq
+
+    base = per_region(baseline, [min(r[i] for r in mat) for i in range(n)])
+    pk = per_region(peak, [max(r[i] for r in mat) for i in range(n)])
+    gate = [base[i] + thresh * (pk[i] - base[i]) for i in range(n)]
+
+    armed = [True] * n
+    below = [0] * n
+    events: "list[dict]" = []
+    for fi, r in enumerate(mat):
+        for i in range(n):
+            hot = r[i] > gate[i]
+            if hot:
+                below[i] = 0
+                if armed[i]:
+                    events.append({"region": keys[i], "frame": fi,
+                                   "level": r[i]})
+                    armed[i] = False
+            else:
+                below[i] += 1
+                if below[i] >= ref:
+                    armed[i] = True
+    return events
 
 
 _OCR_ENGINE: "str | None" = None
@@ -3888,6 +5196,18 @@ def edge_map(rgb: bytes, size: tuple[int, int],
     w, _h = size
     x0, y0, x1, y1 = bbox
     bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    if _np is not None:
+        lum = ((_np.frombuffer(rgb, dtype=_np.uint8).reshape(-1, w, 3)
+                [y0:y0 + bh, x0:x0 + bw].astype(_np.int32)))
+        lum = (lum[:, :, 0] * 299 + lum[:, :, 1] * 587
+               + lum[:, :, 2] * 114) // 1000
+        edges = _np.zeros((bh, bw), dtype=_np.int64)
+        if bh > 2 and bw > 2:
+            gx = lum[1:bh - 1, 2:bw] - lum[1:bh - 1, 0:bw - 2]
+            gy = lum[2:bh, 1:bw - 1] - lum[0:bh - 2, 1:bw - 1]
+            g = _np.abs(gx) + _np.abs(gy)
+            edges[1:bh - 1, 1:bw - 1] = (g > thr)
+        return edges.reshape(-1).tolist(), bw, bh
     lum = [0] * (bw * bh)
     for yy in range(bh):
         base = ((y0 + yy) * w + x0) * 3
@@ -3911,6 +5231,8 @@ def edge_map(rgb: bytes, size: tuple[int, int],
 
 def edge_hamming(a: list[int], b: list[int]) -> int:
     """Count differing pixels between two equal-length edge masks."""
+    if _np is not None:
+        return int((_np.asarray(a) != _np.asarray(b)).sum())
     return sum(1 for i in range(len(a)) if a[i] != b[i])
 
 
@@ -3985,6 +5307,31 @@ def edge_signature(rgb: bytes, size: tuple[int, int],
     w, _h = size
     x0, y0, x1, y1 = bbox
     bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    if _np is not None:
+        lum = (_np.frombuffer(rgb, dtype=_np.uint8).reshape(-1, w, 3)
+               [y0:y0 + bh, x0:x0 + bw].astype(_np.int64))
+        lum = (lum[:, :, 0] * 299 + lum[:, :, 1] * 587
+               + lum[:, :, 2] * 114) // 1000
+        # Integral image → every variable-size cell mean in one shot, exactly the
+        # per-cell ``s // cnt`` the loop computes (floor division on non-neg sums).
+        ii = _np.zeros((bh + 1, bw + 1), dtype=_np.int64)
+        ii[1:, 1:] = lum.cumsum(0).cumsum(1)
+        r0 = _np.array([ny * bh // nh for ny in range(nh)])
+        r1 = _np.maximum(_np.array([(ny + 1) * bh // nh for ny in range(nh)]),
+                         r0 + 1)
+        c0 = _np.array([nx * bw // nw for nx in range(nw)])
+        c1 = _np.maximum(_np.array([(nx + 1) * bw // nw for nx in range(nw)]),
+                         c0 + 1)
+        s = (ii[r1[:, None], c1[None, :]] - ii[r0[:, None], c1[None, :]]
+             - ii[r1[:, None], c0[None, :]] + ii[r0[:, None], c0[None, :]])
+        cnt = (r1 - r0)[:, None] * (c1 - c0)[None, :]
+        gg = s // cnt  # (nh, nw)
+        sig = _np.zeros((nh, nw), dtype=_np.int64)
+        if nh > 2 and nw > 2:
+            gx = gg[1:nh - 1, 2:nw] - gg[1:nh - 1, 0:nw - 2]
+            gy = gg[2:nh, 1:nw - 1] - gg[0:nh - 2, 1:nw - 1]
+            sig[1:nh - 1, 1:nw - 1] = (_np.abs(gx) + _np.abs(gy) > thr)
+        return sig.reshape(-1).tolist()
     g = [0] * (nw * nh)
     for ny in range(nh):
         sy0 = y0 + ny * bh // nh
@@ -5403,6 +6750,341 @@ def scroll_to_phrase(bbox: tuple[int, int, int, int],
             scroll(dy=-step, x=x, y=y)
             time.sleep(settle)
     return None
+
+
+# ==== F277–F302: the application-floor arc (reconstructed) ================== #
+# The arc that took the floor from "controls a screen" to "operates the
+# machine as a user does": launching apps with the a11y bus lit, speaking
+# hotkeys as words, accepting window records everywhere, and reading text
+# through the AT-SPI Text interface.
+
+# uia_text (F286): read what a text-bearing surface *says* through the AT-SPI
+# Text iface (worker-isolated like every semantic verb). The tree dual of
+# read_selection: meaning for what is exposed, the copy channel for what is
+# only drawn.
+uia_text = getattr(_be, "uia_text", lambda win, name=None, ctype=None: "")
+# set_num_desktops (F292): the write dual of num_desktops — grow/shrink the
+# workspace set itself, completing the full workspace lifecycle.
+set_num_desktops = getattr(_be, "set_num_desktops", lambda n: False)
+num_desktops = getattr(_be, "num_desktops", lambda: 1)
+current_desktop = getattr(_be, "current_desktop", lambda: 0)
+set_desktop = getattr(_be, "set_desktop", lambda n: False)
+move_window_to_desktop = getattr(_be, "move_window_to_desktop", lambda win, n: False)
+window_desktop = getattr(_be, "window_desktop", lambda win: 0)
+
+
+def _win_id(win) -> int:
+    """F277: window-handle composition. list_windows/wait_window yield window
+    *records* ``{"id","title",…}`` but the verbs took bare ids, so every call
+    site paid a ``w["id"]`` toll and the one time it was forgotten the verb
+    silently acted on garbage. Every window-taking verb now accepts either."""
+    if isinstance(win, dict):
+        return int(win["id"])
+    return int(win)
+
+
+def _wrap_win_verbs():
+    g = globals()
+    for nm in ("activate_window", "close_window", "window_exists", "window_geometry",
+               "move_window", "window_state", "set_window_state", "window_pid",
+               "terminate_window", "set_window_topmost", "is_window_topmost",
+               "window_desktop", "move_window_to_desktop",
+               "uia_name", "uia_children", "uia_find", "uia_find_all", "uia_invoke",
+               "uia_get_value", "uia_set_value", "uia_focus", "uia_click",
+               "uia_select", "uia_is_selected", "uia_toggle", "uia_toggle_state",
+               "uia_expand", "uia_collapse", "uia_expand_state", "uia_text"):
+        fn = g.get(nm)
+        if fn is None:
+            continue
+
+        def mk(f):
+            def wrapped(win, *a, **kw):
+                return f(_win_id(win), *a, **kw)
+            wrapped.__name__ = getattr(f, "__name__", "wrapped")
+            wrapped.__doc__ = getattr(f, "__doc__", None)
+            return wrapped
+        g[nm] = mk(fn)
+
+
+_wrap_win_verbs()
+
+
+_type_unicode_raw = type_unicode
+
+
+def type_unicode(text: str) -> None:  # noqa: F811 — deliberate re-bind (F278)
+    """F278: '\\n' in typed text becomes a real Return press. The X keysym path
+    types LF as a glyph most toolkits ignore, so multi-line typing silently
+    collapsed to one line; splitting on newlines and tapping Return between
+    segments makes typed text mean what a person typing it would mean."""
+    parts = text.split("\n")
+    for i, part in enumerate(parts):
+        if part:
+            _type_unicode_raw(part)
+        if i < len(parts) - 1:
+            tap(VK_RETURN)
+            time.sleep(0.03)
+
+
+# F284: the full VK alphabet, and hotkeys as words. chord() took raw VK codes,
+# so every accelerator call site carried magic numbers; hotkey('ctrl+shift+e')
+# says what a keyboard shortcut *is*.
+_VK_BY_NAME = {
+    "ctrl": 0x11, "control": 0x11, "alt": 0x12, "menu": 0x12, "shift": 0x10,
+    "win": 0x5B, "super": 0x5B, "meta": 0x5B, "cmd": 0x5B,
+    "enter": 0x0D, "return": 0x0D, "esc": 0x1B, "escape": 0x1B, "tab": 0x09,
+    "space": 0x20, "backspace": 0x08, "delete": 0x2E, "del": 0x2E,
+    "insert": 0x2D, "home": 0x24, "end": 0x23,
+    "pageup": 0x21, "pgup": 0x21, "pagedown": 0x22, "pgdn": 0x22,
+    "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28,
+    "comma": 0xBC, "period": 0xBE, "minus": 0xBD, "plus": 0xBB, "equals": 0xBB,
+    "slash": 0xBF, "semicolon": 0xBA, "quote": 0xDE, "backslash": 0xDC,
+    "bracketleft": 0xDB, "bracketright": 0xDD, "grave": 0xC0,
+}
+for _c in range(26):
+    _VK_BY_NAME[chr(ord("a") + _c)] = 0x41 + _c
+for _c in range(10):
+    _VK_BY_NAME[str(_c)] = 0x30 + _c
+for _c in range(1, 13):
+    _VK_BY_NAME[f"f{_c}"] = 0x70 + _c - 1
+
+
+def hotkey(spec: str, hold: float = 0.0) -> None:
+    """F284: speak a keyboard shortcut as the word it is — ``'ctrl+shift+e'``,
+    ``'alt+f4'``, ``'ctrl+l'``. Presses in order, releases in reverse (the
+    chord discipline); ``hold`` keeps the chord down for state-sampling
+    surfaces (see :func:`tap`)."""
+    vks = []
+    for part in spec.replace(" ", "").split("+"):
+        vk = _VK_BY_NAME.get(part.lower())
+        if vk is None:
+            raise ValueError(f"hotkey: unknown key {part!r}")
+        vks.append(vk)
+    for vk in vks:
+        key_down(vk)
+    if hold > 0:
+        time.sleep(hold)
+    for vk in reversed(vks):
+        key_up(vk)
+
+
+def replace_text(text: str, settle: float = 0.08) -> None:
+    """F300: put a field into a KNOWN state before typing. Prefilled fields
+    (a highscore dialog with the previous name, a rename box with the old
+    name) make blind typing *append*, not replace — select-all, delete, then
+    type, so the field afterwards holds exactly ``text``."""
+    chord(VK_CONTROL, VK_A)
+    time.sleep(settle)
+    tap(0x2E)  # VK_DELETE
+    time.sleep(settle)
+    if text:
+        type_unicode(text)
+
+
+def bbox_of(obj):
+    """F289: one verb from *any* located thing to its screen box (x, y, w, h).
+    uia records carry ``rect=(x,y,w,h)``, windows carry geometry dicts, pixel
+    verbs hand back 4-tuples — every call site was recomposing corners by
+    hand. Returns None when the thing has no on-screen box."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        if "rect" in obj:
+            return tuple(obj["rect"]) if obj["rect"] else None
+        if "id" in obj:
+            g = window_geometry(obj)
+            return (g["x"], g["y"], g["w"], g["h"]) if g else None
+        if {"x", "y", "w", "h"} <= set(obj):
+            return (obj["x"], obj["y"], obj["w"], obj["h"])
+    if isinstance(obj, (tuple, list)) and len(obj) == 4:
+        return tuple(obj)
+    g = window_geometry(obj)   # bare window id
+    return (g["x"], g["y"], g["w"], g["h"]) if g else None
+
+
+def center_of(obj):
+    """Centre point of :func:`bbox_of` — where a click on it should land."""
+    r = bbox_of(obj)
+    if r is None:
+        return None
+    return (r[0] + r[2] // 2, r[1] + r[3] // 2)
+
+
+def click_center(obj, right: bool = False) -> bool:
+    """Click the centre of any located thing (uia record / window / rect)."""
+    c = center_of(obj)
+    if c is None:
+        return False
+    click(c[0], c[1], right=right)
+    return True
+
+
+def _session_bus() -> str | None:
+    """F303: FIND the session bus before speaking on it. On a VNC/plasma
+    ground the desktop's dbus-daemon was started by dbus-launch and its
+    address (an abstract socket) never reaches a fresh shell's environment —
+    so every dbus word (including lighting the a11y bus, hence the entire
+    semantic floor) fails with 'No such file or directory'. Discover it:
+    env var if set; else any same-uid process that carries it; else the
+    abstract ``@/tmp/dbus-*`` sockets in /proc/net/unix, probed with a real
+    dbus call. The winning address is exported so the AT-SPI workers and
+    every launched app inherit it."""
+    import os
+    import subprocess
+    cands = []
+    a = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+    if a:
+        cands.append(a)
+    uid = os.getuid()
+    try:
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            p = f"/proc/{pid}"
+            try:
+                if os.stat(p).st_uid != uid:
+                    continue
+                with open(p + "/environ", "rb") as f:
+                    for kv in f.read().split(b"\0"):
+                        if kv.startswith(b"DBUS_SESSION_BUS_ADDRESS="):
+                            cands.append(kv.split(b"=", 1)[1].decode())
+            except OSError:
+                continue
+    except OSError:
+        pass
+    try:
+        with open("/proc/net/unix") as f:
+            for ln in f:
+                cols = ln.split()
+                if cols and cols[-1].startswith("@/tmp/dbus-"):
+                    cands.append("unix:abstract=" + cols[-1][1:])
+    except OSError:
+        pass
+    for addr in dict.fromkeys(cands):
+        try:
+            # NB: probe with --session + env, not --address=: dbus-send in
+            # address mode speaks peer-to-peer and the daemon rejects it
+            # ('tried to send a message other than Hello').
+            env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=addr)
+            r = subprocess.run(
+                ["dbus-send", "--session", "--print-reply",
+                 "--dest=org.freedesktop.DBus", "/org/freedesktop/DBus",
+                 "org.freedesktop.DBus.GetId"],
+                capture_output=True, timeout=3, env=env)
+            if r.returncode == 0:
+                os.environ["DBUS_SESSION_BUS_ADDRESS"] = addr
+                return addr
+        except Exception:
+            continue
+    return None
+
+
+_a11y_lit = [False]
+
+
+def _light_a11y() -> None:
+    """F281: the semantic floor lights its own ground. AT-SPI registration is
+    gated on the session a11y flag; on a fresh VM it is off, so every launched
+    app would come up semantically dark. Flip org.a11y.Status.IsEnabled (and
+    the GTK gsettings twin) once per session before the first launch."""
+    if _a11y_lit[0]:
+        return
+    _a11y_lit[0] = True
+    _session_bus()          # F303: make sure we are on the desktop's bus
+    import subprocess
+    for cmd in (
+        ["dbus-send", "--session", "--type=method_call",
+         "--dest=org.a11y.Bus", "/org/a11y/bus",
+         "org.freedesktop.DBus.Properties.Set", "string:org.a11y.Status",
+         "string:IsEnabled", "variant:boolean:true"],
+        ["gsettings", "set", "org.gnome.desktop.interface",
+         "toolkit-accessibility", "true"],
+    ):
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=5)
+        except Exception:
+            pass
+
+
+def launch(argv, wait_title: str | None = None, timeout: float = 20.0,
+           env: dict | None = None):
+    """F282 (+F283, F287): start an application the way the floor needs it —
+    a11y-lit and tracked to its window.
+
+    * lights the session a11y bus first (F281) and exports the per-toolkit
+      bridge variables (``GTK_MODULES=gail:atk-bridge``, ``QT_ACCESSIBILITY=1``,
+      …) so the app registers on the semantic floor at *process birth* — a11y
+      is decided when the process starts, not later (F302);
+    * resolves the binary against PATH **plus /usr/games** (F287 — Debian puts
+      every game there and login shells see it, but a bare Popen does not);
+    * watches ``list_windows`` and returns the NEW window record that appears
+      (title containing ``wait_title`` if given), or None on timeout — so the
+      caller holds the window, not just a pid."""
+    import os
+    import shlex
+    import shutil
+    import subprocess
+    if isinstance(argv, str):
+        argv = shlex.split(argv)
+    argv = list(argv)
+    path = os.environ.get("PATH", "") + os.pathsep + "/usr/games"
+    exe = shutil.which(argv[0], path=path)
+    if exe:
+        argv[0] = exe
+    _light_a11y()
+    e = dict(os.environ)
+    e.update({"GTK_MODULES": "gail:atk-bridge", "QT_ACCESSIBILITY": "1",
+              "QT_LINUX_ACCESSIBILITY_ALWAYS_ON": "1", "GNOME_ACCESSIBILITY": "1"})
+    e.pop("NO_AT_BRIDGE", None)
+    if env:
+        e.update(env)
+    before = {w["id"] for w in list_windows()}
+    proc = subprocess.Popen(argv, env=e, start_new_session=True,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for w in list_windows():
+            if w["id"] in before:
+                continue
+            if wait_title is None or wait_title.lower() in (w.get("title") or "").lower():
+                w["pid"] = proc.pid
+                return w
+        if proc.poll() is not None and wait_title is None:
+            break
+        time.sleep(0.25)
+    return None
+
+
+_omnibox_go_raw = omnibox_go
+
+
+def omnibox_go(url: str) -> None:  # noqa: F811 — deliberate re-bind (F280)
+    """F280: the omnibox verb *aims at a browser* first. Ctrl+L means
+    'focus address bar' only inside a browser window; fired at whatever holds
+    focus it types into documents. Find and raise a browser window, then do
+    the atomic focus/paste/Enter."""
+    for w in list_windows():
+        t = (w.get("title") or "").lower()
+        if any(b in t for b in ("chrome", "chromium", "firefox", "falkon",
+                                "konqueror", "epiphany", "edge")):
+            activate_window(w)
+            time.sleep(0.25)
+            break
+    _omnibox_go_raw(url)
+
+
+def read_selection_retry(tries: int = 4, settle: float = 0.15,
+                         restore: bool = True) -> str:
+    """F279: X selection transfer is asynchronous — a fixed post-copy sleep
+    races the owner. Retry the read until the clipboard turns non-empty (or
+    tries run out), which converts a timing guess into an observed fact."""
+    out = ""
+    for _ in range(max(1, tries)):
+        out = read_selection(restore=restore, settle=settle)
+        if out:
+            return out
+        time.sleep(settle)
+    return out
 
 
 if __name__ == "__main__":
