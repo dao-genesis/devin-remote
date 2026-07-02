@@ -11039,3 +11039,22 @@ the whole edit was keyboard-shaped (cell click for caret, then nibbles +
 shortcuts), and the semantic layer served as the *witness* (offset label
 ticking 0000:0001 after the first byte) rather than the actor. Apps with
 modal-free, keyboard-first editing are the easiest citizens of the floor.
+
+## F343 — FreeCAD: parametric CAD speaks XML through a zip
+
+First heavy engineering arc (3D modeling, OpenCASCADE floor, 253 MB of
+apt). Launch quirk: osctl.launch hit a BadWindow X error racing FreeCAD's
+splash window (the wait_title match found a window that died before
+ConfigureWindow) — re-listing and re-acquiring the real main window
+recovers cleanly; splash screens are a launch-time hazard worth a retry
+loop. From there the whole arc stayed semantic: workbench ComboBox lists
+all 23 workbenches as ListItems (pick 'Part'), menu Part > Primitives >
+Cube posts fine on click-hover-click, and the new Cube lands in the model
+tree as a named node. The parametric heart: select Cube, the property
+grid exposes Length/Width/Height as DataItems; clicking the value cell,
+Ctrl+A, '30', Return re-dimensions the solid live (viewport stretches
+visibly). Ctrl+S posts the save dialog which accepts a full typed path.
+Ground truth: .FCStd is a zip — Document.xml inside carries
+Length=30, Width=10, Height=10 exactly as typed. CAD's artifact floor is
+the most articulate yet: the parametric model is *text*, and the GUI is
+just one editor of it.
