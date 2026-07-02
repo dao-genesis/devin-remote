@@ -3966,7 +3966,7 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                             if (!message || !ws.devinAuth1 || !ws.devinOrgId) return;
                             devinCreateSession(ws.devinOrgId, message, ws.devinAuth1).then(r => {
                                 if (r.ok) vscode.window.showInformationMessage('Session created: ' + (r.devinId || ''));
-                                else vscode.window.showErrorMessage('Session create failed');
+                                else vscode.window.showErrorMessage('Session create failed' + (r.status ? ' (HTTP ' + r.status + ')' : '') + (r.error ? ': ' + r.error : ''));
                                 this.refresh();
                             });
                         });
@@ -7263,7 +7263,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     if (!message) return;
                     const r = await devinCreateSession(ws.devinOrgId, message, ws.devinAuth1);
                     if (r.ok) vscode.window.showInformationMessage('Session created: ' + (r.devinId || ''));
-                    else vscode.window.showErrorMessage('Session create failed');
+                    else vscode.window.showErrorMessage('Session create failed' + (r.status ? ' (HTTP ' + r.status + ')' : '') + (r.error ? ': ' + r.error : ''));
                     refreshReply({ type: 'actionResult', command: 'devinCreateSession', ok: r.ok });
                 });
                 break;
@@ -10015,7 +10015,9 @@ const DEVIN_FRONTEND_TO_BACKEND: Record<string, string> = {
 
 async function devinCreateSession(orgId: string, userMessage: string, auth1: string, opts?: any): Promise<{ ok: boolean; devinId?: string; isNewSession?: boolean; createdAt?: string; raw?: any; status?: number; error?: string }> {
     opts = opts || {};
-    const payload: any = { prompt: userMessage };
+    // app.devin.ai 内部 API 的 /sessions 校验字段为 user_message (非 prompt); api.devin.ai/v1 则用 prompt。
+    // 两个都带上以兼容内部/公开两套契约 (实跑 422 揭示: body.user_message required) — 与 rt-flow devin_cloud.createSession 同源。
+    const payload: any = { user_message: userMessage, prompt: userMessage };
     if (opts.idempotencyKey) payload.idempotency_key = opts.idempotencyKey;
     if (opts.playbookId) payload.playbook_id = opts.playbookId;
     if (opts.title) payload.title = opts.title;
