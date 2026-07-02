@@ -203,6 +203,36 @@ const upstreamHttpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 15
 // 道·通用网页代理(搜索引擎/任意站)连接池: 各站各自 keep-alive, 多路复用免 TLS 重握手, 根治搜索引擎「完全不可用」。
 const webProxyHttpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 10000, maxSockets: 32, maxFreeSockets: 8, rejectUnauthorized: false });
 const webProxyHttpAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 10000, maxSockets: 32, maxFreeSockets: 8 });
+// 道·「知其雄·守其雌」— 站内网页反代 per-origin Cookie 罐。单源代理(全站皆落 127.0.0.1:9920)下
+//   浏览器无法按目标站隔离 Cookie → 登录态/CSRF/会话在 GitHub 等站内「操作」时全部丢失(旧病灶:
+//   只能搜索·一操作就用不了)。故 Cookie 由服务端按目标 origin 存/发, 与浏览器 127.0.0.1 Cookie 罐脱钩,
+//   多站会话各归其源、并行不悖。上限保平(超额淘汰最旧源) → 守柔不涨爆内存。
+const webProxyCookieJar = new Map<string, Map<string, string>>();
+const WEB_COOKIE_ORIGIN_MAX = 128;
+function webProxyCookieHeader(origin: string): string {
+    const jar = webProxyCookieJar.get(origin);
+    if (!jar || !jar.size) return '';
+    return Array.from(jar.entries()).map(([k, v]) => k + '=' + v).join('; ');
+}
+function webProxyStoreCookies(origin: string, setCookie: any): void {
+    if (!setCookie) return;
+    const arr = Array.isArray(setCookie) ? setCookie : [setCookie];
+    let jar = webProxyCookieJar.get(origin);
+    if (!jar) {
+        if (webProxyCookieJar.size >= WEB_COOKIE_ORIGIN_MAX) { const k0 = webProxyCookieJar.keys().next().value; if (k0 !== undefined) webProxyCookieJar.delete(k0); }
+        jar = new Map(); webProxyCookieJar.set(origin, jar);
+    }
+    for (const sc of arr) {
+        const first = String(sc).split(';')[0];
+        const eq = first.indexOf('=');
+        if (eq <= 0) continue;
+        const name = first.slice(0, eq).trim();
+        const val = first.slice(eq + 1).trim();
+        const expired = /(?:^|;)\s*max-age\s*=\s*0(?:;|$)/i.test(String(sc)) || /expires=[^;]*1970/i.test(String(sc));
+        if (!name) continue;
+        if (expired || val === '') jar.delete(name); else jar.set(name, val);
+    }
+}
 // 执今之道见小曰明 — Vite 内容哈希静态资源(/assets/*)缓存 (内存 L1 + 磁盘 L2)
 // 哈希变则键变 → 永不陈旧; 免重复穿隧道 → 二次导航秒开。
 // 道·「穿透只传必要核心」: 公网用户的渲染负荷(JS/CSS/字体, 占带宽大头)经反代首取后落盘 L2,
@@ -1051,6 +1081,92 @@ function checkAuth(req: any): boolean {
     return false;
 }
 
+// 道·「无有入于无间」— 主端口 WS 升级反代: 令多窗口 Devin 网页的实时会话事件通道(SPA 同源 WS)
+//   随网页存活穿透隧道到官方上游, 根治「多开/多窗口断联·发不出·没回应·须重连」。仅放行 Devin 系上游
+//   (无任意 TCP 中继面·杜绝 SSRF)。token 已内嵌于 WS URL query(getAccessToken 返本账号令牌·多号各正确)。
+function daoWsUpstreamFor(route: string, search: string): { host: string; port: number; path: string } | null {
+    const q = search || '';
+    const m = (host: string, p: string) => ({ host, port: 443, path: p + q });
+    if (route.startsWith('/devin-cloud-api/')) return m('api.devin.ai', route.slice('/devin-cloud-api'.length));
+    if (route.startsWith('/devin-cloud-backend/')) return m('backend.webapp.devin.ai', route.slice('/devin-cloud-backend'.length));
+    if (route.startsWith('/devin-cloud-ws-register/')) return m('register.windsurf.com', route.slice('/devin-cloud-ws-register'.length));
+    if (route.startsWith('/devin-cloud-ws-cdn/')) return m('server.codeium.com', route.slice('/devin-cloud-ws-cdn'.length));
+    if (route.startsWith('/devin-cloud-ws-ss/')) return m('server.self-serve.windsurf.com', route.slice('/devin-cloud-ws-ss'.length));
+    if (route.startsWith('/devin-cloud-ws/')) return m('windsurf.com', route.slice('/devin-cloud-ws'.length));
+    if (route.startsWith('/devin-cloud/')) return m('app.devin.ai', route.slice('/devin-cloud'.length));
+    // 官网同源根挂载: /api/events/<id>/live 等 SPA 同源 WS(window.location.origin) → app.devin.ai
+    if (isAppProxyPassthrough(route)) return m('app.devin.ai', route);
+    return null;
+}
+function daoProxyWsUpgrade(req: any, clientSocket: any, head: any, up: { host: string; port: number; path: string }, url: URL): void {
+    let done = false, connected = false;
+    const bail = () => { if (done) return; done = true; try { clientSocket.destroy(); } catch (e) { /* 守柔 */ } };
+    clientSocket.on('error', bail);
+    try { clientSocket.setNoDelay(true); } catch (e) { /* 守柔 */ }
+    try { clientSocket.setTimeout(0); } catch (e) { /* 守柔 */ }
+    const onUpstream = (upstream: any) => {
+        connected = true;
+        const h = req.headers || {};
+        const qToken = url.searchParams.get('token') || '';
+        const qOrg = url.searchParams.get('org_id') || '';
+        const a1 = qToken || ws.devinAuth1 || '';
+        const org = qOrg || ws.devinOrgId || '';
+        const lines = [
+            'GET ' + up.path + ' HTTP/1.1',
+            'Host: ' + up.host,
+            'Connection: Upgrade',
+            'Upgrade: ' + (h['upgrade'] || 'websocket'),
+            'Sec-WebSocket-Version: ' + (h['sec-websocket-version'] || '13'),
+        ];
+        if (h['sec-websocket-key']) lines.push('Sec-WebSocket-Key: ' + h['sec-websocket-key']);
+        if (h['sec-websocket-protocol']) lines.push('Sec-WebSocket-Protocol: ' + h['sec-websocket-protocol']);
+        if (h['sec-websocket-extensions']) lines.push('Sec-WebSocket-Extensions: ' + h['sec-websocket-extensions']);
+        lines.push('Origin: https://' + up.host);
+        lines.push('User-Agent: ' + DEVIN_UA);
+        if (a1) {
+            lines.push('Authorization: Bearer ' + a1);
+            if (org) lines.push('x-cog-org-id: ' + org);
+            const ck = ['auth1_token=' + a1];
+            if (org) ck.push('org_id=' + org);
+            lines.push('Cookie: ' + ck.join('; '));
+        }
+        lines.push('', '');
+        try { upstream.write(lines.join('\r\n')); } catch (e) { bail(); return; }
+        if (head && head.length) { try { upstream.write(head); } catch (e) { /* 守柔 */ } }
+        // 裸字节双向管道: 上游 101 握手回放 + 之后所有帧透传(不解析·不改写)
+        upstream.pipe(clientSocket);
+        clientSocket.pipe(upstream);
+        upstream.on('error', bail);
+        upstream.on('close', bail);
+        clientSocket.on('close', () => { try { upstream.destroy(); } catch (e) { /* 守柔 */ } });
+    };
+    // 直连优先(app.devin.ai 未被墙·最快); 失败经本机代理(Clash)CONNECT 兜底 — 与 devinCloudProxyRoute 同策
+    const direct = tls.connect({ host: up.host, port: up.port || 443, servername: up.host, rejectUnauthorized: false, ALPNProtocols: ['http/1.1'] } as any, () => onUpstream(direct));
+    direct.once('error', () => {
+        if (connected) return;
+        if (detectedProxyPort > 0) {
+            const raw = net.connect(detectedProxyPort, '127.0.0.1', () => {
+                try { raw.write('CONNECT ' + up.host + ':443 HTTP/1.1\r\nHost: ' + up.host + ':443\r\n\r\n'); } catch (e) { bail(); }
+            });
+            let buf = Buffer.alloc(0);
+            const onData = (d: Buffer) => {
+                buf = Buffer.concat([buf, d]);
+                const i = buf.indexOf('\r\n\r\n');
+                if (i < 0) return;
+                raw.removeListener('data', onData);
+                const status = buf.slice(0, i).toString('utf8').split('\r\n')[0];
+                if (!/ 200 /.test(status)) { try { raw.destroy(); } catch (e) { /* 守柔 */ } bail(); return; }
+                const tsock = tls.connect({ socket: raw, servername: up.host, rejectUnauthorized: false, ALPNProtocols: ['http/1.1'] } as any, () => onUpstream(tsock));
+                tsock.once('error', bail);
+            };
+            raw.on('data', onData);
+            raw.on('error', bail);
+        } else {
+            bail();
+        }
+    });
+}
+
 async function startServer(context: vscode.ExtensionContext) {
     if (ws.server) {
         vscode.window.showWarningMessage('Dao server already running');
@@ -1133,6 +1249,22 @@ async function startServer(context: vscode.ExtensionContext) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: err.message || String(err) }));
             }
+        }
+    });
+
+    // 帛书·「无有入于无间」— 注册 WS 升级反代: 令 Devin 实时会话事件通道随网页存活(根治多窗口断联)
+    ws.server.on('upgrade', (req: any, clientSocket: any, head: any) => {
+        try {
+            const uurl = new URL(req.url || '/', `http://localhost:${ws.port}`);
+            const up = daoWsUpstreamFor(uurl.pathname, uurl.search || '');
+            if (!up) {
+                // 非 Devin 上游 → 拒绝(防被用作任意 TCP 中继·无 SSRF 面)
+                try { clientSocket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); clientSocket.destroy(); } catch (e) { /* 守柔 */ }
+                return;
+            }
+            daoProxyWsUpgrade(req, clientSocket, head, up, uurl);
+        } catch (e) {
+            try { clientSocket.destroy(); } catch (e2) { /* 守柔 */ }
         }
     });
 
@@ -1239,6 +1371,20 @@ function readBody(req: any): Promise<string> {
         req.on('data', chunk => body += chunk);
         req.on('end', () => resolve(body));
         req.on('error', reject);
+    });
+}
+
+// 道·守全字节: 站内网页反代转发 POST/PUT 等请求体须保二进制原样(表单/文件/JSON 皆可),
+//   故收原始 Buffer(不经 utf8 串拼接失真)。中继请求体为 base64 字符串 → 解回 Buffer。
+function readBodyBuffer(req: any): Promise<Buffer> {
+    if (req._relayBody !== undefined) {
+        try { return Promise.resolve(Buffer.from(String(req._relayBody || ''), 'utf8')); } catch (e) { return Promise.resolve(Buffer.alloc(0)); }
+    }
+    return new Promise((resolve) => {
+        const chunks: Buffer[] = [];
+        req.on('data', (c: any) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+        req.on('end', () => resolve(Buffer.concat(chunks)));
+        req.on('error', () => resolve(Buffer.concat(chunks)));
     });
 }
 
@@ -3063,7 +3209,18 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         if (!/^https?:\/\//i.test(target)) {
             return { _proxy: true, status: 400, contentType: 'text/html; charset=utf-8', body: '<!DOCTYPE html><meta charset="utf-8"><body style="background:#1e1e1e;color:#888;font:13px sans-serif;padding:16px">缺少或非法的 u 参数</body>' };
         }
-        return await genericWebProxy(target);
+        // 归一 · 站内网页「可操作」: 透传真实方法/请求体(表单/AJAX POST) + 逐源 Cookie 罐 →
+        //   登录/提交/评论等站内操作不再失效(旧病灶: 只 GET 能搜, 一操作即断)。子资源(fetch/XHR)
+        //   带 __sub=1 → 返原始字节不注壳, 仅顶层文档注入链接/表单/fetch/XHR 拦截桥。
+        const _m = String((req && req.method) || 'GET').toUpperCase();
+        const _isSub = url.searchParams.get('__sub') === '1';
+        let _ctx: any = null;
+        if (_m !== 'GET') {
+            let _bodyBuf = Buffer.alloc(0);
+            if (_m !== 'HEAD') { try { _bodyBuf = await readBodyBuffer(req); } catch (e) { _bodyBuf = Buffer.alloc(0); } }
+            _ctx = { method: _m, body: _bodyBuf, contentType: String((req && req.headers && req.headers['content-type']) || ''), accept: String((req && req.headers && req.headers['accept']) || '') };
+        }
+        return await genericWebProxy(target, 0, _ctx, _isSub);
     }
 
     // ── 归一 · 拖拽上传桥数据源 (对齐手机 APK: 拖文件=上传该文件 / 拖会话=上传该会话 MD) ──
@@ -4113,7 +4270,32 @@ let bridgeToken: string = '';
 // 独立闭环(鸡犬相闻·不相往来): 用 -vsix 后缀, 与常驻桥各自管各自的 cloudflared, 互不干扰。
 const CF_LOG = path.join(BRIDGE_DIR, 'cloudflared-vsix.log');
 const CF_PID = path.join(BRIDGE_DIR, 'cloudflared-vsix.pid');
+const CF_PORT = path.join(BRIDGE_DIR, 'cloudflared-vsix.port');
 let cfPollTimer: any = null;
+// 帛书补丁·止抖三律: 新生隧道自起时刻(建立期/冷却期判据源) — 免 liveness 每 8s 抖杀尚在建立的 quick-tunnel。
+let _cfLastStartMs = 0;
+const CF_ESTABLISH_GRACE_MS = 45000; // 新生隧道·源活即守候至多 45s 让 URL 就绪, 不抖杀
+const CF_RESTART_COOLDOWN_MS = 25000; // 两次重启最小间隔, 杜绝连环重启
+// 帛书补丁·退避: 连续自起失败(多为 trycloudflare 1015/429 限流·正是抖动锤爆隧道 API 所致)时指数退避,
+//   让限流冷却而非越锤越死 — 「反者道之动·弱者道之用」, 不争而自复。
+let _cfSpawnFails = 0;
+let _cfBackoffUntilMs = 0;
+let _cfLastCountedStartMs = 0;
+const CF_BACKOFF_MAX_MS = 300000; // 退避上限 5min: 冷却后尽快重试又不锤爆
+function cfReadBoundPort(): number { try { const n = parseInt(fs.readFileSync(CF_PORT, 'utf8').trim(), 10); if (n > 0) return n; } catch (eCFP1) { /* 守柔 */ } return 0; }
+function cfWriteBoundPort(p: number): void { try { if (p) { bridgeEnsureDir(); fs.writeFileSync(CF_PORT, String(p), 'utf8'); } } catch (eCFP2) { /* 守柔 */ } }
+// 帛书·「上善若水」: 公网隧道 origin 恒随「活着的 leader」流动 — 取当前真应答 /api/health 的最小端口实例。
+//   杜绝隧道被钉死在已消亡端口而无人重绑, 令「打不通自动刷新」真正落到活端口(用户所述自愈失效之根)。
+async function bridgeLeaderOriginPort(): Promise<number> {
+    const cands = new Set<number>();
+    try { const j = JSON.parse(fs.readFileSync(DAO_CONN_CURRENT, 'utf8')); if (j && j.port) cands.add(Number(j.port)); if (j && Array.isArray(j.alive)) for (const a of j.alive) { if (a && a.port) cands.add(Number(a.port)); } } catch (eLOP1) { /* 守柔 */ }
+    if (ws && ws.port) cands.add(Number(ws.port));
+    const base = (typeof DEFAULT_PORT === 'number' ? DEFAULT_PORT : 9920);
+    for (let i = 0; i < 10; i++) cands.add(base + i);
+    const ports = Array.from(cands).filter(p => p >= 1 && p <= 65535).sort((a, b) => a - b);
+    for (const p of ports) { try { if (await daoProbeHealth(p)) return p; } catch (eLOP2) { /* 守柔 */ } }
+    return (ws && ws.port) || base;
+}
 
 function bridgeEnsureDir() { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); }
 
@@ -4326,7 +4508,12 @@ async function bridgeStartTunnel(named: boolean): Promise<{ ok: boolean; reason?
         const existingPid = cfPidAlive();
         if (existingPid) {
             const u = cfReadUrlFromLog();
-            if (u) {
+            // 帛书·「以实际有效性为基准」: 仅当孤儿隧道所绑 origin 端口仍真有 dao-vsix 应答, 才复用;
+            //   否则(端口已漂移/实例已消亡, 如钉死 9920)必重绑活端口, 不再复用死隧道致 502 长滞留。
+            const boundPort = cfReadBoundPort();
+            let originAlive = false;
+            if (u && boundPort) { try { originAlive = !!(await daoProbeHealth(boundPort)); } catch (eRU1) { /* 守柔 */ } }
+            if (u && originAlive) {
                 bridgeProc = null; // 不持有句柄: 它是孤儿进程, 仍在独立跑, 本宿主只跟随其日志
                 bridgeUrl = u;
                 bridgeSaveConnJson();
@@ -4335,6 +4522,47 @@ async function bridgeStartTunnel(named: boolean): Promise<{ ok: boolean; reason?
                 bridgeStartUrlPoll();
                 return { ok: true, reused: true, url: u };
             }
+            // 孤儿隧道绑的是死端口(或无端口记录) → 诚实收尸: 杀孤儿 + 清元数据 + 清日志, 落入下方重起。
+            try { process.kill(existingPid); } catch (eRU2) { /* 守柔 */ }
+            try { fs.unlinkSync(CF_PID); } catch (eRU3) { /* 守柔 */ }
+            try { fs.unlinkSync(CF_PORT); } catch (eRU4) { /* 守柔 */ }
+            try { fs.writeFileSync(CF_LOG, ''); } catch (eRU5) { /* 守柔 */ }
+        }
+    }
+    // 帛书补丁·万流归宗闸: backoff计数+退避+leader+冷却 统一内置于唯一创建入口,
+    //   令 autoPersist / livenessTick / 手动 等一切自动调用方共享同一限流·同一选举,
+    //   杜绝 autoPersist 等旁路绕过闸门无限自起的根因抖动。「反者道之动·弱者道之用」
+    if (!named) {
+        // 退避计数: 审视上次自起结果 — 速亡(无URL+进程已死)或逾建立期无URL → 失败+指数退避
+        try {
+            if (_cfLastStartMs && _cfLastStartMs !== _cfLastCountedStartMs) {
+                const _sa = Date.now() - _cfLastStartMs;
+                const _haveUrl = !!cfReadUrlFromLog();
+                const _aliveNow = !!cfPidAlive();
+                if (_haveUrl) { _cfSpawnFails = 0; _cfBackoffUntilMs = 0; _cfLastCountedStartMs = _cfLastStartMs; }
+                else if ((!_aliveNow && _sa > 6000) || _sa > CF_ESTABLISH_GRACE_MS) {
+                    _cfLastCountedStartMs = _cfLastStartMs;
+                    _cfSpawnFails = Math.min(_cfSpawnFails + 1, 8);
+                    const _bo = Math.min(CF_BACKOFF_MAX_MS, 30000 * Math.pow(2, _cfSpawnFails - 1));
+                    _cfBackoffUntilMs = Date.now() + _bo;
+                    daoLoopLog('tunnel', '隧道自起失败#' + _cfSpawnFails + '(无URL/进程速亡)→退避' + Math.round(_bo / 1000) + 's');
+                }
+            }
+        } catch (eBK) { /* 守柔 */ }
+        // ① 退避闸: 限流冷却期不锤 API
+        if (_cfBackoffUntilMs && Date.now() < _cfBackoffUntilMs) {
+            daoLoopLog('tunnel', '退避中·剩' + Math.round((_cfBackoffUntilMs - Date.now()) / 1000) + 's [startTunnel]');
+            return { ok: false, reason: 'backoff-active' };
+        }
+        // ② leader 闸: shared cloudflared 仅 leader(端口最小活实例)独管
+        if (!bridgeIsLeaderInstance()) {
+            daoLoopLog('tunnel', '非leader·port=' + (ws.port || 0) + '/leader=' + bridgeMachinePort() + ' [startTunnel]');
+            return { ok: false, reason: 'not-leader' };
+        }
+        // ③ 冷却闸: 防连环重启
+        if (_cfLastStartMs && (Date.now() - _cfLastStartMs) < CF_RESTART_COOLDOWN_MS) {
+            daoLoopLog('tunnel', '冷却中·剩' + Math.round((CF_RESTART_COOLDOWN_MS - (Date.now() - _cfLastStartMs)) / 1000) + 's [startTunnel]');
+            return { ok: false, reason: 'cooldown-active' };
         }
     }
     // 决定新起隧道: 先清掉本进程句柄与任何残留孤儿, 避免双隧道
@@ -4344,7 +4572,10 @@ async function bridgeStartTunnel(named: boolean): Promise<{ ok: boolean; reason?
     const cfPath = bridgeFindCloudflared();
     // 守柔·不臆造成功: 缺 cloudflared 二进制时不假装已启动, 诚实回报由调用方提示用户。
     if (!cfPath) { return { ok: false, reason: 'cloudflared-not-found' }; }
-    const targetPort = ws.port || DEFAULT_PORT;
+    // 隧道 origin 恒绑「活着的 leader 端口」(最小的真应答实例), 而非本窗口私有 ws.port —
+    //   否则本窗口一关, 隧道即指向死端口 502 且无人重绑。
+    let targetPort = ws.port || DEFAULT_PORT;
+    try { const lp = await bridgeLeaderOriginPort(); if (lp) targetPort = lp; } catch (eTP1) { /* 守柔 */ }
     const localUrl = `http://127.0.0.1:${targetPort}`;
     let args: string[];
     if (named) {
@@ -4372,6 +4603,8 @@ async function bridgeStartTunnel(named: boolean): Promise<{ ok: boolean; reason?
         return { ok: false, reason: 'spawn-failed' };
     }
     try { fs.writeFileSync(CF_PID, String(bridgeProc.pid)); } catch {}
+    try { cfWriteBoundPort(targetPort); } catch (e161b) { /* 守柔 */ }
+    _cfLastStartMs = Date.now();
     try { bridgeProc.unref(); } catch {}
     bridgeStartUrlPoll();
     bridgeProc.on('error', () => { bridgeProc = null; refreshDaoCloudMiddlePanel(); });
@@ -4381,6 +4614,12 @@ async function bridgeStartTunnel(named: boolean): Promise<{ ok: boolean; reason?
 
 function bridgeStopTunnel() {
     if (bridgeProc) { try { bridgeProc.kill(); } catch {} bridgeProc = null; }
+    // 收尸脱宿主孤儿: 仅 kill 本窗口句柄不够(复用来的孤儿 bridgeProc 恒 null → 旧法什么也没杀,
+    //   下次 start 又从日志读到同一死 URL 复用 → 死隧道永生。故按 PID 文件真杀 + 清端口/日志。)
+    try { const op = cfPidAlive(); if (op) process.kill(op); } catch (e163b) { /* 守柔 */ }
+    try { fs.unlinkSync(CF_PID); } catch (e163c) { /* 守柔 */ }
+    try { fs.unlinkSync(CF_PORT); } catch (e163d) { /* 守柔 */ }
+    try { fs.writeFileSync(CF_LOG, ''); } catch (e163e) { /* 守柔 */ }
     bridgeUrl = '';
     bridgeSaveConnJson();
     refreshDaoCloudMiddlePanel();
@@ -5220,10 +5459,21 @@ async function bridgeLivenessTick(): Promise<void> {
         try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
         if (!bridgeOk) {
             _bridgeLivenessFail++;
-            if (bridgeUrl) {
-                try { const wasNamed = !!bridgeReadNamedToken(); console.log('[dao] bridge DEAD → 自动重启隧道 (named=' + wasNamed + ', fail=' + _bridgeLivenessFail + ')'); bridgeStopTunnel(); await bridgeStartTunnel(wasNamed); } catch { /* 守柔 */ }
+            // 帛书补丁·万流归宗: 建立期守候(不抖杀正在连接的隧道); 退避/leader/冷却闸已内置于 bridgeStartTunnel
+            let _cfEstablishing = false;
+            try {
+                if (cfPidAlive()) {
+                    const _bp = cfReadBoundPort();
+                    const _og = _bp ? await daoProbeHealth(_bp) : null;
+                    if (_og && (Date.now() - (_cfLastStartMs || 0)) < CF_ESTABLISH_GRACE_MS) _cfEstablishing = true;
+                }
+            } catch (eCFE) { /* 守柔 */ }
+            if (_cfEstablishing) {
+                daoLoopLog('tunnel', '新生隧道建立期·源活·守候不抖杀 (age=' + Math.round((Date.now() - (_cfLastStartMs || 0)) / 1000) + 's)');
             } else {
-                try { await bridgeStartTunnel(false); } catch { /* 守柔 */ }
+                // 收尸死/僵隧道 + 委托 bridgeStartTunnel(内含万流归宗闸)统一决策是否重建
+                try { bridgeStopTunnel(); } catch (eStop) { /* 守柔 */ }
+                try { await bridgeStartTunnel(!!bridgeReadNamedToken()); } catch (e218) { /* 守柔 */ }
             }
         }
         // 3) 强制把最新地址重注到各账号(清签名 → 绕过"无变化不重注")
@@ -12506,7 +12756,7 @@ function _unwrapSearchRedirect(u) {
     } catch (e) { /* 守柔 */ }
     return null;
 }
-async function genericWebProxy(targetUrl, depth = 0) {
+async function genericWebProxy(targetUrl, depth = 0, reqCtx: any = null, isSub = false) {
     const errPage = (msg, href) => {
         const safeHref = (href || '').replace(/"/g, '&quot;');
         const host = (() => { try { return new URL(href || targetUrl).host; } catch (e359) { return ''; } })();
@@ -12559,11 +12809,24 @@ async function genericWebProxy(targetUrl, depth = 0) {
             'Connection': 'keep-alive',
             'Host': u.host,
         };
-        const options = {
+        // 逐源 Cookie 罐: 附该目标站已积累的会话 Cookie → 登录态跨请求保持(GitHub 等站内操作可用)。
+        const _rh: any = reqHeaders;
+        const _method = (reqCtx && reqCtx.method) ? String(reqCtx.method).toUpperCase() : 'GET';
+        const _ck = webProxyCookieHeader(u.origin);
+        if (_ck) _rh['Cookie'] = _ck;
+        if (reqCtx && reqCtx.accept) _rh['Accept'] = reqCtx.accept;
+        if (isSub) { _rh['Sec-Fetch-Mode'] = 'cors'; _rh['Sec-Fetch-Dest'] = 'empty'; _rh['Sec-Fetch-Site'] = 'same-origin'; delete _rh['Upgrade-Insecure-Requests']; }
+        if (_method !== 'GET' && _method !== 'HEAD') {
+            _rh['Origin'] = u.origin;
+            if (!isSub) _rh['Sec-Fetch-Mode'] = 'navigate';
+            if (reqCtx && reqCtx.contentType) _rh['Content-Type'] = reqCtx.contentType;
+            if (reqCtx && reqCtx.body) _rh['Content-Length'] = String(reqCtx.body.length);
+        }
+        const options: any = {
             hostname: u.hostname,
             port: u.port ? parseInt(u.port) : (isHttps ? 443 : 80),
             path: (u.pathname || '/') + (u.search || ''),
-            method: 'GET',
+            method: _method,
             headers: reqHeaders,
             timeout: 14000,
             agent: isHttps ? webProxyHttpsAgent : webProxyHttpAgent,
@@ -12594,6 +12857,9 @@ async function genericWebProxy(targetUrl, depth = 0) {
                 finish({ _proxy: true, status: sc, contentType: ct || 'application/octet-stream', body: body.toString('base64'), binary: true });
                 return;
             }
+            // 子资源(fetch/XHR)命中 HTML(如站内 API 回 text/html 片段) → 原样返, 绝不注入外壳脚本,
+            //   否则污染 AJAX 响应体致站内交互错乱。仅顶层文档导航才注入链接/表单/fetch/XHR 拦截桥。
+            if (isSub) { finish({ _proxy: true, status: sc, contentType: ct || 'text/html; charset=utf-8', body: body.toString('utf8') }); return; }
             let html = body.toString('utf8');
             const pBase = 'http://127.0.0.1:' + (ws && ws.port ? ws.port : DEFAULT_PORT) + '/__web?u=';
             const _oh = u.origin.replace(/"/g, '&quot;');
@@ -12605,11 +12871,17 @@ async function genericWebProxy(targetUrl, depth = 0) {
                 + 'var P=((location.origin&&/^https?:/i.test(location.origin))?location.origin+"/__web?u=":PB),B=' + JSON.stringify(u.href) + ';'
                 + 'function ab(h){try{return new URL(h,B).href}catch(e){return ""}}'
                 + 'function wrap(h){if(typeof h==="string"&&h.indexOf(P)===0)return h;var a=ab(h);return /^https?:/i.test(a)?(P+encodeURIComponent(a)):h}'
+                + 'function isProxied(x){return typeof x==="string"&&x.indexOf("/__web?u=")>=0}'
+                + 'function subUrl(x){var a=ab(x);return (/^https?:/i.test(a)&&!isProxied(x))?(P+encodeURIComponent(a)+"&__sub=1"):x}'
                 + 'function go(h){var a=ab(h);if(/^https?:/i.test(a)){_nav(P+encodeURIComponent(a));return true}return false}'
                 // _nav: 真实整页跳转(绕过被改写的 location.assign/replace), 防自陷套娃。
                 + 'var _asn=window.location.assign.bind(window.location);function _nav(x){try{_asn(x)}catch(e){window.location.href=x}}'
                 + 'document.addEventListener("click",function(e){if(e.defaultPrevented||e.button)return;var t=e.target;var a=t&&t.closest?t.closest("a[href]"):null;if(!a)return;var h=a.getAttribute("href");if(!h||h.charAt(0)==="#"||/^(javascript|mailto|tel|data|blob):/i.test(h))return;if(go(h))e.preventDefault();},true);'
-                + 'document.addEventListener("submit",function(e){var f=e.target;if(!f||(f.method||"get").toLowerCase()!=="get")return;try{var u2=new URL(f.getAttribute("action")||B,B);u2.search=new URLSearchParams(new FormData(f)).toString();e.preventDefault();_nav(P+encodeURIComponent(u2.href));}catch(x){}},true);'
+                // 表单提交: GET 表单改写 query 经代理整页跳; POST 表单(登录/评论/提交)重建同源 POST 表单直投 /__web → 站内操作真正生效(旧病灶: 只放行 GET, POST 一律漏网)。multipart 上传交原生(边缘情形)。
+                + 'document.addEventListener("submit",function(e){var f=e.target;if(!f||e.defaultPrevented)return;var mth=(f.getAttribute("method")||f.method||"get").toLowerCase();var act;try{act=new URL(f.getAttribute("action")||B,B).href}catch(x){return}if(!/^https?:/i.test(act))return;if(mth!=="post"){try{var u2=new URL(act);u2.search=new URLSearchParams(new FormData(f)).toString();e.preventDefault();_nav(P+encodeURIComponent(u2.href));}catch(x){}return}if((f.getAttribute("enctype")||"").toLowerCase().indexOf("multipart")>=0)return;e.preventDefault();try{var nf=document.createElement("form");nf.method="POST";nf.action=P+encodeURIComponent(act);nf.style.display="none";new FormData(f).forEach(function(v,k){if(typeof v==="string"){var ip=document.createElement("input");ip.type="hidden";ip.name=k;ip.value=v;nf.appendChild(ip)}});document.body.appendChild(nf);nf.submit();}catch(x){}},true);'
+                // fetch/XHR 拦截: 站内一切 AJAX(GitHub 等 SPA 数据面全走此)改经同源 /__web 代理并带凭据 → 跨源 CORS/掉 Cookie 之困全消(旧病灶: fetch 直打真源被 CORS 拦死, 搜完就不能操作)。
+                + 'try{var _F=window.fetch;if(_F){window.fetch=function(inp,ini){try{var url=(typeof inp==="string")?inp:(inp&&inp.url);if(url&&!isProxied(url)){var nu=subUrl(url);if(nu!==url){if(typeof inp==="string")return _F(nu,Object.assign({credentials:"include"},ini||{}));try{return _F(new Request(nu,inp),ini)}catch(e2){return _F(nu,Object.assign({credentials:"include"},ini||{}))}}}}catch(e){}return _F.call(this,inp,ini)};}}catch(e){}'
+                + 'try{var _xo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,url){var a2=arguments;try{if(url&&!isProxied(url)){var nu=subUrl(url);if(nu!==url){a2=[m,nu].concat([].slice.call(arguments,2))}}}catch(e){}return _xo.apply(this,a2)};}catch(e){}'
                 + 'try{window.open=function(u){if(u){go(u)}return null};}catch(e){}'
                 // JS 驱动的整页跳转(搜索结果/SPA 多层点进) → 同样改经 /__web 代理, 否则套娃页直跳真站致掉登录/空白。
                 + 'try{window.location.assign=function(u){return _asn(wrap(u))};}catch(e){}'
@@ -12623,10 +12895,13 @@ async function genericWebProxy(targetUrl, depth = 0) {
         // 归一 · 取响应后统一处理重定向或落体, 直连/代理两赛道共用。
         const handle = (sc, headers, raw) => {
             if (done) return;
+            // 逐源 Cookie 罐: 收 Set-Cookie 归入本目标站会话 → 下次该站请求自动附带(登录态持久)。
+            try { if (headers && headers['set-cookie']) webProxyStoreCookies(u.origin, headers['set-cookie']); } catch (e) { /* 守柔 */ }
             if (sc >= 300 && sc < 400 && headers && headers['location']) {
                 let loc = String(headers['location']);
                 try { loc = new URL(loc, u.href).href; } catch (e363) { /* 守柔 */ }
-                finish(genericWebProxy(loc, depth + 1));
+                // 跳转后一律以 GET 续取(浏览器语义), 但沿用 isSub 以免子资源跳转被注壳。
+                finish(genericWebProxy(loc, depth + 1, null, isSub));
                 return;
             }
             processBody(sc || 200, headers || {}, raw || Buffer.alloc(0));
@@ -12650,9 +12925,11 @@ async function genericWebProxy(targetUrl, depth = 0) {
         });
         proxyReq.on('error', () => directFail());
         proxyReq.on('timeout', () => { try { proxyReq.destroy(); } catch (e) { /* 守柔 */ } directFail(); });
+        if (reqCtx && reqCtx.body && reqCtx.body.length) { try { proxyReq.write(reqCtx.body); } catch (e) { /* 守柔 */ } }
         proxyReq.end();
         // 代理赛道(经本机 Clash/V2Ray: https 走 CONNECT 隧道, http 走标准代理 GET; 与官网代理/MCP 接测同策)
-        if (hasProxy) {
+        //   仅 GET 走并行代理赛道(fetchViaTunnel 不承载请求体); 非 GET(站内操作)专走直连以保方法/体完整。
+        if (hasProxy && _method === 'GET') {
             fetchViaTunnel(u, reqHeaders, 16000).then((tr) => {
                 if (done) return;
                 if (!tr) { proxyFail(); return; }
