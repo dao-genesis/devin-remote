@@ -5071,11 +5071,18 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
     # empty *and* the crop holds ink — never overriding a hit, and leaving a
     # genuinely blank cell empty (``g`` is the pre-upscale greyscale; ``bg`` is
     # its brightest = background, so a count of clearly-darker pixels is ink).
-    if (not res and whitelist and fallback_psm and fallback_psm != psm):
+    # F324: the same silent drop hits unconstrained reads — a multi-line
+    # region (a sidebar, a dialog) under the line-mode default (psm=7) reads
+    # as one junk token while block mode reads every row. A near-empty
+    # unwhitelisted result over an inked crop takes the same retry.
+    if (fallback_psm and fallback_psm != psm
+            and (not res if whitelist else len(res) <= 2)):
         bg = max(g) if g else 0
         ink = sum(1 for v in g if v < bg - 40)
         if ink >= max(8, (rw * rh) * 3 // 200):
-            res = _run(fallback_psm)
+            r2 = _run(fallback_psm)
+            if len(r2) > len(res):
+                res = r2
     if len(_OCR_CACHE) >= _OCR_CACHE_MAX:
         _OCR_CACHE.pop(next(iter(_OCR_CACHE)))
     _OCR_CACHE[key] = res
@@ -6758,6 +6765,36 @@ def scroll_to_phrase(bbox: tuple[int, int, int, int],
 # hotkeys as words, accepting window records everywhere, and reading text
 # through the AT-SPI Text interface.
 
+# uia_table_cell (F311): reach one cell of a spreadsheet/grid by (row, col)
+# through the AT-SPI Table interface. LibreOffice Calc exposes a sheet of a
+# million lazy rows — no tree walk ever reaches cell A3, and find_all's node
+# budget is *right* to give up. Table.get_accessible_at is the O(1) door the
+# toolkit built for exactly this. sheet_cell() speaks 'A3' directly.
+uia_table_cell = getattr(_be, "uia_table_cell",
+                         lambda win, row=0, col=0, name=None, ctype=None,
+                         focus=False: None)
+
+
+def _cell_ref(ref: str):
+    """'A3' → (row=2, col=0). Column letters little-endian base-26."""
+    i = 0
+    while i < len(ref) and ref[i].isalpha():
+        i += 1
+    col = 0
+    for ch in ref[:i].upper():
+        col = col * 26 + (ord(ch) - 64)
+    return int(ref[i:]) - 1, col - 1
+
+
+def sheet_cell(win, ref: str, name=None, ctype=None, focus: bool = False):
+    """Read one spreadsheet cell by its human ref ('A3', 'BC12'). Returns the
+    cell record (with .text carrying what the cell shows) or None. focus=True
+    also moves the app's cursor to the cell (coordinate-free — Calc reports
+    cell extents shifted by the header row, so never click the rect)."""
+    r, c = _cell_ref(ref)
+    return uia_table_cell(win, row=r, col=c, name=name, ctype=ctype, focus=focus)
+
+
 # uia_text (F286): read what a text-bearing surface *says* through the AT-SPI
 # Text iface (worker-isolated like every semantic verb). The tree dual of
 # read_selection: meaning for what is exposed, the copy channel for what is
@@ -6780,6 +6817,9 @@ def _win_id(win) -> int:
     silently acted on garbage. Every window-taking verb now accepts either."""
     if isinstance(win, dict):
         return int(win["id"])
+    if win is None:
+        raise ValueError("window verb got None (upstream launch/find/wait "
+                         "returned nothing — check its result before acting)")
     return int(win)
 
 
@@ -6789,10 +6829,12 @@ def _wrap_win_verbs():
                "move_window", "window_state", "set_window_state", "window_pid",
                "terminate_window", "set_window_topmost", "is_window_topmost",
                "window_desktop", "move_window_to_desktop",
+               "window_on_current_desktop",
                "uia_name", "uia_children", "uia_find", "uia_find_all", "uia_invoke",
                "uia_get_value", "uia_set_value", "uia_focus", "uia_click",
                "uia_select", "uia_is_selected", "uia_toggle", "uia_toggle_state",
-               "uia_expand", "uia_collapse", "uia_expand_state", "uia_text"):
+               "uia_expand", "uia_collapse", "uia_expand_state", "uia_text",
+               "uia_table_cell", "sheet_cell"):
         fn = g.get(nm)
         if fn is None:
             continue
@@ -6848,24 +6890,49 @@ for _c in range(10):
 for _c in range(1, 13):
     _VK_BY_NAME[f"f{_c}"] = 0x70 + _c - 1
 
+# F323: every name hotkey() speaks is also a VK_* constant — tap(VK_SPACE)
+# died with AttributeError while hotkey('space') worked fine; the two
+# vocabularies now cover the same alphabet (existing constants keep their
+# hand-set values).
+for _nm, _vk in _VK_BY_NAME.items():
+    _const = "VK_" + _nm.upper()
+    if _const not in globals():
+        globals()[_const] = _vk
 
-def hotkey(spec: str, hold: float = 0.0) -> None:
+
+def hotkey(spec: str, *more: str, hold: float = 0.0) -> None:
     """F284: speak a keyboard shortcut as the word it is — ``'ctrl+shift+e'``,
     ``'alt+f4'``, ``'ctrl+l'``. Presses in order, releases in reverse (the
     chord discipline); ``hold`` keeps the chord down for state-sampling
-    surfaces (see :func:`tap`)."""
+    surfaces (see :func:`tap`).
+
+    F317: ``hotkey('ctrl', 'z')`` — the pyautogui-shaped spelling — used to
+    bind ``'z'`` to *hold* and die comparing str to int. Both spellings are
+    natural enough that the floor should speak them; extra positional args
+    now join the chord."""
+    if more:
+        spec = "+".join((spec,) + tuple(more))
     vks = []
     for part in spec.replace(" ", "").split("+"):
         vk = _VK_BY_NAME.get(part.lower())
         if vk is None:
             raise ValueError(f"hotkey: unknown key {part!r}")
         vks.append(vk)
-    for vk in vks:
-        key_down(vk)
-    if hold > 0:
-        time.sleep(hold)
-    for vk in reversed(vks):
-        key_up(vk)
+    # F318: never leave a chord half-pressed. An exception between the downs
+    # and the ups (bad `hold`, a dying display connection) left Ctrl stuck
+    # down for the whole session — every later keystroke and click silently
+    # became Ctrl+<x> (Esc opened KDE's System Activity, clicks toggled
+    # selections). The downs are now always unwound.
+    pressed = []
+    try:
+        for vk in vks:
+            key_down(vk)
+            pressed.append(vk)
+        if hold > 0:
+            time.sleep(hold)
+    finally:
+        for vk in reversed(pressed):
+            key_up(vk)
 
 
 def replace_text(text: str, settle: float = 0.08) -> None:
@@ -7039,8 +7106,14 @@ def launch(argv, wait_title: str | None = None, timeout: float = 20.0,
     if env:
         e.update(env)
     before = {w["id"] for w in list_windows()}
-    proc = subprocess.Popen(argv, env=e, start_new_session=True,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        proc = subprocess.Popen(argv, env=e, start_new_session=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        # F306: an absent binary is an ordinary answer, not a crash \u2014 the floor
+        # speaks in None (like every locate verb) so the caller can decide to
+        # install, substitute, or report.
+        return None
     deadline = time.time() + timeout
     while time.time() < deadline:
         for w in list_windows():

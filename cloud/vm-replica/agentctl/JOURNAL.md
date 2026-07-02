@@ -10552,3 +10552,381 @@ type two lines → `uia_text` reads them back → `uia_find_all(ctype="button")`
 enumerates the toolbar → `uia_find(name="New")` resolves exactly → file
 clipboard round-trips through Dolphin's protocol → the workspace count walks
 1→4→2→1. 道生一 — find the ground first, and everything built on it stands.
+
+## F304 — Dolphin: the file clipboard proves itself in a real file manager
+
+Launch Dolphin on an empty directory, put two files on the clipboard with
+`set_clipboard_files`, hotkey Ctrl+V — both files appear on disk in the target
+directory. The F285 protocol (text/uri-list + x-special/gnome-copied-files) is
+exactly what KDE's paste consumes. Pass, no flaw.
+
+## F305 — the running browser: omnibox_go aims, navigates, and the title tells
+
+Against the already-running Chrome (never relaunch the user's browser):
+`omnibox_go('https://example.com')` finds and raises the Chrome window (F280),
+does the atomic Ctrl+L/paste/Enter, and within seconds `list_windows` shows
+"Example Domain - Google Chrome for Testing". Navigation confirmed purely
+through the floor's own reads. Pass, no flaw.
+
+## F306 — KCalc: a missing binary is an answer, not a crash
+
+First attempt exposed a flaw: `launch('kcalc')` on a machine without kcalc
+raised FileNotFoundError out of Popen — a crash where the floor's grammar says
+None (every locate verb answers None for "not there"). Fixed: launch returns
+None on an absent binary, so the caller can install, substitute, or report.
+Then the domain itself: install kcalc, launch, click 7 × 6 = purely by
+`uia_find(name, ctype='button')` + `click_center`, read back through
+`uia_text`: "7 × 6 = 42". Semantic in, semantic out.
+
+## F307 — KWrite save dialog: the modal workflow end-to-end
+
+Type two lines (F278 newline), Ctrl+S (F284), find the "Save File" dialog in
+`list_windows`, focus its edit field by role, `replace_text` the full path
+(F300 — the field is prefilled with "Untitled"), Enter — and the file is on
+disk with exactly the typed content, newline included. The whole chain
+launch → type → hotkey → dialog → field → disk runs on floor verbs alone.
+Pass, no flaw.
+
+## F308 — the workspace lifecycle, live
+
+`set_num_desktops(3)` (F292) → launch Konsole → `move_window_to_desktop(w, 2)`
+→ `window_on_current_desktop` says False here, True after `set_desktop(2)` →
+restore to one desktop. Grow, populate, walk, shrink: the full lifecycle a
+tiling power-user exercises daily, each step confirmed by the floor's own
+reads. Pass, no flaw.
+
+Regression: all 33 test files green after the arc (NumPy installed on this
+ground for `_test_accel`; byte-identical fast paths, locate_change 12× faster).
+
+## F309 — KMines: a drawn board is pixel ground, its chrome is semantic ground
+
+KMines' board is a QGraphicsView — semantically dark (one button in the whole
+tree), the exact split F-series keeps meeting: *the game surface is drawn, the
+game chrome is exposed*. The two floors divide the work: `capture_patch` a board
+ROI, click the centre, `region_diff(tol=8)` reports 28.6% of the board repainted
+(the reveal cascade), while `uia_find_all` reads the chrome — "Mines: 0/10",
+"Time: 00:01" — confirming the game started and the timer ticks. Neither floor
+alone could verify the move; together it is one observation. Pass, no flaw.
+
+## F310 — Konsole scrollback read by meaning
+
+Before F303 this exact probe returned an empty string (the semantic floor was
+dark — the bus, not the verb, was the flaw). Now: launch Konsole, type
+`echo F310-$((6*7))`, and `uia_text` returns the scrollback with `F310-42` in
+it — the terminal's *text*, read through the Text interface, no OCR. The verb
+was right all along; the ground it stood on wasn't there. Pass — and the
+retro-confirmation of F303.
+
+## F311 — LibreOffice Calc: the sheet no walk can cross
+
+Engineering ground: the spreadsheet. Three flaws in one domain, each a layer
+deeper.
+
+First: the whole app was semantically dark — not a floor flaw but a *ground*
+flaw: LibreOffice ships its a11y bridge in a separate package
+(`libreoffice-gtk3`); without it the generic VCL plugin exposes nothing. The
+recovery dialog that had no buttons suddenly grew "Start / Discard" the moment
+the gtk3 plugin arrived. (And the recovery flow itself became a floor test:
+Discard → a *title-less* confirm window → its "Yes" — all found and clicked
+semantically.)
+
+Second, the real one: a sheet exposes ~17 billion lazy cells. No tree walk
+reaches A3; `find_all`'s node budget is right to give up. The toolkits built
+an O(1) door for exactly this — the AT-SPI **Table interface** — and the floor
+now opens it: `uia_table_cell(win, row, col)` / `sheet_cell(win, 'A3')` return
+the cell as a normal record plus its text.
+
+Third: Calc reports cell extents shifted by the header row — clicking a cell's
+rect lands one cell off. Clicking coordinates the app itself mis-reports is a
+dead end; `sheet_cell(..., focus=True)` grabs focus through the Component
+iface instead — coordinate-free, exact. Enter a ledger, `=SUM(E1:E3)`, read
+back "387" through the same door. Pass after three fixes.
+
+## F312 — the keymap-cache race: why '*' typed as 'a'
+
+Typing `=A1*A2` into Calc produced `=a1aa2`. The scratch-keycode remap
+(the xdotool technique) binds each char to a spare keycode per keystroke —
+but GTK apps cache the keyboard map and process MappingNotify
+*asynchronously*, so the strike resolves against a stale map. Qt requeries
+synchronously, which is why 34 F-numbers of Qt apps never saw it.
+
+Fix: chars the resident layout already carries are now struck through their
+**native keycode** (+Shift for level-1 syms) — no remap at all, so there is
+nothing to race. The remap path remains only for what the layout cannot say
+(CJK, emoji), and `'=A1*A2 hello WORLD 42 中文'` round-trips exactly through
+both paths. Also from this arc: `_win_id(None)` now names its caller's sin
+instead of throwing a bare int() TypeError.
+
+## F313 — LibreCAD: CAD by the command line the app itself offers
+
+Engineering software's oldest interface is alive inside the GUI: LibreCAD's
+command widget. First-run "Welcome" dialog cleared by its own OK; then the
+floor speaks CAD: focus the command line (the bottom edit, found by role and
+position), type `line` `0,0` `200,150` `Esc`, invoke "Auto Zoom" *by name*
+from the menu, and the canvas — pixel ground, as every drawn surface is —
+reports 1,388 changed pixels where the line now lies. Menus and command line
+are semantic ground; the drawing is pixel ground; the workflow crosses both
+without friction. Pass, no flaw — the F311/F312 fixes carried the whole
+domain.
+
+## F314 — KPatience: choosing, playing and delegating a game
+
+The game-chooser grid is fully drawn — sixteen named tiles and not one exposed
+node — so the pixel floor picks Klondike by position. From there the chrome
+speaks: "Solver: This game is winnable." read by name before a single card
+moved. One stock click: 3.0% of the board repaints, the status bar flips to
+"1 move" — pixel change and semantic count agreeing on the same event. Then
+delegation: invoke "Demo" by name and the solver plays the board (99.9% of
+the ROI repainted), stopped the same way. Quirk noted: the moves label does
+not tick during demo playback — the count is the *user's* moves, which is
+itself a correct reading. Pass, no flaw.
+
+## F315 — KSudoku: generate, hint, solve
+
+Full puzzle arc: pick "Generate A Puzzle" by name, dismiss the Difficulty
+Level dialog by its OK, Hint fills a cell (board ROI repaints), Solve
+completes the grid and KSudoku's own "Congratulations!" dialog confirms —
+read and dismissed semantically. Along the way `window_on_current_desktop`
+turned out to be the one window verb left outside the record-accepting
+wrapper (F277's composition applied everywhere but here) — added to the
+wrap list.
+
+## F316 — the hidden twin: why clicking 'Solve' raised Chrome
+
+`uia_click(w, 'Solve')` sometimes raised *Chrome* instead of solving. The
+cause: 'Solve' lives twice in KSudoku's tree — toolbar button and menu item
+— and the menu-item twin inside a *closed* menu still reports a screen rect.
+`_find_acc` ranked rect-validity but not *visibility*, so it could choose the
+hidden twin, and the click at that stale rect landed on whatever window sat
+beneath. Fix: SHOWING now ranks above rect validity (showing+exact >
+showing+substring > hidden-exact > anything). Solve then actually solves:
+90% of the board repainted, Congratulations read from the app's own dialog.
+
+## F317 — KiCad (PCB/EDA suite): first-run gauntlet, then a schematic wire
+
+KiCad 6 greets a fresh machine with three consecutive first-run dialogs
+(settings path, symbol-library table — plus another settings dialog for the
+standalone Schematic Editor). All cleared semantically by name. Standalone
+eeschema then loads no sheet: 'w' + clicks silently draw nothing until File >
+New... creates a schematic (dialog typed a full path, Enter). The wire arc
+itself: move to start, 'w', move, *double-click* to commit (a single click +
+Esc cancels the pending run — Esc in KiCad abandons, not finishes). Ground
+truth came from the saved .kicad_sch: `grep -c wire` = 1. Along the way
+`hotkey('ctrl', 'z')` — the pyautogui-shaped spelling — raised TypeError
+('z' bound to hold); extra positional args now join the chord.
+
+## F318 — the half-pressed chord: one exception, then every key is Ctrl+key
+
+The F317 TypeError fired *between* hotkey's key-downs and key-ups: Ctrl went
+down and never came up. From then on every keystroke and click was silently
+Ctrl+<x> — Esc opened KDE's System Activity, canvas clicks toggled
+selections — session-wide poltergeist from one dead call. hotkey now unwinds
+whatever it pressed in a finally block; no exception path can leave a
+modifier stuck.
+
+## F319 — GIMP: the fully mute app — pixel floor carries the whole arc
+
+GIMP 2.10 exposes *zero* AT-SPI nodes — not a sparse tree, none (GTK2-era
+a11y absent on this ground). The purest all-pixel domain so far: Ctrl+N,
+Enter through Create-a-New-Image, 'n' for Pencil, drag a stroke — canvas
+pixel flips white→black at the sampled point. Shift+Ctrl+E, select-all +
+type path, Enter, Enter through the PNG options — exported file on disk is
+ground truth: 1920x1080, the painted stroke sampled dark. Every step of a
+professional image-editing arc completed with keyboard + pointer + pixels
+alone; no floor change needed, the fallback tier held.
+
+## F320 — KMahjongg: the app narrates itself
+
+The status bar speaks everything the floor needs: 'Removed: 0/144
+Combinations left: 18', 'Game number', 'Ready. Now it is your turn.' — all
+readable as labels. Demo mode is the app playing itself: after 8 seconds the
+label reads 'Removed: 16/144' (semantic ground truth of tiles leaving the
+board) while ~10% of the window's pixels changed (pixel corroboration). The
+Hint flash is too brief for a 1.5s-later capture to catch (diff ~0) — a
+reminder that transient highlights need capture timed inside the flash, not
+after it. Chrome semantic, board pixel: both floors held, no fix needed.
+
+## F321 — Inkscape: vector drawing with SVG ground truth
+
+Inkscape 1.1's Welcome dialog is a three-tab affair; 'New Document' lives on
+the 'Time to Draw' tab — the first uia_click found the button by name but the
+dialog stayed (the button on a hidden tab; F316's SHOWING ranking made the
+second attempt after selecting the tab hit the visible one). Then a full
+vector arc: 'r' rectangle tool, drag across canvas centre — sampled canvas
+pixel flips white→red — Ctrl+S, type path, Enter. Ground truth from the
+saved document itself: `grep -c '<rect'` = 1 in ink_out.svg. Semantic chrome
++ pixel canvas + on-disk artifact: all three tiers agreeing.
+
+## F322 — GNU Octave: the mute console and the workspace that speaks
+
+Octave's GUI console (a QTerminal descendant) exposes no Text iface —
+uia_text on the Command Window reads nothing. But the floor never needed the
+console: the *Workspace* panel exposes every variable as DataItems — after
+typing `x = 6*7`, the pair ('x', '42') sits right in the tree. Computation
+verified by meaning, not glyphs. `plot(sin(...))` raises 'Figure 1' — pure
+pixel ground, blue curve samples confirm the render. Along the way the
+record-key split surfaced: uia_find_all said "type" where uia_table_cell
+said "ctype"; every consumer had to remember which verb it asked. Records
+now carry both spellings.
+
+## F323 — KBlocks: real-time play, and the missing half of the VK alphabet
+
+Falling-blocks under real-time pressure: 'Single Game' by name, then eight
+piece-drops — rotate (Up), steer (Left/Right), hard-drop (Space) — board ROI
+repaints ~7% as the stack grows; the status label ('Points: … Lines: …')
+stays semantic. The floor flaw was in its own mouth: `tap(VK_SPACE)` raised
+AttributeError while `hotkey('space')` worked — hotkey's word alphabet
+(F284) and the VK_* constants had drifted apart. Every name hotkey speaks is
+now also a VK_* constant, one alphabet in two spellings.
+
+## F324 — KDE System Settings: the QML sidebar, and OCR's one-line default
+
+System Settings' module sidebar is QML — 17 chrome nodes in the tree, none
+of them the module list. The pixel floor takes over: capture the sidebar
+strip and OCR it. That exposed the flaw: `ocr_text` on the multi-line strip
+returned '-' — one junk token — because the *default* psm=7 means "one text
+line", and tesseract's line segmenter collapses a column of rows. The F235
+ink-gated retry only armed itself for whitelisted reads; it now also fires
+on a near-empty unconstrained read over an inked crop, retrying in block
+mode (never overriding a longer hit). After the fix the same strip reads
+every module name; a pixel click on the located 'Appearance' row lands in
+'Global Theme' — title change as ground truth.
+
+## F325 — KNetWalk: a maximize before the measure
+
+KNetWalk opened at a degenerate 383x100 — a fresh window that had not been
+given a size hint yet; ROI math over that sliver clicked the toolbar
+instead of the board (a High Scores dialog appeared over Chrome). Lesson
+folded into practice: set_window_state(w, 'maximized') *before* deriving
+board geometry. After the maximize: five board clicks rotate tiles (the
+Moves label ticks -20 → -15, semantic; ~6% board repaint, pixel), and the
+Move-menu 'Solve' repaints ~16% of the grid. Both floors held; the flaw was
+in the arc's own choreography, not the verbs.
+
+## F326 — KBounce: walls under moving fire
+
+Real-time arcade with hostile physics: clicks spawn growing walls that
+bouncing balls can shatter mid-build. The first clicks (dead centre, right
+where the balls roam) filled nothing — Filled: 0% after three walls, every
+one shot down. Placing walls *away* from the balls (right flank of the
+board) the status labels tick 0% → 2% → 3% → 5% — pure semantic ground
+truth for territory captured, while the timer label counts down
+independently. The floor needs no fix; the lesson is tactical: in a live
+arena, where you act matters as much as that you act.
+
+## F327 — Kate: a developer's find/replace, verified on disk
+
+The multi-document editor arc: launch with a file argument, Ctrl+R raises
+the power search bar, type the pattern, Tab to the replacement field, type,
+click 'Replace All' by name, Ctrl+S. Ground truth is the file itself —
+every 'beta' now 'BETA', the untouched words untouched. Search bar fields,
+buttons and the editor area all speak in the tree; no floor gap. (kate was
+not preinstalled; launch's missing-binary error (F306 fix) said so plainly
+instead of hanging.)
+
+## F328 — FreeCAD: parametric 3D modeling, verified inside the archive
+
+The 0.19 tree is rich once the window has actually settled — an immediate
+post-launch uia_find_all read 0 nodes, three seconds later 531 (a11y tree
+builds lazily; wait for the window, then wait for the tree). The arc:
+Ctrl+N, switch workbench through the combo ('Start' → dropdown → 'Part' —
+the closed combo's own list item was the SHOWING one, F316 paying rent),
+toolbar 'Cube' by name, Ctrl+S through the save dialog. Ground truth from
+inside the .FCStd zip: Document.xml carries Part::Box. A full parametric
+CAD arc — workbench switch, primitive creation, document save — entirely by
+meaning.
+
+## F329 — Blender: an all-pixel giant, driven end to end
+
+Zero AT-SPI nodes — Blender draws every widget itself (GHOST/OpenGL), so
+this is the pixel floor's biggest arena yet. The arc: dismiss the Quick
+Setup splash, click the viewport, A (select all), X + Enter (delete the
+default cube — outliner emptied), Add ▸ Mesh ▸ UV Sphere through two
+pixel-located menu levels (~9% viewport repaint, 'Sphere' in the outliner),
+Ctrl+S through Blender's own file browser. One genuine gap surfaced: the
+file dialog's *text field* never took the typed name — Blender's custom
+fields want a double-click to enter edit mode and the synthetic pair
+didn't register as one; Enter saved under the default 'untitled.blend'
+instead. Ground truth still lands: the saved .blend carries the Sphere
+object (849 KB, 'Sphere' datablock present). Flaw filed: GHOST-field text
+entry needs a dedicated recipe (click + select-all + type is not it).
+
+## F330 — Blender's text field, resolved: the flaw was the aim, not the verb
+
+Follow-up on the F329 gap. Instrumented replay against the live Save-As
+dialog: single click at the old point left the field inert; six backspaces
+changed nothing — because the point (y=883) was the *strip above* the
+field. A pixel crop of the dialog bottom put the field's true centre at
+y≈897; double-click there, Ctrl+A, type, Enter — and the file lands under
+the typed name (f330_scene.blend on disk). So GHOST fields take the
+standard recipe fine; the failure was 14 px of aim. Method note folded in:
+when a pixel-floor click seems ignored, crop the target and *measure* the
+row before blaming the widget.
+
+## F331 — KPatience: drag-and-drop under a solver's eye
+
+The card-game drag domain. Chrome speaks (41 nodes: menus, 'Solver: This
+game is winnable.', an 'N moves' status label); the board is pixels. From
+the Klondike deal's screenshot: 3♦ sat playable onto 4♠ — drag(985,740 →
+578,600) and the status label ticked '2 moves' → '4 moves' (KPatience
+counts the flip too); a stock click made it 5. So the drag verb carries a
+real card across a QGraphicsScene, and the semantic moves counter is the
+ground truth that the drop *registered as a legal move* rather than
+snapping back — a nice cross-floor assertion: pixel gesture, semantic
+receipt.
+
+## F332 — LibreOffice Writer: authoring, and the missing-module trap
+
+New-machine friction first: launching `libreoffice --writer` produced a
+Start Center whose 'Writer Document' entry sat permanently greyed and no
+Writer window ever came — because Ubuntu ships `libreoffice-core`+`calc`
+here without `libreoffice-writer` at all. The floor could see the symptom
+(a Start Center that never advances) but the diagnosis lived in dpkg; one
+`apt-get install libreoffice-writer` later, `lowriter` opens a real
+document window (1905 a11y nodes — the richest tree yet). The arc: type a
+sentence, Ctrl+A + Ctrl+B, Ctrl+S, name it in the KDE save dialog, Enter.
+Ground truth from the ODT zip itself: content.xml carries the sentence and
+`font-weight="bold"`. Lesson filed: a greyed launcher entry is a *package*
+smell, not a floor flaw — check dpkg before blaming the tree.
+
+## F333 — LibreOffice Impress: recovery-loop weather, then a clean deck
+
+Impress arrived with weather: the earlier soffice kill left crash-recovery
+state, so launch produced a Document Recovery dialog, whose Discard spawns
+a *second* nested confirm ('Are you sure...') on an untitled window — both
+navigated semantically (Discard → Yes). Even then the module wobbled once
+(recovery loop reappeared); a `pkill` + `--norestore` relaunch settled it.
+The deck arc itself is all keyboard: Esc/Tab selects the title
+placeholder, F2 enters edit, type the title, Esc Esc, Ctrl+S, name, Enter
+through the keep-format prompt. Tree is rich (1749 nodes: every layout
+name, Outline views). Ground truth: f333_deck.odp's content.xml carries
+the typed title. Lesson: crash-recovery dialogs are part of the *launch*
+choreography on long-lived desktops — treat 'wait_title' misses as a cue
+to scan for them before blaming the app.
+
+## F334 — KSudoku: chrome speaks, cells are pixels, the solver closes the loop
+
+Puzzle-grid domain. The launcher is fully semantic (game-type gallery,
+Generate A Puzzle, a Difficulty Level dialog with its OK — all
+uia_click-able), while the 9x9 board itself is a custom-painted canvas: the
+106-node tree carries not one cell. The arc mixes floors: click an empty
+cell by grid arithmetic (first cell ~(415,195), ~99 px pitch), tap a digit
+(22% board repaint — cell entry plus selection highlights), Ctrl+Z to
+undo, then the semantic 'Solve' action — 54% of the board repaints as
+every blank fills, and a Congratulations dialog (semantic, OK) confirms
+the game engine itself judged the board complete. Third arcade/puzzle in a
+row where the winning pattern is: semantic chrome for verbs and receipts,
+pixel geometry for the play surface.
+
+## F335 — VLC: time itself as the assertion
+
+Media-playback domain. Launch choreography again: first run pops a
+Privacy/Network Access consent dialog — fully semantic ('Continue'
+uia_click-able). The subtle trap: a 30 s test clip *finished* while the
+consent was being handled, so the first playing-diff read 0.0 — a stopped
+player looks exactly like a broken capture. Relaunch with `--loop` turned
+the assertion stable: frames-changing 15% per 1.5 s while playing, 0.0%
+frozen after Space (pause), 15% again after Space (resume). The lesson
+worth keeping: for continuous media the pixel floor's assertion is
+*temporal* — two captures and a diff turn 'is video actually rendering'
+into a number, and pause/resume becomes a crisp three-beat proof.
