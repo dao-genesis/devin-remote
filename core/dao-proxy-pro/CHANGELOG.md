@@ -2,6 +2,18 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.332 · 反代提示词隔离(回归模型本源) + 模型外接选择
+: 用户反馈反代端点回包错乱——上游模型自认 Cascade、回包混入插件语境。根因: 官方直通
+  复用捕获帧时, 帧内仍携 Cascade 全量系统提示词(捕帧于注入前=原始官方 SP)。
+- `source.js` 新增 `_isolateChatFrameSP`: 复用前剥净帧内 SP 载体(顶层裸文本字段 +
+  数组内 role=0 条目两 schema 兼容·置空后不可解则回退原帧)。配置 `isolatePrompt`
+  默认开(反代回包即模型本源·"Kimi 即 Kimi"), 关则透传旧行为。
+- `revproxy.js` 模型外接选择: 新增 `disabledModels` 配置(默认空=全部反代);
+  `/v1/models` 不列已排除模型、调用即 403 `model_not_exposed`;
+  新增 `/origin/revproxy/models` 端点(单个/批量/setAll 热切·本机或持 key 远程可管)。
+- `extension.js` 面板: 每模型/家族外接复选框 + 全选/全不外接 + 「提示词隔离」开关。
+- 自检新增 [17] 提示词隔离 8 项 + [18] 模型外接选择 12 项(全过)·dao-test 328 回归全过。
+
 v9.9.331 · 提示缓存从根修复(命中率≈0 → 真命中) + 面板缓存命中率观照
 : 用户反馈外接 API 缓存命中率几乎为零。根因三重: ① Anthropic 仅 thinking 时才钉 system
   cache_control/发 prompt-caching beta 头,工具与对话历史从不钉断点 → 非 thinking 路径

@@ -61,6 +61,13 @@ function defaultConfig() {
     // 是否允许局域网(0.0.0.0)其他设备访问 · 仅状态标记, 实际监听仍由 source.js 决定
     exposeLan: false,
     defaultMaxTokens: 4096,
+    // 提示词隔离(回归模型本源): 官方直通复用捕获帧时, 剥净 Cascade/DAO 系统提示词,
+    //   使反代出去的即上游模型最本源 API 形态("Kimi 即 Kimi"·不冒认 Cascade)。
+    //   默认开·符合「反代=回归本源」之义; 关则透传捕获帧原 SP(旧行为)。
+    isolatePrompt: true,
+    // 模型外接选择(用户可择): 被排除(不对外反代)之模型 uid 列表。空=全部反代(默认)。
+    //   道: 万物并育, 默认全通; 用户按需「去彼」某些模型不外接。
+    disabledModels: [],
     // 反代档位热切换: familyUid → 当前活跃档 modelUid (空=按默认规则·免费档优先)
     tiers: {},
     // 双路互补(道并行而不相悖): 主路(官方直通/渠道)遇限流·配额且未出首字节时,
@@ -265,6 +272,19 @@ function _resolveFamilyAlias(model, deps) {
   } catch (_) {}
   return null;
 }
+// 模型外接选择: 判某模型(对外名/uid/家族别名)是否被用户排除(不对外反代)。
+//   命中原名或其家族别名解析出的活跃档 uid, 皆视为禁用。空列表=全通。
+function _isModelDisabled(cfg, model, deps) {
+  const dis = (cfg && cfg.disabledModels) || [];
+  if (!dis.length || !model) return false;
+  if (dis.indexOf(model) >= 0) return true;
+  try {
+    const aliased = _resolveFamilyAlias(model, deps);
+    if (aliased && dis.indexOf(aliased) >= 0) return true;
+  } catch (_) {}
+  return false;
+}
+
 // 家族归组摘要(供状态面 + /v1/models 别名): 每族活跃档 + 各档色/免费态
 function familySummary(deps, models) {
   const idx = buildFamilyIndex(deps);
@@ -422,12 +442,16 @@ function listModels(deps) {
       add(m, { owned_by: name, provider: name, routed: true, reverse: "channel" });
   }
 
-  // 着色 + 计数
+  // 着色 + 计数 + 外接开关标记(exposed: 是否对外反代 · false=用户已排除)
+  //   注: 此处 cfg 为 EaConfig(渠道/路由), 反代配置须取 deps.cfg / loadConfig()。
+  const _rpCfg = (deps && deps.cfg) || loadConfig();
+  const _cfgDis = (_rpCfg && _rpCfg.disabledModels) || [];
   for (const e of out) {
     const c = _classify(e, deps);
     e.color = c.color;
     e.status = c.status;
     e.note = c.note;
+    e.exposed = _cfgDis.indexOf(e.id) < 0;
   }
   // 家族·档位标注 (供前端按家族归组 + 档位热切换 · 每档保留独立配额色)
   try {
@@ -456,7 +480,7 @@ function listModels(deps) {
 }
 
 function modelStats(models) {
-  const s = { total: models.length, green: 0, red: 0, amber: 0, free: 0, channel: 0, official: 0 };
+  const s = { total: models.length, green: 0, red: 0, amber: 0, free: 0, channel: 0, official: 0, exposed: 0, disabled: 0 };
   for (const m of models) {
     if (m.color === "green") s.green++;
     else if (m.color === "red") s.red++;
@@ -464,6 +488,8 @@ function modelStats(models) {
     if (m.status === "free") s.free++;
     if (m.reverse === "channel" || m.reverse === "stub") s.channel++;
     if (m.reverse === "official") s.official++;
+    if (m.exposed === false) s.disabled++;
+    else s.exposed++;
   }
   return s;
 }
@@ -1236,6 +1262,8 @@ async function handle(req, res, u, deps) {
       version: deps.version || "",
       enabled: cfg.enabled,
       applyInvert: cfg.applyInvert,
+      isolatePrompt: cfg.isolatePrompt !== false,
+      disabledModels: cfg.disabledModels || [],
       exposeLan: cfg.exposeLan,
       dualPath: cfg.dualPath !== false,
       hasKey: !!cfg.apiKey,
@@ -1281,6 +1309,49 @@ async function handle(req, res, u, deps) {
     _json(res, 200, { ok: true, tiers: next.tiers });
     return true;
   }
+  // 模型外接选择: 原子切换某(些)模型是否对外反代 (热生效·无需重启) ──
+  //   body: {modelUid|modelUids:[...], exposed:bool} 精确开关 ·
+  //         {setAll:"on"|"off"} 批量全选/全不选(off 时排除当前全部枚举模型)。
+  if (p === "/origin/revproxy/models" && req.method === "POST") {
+    if (!_isLocal(req) && !_authOk(req, cfg)) {
+      _json(res, 403, { ok: false, error: "需本机或有效 Bearer key (远程管理)" });
+      return true;
+    }
+    let body = {};
+    try {
+      body = await _readBody(req);
+    } catch (_) {}
+    const next = Object.assign(loadConfig(), {});
+    let dis = Array.isArray(next.disabledModels)
+      ? next.disabledModels.slice()
+      : [];
+    const disSet = new Set(dis);
+    if (body.setAll === "on") {
+      disSet.clear(); // 全选反代 · 万物并育
+    } else if (body.setAll === "off") {
+      for (const m of listModels(deps)) disSet.add(m.id); // 全不外接
+    } else {
+      const ids = Array.isArray(body.modelUids)
+        ? body.modelUids
+        : body.modelUid
+          ? [body.modelUid]
+          : [];
+      const exposed = body.exposed !== false; // 缺省视为开启外接
+      for (const id of ids) {
+        if (!id || typeof id !== "string") continue;
+        if (exposed) disSet.delete(id);
+        else disSet.add(id);
+      }
+    }
+    next.disabledModels = Array.from(disSet).slice(0, 2000);
+    saveConfig(next);
+    _json(res, 200, {
+      ok: true,
+      disabledModels: next.disabledModels,
+      stats: modelStats(listModels(Object.assign({}, deps, { cfg: next }))),
+    });
+    return true;
+  }
   if (p === "/origin/revproxy/config" && req.method === "POST") {
     if (!_isLocal(req)) {
       _json(res, 403, { ok: false, error: "localhost only" });
@@ -1294,6 +1365,12 @@ async function handle(req, res, u, deps) {
     if (typeof body.enabled === "boolean") next.enabled = body.enabled;
     if (typeof body.applyInvert === "boolean")
       next.applyInvert = body.applyInvert;
+    if (typeof body.isolatePrompt === "boolean")
+      next.isolatePrompt = body.isolatePrompt;
+    if (Array.isArray(body.disabledModels))
+      next.disabledModels = body.disabledModels
+        .filter((x) => typeof x === "string" && x)
+        .slice(0, 2000);
     if (typeof body.exposeLan === "boolean") next.exposeLan = body.exposeLan;
     if (typeof body.defaultMaxTokens === "number")
       next.defaultMaxTokens = body.defaultMaxTokens;
@@ -1326,7 +1403,9 @@ async function handle(req, res, u, deps) {
   }
 
   if (p === "/v1/models" && req.method === "GET") {
-    const models = listModels(deps);
+    const allModels = listModels(deps);
+    // 模型外接选择: 对外仅呈现「已开启外接」之模型(用户排除者不列)。
+    const models = allModels.filter((m) => m.exposed !== false);
     const data = models.slice();
     // 家族别名: 外部可用干净家族名(如 glm-5.1)调用「当前活跃档」· 一族一别名
     try {
@@ -1334,6 +1413,7 @@ async function handle(req, res, u, deps) {
       for (const f of fams) {
         if (!f.aliasSlug || f.aliasSlug === f.activeUid) continue;
         if (models.some((m) => m.id === f.aliasSlug)) continue;
+        if (_isModelDisabled(cfg, f.activeUid, deps)) continue;
         const act = models.find((m) => m.id === f.activeUid) || {};
         data.push({
           id: f.aliasSlug,
@@ -1366,6 +1446,19 @@ async function handle(req, res, u, deps) {
     const norm = normalizeInbound(clientKind, body);
     if (!norm.model) {
       _json(res, 400, { error: { message: "model required" } });
+      return true;
+    }
+    // 模型外接选择: 用户已排除之模型拒绝对外反代(回归本源·各取所需)。
+    if (_isModelDisabled(cfg, norm.model, deps)) {
+      _json(res, 403, {
+        error: {
+          message:
+            "模型 '" +
+            norm.model +
+            "' 未开放外接 · 已被用户在「模型反代」面板排除(可在面板重新勾选启用)",
+          type: "model_not_exposed",
+        },
+      });
       return true;
     }
     const targets = resolveTargets(norm.model, deps);
@@ -1433,6 +1526,7 @@ module.exports = {
   setPremiumQuota,
   getPremiumQuota,
   _officialInfo,
+  _isModelDisabled,
   _isFreeTier,
   buildFamilyIndex,
   familySummary,

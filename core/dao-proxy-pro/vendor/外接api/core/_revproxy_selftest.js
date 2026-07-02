@@ -699,6 +699,113 @@ let KEY = "";
     revproxy.saveConfig(c2);
   }
 
+  // ── [17] 提示词隔离(回归模型本源): 捕获帧内 Cascade SP 被剥净 ──
+  //   病灶: 官方直通复用捕获帧时携 Cascade 全量 SP → 上游自认 Cascade·回包混入插件语境。
+  console.log("[17] 提示词隔离: _isolateChatFrameSP 剥净捕获帧 SP");
+  {
+    const SRC = require("../../bundled-origin/source.js")._test;
+    const { _pbTag, _pbEncVarint, _isolateChatFrameSP, parseFrames, parseProto, _findMsgsArray, _msgContentInfo } = SRC;
+    const strF = (f, s) => {
+      const b = Buffer.from(s, "utf8");
+      return Buffer.concat([_pbTag(f, 2), _pbEncVarint(b.length), b]);
+    };
+    const varF = (f, v) => Buffer.concat([_pbTag(f, 0), _pbEncVarint(v)]);
+    const wrap = (f, body) => Buffer.concat([_pbTag(f, 2), _pbEncVarint(body.length), body]);
+    const frameOf = (payload) => {
+      const h = Buffer.alloc(5);
+      h[0] = 0;
+      h.writeUInt32BE(payload.length, 1);
+      return Buffer.concat([h, payload]);
+    };
+    const cascadeSP = "You are Cascade, a powerful agentic AI coding assistant designed by the Codeium engineering team. " + "道".repeat(120);
+    // schema ①: SP=顶层独立 field2 裸文本 · 消息数组=field3
+    const bodyA = Buffer.concat([
+      strF(2, cascadeSP),
+      wrap(3, Buffer.concat([varF(2, 1), strF(3, "用户真问题 PING")])),
+      strF(21, "kimi-k2-uid"),
+    ]);
+    const isoA = _isolateChatFrameSP(frameOf(bodyA));
+    const sA = isoA.toString("utf8");
+    ok("①顶层裸SP被剥净", !/You are Cascade/.test(sA));
+    ok("①用户正文保留", /用户真问题 PING/.test(sA));
+    ok("①短标识字段(field21)不误伤", /kimi-k2-uid/.test(sA));
+    {
+      const top = parseProto(parseFrames(isoA)[0].payload);
+      const fnd = _findMsgsArray(top);
+      ok("①隔离后帧仍可解析·末条正文完好", fnd && _msgContentInfo(fnd.arr[fnd.arr.length - 1]).text === "用户真问题 PING");
+    }
+    // schema ②: SP=消息数组内 role=0 条目(role=field1, content=field2)
+    const bodyB = Buffer.concat([
+      wrap(2, Buffer.concat([varF(1, 0), strF(2, cascadeSP)])),
+      wrap(2, Buffer.concat([varF(1, 1), strF(2, "user turn B")])),
+    ]);
+    const isoB = _isolateChatFrameSP(frameOf(bodyB));
+    const sB = isoB.toString("utf8");
+    ok("②数组内 role=0 SP 正文被置空", !/You are Cascade/.test(sB));
+    ok("②user 条目保留", /user turn B/.test(sB));
+    // 坏帧/空帧不崩·回退原帧
+    ok("空帧回退不崩", _isolateChatFrameSP(Buffer.alloc(0)).length === 0);
+    // 无 SP 的干净帧幂等
+    const clean = frameOf(wrap(3, Buffer.concat([varF(2, 1), strF(3, "clean")])));
+    ok("干净帧幂等", _isolateChatFrameSP(clean).equals(clean));
+  }
+
+  // ── [18] 模型外接选择: 默认全选·排除后端点不列不接·可恢复 ──
+  console.log("[18] 模型外接选择: disabledModels 强制 + /origin/revproxy/models 热切");
+  {
+    const c17 = revproxy.loadConfig();
+    c17.disabledModels = [];
+    revproxy.saveConfig(c17);
+    const depsSel = Object.assign({}, deps, {
+      getModelCatalog: () => [],
+      getOfficialFamilies: () => [],
+    });
+    // 默认全选: glm-test 可见可调
+    delete depsSel.cfg;
+    let rm = await call("GET", "/v1/models", null, depsSel);
+    ok("默认全选: glm-test 在列", JSON.parse(rm.body).data.some((m) => m.id === "glm-test"));
+    ok("默认 isolatePrompt=true", revproxy.loadConfig().isolatePrompt !== false);
+    // 排除 glm-test
+    let rt = await call("POST", "/origin/revproxy/models", { modelUid: "glm-test", exposed: false }, depsSel);
+    ok("models 端点回 ok+disabledModels", JSON.parse(rt.body).ok === true && JSON.parse(rt.body).disabledModels.indexOf("glm-test") >= 0);
+    delete depsSel.cfg;
+    rm = await call("GET", "/v1/models", null, depsSel);
+    ok("排除后 /v1/models 不列 glm-test", !JSON.parse(rm.body).data.some((m) => m.id === "glm-test"));
+    ok("未排除的 claude-test 仍在列", JSON.parse(rm.body).data.some((m) => m.id === "claude-test"));
+    delete depsSel.cfg;
+    let rc = await call(
+      "POST",
+      "/v1/chat/completions",
+      { model: "glm-test", messages: [{ role: "user", content: "hi" }] },
+      depsSel,
+    );
+    ok("排除后调用 → 403 model_not_exposed", rc._status === 403 && JSON.parse(rc.body).error.type === "model_not_exposed");
+    // _isModelDisabled 单元
+    ok("_isModelDisabled 命中", revproxy._isModelDisabled({ disabledModels: ["glm-test"] }, "glm-test", depsSel) === true);
+    ok("_isModelDisabled 未命中", revproxy._isModelDisabled({ disabledModels: ["glm-test"] }, "claude-test", depsSel) === false);
+    // setAll:on 一键恢复全选
+    rt = await call("POST", "/origin/revproxy/models", { setAll: "on" }, depsSel);
+    ok("setAll:on 清空排除表", JSON.parse(rt.body).disabledModels.length === 0);
+    delete depsSel.cfg;
+    rc = await call(
+      "POST",
+      "/v1/chat/completions",
+      { model: "glm-test", messages: [{ role: "user", content: "hi" }] },
+      depsSel,
+    );
+    ok("恢复后调用即通", JSON.parse(rc.body).choices[0].message.content === "你好，道可道");
+    // setAll:off 全不外接
+    rt = await call("POST", "/origin/revproxy/models", { setAll: "off" }, depsSel);
+    ok("setAll:off 排除全部枚举模型", JSON.parse(rt.body).disabledModels.length >= 2);
+    delete depsSel.cfg;
+    rm = await call("GET", "/v1/models", null, depsSel);
+    ok("全不外接时 /v1/models 空列", JSON.parse(rm.body).data.length === 0);
+    // 复位
+    const cz17 = revproxy.loadConfig();
+    cz17.disabledModels = [];
+    revproxy.saveConfig(cz17);
+  }
+
   revproxy.setPremiumQuota("unknown");
   mock.close();
   console.log(failures === 0 ? "\nALL PASS" : "\n" + failures + " FAIL");

@@ -6572,6 +6572,67 @@ function _trimFrameHistory(frameBody) {
   return frameBody;
 }
 
+// 提示词隔离(回归模型本源·反代专用): 剥净捕获帧内 Cascade/DAO 系统提示词。
+//   病灶(实证·2026-07): 官方直通复用捕获帧时, 帧内仍携 Cascade 全量系统提示词
+//   (顶层独立 SP 字段 / 消息数组内 role=0 条目, 且捕帧于 modifySPProto 之前=原始官方 SP),
+//   上游模型遂自认 Cascade、回包混入插件语境 → 非模型本源。
+//   正法: 复用前把 SP 载体置空——外接调用方自带 system 时经渠道路径注入, 官方直通则纯净
+//   单轮("Kimi 即 Kimi")。与 invertSP(保留本源观照文本)不同, 此处彻底剥净·不注入任何内容。
+//   两种 schema 兼容: ① SP 为独立顶层字段(长 utf8 文本·非消息数组) ② SP 为数组内 role=0 条目。
+//   置空后不能解析则回退原帧(宁稳勿崩)。
+function _isolateChatFrameSP(frameBody) {
+  try {
+    const frames = parseFrames(frameBody);
+    if (!frames.length) return frameBody;
+    let payload = frames[0].payload;
+    const top = parseProto(payload);
+    const found = _findMsgsArray(top);
+    const msgsField = found ? found.field : null;
+    const empty = Buffer.alloc(0);
+    let changed = false;
+    // ① 独立顶层 SP 字段: 候选字段中「长 utf8 文本」条目(非消息数组本体) → 置空
+    //   加 !_pbParseOk 门: 仅命中真裸文本载体, 不误伤嵌套 proto(如工具定义·field10)
+    const _rawSP = (b) =>
+      b && b.length > 200 && !_pbParseOk(b) && looksLikeUtf8Text(b);
+    for (const fn of MSGS_FIELD_CANDIDATES) {
+      if (fn === msgsField) continue;
+      const arr = top[fn];
+      if (!arr || !arr.length) continue;
+      const hasSP = arr.some((e) => e.w === 2 && e.b && _rawSP(Buffer.from(e.b)));
+      if (!hasSP) continue;
+      const out = _pbRebuildField(payload, fn, (entry) =>
+        _rawSP(entry) ? empty : entry,
+      );
+      if (out && out.length && _pbParseOk(out)) {
+        payload = out;
+        changed = true;
+      }
+    }
+    // ② 消息数组内 role=0 系统条目: 正文置空(结构保留·宁稳勿崩)
+    if (msgsField != null) {
+      let touch = false;
+      const out = _pbRebuildField(payload, msgsField, (entry) => {
+        try {
+          const mf = parseProto(entry);
+          const role =
+            mf[1] && mf[1][0] && mf[1][0].w === 0 ? mf[1][0].v : null;
+          if (role === 0 && mf[2] && mf[2][0] && mf[2][0].b && mf[2][0].b.length) {
+            touch = true;
+            return _pbRebuildField(entry, 2, () => empty);
+          }
+        } catch (_) {}
+        return entry;
+      });
+      if (touch && out && out.length && _pbParseOk(out)) {
+        payload = out;
+        changed = true;
+      }
+    }
+    if (changed) return buildFrame(0, payload);
+  } catch (_) {}
+  return frameBody;
+}
+
 // 官方直通: revproxy 经此真转云端、解码回包。sink: {onText,onEnd,onError}。
 function _officialChatReplay(target, norm, sink) {
   return new Promise((resolve) => {
@@ -6597,6 +6658,14 @@ function _officialChatReplay(target, norm, sink) {
     if (!userText) userText = "你好";
     let newBody = _swapLastUserMsg(_lastChatFrame.body, userText);
     if (newBody) newBody = _trimFrameHistory(newBody); // 去污染: 裁掉预热历史·单轮干净
+    // 提示词隔离(回归模型本源): 默认开 · revproxy.json isolatePrompt=false 可关(旧行为)
+    let _isolate = true;
+    try {
+      const _rp = _getRevproxy();
+      const _rc = _rp && _rp.loadConfig && _rp.loadConfig();
+      if (_rc && _rc.isolatePrompt === false) _isolate = false;
+    } catch (_) {}
+    if (newBody && _isolate) newBody = _isolateChatFrameSP(newBody);
     if (!newBody) {
       sink.onError &&
         sink.onError("官方直通: 捕获帧解析失败, 请重新预热一次官方对话");
@@ -7682,6 +7751,7 @@ module.exports = {
     _swapLastUserMsg,
     _trimFrameHistory,
     _pbKeepLastRepeated,
+    _isolateChatFrameSP,
     _findMsgsArray,
     _msgContentInfo,
     parseFrames,

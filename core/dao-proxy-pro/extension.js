@@ -5033,6 +5033,9 @@ function getEaConfigHtml(port, nonce) {
       <label class="rp-switch" title="对入站 system 施『本源观照』(剥官方着相归本源) · 默认关=透传你自己的提示">
         <input type="checkbox" id="rpInvert"> 本源观照入站提示
       </label>
+      <label class="rp-switch" title="官方直通复用捕获帧时剥净 Cascade 系统提示词 · 反代回包即上游模型本源(Kimi 即 Kimi) · 默认开">
+        <input type="checkbox" id="rpIsolate"> 提示词隔离(回归模型本源)
+      </label>
       <span id="rpStat" style="font-size:10px;opacity:0.65;margin-left:auto">加载中…</span>
     </div>
 
@@ -5075,6 +5078,9 @@ function getEaConfigHtml(port, nonce) {
       <button class="btn rp-f" data-f="red" title="配额耗尽(红)">🔴无配额</button>
       <button class="btn rp-f" data-f="free" title="免费档·恒可反代">免费</button>
       <button class="btn rp-f" data-f="channel" title="经第三方渠道">渠道</button>
+      <span style="opacity:0.35">|</span>
+      <button class="btn" id="rpExposeAll" title="所有模型全部开启外接(默认态)">☑ 全选外接</button>
+      <button class="btn" id="rpExposeNone" title="所有模型全部关闭外接(端点不列不接)">☐ 全不外接</button>
       <input id="rpFilter" placeholder="搜索模型 (uid / 名称 / 厂商)" style="flex:1;min-width:120px;font-size:11px;padding:2px 6px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-input-background,rgba(0,0,0,0.2));color:var(--vscode-input-foreground,var(--vscode-foreground))">
     </div>
     <div id="rpModelList" style="flex:1;overflow-y:auto;margin:2px;font-size:11px;min-height:120px"></div>
@@ -6050,6 +6056,7 @@ function getEaConfigHtml(port, nonce) {
       _rpModels = (d && d.models) || [];
       var en = _rpEl('rpEnabled'); if (en) en.checked = !!d.enabled;
       var iv = _rpEl('rpInvert'); if (iv) iv.checked = !!d.applyInvert;
+      var iso = _rpEl('rpIsolate'); if (iso) iso.checked = d.isolatePrompt !== false;
       var st = d.stats || {};
       _rpSetText('rpStat', (d.enabled ? '● 已启用' : '○ 未启用') + ' · ' + (d.model_count || 0) + ' 模型可反代');
       _rpSetText('rpEndpoint', d.endpoint || ('http://127.0.0.1:' + _PORT + '/v1'));
@@ -6058,7 +6065,8 @@ function getEaConfigHtml(port, nonce) {
       var q = d.premiumQuota === 'ok' ? '付费配额·有' : (d.premiumQuota === 'exhausted' ? '付费配额·耗尽' : '付费配额·未探测');
       var nFam = (d.families || []).length;
       var nMulti = (d.families || []).filter(function(f){ return f.multi; }).length;
-      _rpSetText('rpLegend', '🟢 ' + (st.green || 0) + ' · 🔴 ' + (st.red || 0) + ' · 🟡 ' + (st.amber || 0) + ' · 免费 ' + (st.free || 0) + ' · ' + nFam + '族(' + nMulti + '族多档可热切) · ' + q);
+      var exq = (st.disabled || 0) > 0 ? (' · 外接 ' + (st.exposed || 0) + '/' + (st.total || 0)) : '';
+      _rpSetText('rpLegend', '🟢 ' + (st.green || 0) + ' · 🔴 ' + (st.red || 0) + ' · 🟡 ' + (st.amber || 0) + ' · 免费 ' + (st.free || 0) + ' · ' + nFam + '族(' + nMulti + '族多档可热切) · ' + q + exq);
       _rpRenderList();
       _rpFillSelect();
     }).catch(function(e) { _rpSetText('rpStat', '状态加载失败: ' + e.message); });
@@ -6115,6 +6123,10 @@ function getEaConfigHtml(port, nonce) {
       shownFams++;
       shownModels += f.members.length;
       var multi = f.members.length > 1;
+      var famExposed = f.members.some(function (mb) { return mb.exposed !== false; });
+      var famIds = f.members.map(function (mb) { return mb.id; }).join(',');
+      var expBox = '<input type="checkbox" class="rp-exp" data-ids="' + _rpEsc(famIds) + '"' + (famExposed ? ' checked' : '') + ' title="是否外接此模型(取消后端点不列不接·默认全选)" style="flex:none;margin:0">';
+      var dimSt = famExposed ? '' : 'opacity:0.45;';
       if (multi) {
         var act = f.active;
         var dot = _RP_DOT[act.color] || '#888';
@@ -6125,7 +6137,8 @@ function getEaConfigHtml(port, nonce) {
           opts += '<option value="' + _rpEsc(mb.id) + '"' + (mb === act ? ' selected' : '') + '>'
             + _rpDot(mb.color) + ' ' + _rpEsc(_rpTierName(mb)) + (mb.free ? ' · 免费' : '') + '</option>';
         }
-        html += '<div style="display:flex;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
+        html += '<div style="' + dimSt + 'display:flex;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
+          + expBox
           + '<span title="' + _rpEsc(act.note || '') + '" style="flex:none;width:8px;height:8px;border-radius:50%;background:' + dot + '"></span>'
           + '<b style="font-size:11px">' + _rpEsc(f.familyLabel) + '</b>'
           + '<span style="opacity:0.45;font-size:9px">' + f.members.length + '档</span>'
@@ -6137,7 +6150,8 @@ function getEaConfigHtml(port, nonce) {
         var via1 = m.dao_route ? ('→ ' + m.dao_route.provider + ' / ' + (m.dao_route.model || '')) : (m.reverse === 'official' ? '官方直通' : (m.owned_by || ''));
         var tier = m.costTier ? String(m.costTier).replace('MODEL_COST_TIER_', '') : '';
         var badge = m.free ? '<span style="font-size:9px;color:#3fb950;border:1px solid #3fb950;border-radius:3px;padding:0 3px;margin-left:4px">免费</span>' : (tier ? '<span style="font-size:9px;opacity:0.6;margin-left:4px">' + _rpEsc(tier) + '</span>' : '');
-        html += '<div style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
+        html += '<div style="' + dimSt + 'display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
+          + expBox
           + '<span title="' + _rpEsc(m.note || '') + '" style="flex:none;width:8px;height:8px;border-radius:50%;background:' + d1 + '"></span>'
           + '<code style="font-weight:600">' + _rpEsc(m.id) + '</code>' + badge
           + '<span style="opacity:0.55;font-size:10px">· ' + _rpEsc(m.provider || m.owned_by || '') + '</span>'
@@ -6152,6 +6166,20 @@ function getEaConfigHtml(port, nonce) {
         el.addEventListener('change', function () { _rpSetTier(el.getAttribute('data-fam'), el.value); });
       })(sels[s]);
     }
+    var exps = list.querySelectorAll('.rp-exp');
+    for (var x = 0; x < exps.length; x++) {
+      (function (el) {
+        el.addEventListener('change', function () {
+          _rpSetExposed((el.getAttribute('data-ids') || '').split(','), el.checked);
+        });
+      })(exps[x]);
+    }
+  }
+  // 模型外接选择: 热切某(些)模型是否对外反代 (setAll: 'on'|'off' 批量)
+  function _rpSetExposed(ids, exposed, setAll) {
+    _rpSetText('rpStat', '保存外接选择…');
+    var body = setAll ? { setAll: setAll } : { modelUids: ids, exposed: !!exposed };
+    fPost('/origin/revproxy/models', body).then(function () { _rpRefresh(); }).catch(function (e) { _rpSetText('rpStat', '外接选择保存失败: ' + e.message); });
   }
   function _rpSetTier(fam, uid) {
     if (!fam || !uid) return;
@@ -6194,6 +6222,9 @@ function getEaConfigHtml(port, nonce) {
   (function _rpWire() {
     var en = _rpEl('rpEnabled'); if (en) en.addEventListener('change', function() { _rpSaveCfg({ enabled: en.checked }); });
     var iv = _rpEl('rpInvert'); if (iv) iv.addEventListener('change', function() { _rpSaveCfg({ applyInvert: iv.checked }); });
+    var iso = _rpEl('rpIsolate'); if (iso) iso.addEventListener('change', function() { _rpSaveCfg({ isolatePrompt: iso.checked }); });
+    var ea = _rpEl('rpExposeAll'); if (ea) ea.addEventListener('click', function() { _rpSetExposed(null, true, 'on'); });
+    var en0 = _rpEl('rpExposeNone'); if (en0) en0.addEventListener('click', function() { _rpSetExposed(null, false, 'off'); });
     var rf = _rpEl('rpRefresh'); if (rf) rf.addEventListener('click', _rpRefresh);
     var rk = _rpEl('rpRegenKey'); if (rk) rk.addEventListener('click', function() { _rpSaveCfg({ regenerateKey: true }); });
     var ce = _rpEl('rpCopyEndpoint'); if (ce) ce.addEventListener('click', function() { _rpClip(_rpEl('rpEndpoint').textContent); });
