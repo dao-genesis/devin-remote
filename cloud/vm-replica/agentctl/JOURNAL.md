@@ -10723,3 +10723,25 @@ Ctrl+<x> — Esc opened KDE's System Activity, canvas clicks toggled
 selections — session-wide poltergeist from one dead call. hotkey now unwinds
 whatever it pressed in a finally block; no exception path can leave a
 modifier stuck.
+
+## F319 — GIMP: the fully mute app — pixel floor carries the whole arc
+
+GIMP 2.10 exposes *zero* AT-SPI nodes — not a sparse tree, none (GTK2-era
+a11y absent on this ground). The purest all-pixel domain so far: Ctrl+N,
+Enter through Create-a-New-Image, 'n' for Pencil, drag a stroke — canvas
+pixel flips white→black at the sampled point. Shift+Ctrl+E, select-all +
+type path, Enter, Enter through the PNG options — exported file on disk is
+ground truth: 1920x1080, the painted stroke sampled dark. Every step of a
+professional image-editing arc completed with keyboard + pointer + pixels
+alone; no floor change needed, the fallback tier held.
+
+## F320 — KMahjongg: the app narrates itself
+
+The status bar speaks everything the floor needs: 'Removed: 0/144
+Combinations left: 18', 'Game number', 'Ready. Now it is your turn.' — all
+readable as labels. Demo mode is the app playing itself: after 8 seconds the
+label reads 'Removed: 16/144' (semantic ground truth of tiles leaving the
+board) while ~10% of the window's pixels changed (pixel corroboration). The
+Hint flash is too brief for a 1.5s-later capture to catch (diff ~0) — a
+reminder that transient highlights need capture timed inside the flash, not
+after it. Chrome semantic, board pixel: both floors held, no fix needed.
