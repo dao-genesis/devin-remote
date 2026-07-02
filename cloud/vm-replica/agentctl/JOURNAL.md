@@ -10835,3 +10835,18 @@ toolbar 'Cube' by name, Ctrl+S through the save dialog. Ground truth from
 inside the .FCStd zip: Document.xml carries Part::Box. A full parametric
 CAD arc — workbench switch, primitive creation, document save — entirely by
 meaning.
+
+## F329 — Blender: an all-pixel giant, driven end to end
+
+Zero AT-SPI nodes — Blender draws every widget itself (GHOST/OpenGL), so
+this is the pixel floor's biggest arena yet. The arc: dismiss the Quick
+Setup splash, click the viewport, A (select all), X + Enter (delete the
+default cube — outliner emptied), Add ▸ Mesh ▸ UV Sphere through two
+pixel-located menu levels (~9% viewport repaint, 'Sphere' in the outliner),
+Ctrl+S through Blender's own file browser. One genuine gap surfaced: the
+file dialog's *text field* never took the typed name — Blender's custom
+fields want a double-click to enter edit mode and the synthetic pair
+didn't register as one; Enter saved under the default 'untitled.blend'
+instead. Ground truth still lands: the saved .blend carries the Sphere
+object (849 KB, 'Sphere' datablock present). Flaw filed: GHOST-field text
+entry needs a dedicated recipe (click + select-all + type is not it).
