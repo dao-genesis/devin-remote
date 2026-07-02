@@ -11222,3 +11222,23 @@ arc pure: ocr_boxes found 'Press' at (24,255,141,85) conf 94, clicked
 its rect center, and the page mutated to 'CLICKED OK_ 5560' — DOM state
 change caused and observed entirely through pixels. Words-with-places
 turn any legible surface into a semantic tree. Suite stays 33/33.
+
+## F354 — Blender: modal keyboard grammar, and a save dialog that ignores you
+
+3D-modeling domain, the deepest keyboard grammar yet. Blender exposes
+zero AT-SPI nodes (custom OpenGL UI), so everything ran as pixels +
+Blender's own modal language. Two traps fired. First: transform keys
+are *selection-scoped and modal* — an early stray click deselected the
+cube, so 'g'/'x'/'2' fell through as global shortcuts and the '.' of
+'1.5' opened the pivot-point pie menu instead of typing a decimal.
+Inside a G/S modal, digits are numeric input; outside, they are commands
+— same keys, two grammars, and only pixel state tells you which one is
+listening. Reselect, then G X 2 Enter / S 1.5 Enter worked, sidebar OCR
+confirming Scale 1.500 live. Second: the Save file browser kept the
+default name — the typed 'f354.blend' never landed (field focus is
+click-position-sensitive) and Enter accepted 'untitled.blend'; the post-
+save window title was the tell. Ground truth came from the artifact via
+the app's own engine: blender --background --python-expr read back
+LOC (2,0,0) SCALE (1.5,1.5,1.5) — exactly the modal keystrokes. When an
+app has a CLI, the artifact floor can be *queried in the app's own
+words* rather than parsed by hand.
