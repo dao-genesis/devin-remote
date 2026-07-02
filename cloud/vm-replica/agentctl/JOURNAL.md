@@ -10656,3 +10656,48 @@ nothing to race. The remap path remains only for what the layout cannot say
 (CJK, emoji), and `'=A1*A2 hello WORLD 42 中文'` round-trips exactly through
 both paths. Also from this arc: `_win_id(None)` now names its caller's sin
 instead of throwing a bare int() TypeError.
+
+## F313 — LibreCAD: CAD by the command line the app itself offers
+
+Engineering software's oldest interface is alive inside the GUI: LibreCAD's
+command widget. First-run "Welcome" dialog cleared by its own OK; then the
+floor speaks CAD: focus the command line (the bottom edit, found by role and
+position), type `line` `0,0` `200,150` `Esc`, invoke "Auto Zoom" *by name*
+from the menu, and the canvas — pixel ground, as every drawn surface is —
+reports 1,388 changed pixels where the line now lies. Menus and command line
+are semantic ground; the drawing is pixel ground; the workflow crosses both
+without friction. Pass, no flaw — the F311/F312 fixes carried the whole
+domain.
+
+## F314 — KPatience: choosing, playing and delegating a game
+
+The game-chooser grid is fully drawn — sixteen named tiles and not one exposed
+node — so the pixel floor picks Klondike by position. From there the chrome
+speaks: "Solver: This game is winnable." read by name before a single card
+moved. One stock click: 3.0% of the board repaints, the status bar flips to
+"1 move" — pixel change and semantic count agreeing on the same event. Then
+delegation: invoke "Demo" by name and the solver plays the board (99.9% of
+the ROI repainted), stopped the same way. Quirk noted: the moves label does
+not tick during demo playback — the count is the *user's* moves, which is
+itself a correct reading. Pass, no flaw.
+
+## F315 — KSudoku: generate, hint, solve
+
+Full puzzle arc: pick "Generate A Puzzle" by name, dismiss the Difficulty
+Level dialog by its OK, Hint fills a cell (board ROI repaints), Solve
+completes the grid and KSudoku's own "Congratulations!" dialog confirms —
+read and dismissed semantically. Along the way `window_on_current_desktop`
+turned out to be the one window verb left outside the record-accepting
+wrapper (F277's composition applied everywhere but here) — added to the
+wrap list.
+
+## F316 — the hidden twin: why clicking 'Solve' raised Chrome
+
+`uia_click(w, 'Solve')` sometimes raised *Chrome* instead of solving. The
+cause: 'Solve' lives twice in KSudoku's tree — toolbar button and menu item
+— and the menu-item twin inside a *closed* menu still reports a screen rect.
+`_find_acc` ranked rect-validity but not *visibility*, so it could choose the
+hidden twin, and the click at that stale rect landed on whatever window sat
+beneath. Fix: SHOWING now ranks above rect validity (showing+exact >
+showing+substring > hidden-exact > anything). Solve then actually solves:
+90% of the board repainted, Congratulations read from the app's own dialog.

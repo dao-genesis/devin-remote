@@ -6822,6 +6822,7 @@ def _wrap_win_verbs():
                "move_window", "window_state", "set_window_state", "window_pid",
                "terminate_window", "set_window_topmost", "is_window_topmost",
                "window_desktop", "move_window_to_desktop",
+               "window_on_current_desktop",
                "uia_name", "uia_children", "uia_find", "uia_find_all", "uia_invoke",
                "uia_get_value", "uia_set_value", "uia_focus", "uia_click",
                "uia_select", "uia_is_selected", "uia_toggle", "uia_toggle_state",

@@ -1926,9 +1926,17 @@ def _find_acc(at, fr, name, ctype):
 
     F219: prefer the first match whose screen rect is valid (not None / not
     INT32_MIN-filtered).  Label/text shadows share a name with the operable
-    control but carry no rect; returning them makes click/invoke always fail."""
+    control but carry no rect; returning them makes click/invoke always fail.
+
+    F316: prefer a match that is SHOWING. A toolbar button and its menu-item
+    twin share a name ('Solve' lives in both KSudoku's toolbar and its Move
+    menu); the item inside a *closed* menu still reports a stale screen rect,
+    and clicking that rect lands on whatever unrelated window sits there.
+    Visibility ranks above rect validity: showing+exact > showing+substring >
+    hidden-exact > hidden-substring > anything."""
     first_any = [None]
     first_sub = [None]
+    first_hidden = [None]
 
     def visit(acc, depth):
         if depth > 0 and _match(at, acc, name, ctype):
@@ -1938,8 +1946,15 @@ def _find_acc(at, fr, name, ctype):
             r = _acc_rect(at, acc)
             if r is not None:
                 nm = _acc_name(at, acc)
+                exact = name is None or \
+                    _strip_ellipsis(nm.lower()) == _strip_ellipsis(name.lower())
+                if not _acc_showing(at, acc):
+                    if exact and first_hidden[0] is None:
+                        first_hidden[0] = acc
+                        _ref(acc)
+                    return None
                 # F290: exact-first, mirroring _impl_uia_find.
-                if name is None or _strip_ellipsis(nm.lower()) == _strip_ellipsis(name.lower()):
+                if exact:
                     return acc
                 if first_sub[0] is None:
                     first_sub[0] = acc
@@ -1947,8 +1962,8 @@ def _find_acc(at, fr, name, ctype):
         return None
 
     hit = _walk(at, fr, visit)
-    keep = hit or first_sub[0] or first_any[0]
-    for held in (first_sub[0], first_any[0]):
+    keep = hit or first_sub[0] or first_hidden[0] or first_any[0]
+    for held in (first_sub[0], first_hidden[0], first_any[0]):
         if held and held is not keep:
             _unref(held)
     return keep
