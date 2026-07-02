@@ -5089,6 +5089,76 @@ def ocr_text(region: "tuple[int, int, int, int] | None" = None,
     return res
 
 
+def ocr_boxes(region: "tuple[int, int, int, int] | None" = None,
+              whitelist: "str | None" = None, psm: int = 6,
+              scale: int = 3, invert: bool = False,
+              min_conf: int = 40) -> "list[dict]":
+    """OCR *with locations*: each recognised word as ``{"text", "rect", "conf"}``,
+    ``rect`` in **screen coordinates** ``(x, y, w, h)``.
+
+    :func:`ocr_text` answers *what does this region say?* but discards *where*
+    each word sits — and on a semantically-mute surface (Chrome without its
+    a11y bridge, a game HUD, a canvas app) the words on screen are the only
+    clickable landmarks there are. F353 exposed the gap: driving a web page,
+    the 'Press Me' button was readable by OCR yet unclickable by name, forcing
+    a blind coordinate guess. This is find-by-reading: tesseract's TSV output
+    carries a box per word, so text becomes a click target the same way an
+    AT-SPI name does — read the word, click its rect.
+
+    Same capture/greyscale/upscale pipeline as :func:`ocr_text`; boxes are
+    mapped back through ``scale`` and offset by the region origin, so a hit can
+    be fed straight to :func:`click`. ``min_conf`` drops tesseract's low-
+    confidence junk words (its conf is 0-100, -1 for non-word rows)."""
+    import subprocess
+    if region is None:
+        w, h, buf = capture_rgb()
+        rx, ry, rw, rh = 0, 0, w, h
+    else:
+        rx, ry, rw, rh = region
+        if rw <= 0 or rh <= 0:
+            raise ValueError(
+                f"ocr_boxes region must have positive width/height, got {region!r}")
+        _w, _h, buf = capture_rgb(rx, ry, rw, rh)
+        rw, rh = _w, _h
+    g = bytearray(rw * rh)
+    for i in range(rw * rh):
+        lum = (buf[i * 3] * 299 + buf[i * 3 + 1] * 587
+               + buf[i * 3 + 2] * 114) // 1000
+        g[i] = 255 - lum if invert else lum
+    s = max(1, int(scale))
+    bw, bh = rw * s, rh * s
+    up = bytearray(bw * bh * 3)
+    for yy in range(bh):
+        srow = (yy // s) * rw
+        drow = yy * bw * 3
+        for xx in range(bw):
+            v = g[srow + xx // s]
+            j = drow + xx * 3
+            up[j] = up[j + 1] = up[j + 2] = v
+    png = _png(bw, bh, bytes(up))
+    cmd = [_ocr_engine(), "stdin", "stdout", "--psm", str(psm), "tsv"]
+    if whitelist:
+        cmd += ["-c", "tessedit_char_whitelist=" + whitelist]
+    out = subprocess.run(cmd, input=png, capture_output=True, timeout=30)
+    boxes = []
+    lines = out.stdout.decode(errors="ignore").splitlines()
+    for ln in lines[1:]:
+        f = ln.split("\t")
+        if len(f) < 12 or not f[11].strip():
+            continue
+        try:
+            conf = int(float(f[10]))
+            lx, ly, lw, lh = int(f[6]), int(f[7]), int(f[8]), int(f[9])
+        except ValueError:
+            continue
+        if conf < min_conf:
+            continue
+        boxes.append({"text": f[11].strip(), "conf": conf,
+                      "rect": (rx + lx // s, ry + ly // s,
+                               max(1, lw // s), max(1, lh // s))})
+    return boxes
+
+
 def wait_stable(target: tuple[int, int, int], tol: int = 24, move_tol: int = 3,
                 settle_frames: int = 3, interval: float = 0.12,
                 timeout: float = 6.0, radius: int = 80,

@@ -11206,3 +11206,19 @@ own config store — kreadconfig5 kdeglobals General/ColorScheme flipped
 GUI: the honest verification floor is the dotfile the panel writes.
 Restored the scheme afterwards; a practice arc should leave the desktop
 as it found it.
+
+## F353 — Chrome: when a page has no tree, its words must become click targets
+
+Web-browsing domain, the everyday king. Chrome (no a11y bridge enabled)
+exposes *zero* AT-SPI nodes — a page full of buttons is as mute as an
+SDL game. The arc drove browsing anyway: Ctrl+T, typed a file:// URL,
+title bar confirmed navigation, OCR read the page ('MARKER_ALPHA_7391 /
+Press Me'). Then the flaw: the button was *readable* but not *clickable*
+— ocr_text returns words without places, and the first click was a
+blind coordinate guess. Fixed in osctl: new ocr_boxes() parses
+tesseract's TSV, returning {"text","rect","conf"} per word with rects
+mapped back through the upscale factor to screen coordinates. Re-ran the
+arc pure: ocr_boxes found 'Press' at (24,255,141,85) conf 94, clicked
+its rect center, and the page mutated to 'CLICKED OK_ 5560' — DOM state
+change caused and observed entirely through pixels. Words-with-places
+turn any legible surface into a semantic tree. Suite stays 33/33.
