@@ -10992,3 +10992,19 @@ and the saved .dia is gzip'd XML naming exactly the truth — object types
 'Flowchart - Box' and 'Flowchart - Diamond', the 'decide' label embedded.
 When the accessibility floor is void, the artifact format is the semantic
 floor: parse what the app writes, not what it paints.
+
+## F340 — KAlgebra: the calculator answers in the tree, the graph answers in ink
+
+Math-tool domain, richly semantic (501 nodes). Calculator floor: click the
+expression Edit, type 6*7, Return — the result '42' lands as a *named
+AT-SPI node*, the cleanest receipt an app can give. Graph floor: the 2D
+tab's function Edit takes sin(x)*x, Return plots it (1.4% ROI diff), and
+the function list echoes 'sin(x)*x' as a checked row. Verifying the *math*
+from pixels taught a calibration humility: mapping data coords to screen
+px from the axis labels (±12.3485, ±10) missed the curve's analytic peak
+by ~25 px — axis-label-based calibration accumulates error from margins
+and label anchoring; column-scanning for the curve found it at y≈240 vs
+predicted 193. The zero-crossing at x=π *did* verify (curve pixel on the
+axis where x·sin x = 0). Lesson: pixel-verify invariants that are robust
+to calibration (zero crossings, symmetry, existence), not fine amplitudes
+— or calibrate from two known curve points, not from axis chrome.
