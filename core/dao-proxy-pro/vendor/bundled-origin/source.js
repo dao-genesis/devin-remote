@@ -6628,6 +6628,27 @@ function _isolateChatFrameSP(frameBody) {
         changed = true;
       }
     }
+    // ③ 工具定义(顶层 field 10)去污染: 与前向路径(modifySPProto)同源同净。
+    //   病灶(实证·2026-07): SP 剥净后帧内仍携 82 条 Cascade 全量工具定义(名/描述/schema
+    //   满是 "Cascade"/"Windsurf"/"Codeium" 与 create_memory 等着相) → 上游模型据此
+    //   工具集自认 Cascade、并能 "Created memory"。正法: 复用前向路径久经实证的两台去名/剔除
+    //   引擎——dropMemoryToolsProto(整条删记忆工具) + deOfficialNameToolsProto(工具描述/schema
+    //   去名)——对复用帧 field 10 施同一净化, 令反代出的免费模型真回归本源("Kimi 即 Kimi")。
+    //   与 ①② 的字节手术不同, 工具净化须整解整序(复用现成 parse/serialize·前向路径已验字节稳)。
+    try {
+      const top2 = parseProto(payload);
+      if (top2[_TOOLS_FIELD_NUM] && top2[_TOOLS_FIELD_NUM].length) {
+        const memDropped = dropMemoryToolsProto(top2);
+        const toolsDenamed = deOfficialNameToolsProto(top2);
+        if (memDropped > 0 || toolsDenamed > 0) {
+          const reser = serializeProto(top2);
+          if (reser && reser.length && _pbParseOk(reser)) {
+            payload = reser;
+            changed = true;
+          }
+        }
+      }
+    } catch (_) {}
     if (changed) return buildFrame(0, payload);
   } catch (_) {}
   return frameBody;
@@ -7754,7 +7775,10 @@ module.exports = {
     _isolateChatFrameSP,
     _findMsgsArray,
     _msgContentInfo,
+    dropMemoryToolsProto,
+    deOfficialNameToolsProto,
     parseFrames,
     parseProto,
+    serializeProto,
   },
 };

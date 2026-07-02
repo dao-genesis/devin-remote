@@ -748,6 +748,39 @@ let KEY = "";
     // 无 SP 的干净帧幂等
     const clean = frameOf(wrap(3, Buffer.concat([varF(2, 1), strF(3, "clean")])));
     ok("干净帧幂等", _isolateChatFrameSP(clean).equals(clean));
+    // schema ③: 工具定义(顶层 field 10)去污染 — 与前向路径同源。
+    //   ChatToolDefinition: field1=name · field2=description · field3=json_schema_string
+    const _TOOLS_FIELD_NUM = 10; // cascade_wire REQ.TOOLS
+    const td = (name, desc, schema) => {
+      let body = Buffer.concat([strF(1, name), strF(2, desc)]);
+      if (schema != null) body = Buffer.concat([body, strF(3, schema)]);
+      return wrap(_TOOLS_FIELD_NUM, body);
+    };
+    const bodyC = Buffer.concat([
+      strF(2, cascadeSP),
+      wrap(3, Buffer.concat([varF(2, 1), strF(3, "用户问题 C")])),
+      td("create_memory", "Save a memory item to the Cascade store"),
+      td(
+        "edit_file",
+        "Use Cascade to edit a file in the Windsurf IDE (Codeium)",
+        JSON.stringify({ type: "object", description: "Cascade file edit args" }),
+      ),
+    ]);
+    const isoC = _isolateChatFrameSP(frameOf(bodyC));
+    const sC = isoC.toString("utf8");
+    ok("③记忆工具(create_memory)整条剔除", !/create_memory/.test(sC));
+    ok("③工具描述去名: 无 Cascade", !/Cascade/.test(sC));
+    ok("③工具描述去名: 无 Windsurf/Codeium", !/Windsurf|Codeium/.test(sC));
+    ok("③非记忆工具(edit_file)保留", /edit_file/.test(sC));
+    ok("③顶层裸SP仍被剥净", !/You are Cascade/.test(sC));
+    {
+      const topC = parseProto(parseFrames(isoC)[0].payload);
+      const fndC = _findMsgsArray(topC);
+      ok(
+        "③工具净化后帧仍可解析·末条正文完好",
+        fndC && _msgContentInfo(fndC.arr[fndC.arr.length - 1]).text === "用户问题 C",
+      );
+    }
   }
 
   // ── [18] 模型外接选择: 默认全选·排除后端点不列不接·可恢复 ──
