@@ -11190,3 +11190,19 @@ ONE end'). The freshly-added window rect (F350) rode along: fields were
 found at y=1048 in a 1600x1200 screen without a single hardcoded
 coordinate. Lesson: a name is not an address — semantic targeting needs
 role plus name, because labels shadow the controls they describe.
+
+## F352 — KDE Colors KCM: QML settings panels are semantically hollow, config files are not
+
+System-configuration domain (the "manage the machine" verb). kcmshell5
+kcm_colors opened a QML module whose accessibility tree holds *only* the
+seven dialog buttons — the entire scheme grid (search field, accent
+swatches, Breeze Classic/Dark/Light cards) is invisible to AT-SPI. QML
+Kirigami surfaces are the Qt world's SDL: rich to the eye, mute to the
+tree. So the arc went pixels-to-artifact: screenshot to map the cards,
+click the Breeze Dark card, uia_click('Apply') (buttons at least are
+real), then read the receipt not from the screen but from the platform's
+own config store — kreadconfig5 kdeglobals General/ColorScheme flipped
+'' -> 'BreezeDark'. Desktop settings are a config-file domain wearing a
+GUI: the honest verification floor is the dotfile the panel writes.
+Restored the scheme afterwards; a practice arc should leave the desktop
+as it found it.
