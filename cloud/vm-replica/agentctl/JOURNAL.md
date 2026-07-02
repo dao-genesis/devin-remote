@@ -10850,3 +10850,15 @@ didn't register as one; Enter saved under the default 'untitled.blend'
 instead. Ground truth still lands: the saved .blend carries the Sphere
 object (849 KB, 'Sphere' datablock present). Flaw filed: GHOST-field text
 entry needs a dedicated recipe (click + select-all + type is not it).
+
+## F330 — Blender's text field, resolved: the flaw was the aim, not the verb
+
+Follow-up on the F329 gap. Instrumented replay against the live Save-As
+dialog: single click at the old point left the field inert; six backspaces
+changed nothing — because the point (y=883) was the *strip above* the
+field. A pixel crop of the dialog bottom put the field's true centre at
+y≈897; double-click there, Ctrl+A, type, Enter — and the file lands under
+the typed name (f330_scene.blend on disk). So GHOST fields take the
+standard recipe fine; the failure was 14 px of aim. Method note folded in:
+when a pixel-floor click seems ignored, crop the target and *measure* the
+row before blaming the widget.
