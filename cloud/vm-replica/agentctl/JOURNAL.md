@@ -10903,3 +10903,17 @@ name, Outline views). Ground truth: f333_deck.odp's content.xml carries
 the typed title. Lesson: crash-recovery dialogs are part of the *launch*
 choreography on long-lived desktops — treat 'wait_title' misses as a cue
 to scan for them before blaming the app.
+
+## F334 — KSudoku: chrome speaks, cells are pixels, the solver closes the loop
+
+Puzzle-grid domain. The launcher is fully semantic (game-type gallery,
+Generate A Puzzle, a Difficulty Level dialog with its OK — all
+uia_click-able), while the 9x9 board itself is a custom-painted canvas: the
+106-node tree carries not one cell. The arc mixes floors: click an empty
+cell by grid arithmetic (first cell ~(415,195), ~99 px pitch), tap a digit
+(22% board repaint — cell entry plus selection highlights), Ctrl+Z to
+undo, then the semantic 'Solve' action — 54% of the board repaints as
+every blank fills, and a Congratulations dialog (semantic, OK) confirms
+the game engine itself judged the board complete. Third arcade/puzzle in a
+row where the winning pattern is: semantic chrome for verbs and receipts,
+pixel geometry for the play surface.
