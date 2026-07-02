@@ -11261,3 +11261,19 @@ both proportional to the drags at the 64% zoom. Lesson (F343's splash
 trap, sharpened): title match is identity, not state — after acquiring
 a window, verify its *rect responds* to a state change before spending
 gestures on it.
+
+## F356 — DB Browser for SQLite: two-phase commit between screen and disk
+
+Database-tooling domain. Qt app with a *rich* semantic floor (552
+nodes) but the same duplicate-name hazard as F351 amplified: 'Execute
+SQL' exists simultaneously as MenuItem, Pane, Button and TabItem —
+four widgets, one name, four different meanings. Targeted the TabItem
+by (name, ctype), clicked into the editor, typed an INSERT + UPDATE,
+Ctrl+Return to execute. The subtle floor lesson: executing SQL mutates
+only the *session* — the on-disk .db stays stale until 'Write Changes'
+(Ctrl+S). An agent that verified the artifact right after execution
+would read the old rows and call the arc a failure; the app holds a
+two-phase commit between screen-state and disk-state, and the artifact
+floor only settles after the second phase. Post-save sqlite3 read:
+[('apple',7),('pear',5),('grape',9)] — both statements landed. GUIs
+buffer; artifacts lag; verify after the flush, not the gesture.
