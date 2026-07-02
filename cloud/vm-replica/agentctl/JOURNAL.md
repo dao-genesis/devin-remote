@@ -11058,3 +11058,20 @@ Ground truth: .FCStd is a zip — Document.xml inside carries
 Length=30, Width=10, Height=10 exactly as typed. CAD's artifact floor is
 the most articulate yet: the parametric model is *text*, and the GUI is
 just one editor of it.
+
+## F344 — KiCad: a PCB is an s-expression you edit through a viewport
+
+PCB/EDA domain, the user-named engineering target. First-run friction is
+its own floor: KiCad 6 greets a fresh box with two modal gates (settings
+migration, then global footprint-library-table setup) — both fully
+semantic, both cleared with a named OK. Project creation (Ctrl+N, typed
+/tmp path) lays down .kicad_pro/.kicad_sch/.kicad_pcb immediately. The
+PCB editor arc leaned on hotkey verbs, which wx exposes without any
+tree support needed: 'a' posts the Choose Footprint dialog (12,229 parts;
+typed filter 'R_0805_2012Metric', Return picks the top hit), a canvas
+click drops R1, 'x' routes a two-click track, Ctrl+S. Ground truth is the
+best kind — .kicad_pcb is a plain-text s-expression, and it now contains
+(footprint "Resistor_SMD:R_0805_2012Metric" (at 147.32 91.44)) plus two
+(segment ...) entries, exactly the actions performed. EDA tools share
+CAD's virtue: the artifact is source code, so every GUI gesture can be
+code-reviewed after the fact.
