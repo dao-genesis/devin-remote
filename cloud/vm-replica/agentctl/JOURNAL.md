@@ -11124,3 +11124,18 @@ factor between screen gesture and document coordinates; the artifact
 floor is where you find out whether you accounted for it. Also caught a
 self-API paper cut: sample_color takes (bbox) not (x,y) — misremembering
 one's own toolkit is a flaw class regression tests can't catch, only use.
+
+## F348 — Dolphin: file management is the rare arc where all floors agree
+
+Everyday file-manager domain. Dolphin is what the semantic floor was
+made for: 315 nodes, and every file is a named clickable citizen
+(note.txt found by name, folders too). The arc walked the daily verbs —
+F10 New Folder (modal, typed 'outbox'), F2 rename (inline editor,
+Ctrl+A + typed 'renamed.txt'), Ctrl+C on the file, double-click into
+outbox by its tree node rect, Ctrl+V — and after each verb os.path gave
+an instant, binary verdict: outbox created, renamed.txt present +
+note.txt gone, copy landed in outbox with source intact. No OCR, no
+pixel diffing, no zip parsing: when the app's whole job *is* the
+filesystem, the artifact floor is the filesystem, and verification cost
+rounds to zero. The healthy pattern to reuse: semantic to act (find by
+name, click), artifact to judge (stat the path), pixels not needed at all.
