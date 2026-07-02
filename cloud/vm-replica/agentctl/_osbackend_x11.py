@@ -619,13 +619,16 @@ def find_control(top: int, cls=None, text=None):
 
 def list_windows() -> list:
     """Enumerate top-level windows the window manager manages (EWMH
-    ``_NET_CLIENT_LIST``), newest last. Each item is ``{"id", "title"}``.
+    ``_NET_CLIENT_LIST``), newest last. Each item is ``{"id", "title", "rect"}``.
 
     This is the eye that *finds the right window* — the floor previously acted
     only on whatever happened to hold focus, so on a busy desktop input could
     land in the wrong place. Each item also carries ``"desktop"`` (the workspace
     it lives on; -1 = sticky) so the floor can *see* a window is off the current
     workspace — invisible and unclickable until switched to or pulled over.
+    ``"rect"`` is ``(x, y, w, h)`` in screen coords (F350: mpv exposed that a
+    window record you can *name* but cannot *locate* forces callers back to
+    display-absolute guesses — the same trap F349 hit with OCR ROIs).
     Falls back to an empty list if the WM is not EWMH."""
     with _lock:
         raw = _prop(_root, _atom("_NET_CLIENT_LIST"), 33)  # 33 = XA_WINDOW
@@ -642,6 +645,7 @@ def list_windows() -> list:
                 continue
             d = _read_card(int(w), "_NET_WM_DESKTOP")
             out.append({"id": int(w) & 0xFFFFFFFF, "title": _win_title(int(w)),
+                        "rect": _abs_rect(int(w)),
                         "desktop": (-1 if d == _ALL_DESKTOPS else d)
                         if d is not None else cur})
         return out

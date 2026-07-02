@@ -11157,3 +11157,21 @@ window sat elsewhere — read garbage from the wrong region. Two lessons:
 rect, never from display constants; (2) when driving a shell through a
 GUI, skip reading the screen — have every command write its own receipt
 to disk.
+
+## F350 — mpv: motion itself is the assertion, and windows must know where they are
+
+Media-player domain. mpv on a testsrc clip; the property under test is
+*time-varying pixels*, so region_diff graduated from change-detector to
+motion-meter: playing 15.7% frame-to-frame churn, Space -> paused 0.0%
+(dead still), Space -> resumed 15.7%. A three-state pixel proof of the
+play/pause toggle, symmetrical to the decimal.
+
+The arc's exposed flaw was in osctl itself: list_windows() returned
+{"id","title","desktop"} — a window you could *name* but not *locate*.
+The first run crashed on w['rect'], and the fallback (hardcoding the
+--geometry offsets) was exactly the display-absolute trap F349 warned
+about. Fixed at the backend: X11 list_windows now carries
+"rect" (x,y,w,h) via XGetGeometry+XTranslateCoordinates, so every
+window record is directly addressable for ROIs, patches, and OCR.
+Suite stays 33/33. Perception APIs should never hand you a name
+without a place.
