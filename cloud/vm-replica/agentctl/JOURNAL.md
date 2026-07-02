@@ -10917,3 +10917,16 @@ every blank fills, and a Congratulations dialog (semantic, OK) confirms
 the game engine itself judged the board complete. Third arcade/puzzle in a
 row where the winning pattern is: semantic chrome for verbs and receipts,
 pixel geometry for the play surface.
+
+## F335 — VLC: time itself as the assertion
+
+Media-playback domain. Launch choreography again: first run pops a
+Privacy/Network Access consent dialog — fully semantic ('Continue'
+uia_click-able). The subtle trap: a 30 s test clip *finished* while the
+consent was being handled, so the first playing-diff read 0.0 — a stopped
+player looks exactly like a broken capture. Relaunch with `--loop` turned
+the assertion stable: frames-changing 15% per 1.5 s while playing, 0.0%
+frozen after Space (pause), 15% again after Space (resume). The lesson
+worth keeping: for continuous media the pixel floor's assertion is
+*temporal* — two captures and a diff turn 'is video actually rendering'
+into a number, and pause/resume becomes a crisp three-beat proof.
