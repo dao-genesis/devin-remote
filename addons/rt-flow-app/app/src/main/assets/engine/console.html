@@ -437,7 +437,7 @@
     "vpnStatus", "detectProxy", "currentProxy", "applyProxy", "clearProxy",
     "openVpnSettings", "launchApp", "shizukuStatus", "shizukuRequest", "shizukuGrantAll", "shizukuShell",
     "shizukuOpenManager", "vaultSave", "vaultLoad", "vaultSaveBackup", "vaultSaveBackupB64", "vaultListBackups",
-    "vaultReadBackup", "vaultListBackupAccounts", "vaultReadBackupB64", "usList", "usGetSource", "usSaveCode",
+    "vaultReadBackup", "vaultListBackupAccounts", "vaultReadBackupB64", "vaultDeleteBackup", "usList", "usGetSource", "usSaveCode",
     "usInstall", "usDelete", "usToggle", "gmGet", "gmSet", "gmDel", "gmList", "appVer",
     "usCheckUpdate", "usDeleteMany", "usExportAll", "usImport", "usToggleMany", "accessGuideMd"];
   R.forEach(function (m) { if (!(m in Native)) Native[m] = rpc(m); });

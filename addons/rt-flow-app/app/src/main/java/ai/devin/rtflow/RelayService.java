@@ -956,6 +956,7 @@ public class RelayService extends Service {
             case "vaultReadBackupB64": return bkReadB64(argStr(a, 0), argStr(a, 1));
             case "vaultSaveBackup": return bkSave(argStr(a, 0), argStr(a, 1), argStr(a, 2));
             case "vaultSaveBackupB64": return bkSaveB64(argStr(a, 0), argStr(a, 1), argStr(a, 2));
+            case "vaultDeleteBackup": return bkDelete(argStr(a, 0), argStr(a, 1));
             // ── 纯设备/原生UI: 浏览器里无意义, 安全默认 ──
             case "requestBatteryOpt": case "openAutoStart": case "openBatterySettings":
             case "phoneEnsureControl": case "applyProxy": case "clearProxy": return false;
@@ -1011,6 +1012,14 @@ public class RelayService extends Service {
         try { String safe = (name == null || name.trim().isEmpty()) ? ("backup-" + System.currentTimeMillis() + ".json") : safe(name);
             try (java.io.FileOutputStream fos = new java.io.FileOutputStream(new File(bkDir(folder), safe))) {
                 fos.write((content == null ? "" : content).getBytes("UTF-8")); } return true;
+        } catch (Exception e) { return false; }
+    }
+    /** 删 backups/<folder>/<name> — 单包 ZIP 落地后清除已折入的旧散文件; 不存在视为已删。 */
+    private boolean bkDelete(String folder, String name) {
+        try { if (name == null || name.trim().isEmpty()) return false;
+            File f = new File(bkDir(folder), safe(name));
+            if (!f.exists()) return true;
+            return f.isFile() && f.delete();
         } catch (Exception e) { return false; }
     }
     private boolean bkSaveB64(String folder, String name, String base64) {
