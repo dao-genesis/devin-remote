@@ -10802,3 +10802,14 @@ board geometry. After the maximize: five board clicks rotate tiles (the
 Moves label ticks -20 → -15, semantic; ~6% board repaint, pixel), and the
 Move-menu 'Solve' repaints ~16% of the grid. Both floors held; the flaw was
 in the arc's own choreography, not the verbs.
+
+## F326 — KBounce: walls under moving fire
+
+Real-time arcade with hostile physics: clicks spawn growing walls that
+bouncing balls can shatter mid-build. The first clicks (dead centre, right
+where the balls roam) filled nothing — Filled: 0% after three walls, every
+one shot down. Placing walls *away* from the balls (right flank of the
+board) the status labels tick 0% → 2% → 3% → 5% — pure semantic ground
+truth for territory captured, while the timer label counts down
+independently. The floor needs no fix; the lesson is tactical: in a live
+arena, where you act matters as much as that you act.
