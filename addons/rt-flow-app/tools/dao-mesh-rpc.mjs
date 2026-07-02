@@ -48,11 +48,14 @@ if (!isPing) {
 }
 
 // 浏览器全局垫片: signal.js 只需 fetch / WebSocket / crypto.subtle / AbortController / performance (node18+ 全有)。
+// Node 无 RTCPeerConnection — 提供抛 ice_failed 的桩, 使 signal.js 自然降级到 ntfy relay。
+class _NoRTC { constructor() { throw new Error("ice_failed"); } }
 const sandbox = {
   fetch, WebSocket, AbortController, performance, console,
   setTimeout, clearTimeout, setInterval, clearInterval,
   crypto: globalThis.crypto, TextEncoder, TextDecoder, btoa, atob,
   Math, Date, JSON, Promise, Object, Array, String,
+  RTCPeerConnection: _NoRTC, RTCSessionDescription: _NoRTC,
 };
 sandbox.window = sandbox;              // signal.js: root = window
 const ctx = vm.createContext(sandbox);
