@@ -11008,3 +11008,19 @@ predicted 193. The zero-crossing at x=π *did* verify (curve pixel on the
 axis where x·sin x = 0). Lesson: pixel-verify invariants that are robust
 to calibration (zero crossings, symmetry, existence), not fine amplitudes
 — or calibrate from two known curve points, not from axis chrome.
+
+## F341 — KReversi: glossy art lies to single pixels
+
+Board-game domain with an adversary. Chrome is semantic (Start game
+button, live 'ubuntu: N / Computer: N' score labels, turn indicator), the
+board is pure pixels. First board read failed instructively: sampling one
+center pixel per cell counted 1 black vs the semantic 3 — KReversi's
+discs are *glossy*, and the specular highlight at a black disc's center
+reads bright. Fix: 11x11 sparse-patch majority vote per cell (>35%
+dark/bright), which reproduced the semantic score exactly. From the
+patch-read board a 20-line reversi engine (scan 8 directions, count
+flips) picked greedy moves and played 5 turns against the Easy AI —
+each move confirmed by the score labels ticking and the re-read board
+agreeing with the count (final 9–5, engine leading). Lesson: on rendered
+game art, classify regions, never points; and when an app publishes its
+own score semantically, use it as the referee for your pixel model.
