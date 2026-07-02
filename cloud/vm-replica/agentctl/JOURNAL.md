@@ -11331,3 +11331,22 @@ verification is the purest artifact floor yet: no file, no pixels —
 `pgrep -f 'sleep 300'` returned the PID before and *empty string
 after*. When the GUI's job is to manage the OS, the OS process table
 is the ground truth, and the kernel never lies about who is alive.
+
+## F360 — GIMP: a shortcut that lies, and menus you can only read
+
+Raster-editing domain, GTK2-era shell: zero AT-SPI nodes. Two traps in
+one arc. First, the shortcut homonym: Ctrl+I in GIMP is Select>Invert,
+NOT Colors>Invert — the arc pressed it, exported, and the artifact came
+back byte-identical to the input. No error, no beep: a shortcut that
+"works" while doing a different verb entirely. The exported PNG was
+the witness — same trap-class as F354's modal grammar, but here the
+grammar varies per *application*, so memorised accelerators are guesses
+until the artifact confirms them. Second, ocr_boxes earned its keep on
+a native GTK menu: with no semantic nodes, opening Colors and OCRing
+the dropdown produced clickable rects for every item; 'Invert' was
+read, clicked, and the re-export flipped exactly — corner
+(200,40,40)->(55,215,215), center (40,40,200)->(215,215,55), the
+arithmetic complement to the byte. Also reconfirmed twice: GTK dialog
+buttons (Export) swallow synthetic clicks even *after* activation —
+the mnemonic (Alt+E) is the reliable path into GTK dialogs, not the
+pointer.
