@@ -10888,3 +10888,18 @@ sentence, Ctrl+A + Ctrl+B, Ctrl+S, name it in the KDE save dialog, Enter.
 Ground truth from the ODT zip itself: content.xml carries the sentence and
 `font-weight="bold"`. Lesson filed: a greyed launcher entry is a *package*
 smell, not a floor flaw — check dpkg before blaming the tree.
+
+## F333 — LibreOffice Impress: recovery-loop weather, then a clean deck
+
+Impress arrived with weather: the earlier soffice kill left crash-recovery
+state, so launch produced a Document Recovery dialog, whose Discard spawns
+a *second* nested confirm ('Are you sure...') on an untitled window — both
+navigated semantically (Discard → Yes). Even then the module wobbled once
+(recovery loop reappeared); a `pkill` + `--norestore` relaunch settled it.
+The deck arc itself is all keyboard: Esc/Tab selects the title
+placeholder, F2 enters edit, type the title, Esc Esc, Ctrl+S, name, Enter
+through the keep-format prompt. Tree is rich (1749 nodes: every layout
+name, Outline views). Ground truth: f333_deck.odp's content.xml carries
+the typed title. Lesson: crash-recovery dialogs are part of the *launch*
+choreography on long-lived desktops — treat 'wait_title' misses as a cue
+to scan for them before blaming the app.
