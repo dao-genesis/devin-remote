@@ -840,6 +840,46 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
         return false;
     }
+    /** 当前活动网络: {metered, type(wifi/cellular/ethernet/vpn/unknown), online}。
+     *  metered 以系统 isActiveNetworkMetered() 为准 (与 DownloadManager 等系统「省流量」判定一致);
+     *  识别不到→保守 metered=false (放行), 绝不因门控误伤既有下载功能。 */
+    String netInfoJson() {
+        boolean metered = false, online = false; String type = "unknown";
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                try { metered = cm.isActiveNetworkMetered(); } catch (Exception ignored) {}
+                if (Build.VERSION.SDK_INT >= 23) {
+                    try {
+                        android.net.Network n = cm.getActiveNetwork();
+                        NetworkCapabilities cap = n == null ? null : cm.getNetworkCapabilities(n);
+                        if (cap != null) {
+                            online = cap.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+                            if (cap.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) type = "wifi";
+                            else if (cap.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) type = "cellular";
+                            else if (cap.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) type = "ethernet";
+                            else if (cap.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) type = "vpn";
+                        }
+                    } catch (Exception ignored) {}
+                }
+                if ("unknown".equals(type)) {
+                    try {
+                        android.net.NetworkInfo ni = cm.getActiveNetworkInfo();
+                        if (ni != null) {
+                            online = online || ni.isConnected();
+                            int t = ni.getType();
+                            if (t == ConnectivityManager.TYPE_WIFI) type = "wifi";
+                            else if (t == ConnectivityManager.TYPE_MOBILE) type = "cellular";
+                            else if (t == ConnectivityManager.TYPE_ETHERNET) type = "ethernet";
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+        } catch (Exception ignored) {}
+        JSONObject o = new JSONObject();
+        try { o.put("metered", metered); o.put("type", type); o.put("online", online); } catch (Exception ignored) {}
+        return o.toString();
+    }
     private boolean canReach(String u) {
         HttpURLConnection c = null;
         try {
@@ -2900,6 +2940,8 @@ public class MainActivity extends AppCompatActivity {
         /** 数据保险箱: 把切号面板的账号库等关键数据落到共享文件夹, 卸载/重装/换机仍可回读。 */
         @JavascriptInterface public void vaultSave(String key, String json) { if (key != null) vaultWrite(key, json); }
         @JavascriptInterface public String vaultLoad(String key) { return key == null ? "" : vaultRead(key); }
+        /** 当前网络计费/类型/在线态 (供前端「重下载仅 WiFi·省移动数据」门控)。识别失败→保守视为非计费, 绝不因门控误伤既有功能。 */
+        @JavascriptInterface public String netInfo() { return MainActivity.this.netInfoJson(); }
         @JavascriptInterface public String saveBase64File(String name, String base64) {
             try {
                 String safe = (name == null || name.trim().isEmpty()) ? ("rtflow-" + System.currentTimeMillis() + ".bin") : name.replaceAll("[\\\\/:*?\"<>|]", "_");
