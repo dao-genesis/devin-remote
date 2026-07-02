@@ -10962,3 +10962,19 @@ finished the job. Ground truth on disk: f337_out/f337_arc/{crane,turtle}
 .txt with exact bytes. Lesson: a True from uia_click on a menu-item name
 is not a receipt — insist on a state change (new window, pixel diff, or
 disk) before believing it.
+
+## F338 — Audacity: give the app an ear before asking it to sing
+
+Audio-editing domain, and the first arc where the *machine itself* was the
+missing piece: a bare VM has no sound device, and Audacity greets that
+with a modal assertion (AudioIOBase.cpp getPlayDevIndex) that reappears
+faster than Continue can dismiss it. The floor fix is environmental, not
+UI: pulseaudio --start + module-null-sink + a two-line ~/.asoundrc
+(pcm/ctl !default pulse) gives PortAudio a device, and Audacity boots
+clean. From there the arc is textbook dual-floor: Generate > Tone... (all
+semantic; wx menus *do* post submenus on uia_click, unlike Ark's closed
+QMenu), OK for the default 440 Hz/30 s sine, File > Export — where the
+submenu needed a VK_RIGHT nudge to post before 'Export as WAV' became
+clickable — filename typed into the export dialog, metadata OK'd. Ground
+truth beyond pixels: the WAV on disk FFTs to a 440.0 Hz peak, mono,
+44.1 kHz, 30.0 s, amplitude 0.8 — the tone Audacity promised, byte-provable.
