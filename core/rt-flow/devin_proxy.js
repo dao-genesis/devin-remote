@@ -15,6 +15,7 @@
 const http = require("http");
 const https = require("https");
 const net = require("net");
+const tls = require("tls");
 const zlib = require("zlib");
 const fs = require("fs");
 const path = require("path");
@@ -339,6 +340,70 @@ function resolveUpstream(pathname) {
   if (pathname.startsWith("/__cdn/")) return { base: DEVIN_CDN, path: pathname.slice(6) };
   if (pathname.startsWith("/__ss/")) return { base: DEVIN_SS, path: pathname.slice(5) };
   return { base: DEVIN_APP, path: pathname };
+}
+
+// ═══ WebSocket 升级反代 · 实时会话事件通道 (根治「断联」) ════════════════════════
+// 帛书·「无有入于无间」: Devin SPA 以同源 WS 收发实时事件
+//   (new URL('/api/events/<id>/live?token=..', location.origin.replace('http','ws')))。
+//   页面经本端口反代挂载时 location.origin = localhost:<port> → WS 落到本 http.Server。
+//   Node http.Server 默认不处理 upgrade → 握手被丢弃 → socketConnected 永假 →
+//   多实例网页「只首屏 HTTP 能过, 之后断联·发不出·收不到」。此处补端到端透明 WS 反代
+//   (与 dao-vsix 主口 daoProxyWsUpgrade 同法·自足零依赖)。
+function handleUpgrade(req, clientSocket, head, auth, log) {
+  let done = false, connected = false;
+  const bail = () => { if (done) return; done = true; try { clientSocket.destroy(); } catch {} };
+  try {
+    clientSocket.on("error", bail);
+    try { clientSocket.setNoDelay(true); } catch {}
+    try { clientSocket.setTimeout(0); } catch {}
+    const reqUrl = new URL(req.url || "/", "http://dao.local");
+    const up = resolveUpstream(reqUrl.pathname);
+    const host = new URL(up.base).hostname;
+    const wsPath = up.path + (reqUrl.search || "");
+    const h = req.headers || {};
+    // token 已内嵌于 WS URL query(SPA getAccessToken 返回本账号令牌); 另注入 Bearer/Cookie 兜底。
+    const qToken = reqUrl.searchParams.get("token") || "";
+    const qOrg = reqUrl.searchParams.get("org_id") || "";
+    const a1 = qToken || (auth && auth.auth1) || "";
+    const org = qOrg || (auth && auth.orgId) || "";
+    const onUpstream = (upstream) => {
+      connected = true;
+      const lines = [
+        "GET " + wsPath + " HTTP/1.1",
+        "Host: " + host,
+        "Connection: Upgrade",
+        "Upgrade: " + (h["upgrade"] || "websocket"),
+        "Sec-WebSocket-Version: " + (h["sec-websocket-version"] || "13"),
+      ];
+      if (h["sec-websocket-key"]) lines.push("Sec-WebSocket-Key: " + h["sec-websocket-key"]);
+      if (h["sec-websocket-protocol"]) lines.push("Sec-WebSocket-Protocol: " + h["sec-websocket-protocol"]);
+      if (h["sec-websocket-extensions"]) lines.push("Sec-WebSocket-Extensions: " + h["sec-websocket-extensions"]);
+      lines.push("Origin: https://" + host);
+      lines.push("User-Agent: " + DEVIN_UA);
+      if (a1) {
+        lines.push("Authorization: Bearer " + a1);
+        if (org) lines.push("x-cog-org-id: " + org);
+        const ck = ["auth1_token=" + a1];
+        if (org) ck.push("org_id=" + org);
+        lines.push("Cookie: " + ck.join("; "));
+      }
+      lines.push("", "");
+      try { upstream.write(lines.join("\r\n")); } catch { bail(); return; }
+      if (head && head.length) { try { upstream.write(head); } catch {} }
+      // 裸字节双向管道: 上游 101 握手回放 + 之后所有帧透传(不解析·不改写)
+      upstream.pipe(clientSocket);
+      clientSocket.pipe(upstream);
+      upstream.on("error", bail);
+      upstream.on("close", bail);
+      clientSocket.on("close", () => { try { upstream.destroy(); } catch {} });
+    };
+    const direct = tls.connect({ host, port: 443, servername: host, rejectUnauthorized: false, ALPNProtocols: ["http/1.1"] }, () => onUpstream(direct));
+    direct.once("error", () => { if (!connected) bail(); });
+    direct.setTimeout(20000, () => { if (!connected) { try { direct.destroy(); } catch {} bail(); } });
+  } catch (e) {
+    if (log) try { log("[proxy] ws upgrade error " + (e && e.message)); } catch {}
+    bail();
+  }
 }
 
 function readBody(req) {
@@ -865,6 +930,10 @@ async function ensureProxyForAccount(email, auth, log) {
     });
   });
   entry.server = server;
+  // 注册 WS 升级反代: 令实时会话事件通道随网页存活(根治首登后「断联·发不出收不到」)
+  server.on("upgrade", (req, socket, head) => {
+    try { handleUpgrade(req, socket, head, entry.auth, log); } catch { try { socket.destroy(); } catch {} }
+  });
   await new Promise((resolve) => {
     server.on("error", () => resolve());
     server.listen(port, "127.0.0.1", () => resolve());
@@ -908,6 +977,7 @@ function stopAll() {
 
 module.exports = {
   ensureProxyForAccount,
+  handleUpgrade,
   proxyPrefixed,
   stopProxy,
   stopAll,
