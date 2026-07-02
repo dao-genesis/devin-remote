@@ -486,18 +486,20 @@
   function bytesToB64(bytes) { var bin = "", CH = 0x8000; for (var i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH)); return btoa(bin); }
   function _w16(a, o, v) { a[o] = v & 0xFF; a[o + 1] = (v >>> 8) & 0xFF; }
   function _w32(a, o, v) { a[o] = v & 0xFF; a[o + 1] = (v >>> 8) & 0xFF; a[o + 2] = (v >>> 16) & 0xFF; a[o + 3] = (v >>> 24) & 0xFF; }
-  // entries: [{name, bytes:Uint8Array}] → Uint8Array(完整 zip)
+  // entries: [{name, bytes:Uint8Array, packed?:Uint8Array}] → Uint8Array(完整 zip)
+  //   packed 存在时该条目按 DEFLATE(method 8) 写入(packed=deflate-raw 压缩后字节), 否则 STORE(method 0)。
   function buildZip(entries) {
     var locals = [], centrals = [], offset = 0, n = entries.length;
     for (var i = 0; i < n; i++) {
-      var nameB = utf8Bytes(String(entries[i].name).replace(/\\/g, "/")), data = entries[i].bytes, crc = crc32(data);
+      var nameB = utf8Bytes(String(entries[i].name).replace(/\\/g, "/")), raw = entries[i].bytes, crc = crc32(raw);
+      var packed = entries[i].packed, method = packed ? 8 : 0, data = packed || raw;
       var lh = new Uint8Array(30 + nameB.length);
-      _w32(lh, 0, 0x04034b50); _w16(lh, 4, 20); _w16(lh, 6, 0x0800); _w16(lh, 8, 0); _w16(lh, 10, 0); _w16(lh, 12, 0x21);
-      _w32(lh, 14, crc); _w32(lh, 18, data.length); _w32(lh, 22, data.length); _w16(lh, 26, nameB.length); _w16(lh, 28, 0); lh.set(nameB, 30);
+      _w32(lh, 0, 0x04034b50); _w16(lh, 4, 20); _w16(lh, 6, 0x0800); _w16(lh, 8, method); _w16(lh, 10, 0); _w16(lh, 12, 0x21);
+      _w32(lh, 14, crc); _w32(lh, 18, data.length); _w32(lh, 22, raw.length); _w16(lh, 26, nameB.length); _w16(lh, 28, 0); lh.set(nameB, 30);
       locals.push(lh, data);
       var ch = new Uint8Array(46 + nameB.length);
-      _w32(ch, 0, 0x02014b50); _w16(ch, 4, 20); _w16(ch, 6, 20); _w16(ch, 8, 0x0800); _w16(ch, 10, 0); _w16(ch, 12, 0); _w16(ch, 14, 0x21);
-      _w32(ch, 16, crc); _w32(ch, 20, data.length); _w32(ch, 24, data.length); _w16(ch, 28, nameB.length);
+      _w32(ch, 0, 0x02014b50); _w16(ch, 4, 20); _w16(ch, 6, 20); _w16(ch, 8, 0x0800); _w16(ch, 10, method); _w16(ch, 12, 0); _w16(ch, 14, 0x21);
+      _w32(ch, 16, crc); _w32(ch, 20, data.length); _w32(ch, 24, raw.length); _w16(ch, 28, nameB.length);
       _w16(ch, 30, 0); _w16(ch, 32, 0); _w16(ch, 34, 0); _w16(ch, 36, 0); _w32(ch, 38, 0); _w32(ch, 42, offset); ch.set(nameB, 46);
       centrals.push(ch); offset += lh.length + data.length;
     }
@@ -509,6 +511,66 @@
     centrals.forEach(function (b) { out.set(b, p); p += b.length; });
     out.set(eocd, p);
     return out;
+  }
+  // ── ZIP 真压缩 (省空间/省流量): WebView(Chromium)/Node 原生 CompressionStream ──
+  //   不可用/失败 → 保持 STORE 原样, 功能不变(保守放行)。
+  async function _deflateRaw(bytes) {
+    try {
+      if (typeof CompressionStream === "undefined" || typeof Response === "undefined") return null;
+      var cs = new CompressionStream("deflate-raw");
+      var w = cs.writable.getWriter(); w.write(bytes); w.close();
+      return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+    } catch (e) { return null; }
+  }
+  async function _inflateRaw(bytes) {
+    try {
+      if (typeof DecompressionStream === "undefined" || typeof Response === "undefined") return null;
+      var ds = new DecompressionStream("deflate-raw");
+      var w = ds.writable.getWriter(); w.write(bytes); w.close();
+      return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+    } catch (e) { return null; }
+  }
+  // 逐条目尝试 DEFLATE, 压得更小才用(否则 STORE) → 合法 ZIP, 任意解压器可开。
+  async function buildZipAsync(entries) {
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      if (e && e.bytes && e.bytes.length >= 64 && !e.packed) {
+        var p = await _deflateRaw(e.bytes);
+        if (p && p.length < e.bytes.length) e.packed = p;
+      }
+    }
+    return buildZip(entries);
+  }
+  function utf8Decode(bytes) {
+    try { if (typeof TextDecoder !== "undefined") return new TextDecoder("utf-8").decode(bytes); } catch (e) {}
+    var s = ""; for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    try { return decodeURIComponent(escape(s)); } catch (e2) { return s; }
+  }
+  function _r16(a, o) { return a[o] | (a[o + 1] << 8); }
+  function _r32(a, o) { return (a[o] | (a[o + 1] << 8) | (a[o + 2] << 16) | (a[o + 3] << 24)) >>> 0; }
+  // 从 ZIP(b64 或 Uint8Array) 读取指定条目文本 — STORE 直切片 / DEFLATE 经 DecompressionStream。
+  //   备份「单文件 ZIP 化」后, 本地数据源(对话MD/取数指引)从整包内读取, 不再依赖散文件。
+  async function zipReadText(zip, wantName) {
+    try {
+      var z = (zip instanceof Uint8Array) ? zip : b64ToBytes(zip);
+      var i = z.length - 22; while (i >= 0 && _r32(z, i) !== 0x06054b50) i--;
+      if (i < 0) return null;
+      var n = _r16(z, i + 10), p = _r32(z, i + 16);
+      for (var k = 0; k < n; k++) {
+        if (_r32(z, p) !== 0x02014b50) break;
+        var method = _r16(z, p + 10), csize = _r32(z, p + 20), nlen = _r16(z, p + 28), elen = _r16(z, p + 30), clen = _r16(z, p + 32), lho = _r32(z, p + 42);
+        var name = utf8Decode(z.subarray(p + 46, p + 46 + nlen));
+        if (name === wantName) {
+          var ds = lho + 30 + _r16(z, lho + 26) + _r16(z, lho + 28);
+          var data = z.subarray(ds, ds + csize);
+          if (method === 0) return utf8Decode(data);
+          if (method === 8) { var u = await _inflateRaw(data); return u ? utf8Decode(u) : null; }
+          return null;
+        }
+        p += 46 + nlen + elen + clen;
+      }
+    } catch (e) {}
+    return null;
   }
   // 取数指引 MD: 账号(邮箱/密码/org)+ Session ID + 提取流程 — 据此可随时整体重新取回该对话全部文件。
   //   作为备份「文件夹/ZIP」的本源锚定第二份文档 (与「对话_完整记录」配套), 任意上下文(headless 引擎/网页)皆可生成。
@@ -553,6 +615,8 @@
   async function exportSessionZip(acc, sid, onProgress) {
     var conv = await exportSession(acc, sid, "conversation");
     if (!conv || !conv.ok) return { ok: false, error: (conv && conv.error) || "对话导出失败" };
+    // 事件流偶发回退稀疏 /messages → 再试一次拿全息事件流, 不把稀疏版当完整锚定
+    if (conv.fallback) { try { var c2 = await exportSession(acc, sid, "conversation"); if (c2 && c2.ok && !c2.fallback) conv = c2; } catch (e) {} }
     var wl = null; try { wl = await exportSession(acc, sid, "worklog"); } catch (e) {}
     var ev = null; try { var er = await sessionEvents(acc, sid); ev = (er.ok && er.events) || []; } catch (e) {}
     var col = { files: [], index: [] };
@@ -571,7 +635,7 @@
       var rel = String(f.path || f.key || "file").replace(/^\/+/, "");
       entries.push({ name: "files/" + rel, bytes: b64ToBytes(f.b64 || "") });
     });
-    return { ok: true, title: title, fileCount: (col.files || []).length, entries: entries.length, b64: bytesToB64(buildZip(entries)) };
+    return { ok: true, title: title, fileCount: (col.files || []).length, entries: entries.length, events: conv.events || 0, fallback: !!conv.fallback, b64: bytesToB64(await buildZipAsync(entries)) };
   }
 
   // 会话最近更新时间(ms) — 字段名各端不一, 多候选兜底; 取不到回退 created/0。
@@ -644,7 +708,7 @@
 
   root.DaoCloud = {
     QUOTA_RE: QUOTA_RE, sessStatus: sessStatus, quotaLive: quotaLive, sessStatusA: sessStatusA,
-    buildZip: buildZip, bytesToB64: bytesToB64, utf8Bytes: utf8Bytes, exportSessionZip: exportSessionZip,
+    buildZip: buildZip, buildZipAsync: buildZipAsync, zipReadText: zipReadText, bytesToB64: bytesToB64, utf8Bytes: utf8Bytes, exportSessionZip: exportSessionZip,
     buildAccessGuide: buildAccessGuide,
     purgeSession: purgeSession, sessTs: sessTs,
     listSessions: listSessions, sessionDetail: sessionDetail, sessionMessages: sessionMessages,

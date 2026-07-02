@@ -718,13 +718,18 @@ function dvGitHtml(i,git,email){
 }
 function dvTog(id){ var el=document.getElementById(id); if(el) el.classList.toggle("open"); }
 
-// ── 本地数据源(无感回退): 读已备份的 conv-<sid>.md ──
-function localConvMd(a, mdName){ try{ if(N.vaultReadBackup && mdName) return N.vaultReadBackup(_acctFolder(a), mdName)||""; }catch(e){} return ""; }
+// ── 本地数据源(无感回退): 读已备份的对话MD — 新格式从单包 sess-<sid>.zip 内读, 老散文件 conv-<sid>.md 兼容 ──
+async function localConvMd(a, ent){
+  var folder=_acctFolder(a);
+  try{ if(ent&&ent.md&&N.vaultReadBackup){ var t=N.vaultReadBackup(folder, ent.md); if(t) return t; } }catch(e){}
+  try{ if(ent&&ent.zip&&N.vaultReadBackupB64){ var b64=N.vaultReadBackupB64(folder, ent.zip); if(b64){ var m=await DaoCloud.zipReadText(b64, "对话_人类可读.md"); if(m) return m; } } }catch(e){}
+  return "";
+}
 // 数据源决策: 已全量备份且(已清理 或 24h无更新)→ 直接本地源(省额度·无感); 否则云端, 云端不可用再回退本地。
 function _convSourceDecision(a, did){
   var man=loadBackupManifest(a); var ent=(man.sessions&&man.sessions[did])||null;
   var preferLocal=false;
-  if(ent && ent.backedUpAt && ent.md){
+  if(ent && ent.backedUpAt && (ent.md||ent.zip)){
     if(ent.deleted) preferLocal=true;                                  // 已清理 → 必走本地
     else if(Date.now()-(ent.ts||0) > CLEAN_STALE_MS) preferLocal=true; // 24h 无更新且已备份 → 本地优先
   }
@@ -734,23 +739,23 @@ function _convSourceDecision(a, did){
 async function dvConvView(i,did){
   var a=loadAcc()[i]; if(!a)return;
   var dec=_convSourceDecision(a,did), ent=dec.ent;
-  if(dec.preferLocal){ var lm=localConvMd(a, ent.md); if(lm){ try{ N.openText&&N.openText("【本地备份】"+(ent.title||did.slice(0,12)), lm); }catch(e){} toast("本地备份数据源"); return; } }
+  if(dec.preferLocal){ var lm=await localConvMd(a, ent); if(lm){ try{ N.openText&&N.openText("【本地备份】"+(ent.title||did.slice(0,12)), lm); }catch(e){} toast("本地备份数据源"); return; } }
   toast("拉取对话全文…");
   var r=await DaoCloud.exportSession(a,did,"conversation");
   if(r&&r.ok){ try{ N.openText&&N.openText("【云端】"+(r.title||did.slice(0,12)), r.md||r.content||""); }catch(e){} return; }
   // 云端不可用(已清理/额度耗尽) → 无感回退本地备份
-  if(ent && ent.md){ var lm2=localConvMd(a, ent.md); if(lm2){ try{ N.openText&&N.openText("【本地备份】"+(ent.title||did.slice(0,12)), lm2); }catch(e){} toast("云端不可用·已切本地备份"); return; } }
+  if(ent && (ent.md||ent.zip)){ var lm2=await localConvMd(a, ent); if(lm2){ try{ N.openText&&N.openText("【本地备份】"+(ent.title||did.slice(0,12)), lm2); }catch(e){} toast("云端不可用·已切本地备份"); return; } }
   toast("拉取失败: "+((r&&r.error)||""),true);
 }
 async function dvConvDl(i,did){
   var a=loadAcc()[i]; if(!a)return;
   var dec=_convSourceDecision(a,did), ent=dec.ent;
   var name="devin-"+(a.email||a.id).split("@")[0]+"-"+did.slice(0,10)+".md";
-  if(dec.preferLocal){ var lm=localConvMd(a, ent.md); if(lm){ try{ N.saveTextFile&&N.saveTextFile(name, lm); }catch(e){} toast("✓ 本地备份 MD"); return; } }
+  if(dec.preferLocal){ var lm=await localConvMd(a, ent); if(lm){ try{ N.saveTextFile&&N.saveTextFile(name, lm); }catch(e){} toast("✓ 本地备份 MD"); return; } }
   toast("生成 MD…");
   var r=await DaoCloud.exportSession(a,did,"conversation");
   if(r&&r.ok){ try{ N.saveTextFile&&N.saveTextFile(name, r.md||r.content||""); }catch(e){ toast("下载失败",true); } return; }
-  if(ent && ent.md){ var lm2=localConvMd(a, ent.md); if(lm2){ try{ N.saveTextFile&&N.saveTextFile(name, lm2); }catch(e){} toast("云端不可用·已存本地备份 MD"); return; } }
+  if(ent && (ent.md||ent.zip)){ var lm2=await localConvMd(a, ent); if(lm2){ try{ N.saveTextFile&&N.saveTextFile(name, lm2); }catch(e){} toast("云端不可用·已存本地备份 MD"); return; } }
   toast("失败: "+((r&&r.error)||""),true);
 }
 async function dvConvZip(i,did){
@@ -1408,27 +1413,36 @@ function saveBackupManifest(a, man){
   try{ if(N.vaultSaveBackup) return !!N.vaultSaveBackup(_acctFolder(a),"manifest.json",JSON.stringify(man)); }catch(e){}
   return false;
 }
-// 增量备份单条对话: 名称/更新时间未变且已备份 → 跳过; 否则 备份「完整文件夹ZIP + 对话MD(本地数据源用)」并更新清单。
+// 增量备份单条对话: 名称/更新时间未变且已备份 → 跳过; 否则备份「单文件整包 sess-<sid>.zip」并更新清单。
+//   ZIP 单包(真压缩)内含 对话_人类可读.md + 取数指引.md + 工作日志.md + files/<产出文件> —
+//   取代旧散文件三件套(conv-/指引-/sess-): 一条对话只落一个文件, 省空间、拖拽导入直用整包。
+//   ZIP 落地失败 → 回退老散文件写法(绝不丢备份); 老散文件在新单包落地后顺手删除(归纳整理)。
 async function backupSessionFull(a, s, man){
   var sid=s.devin_id||s.session_id||s.id; if(!sid) return {skipped:true};
   var title=s.title||s.name||s.prompt||sid; var ts=DaoCloud.sessTs(s)||0;
   var prev=man.sessions[sid];
   if(prev && prev.backedUpAt && !prev.deleted && prev.ts===ts && prev.title===title && prev.complete!==false){ // 增量: 未变且对话完整则跳过 (complete===false 的旧稀疏备份会重取)
-    if(!prev.guide){ try{ var g0=DaoCloud.buildAccessGuide(a,sid,title); if(g0&&N.vaultSaveBackup&&N.vaultSaveBackup(_acctFolder(a),"指引-"+sid+".md",g0)) prev.guide="指引-"+sid+".md"; }catch(e){} } // 旧备份补全取数指引(轻量, 不重下文件)
+    if(!prev.guide && !prev.zip){ try{ var g0=DaoCloud.buildAccessGuide(a,sid,title); if(g0&&N.vaultSaveBackup&&N.vaultSaveBackup(_acctFolder(a),"指引-"+sid+".md",g0)) prev.guide="指引-"+sid+".md"; }catch(e){} } // 旧散文件备份补全取数指引(轻量, 不重下文件); 单包内已含指引无需补
     return {skipped:true,sid:sid};
   }
-  var folder=_acctFolder(a); var convOk=false, zipOk=false, guideOk=false, hasFiles=0;
-  // 本源核心: 完整对话记录 MD (整条对话全过程/全流程) — 文件夹据此锚定。
-  //   事件流偶发失败会回退到稀疏 /messages(c.fallback) → 再试一次拿全息事件流, 不把稀疏版当完整锚定。
-  var evCnt=0;
+  var folder=_acctFolder(a); var convOk=false, zipOk=false, guideOk=false, hasFiles=0, evCnt=0;
+  // 单管线: exportSessionZip 一次取全(对话md+指引+工作日志+产出文件), 不再对话 md 与 ZIP 各下一遍 → 备份下载量直接减半。
   try{
-    var c=await DaoCloud.exportSession(a,sid,"conversation");
-    if(c&&c.ok&&c.fallback){ try{ var c2=await DaoCloud.exportSession(a,sid,"conversation"); if(c2&&c2.ok&&!c2.fallback) c=c2; }catch(e){} }
-    if(c&&c.ok){ evCnt=c.events||0; convOk=!!(N.vaultSaveBackup&&N.vaultSaveBackup(folder,"conv-"+sid+".md", c.md||c.content||"")); }
+    var z=await DaoCloud.exportSessionZip(a,sid);
+    if(z&&z.ok&&z.b64){ evCnt=z.events||0; hasFiles=z.fileCount||0; zipOk=!!(N.vaultSaveBackupB64&&N.vaultSaveBackupB64(folder,"sess-"+sid+".zip", z.b64)); }
   }catch(e){}
-  // 取数指引 MD: 账号/密码/Session ID/提取流程 — 据此可随时整体重新取回 (与对话记录配套, 写进文件夹)
-  try{ var g=DaoCloud.buildAccessGuide(a, sid, title); if(g) guideOk=!!(N.vaultSaveBackup&&N.vaultSaveBackup(folder,"指引-"+sid+".md", g)); }catch(e){}
-  try{ var z=await DaoCloud.exportSessionZip(a,sid); if(z&&z.ok&&z.b64){ hasFiles=z.fileCount||0; zipOk=!!(N.vaultSaveBackupB64&&N.vaultSaveBackupB64(folder,"sess-"+sid+".zip", z.b64)); } }catch(e){}
+  if(zipOk){
+    // 归纳整理: 该对话的旧散文件已折入单包 → 就地清除, 文件夹只留一个 ZIP
+    try{ if(N.vaultDeleteBackup){ N.vaultDeleteBackup(folder,"conv-"+sid+".md"); N.vaultDeleteBackup(folder,"指引-"+sid+".md"); } }catch(e){}
+  }else{
+    // 回退: ZIP 打包/落地失败 → 按老散文件写法保底(对话 md + 取数指引), 绝不因新格式丢备份
+    try{
+      var c=await DaoCloud.exportSession(a,sid,"conversation");
+      if(c&&c.ok&&c.fallback){ try{ var c2=await DaoCloud.exportSession(a,sid,"conversation"); if(c2&&c2.ok&&!c2.fallback) c=c2; }catch(e){} }
+      if(c&&c.ok){ evCnt=c.events||0; convOk=!!(N.vaultSaveBackup&&N.vaultSaveBackup(folder,"conv-"+sid+".md", c.md||c.content||"")); }
+    }catch(e){}
+    try{ var g=DaoCloud.buildAccessGuide(a, sid, title); if(g) guideOk=!!(N.vaultSaveBackup&&N.vaultSaveBackup(folder,"指引-"+sid+".md", g)); }catch(e){}
+  }
   if(!convOk && !zipOk) return {failed:true,sid:sid};   // 一份都没落地 → 视为失败(不可据此清理)
   man.sessions[sid]={ sid:sid, title:title, ts:ts, backedUpAt:Date.now(), md:convOk?("conv-"+sid+".md"):null, guide:guideOk?("指引-"+sid+".md"):null, zip:zipOk?("sess-"+sid+".zip"):null, hasFiles:hasFiles, events:evCnt, complete:(evCnt>0), deleted:false };
   return {backedUp:true,sid:sid};
@@ -1452,14 +1466,13 @@ async function fullBackupAccount(a){
   try{ if(N.vaultSaveBackup){ var rd=[
     "# 本账号对话备份文件夹 · 说明\n",
     "账号: `"+(a.email||a.id)+"`  ·  更新: "+new Date().toLocaleString()+"\n",
-    "本文件夹以**每条对话的完整记录**为本源锚定, 其余文件围绕它辅助:\n",
+    "本文件夹采用**单文件整包 ZIP** 格式: 每条对话只落一个 `sess-<sid>.zip`(真压缩·省空间):\n",
     "| 文件 | 含义 |","|----|----|",
-    "| `conv-<sid>.md` | **本源核心**: 该对话的完整文本记录(整条对话全过程/全流程) |",
-    "| `指引-<sid>.md` | 取数指引: 该对话所属账号/密码/Session ID/整体重新取回流程 |",
-    "| `sess-<sid>.zip` | 全部文件整包: `对话_人类可读.md`+`取数指引.md`+`工作日志.md`+`files/<产出文件>` |",
+    "| `sess-<sid>.zip` | **本源整包**: `对话_人类可读.md`(完整对话全过程)+`取数指引.md`+`工作日志.md`+`files/<产出文件>` |",
+    "| `conv-<sid>.md` / `指引-<sid>.md` | (旧版散文件·兼容保留) 内容已全部折入同名单包, 新备份不再产生 |",
     "| `account.json` | 账号集成底层(知识库/剧本/密钥/Git/账密) |",
     "| `manifest.json` | 备份清单(每条对话的 sid/标题/时间/完整性) |\n",
-    "> 任一对话: 先看 `conv-<sid>.md` 全文, 需要原始产出文件再解压同名 `sess-<sid>.zip`。"
+    "> 任一对话: 解压 `sess-<sid>.zip` 即得全部(对话全文+指引+产出文件); 拖拽导入也直接用这个整包。"
   ].join("\n"); N.vaultSaveBackup(_acctFolder(a),"_说明.md",rd); } }catch(e){}
   var saved=saveBackupManifest(a, man);
   var total=Object.keys(man.sessions).length;
@@ -1613,7 +1626,7 @@ function bkRender(){
       var when = s.backedUpAt ? new Date(s.backedUpAt).toLocaleString() : "";
       html+='<div class="bk-item"><div class="bk-t"><div>'+_esc(s.title||s.sid)+tag+'</div>'
         +'<div class="bk-sub">'+when+(s.hasFiles?(' · '+s.hasFiles+' 产出文件'):'')+'</div></div>'
-        +(s.md?'<button class="bk-b" onclick="bkOpenMd(\''+grp.folder+'\',\''+s.md+'\')">打开MD</button>':'')
+        +((s.md||s.zip)?'<button class="bk-b" onclick="bkOpenMd(\''+grp.folder+'\',\''+(s.md||'')+'\',\''+(s.zip||'')+'\')">打开MD</button>':'')
         +(s.zip?'<button class="bk-b zip" onclick="bkSaveZip(\''+grp.folder+'\',\''+s.zip+'\')">下载ZIP</button>':'')
         +'</div>';
     });
@@ -1621,8 +1634,10 @@ function bkRender(){
   document.getElementById("bkStat").textContent=nAcc+" 账号 · "+nConv+" 对话";
   box.innerHTML = html || '<div class="bk-empty">无备份记录 · 先在工具条点「全部备份」或开启「自动备份」</div>';
 }
-function bkOpenMd(folder, mdName){
-  try{ var md=N.vaultReadBackup?N.vaultReadBackup(folder,mdName):""; if(md){ N.openText&&N.openText("【本地备份】"+mdName, md); return; } }catch(e){}
+async function bkOpenMd(folder, mdName, zipName){
+  try{ if(mdName){ var md=N.vaultReadBackup?N.vaultReadBackup(folder,mdName):""; if(md){ N.openText&&N.openText("【本地备份】"+mdName, md); return; } } }catch(e){}
+  // 新格式单包: 对话MD 从 sess-<sid>.zip 内直读
+  try{ if(zipName && N.vaultReadBackupB64){ var b64=N.vaultReadBackupB64(folder,zipName); if(b64){ var m=await DaoCloud.zipReadText(b64,"对话_人类可读.md"); if(m){ N.openText&&N.openText("【本地备份·整包】"+zipName, m); return; } } } }catch(e){}
   toast("本地 MD 读取失败",true);
 }
 function bkSaveZip(folder, zipName){

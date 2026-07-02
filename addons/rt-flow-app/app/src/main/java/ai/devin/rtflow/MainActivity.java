@@ -2765,6 +2765,10 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public String vaultReadBackupB64(String folder, String name) {
             return MainActivity.this.vaultReadBackupB64(folder, name);
         }
+        /** 删除某备份文件 — 单包 ZIP 落地后清除已折入的旧散文件(归纳整理·省空间)。 */
+        @JavascriptInterface public boolean vaultDeleteBackup(String folder, String name) {
+            return MainActivity.this.vaultDeleteBackup(folder, name);
+        }
         // ── 在线自动更新 (面板/引擎/中继共用) ──
         @JavascriptInterface public String appCheckUpdate() { return fetchUpdateInfo(); }
         @JavascriptInterface public String appInstallUpdate(String url) { return startUpdate(url); }
@@ -4104,7 +4108,8 @@ public class MainActivity extends AppCompatActivity {
             final int hasFiles = ent.optInt("hasFiles", 0);
             final String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
             final String guide = buildAccessGuideMd(accJson, sid, title);
-            if (zipName != null && !zipName.isEmpty() && hasFiles > 0) {
+            // 单包 ZIP 为本源: 只要有整包就直注整包(内含对话MD+指引+产出文件, 不再要求 hasFiles>0)
+            if (zipName != null && !zipName.isEmpty()) {
                 final String zb64 = vaultReadBackupB64(folder, zipName);
                 if (zb64 != null && !zb64.isEmpty()) {
                     main.post(() -> {
@@ -4112,7 +4117,7 @@ public class MainActivity extends AppCompatActivity {
                         files.add(new String[]{ base + ".zip", zb64 });
                         files.add(new String[]{ base + "-files-access.md", b64Utf8(guide) });
                         dropB64FilesIntoPage(target, x, y, files);
-                        toast("本地备份·秒注入 文件夹ZIP(" + hasFiles + "件) + 取数指引");
+                        toast("本地备份·秒注入 对话整包ZIP" + (hasFiles > 0 ? ("(" + hasFiles + "件产出)") : "") + " + 取数指引");
                     });
                     return true;
                 }
@@ -4606,6 +4611,18 @@ public class MainActivity extends AppCompatActivity {
             }
             return new String(buf, StandardCharsets.UTF_8);
         } catch (Exception e) { return ""; }
+    }
+    /** 删 backups/<folder>/<name> — 仅限备份库内单文件(名字经消毒·不可越目录); 不存在视为已删。 */
+    boolean vaultDeleteBackup(String folder, String name) {
+        try {
+            if (name == null || name.trim().isEmpty()) return false;
+            File base = new File(vaultDir(), "backups");
+            String sf = (folder == null || folder.trim().isEmpty()) ? "misc" : folder.replaceAll("[\\\\/:*?\"<>|]", "_");
+            String safe = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+            File f = new File(new File(base, sf), safe);
+            if (!f.exists()) return true;
+            return f.isFile() && f.delete();
+        } catch (Exception e) { return false; }
     }
     /** 直驱 Vibrator 的震动 (不受系统触感开关影响), 供多选长按/低额提醒等使用。 */
     void doVibrate(int ms) {
