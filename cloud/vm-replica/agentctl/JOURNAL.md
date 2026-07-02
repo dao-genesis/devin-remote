@@ -11075,3 +11075,19 @@ best kind — .kicad_pcb is a plain-text s-expression, and it now contains
 (segment ...) entries, exactly the actions performed. EDA tools share
 CAD's virtue: the artifact is source code, so every GUI gesture can be
 code-reviewed after the fact.
+
+## F345 — SuperTux: real-time games sample keys, they don't queue them
+
+First real-time action game (SDL2/OpenGL, zero AT-SPI nodes — the pixel
+floor is the only floor). The arc's defining flaw: instantaneous
+XTest taps (press+release in the same instant) are *lost* — the SDL event
+loop polls keyboard state per frame, and a zero-width press falls between
+frames. Menu Return did nothing three ways (tap, click on the item, tap
+after refocus) until tap(vk, hold=0.12) — a held press spanning several
+frames — activated Start Game instantly. Everything downstream obeyed the
+same law: hold-taps drove menu -> Story Mode -> skip intro -> worldmap ->
+level entry, and key_hold(Right, 1.2s)+held-space jumps ran Tux through
+Antarctica, HUD coin counter ticking 100 -> 101 (OCR needs the widest
+ROI; the count renders right-edge-anchored). Event-queue GUIs (Qt/GTK)
+buffer keystrokes; game loops *sample* them. Duration is not a nicety in
+the game domain — it is the difference between an event existing and not.
