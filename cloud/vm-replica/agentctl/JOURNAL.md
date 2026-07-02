@@ -10813,3 +10813,13 @@ board) the status labels tick 0% → 2% → 3% → 5% — pure semantic ground
 truth for territory captured, while the timer label counts down
 independently. The floor needs no fix; the lesson is tactical: in a live
 arena, where you act matters as much as that you act.
+
+## F327 — Kate: a developer's find/replace, verified on disk
+
+The multi-document editor arc: launch with a file argument, Ctrl+R raises
+the power search bar, type the pattern, Tab to the replacement field, type,
+click 'Replace All' by name, Ctrl+S. Ground truth is the file itself —
+every 'beta' now 'BETA', the untouched words untouched. Search bar fields,
+buttons and the editor area all speak in the tree; no floor gap. (kate was
+not preinstalled; launch's missing-binary error (F306 fix) said so plainly
+instead of hanging.)
