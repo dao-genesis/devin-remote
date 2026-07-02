@@ -6883,6 +6883,15 @@ for _c in range(10):
 for _c in range(1, 13):
     _VK_BY_NAME[f"f{_c}"] = 0x70 + _c - 1
 
+# F323: every name hotkey() speaks is also a VK_* constant — tap(VK_SPACE)
+# died with AttributeError while hotkey('space') worked fine; the two
+# vocabularies now cover the same alphabet (existing constants keep their
+# hand-set values).
+for _nm, _vk in _VK_BY_NAME.items():
+    _const = "VK_" + _nm.upper()
+    if _const not in globals():
+        globals()[_const] = _vk
+
 
 def hotkey(spec: str, *more: str, hold: float = 0.0) -> None:
     """F284: speak a keyboard shortcut as the word it is — ``'ctrl+shift+e'``,

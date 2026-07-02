@@ -10768,3 +10768,13 @@ pixel ground, blue curve samples confirm the render. Along the way the
 record-key split surfaced: uia_find_all said "type" where uia_table_cell
 said "ctype"; every consumer had to remember which verb it asked. Records
 now carry both spellings.
+
+## F323 — KBlocks: real-time play, and the missing half of the VK alphabet
+
+Falling-blocks under real-time pressure: 'Single Game' by name, then eight
+piece-drops — rotate (Up), steer (Left/Right), hard-drop (Space) — board ROI
+repaints ~7% as the stack grows; the status label ('Points: … Lines: …')
+stays semantic. The floor flaw was in its own mouth: `tap(VK_SPACE)` raised
+AttributeError while `hotkey('space')` worked — hotkey's word alphabet
+(F284) and the VK_* constants had drifted apart. Every name hotkey speaks is
+now also a VK_* constant, one alphabet in two spellings.
