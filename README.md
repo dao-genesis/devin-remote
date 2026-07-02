@@ -7,7 +7,7 @@
 &nbsp;·&nbsp;架构 4 + 4 + 3&nbsp;·&nbsp;[▶ 演示视频](#演示视频)&nbsp;·&nbsp;[⬇ 快速安装](#下载--快速安装)&nbsp;·&nbsp;[📱 手机版 APK](#手机版-apk--直接下载)&nbsp;·&nbsp;[📦 模块下载](#模块下载--去中心化按模块独立发版)&nbsp;·&nbsp;[🧊 冷启动](cloud/coldstart/README.md)
 
 <!-- DAO-APK-LINK:START -->
-**📱 Devin Cloud 手机版 · 直接下载 APK**（安卓本体，辅助 ②）：[⬇ DevinCloud-mobile-v0.37.128.apk](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.128/DevinCloud-mobile-v0.37.128.apk) · 下载后允许「安装未知应用」即可装。
+**📱 Devin Cloud 手机版 · 直接下载 APK**（安卓本体，辅助 ②）：[⬇ DevinCloud-mobile-v0.37.129.apk](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.129/DevinCloud-mobile-v0.37.129.apk) · 下载后允许「安装未知应用」即可装。
 <!-- DAO-APK-LINK:END -->
 
 ---
@@ -86,7 +86,7 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\clo
 | **rt-flow** | `4.26.5` | `devaid.rt-flow` | Devin Cloud 接入本体：对话备份 / 全量快照 / 一键回归本源 wipe / 对话额度上限。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/rt-flow-v4.26.5) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rt-flow-v4.26.5/rt-flow-4.26.5.vsix) |
 | **dao-proxy-pro** | `9.9.332` | `dao-agi.dao-proxy-pro` | 底层提示词隔离替换 + 外接第三方模型路由。三面板：本源观照 / 渠道配置 / 模型路由。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-proxy-pro-v9.9.332) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-proxy-pro-v9.9.332/dao-proxy-pro-9.9.332.vsix) |
 | **dao-bridge** | `3.11.0` | `dao.dao-bridge` | 内网穿透本体：默认 Cloudflare 快速隧道（去中心化，无 Worker），配置账号走命名隧道；cloudflared 自愈/断点续传，随 IDE 自启。独立 addon，不与其它插件冲突。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-bridge-v3.11.0) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-bridge-v3.11.0/dao-bridge-3.11.0.vsix) |
-| **rt-flow-app** | `0.37.128` | `ai.devin.rtflow` _(APK)_ | Devin Cloud 手机版 APK（安卓本体）：切号 + 内网穿透 + 网页多实例 + 浏览器自动化 + 手机本体操控 + 系统级接管 + 渐进式文档。主页可直接下载安装。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/rtflow-v0.37.128) · [⬇ APK](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.128/DevinCloud-mobile-v0.37.128.apk) |
+| **rt-flow-app** | `0.37.129` | `ai.devin.rtflow` _(APK)_ | Devin Cloud 手机版 APK（安卓本体）：切号 + 内网穿透 + 网页多实例 + 浏览器自动化 + 手机本体操控 + 系统级接管 + 渐进式文档。主页可直接下载安装。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/rtflow-v0.37.129) · [⬇ APK](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.129/DevinCloud-mobile-v0.37.129.apk) |
 | **devin-git-auth** | `2.3.2` | `devaid.devin-git-auth` | 多 Devin 账号绑定同一 GitHub（git-permissions 真实授权管理）。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/devin-git-auth-v2.3.2) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/devin-git-auth-v2.3.2/devin-git-auth-2.3.2.vsix) |
 | **dao-devin-export** | `1.4.3` | `dao-natural.dao-devin-export` | 单账号对话数据导出插件（VSIX）。 | [Release](https://github.com/zhouyoukang1234-spec/devin-remote/releases/tag/dao-devin-export-v1.4.3) · [⬇ VSIX](https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/dao-devin-export-v1.4.3/dao-devin-export-1.4.3.vsix) |
 | **dao-relay** | `2.0.0` | _(Worker)_ | 内网穿透栈的中继 Worker 源（Cloudflare Worker，v2·(session,token) 零账号配对·一键部署）。非 VSIX，不进编辑器安装。 | [源码](https://github.com/zhouyoukang1234-spec/devin-remote/tree/main/addons/dao-relay) |
