@@ -812,16 +812,20 @@ const _stats = {
 
 // ── 用量聚合 (v9.9.301) · 内存态 · 供「外接API」面板查看 ──
 //   道义: 四十四章「知足不辱 知止不殆」· 知其所耗 · 方知所止
-const _usage = {}; // providerName → {input,output,calls,since,models:{model:{input,output,calls}}}
+const _usage = {}; // providerName → {input,output,cached,cacheWrite,calls,since,models:{model:{input,output,cached,calls}}}
 function _recordUsage(providerName, model, tc) {
   if (!providerName) return;
   const inTok = (tc && tc.input) || 0;
   const outTok = (tc && tc.output) || 0;
+  const cachedTok = (tc && tc.cached) || 0;
+  const cacheWriteTok = (tc && tc.cacheWrite) || 0;
   let p = _usage[providerName];
   if (!p) {
     p = _usage[providerName] = {
       input: 0,
       output: 0,
+      cached: 0,
+      cacheWrite: 0,
       calls: 0,
       since: Date.now(),
       models: {},
@@ -829,13 +833,26 @@ function _recordUsage(providerName, model, tc) {
   }
   p.input += inTok;
   p.output += outTok;
+  p.cached = (p.cached || 0) + cachedTok;
+  p.cacheWrite = (p.cacheWrite || 0) + cacheWriteTok;
   p.calls += 1;
   const mk = model || "?";
   let m = p.models[mk];
-  if (!m) m = p.models[mk] = { input: 0, output: 0, calls: 0 };
+  if (!m) m = p.models[mk] = { input: 0, output: 0, cached: 0, calls: 0 };
   m.input += inTok;
   m.output += outTok;
+  m.cached = (m.cached || 0) + cachedTok;
   m.calls += 1;
+}
+// 缓存命中率(%) = cached / 总输入
+//   OpenAI/DeepSeek: prompt_tokens 已含缓存部分 → 分母=input
+//   Anthropic: input_tokens 不含缓存读部分 → cached>input 时分母取 input+cached
+function _hitRate(input, cached) {
+  const inTok = input || 0;
+  const cTok = cached || 0;
+  const denom = cTok > inTok ? inTok + cTok : inTok;
+  if (!denom) return 0;
+  return Math.round((cTok / denom) * 1000) / 10; // 百分比 · 一位小数
 }
 // 估算成本 (仅当渠道配置了 pricing:{inPer1k,outPer1k} 时给出 · 否则 null)
 function _estCost(provCfg, input, output) {
@@ -853,6 +870,9 @@ function usage() {
       calls: p.calls,
       input: p.input,
       output: p.output,
+      cached: p.cached || 0,
+      cacheWrite: p.cacheWrite || 0,
+      hitRate: _hitRate(p.input, p.cached),
       total: p.input + p.output,
       since: p.since,
       cost: _estCost(provCfg, p.input, p.output),
@@ -863,6 +883,8 @@ function usage() {
           calls: mm.calls,
           input: mm.input,
           output: mm.output,
+          cached: mm.cached || 0,
+          hitRate: _hitRate(mm.input, mm.cached),
           total: mm.input + mm.output,
         }))
         .sort((a, b) => b.total - a.total),
@@ -2828,6 +2850,11 @@ async function _callProvider(
     } catch {}
 
     const bodyObj = { messages, stream: provCfg.streamMode !== "unary" };
+    // ★ 提示缓存观测: 流式时请求末尾 usage 块 (OpenAI/DeepSeek 兼容)
+    //   不发则流式响应无 usage → cached 永为 0 → 命中率假零。provCfg.streamUsage=false 可关
+    if (bodyObj.stream && provCfg.streamUsage !== false) {
+      bodyObj.stream_options = { include_usage: true };
+    }
     if (toolsField) {
       bodyObj.tools = toolsField;
       // ★ v9.9.84 · DeepSeek V4 thinking 模式不支持 tool_choice
@@ -3354,6 +3381,22 @@ async function _unaryOaToCascade(
   _log(
     `[dao-router] unary ✓ text=${Buffer.byteLength(msg.content || "")}B tools=${(msg.tool_calls || []).length} actualModelUid=${_actualModelUid} outputId=${_outputId}`,
   );
+
+  // ★ Token 追踪: unary 路径同样回传 tokenCount → _recordUsage 可聚合 (含缓存命中)
+  return {
+    tokenCount: {
+      input: (usageInfo && (usageInfo.input || usageInfo.prompt_tokens)) || 0,
+      output:
+        (usageInfo && (usageInfo.output || usageInfo.completion_tokens)) || 0,
+      cached:
+        (usageInfo &&
+          (usageInfo.cached ||
+            usageInfo.prompt_tokens_details?.cached_tokens ||
+            usageInfo.prompt_cache_hit_tokens)) ||
+        0,
+      cacheWrite: (usageInfo && usageInfo.cacheWrite) || 0,
+    },
+  };
 }
 
 /**
@@ -3403,7 +3446,7 @@ function _streamOaToCascade(
   // ★ v9.9.88 · Token 追踪 (移植自 EXE StreamProcessor)
   //   从 SSE 流中提取 usage 信息 · 诊断日志记录
   //   道义: 十六章「万物旁作 吾以观其复也」· 观其所耗方知所节
-  let _tokenCount = { input: 0, output: 0 };
+  let _tokenCount = { input: 0, output: 0, cached: 0, cacheWrite: 0 };
 
   // ★ v9.9.85 · 服务端工具拦截: 分离 LSP 工具和服务端工具
   //   LSP 工具: LSP 有执行器 → 正常转发
@@ -3875,6 +3918,14 @@ function _streamOaToCascade(
             usageInfo.output ||
             usageInfo.completion_tokens ||
             _tokenCount.output;
+          // ★ 缓存命中 token (adapter 已归一: cached / 兜底手工解析取原始字段)
+          _tokenCount.cached =
+            usageInfo.cached ||
+            usageInfo.prompt_tokens_details?.cached_tokens ||
+            usageInfo.prompt_cache_hit_tokens ||
+            _tokenCount.cached;
+          _tokenCount.cacheWrite =
+            usageInfo.cacheWrite || _tokenCount.cacheWrite;
         }
       }
     });
