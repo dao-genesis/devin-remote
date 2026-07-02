@@ -10946,3 +10946,19 @@ ocr_text over the spin-box rect ('2' of '3'); (2) ocr_text is an optional
 extension — a bare box needs tesseract-ocr installed before the floor's
 perception is complete. Semantic verbs, pixel confirmation, OCR for the
 one number the tree refuses to speak.
+
+## F337 — Ark: the menu item that says yes but does nothing
+
+Archive-manager domain. The entry table is fully semantic — crane.txt /
+turtle.txt appear as named nodes, and the verb list is rich (Extract All,
+Extract To..., Quick Extract To...). The trap: uia_click('Extract To...')
+returned True yet no dialog appeared — the name matched a *menu item
+inside a closed menu*; AT-SPI happily 'clicks' it without the menu being
+posted, a silent no-op with a truthful return code. The fix was to press
+the visible toolbar Extract button by geometry, which posted a real
+'Extract — Ark' dialog; there Ctrl+L (KDE file-dialog location bar) +
+type_unicode set the destination, and the semantic Extract button
+finished the job. Ground truth on disk: f337_out/f337_arc/{crane,turtle}
+.txt with exact bytes. Lesson: a True from uia_click on a menu-item name
+is not a receipt — insist on a state change (new window, pixel diff, or
+disk) before believing it.
