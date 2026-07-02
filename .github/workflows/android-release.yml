@@ -158,7 +158,7 @@ jobs:
 
       - name: Set up Android SDK
         if: steps.gate.outputs.exists == 'false'
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install SDK packages
         if: steps.gate.outputs.exists == 'false'
