@@ -10930,3 +10930,19 @@ frozen after Space (pause), 15% again after Space (resume). The lesson
 worth keeping: for continuous media the pixel floor's assertion is
 *temporal* — two captures and a diff turn 'is video actually rendering'
 into a number, and pause/resume becomes a crisp three-beat proof.
+
+## F336 — Okular: the document knows its own page
+
+PDF-viewer domain, fresh VM (this arc also re-proved the restore recipe:
+clone branch, symlink agentctl, apt python3-pil/gi/atspi, pip numpy for the
+pyenv interpreter — suite green first run). Okular's chrome is deeply
+semantic: 339 nodes, every menu action named (Find Next, Go to Page...).
+The arc: Ctrl+F, type_unicode the needle, Return — viewer jumps to page 2
+with the match highlighted (1.8% pixel diff on the content ROI confirms
+the jump). Two gaps surfaced and worth remembering: (1) Qt spin boxes
+(the page field) expose ctype='Edit' with an *empty* name and no value —
+uia_text(name=...) can't address them, so the numeric receipt came from
+ocr_text over the spin-box rect ('2' of '3'); (2) ocr_text is an optional
+extension — a bare box needs tesseract-ocr installed before the floor's
+perception is complete. Semantic verbs, pixel confirmation, OCR for the
+one number the tree refuses to speak.
