@@ -1194,7 +1194,7 @@ public class MainActivity extends AppCompatActivity {
                 if (cb != null) cb.invoke(origin, true, false);
             }
             @Override public void onPermissionRequest(final android.webkit.PermissionRequest request) {
-                main.post(() -> { try { request.grant(request.getResources()); } catch (Exception ignored) {} });
+                main.post(() -> handleWebPermission(request));
             }
         });
 
@@ -1844,6 +1844,38 @@ public class MainActivity extends AppCompatActivity {
         super.onBackPressed();
     }
 
+    // ── 网页麦克风/摄像头授权: WebView 层 grant 之前, 应用自身必须先持有系统运行时权限 (RECORD_AUDIO 等),
+    //    否则页面 getUserMedia 仍被系统拒绝 (语音输入报 "Could not access microphone")。缺权限时先向系统申请,
+    //    授权回调里再补发 grant → 用户点一次「允许」后语音输入即长期可用。
+    private static final int REQ_WEB_PERM = 9;
+    private android.webkit.PermissionRequest pendingWebPermission;
+    private void handleWebPermission(android.webkit.PermissionRequest request) {
+        try {
+            java.util.List<String> need = new java.util.ArrayList<>();
+            for (String res : request.getResources()) {
+                if (android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(res)
+                        && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
+                    need.add(Manifest.permission.RECORD_AUDIO);
+                if (android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(res)
+                        && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED)
+                    need.add(Manifest.permission.CAMERA);
+            }
+            if (need.isEmpty()) { request.grant(request.getResources()); return; }
+            if (pendingWebPermission != null) { try { pendingWebPermission.deny(); } catch (Exception ignored) {} }
+            pendingWebPermission = request;
+            ActivityCompat.requestPermissions(this, need.toArray(new String[0]), REQ_WEB_PERM);
+        } catch (Exception e) { try { request.grant(request.getResources()); } catch (Exception ignored) {} }
+    }
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_WEB_PERM || pendingWebPermission == null) return;
+        android.webkit.PermissionRequest req = pendingWebPermission; pendingWebPermission = null;
+        boolean allGranted = grantResults.length > 0;
+        for (int r : grantResults) if (r != PackageManager.PERMISSION_GRANTED) allGranted = false;
+        final boolean ok = allGranted;
+        main.post(() -> { try { if (ok) req.grant(req.getResources()); else { req.deny(); toast("麦克风权限被拒 · 语音输入不可用, 可在系统设置中开启"); } } catch (Exception ignored) {} });
+    }
+
     /** 原地刷新当前标签的 WebView：同一实例 reload，sessionStorage 隔离的登录态不丢。
      *  并顺带强制切号引擎「立刻重识别当前账号的对话状态 + 额度」(即使切号板块在后台/已停泊)，
      *  根治「点刷新无效 / 对话状态识别不到 / 额度数据老」。刷新引擎走后台 webview·与当前页交互道并行而不相悖。 */
@@ -1928,6 +1960,24 @@ public class MainActivity extends AppCompatActivity {
             java.util.Iterator<String> it = o.keys();
             while (it.hasNext()) { String k = it.next(); String v = o.optString(k, ""); if (k != null && !k.isEmpty() && !v.isEmpty()) sTabDollars.put(k, v); }
         } catch (Exception ignored) {}
+    }
+
+    /** 页签「对话名+状态」推送 (切号面板 Native 桥与常驻引擎 RelayService 桥共用同一入口)。 */
+    public void ipcSetTabStatus(String accountId, String convName, String status) {
+        if (accountId == null || accountId.isEmpty()) return;
+        sTabStatus.put(accountId, new String[]{ convName == null ? "" : convName, status == null ? "" : status });
+        main.post(this::scheduleRenderTabStrip);
+    }
+    /** 页签实时剩余美金推送 ("$5"/空) — 同上双桥共用入口。 */
+    public void ipcSetTabDollars(String accountId, String dollars) {
+        if (accountId == null || accountId.isEmpty()) return;
+        if (dollars == null) dollars = "";
+        // 空值 = 引擎此刻无该号额度(未刷/暂取不到) → 保留上次金额, 绝不抹空 (页签金额「一直显示」之本); 仅真有数值才更新。
+        if (dollars.isEmpty()) return;
+        if (dollars.equals(sTabDollars.get(accountId))) return;   // 未变: 免重渲染/重落盘
+        sTabDollars.put(accountId, dollars);
+        scheduleSaveTabDollars();
+        main.post(this::scheduleRenderTabStrip);
     }
 
     private static final long OPEN_REFRESH_MS = 6000;   // 已打开账号标签的实时刷新心跳周期(前台)
@@ -2873,20 +2923,11 @@ public class MainActivity extends AppCompatActivity {
         }
         /** 切号面板追踪轮询 → 推送该账号最活跃对话名+状态, 用于顶部标签实时显示。 */
         @JavascriptInterface public void setTabStatus(String accountId, String convName, String status) {
-            if (accountId == null || accountId.isEmpty()) return;
-            sTabStatus.put(accountId, new String[]{ convName == null ? "" : convName, status == null ? "" : status });
-            main.post(MainActivity.this::scheduleRenderTabStrip);
+            ipcSetTabStatus(accountId, convName, status);
         }
         /** 切号面板随额度刷新 → 推送该账号实时剩余美金 ("$5"/空), 显示在页签状态点左侧便于管理。 */
         @JavascriptInterface public void setTabDollars(String accountId, String dollars) {
-            if (accountId == null || accountId.isEmpty()) return;
-            if (dollars == null) dollars = "";
-            // 空值 = 引擎此刻无该号额度(未刷/暂取不到) → 保留上次金额, 绝不抹空 (页签金额「一直显示」之本); 仅真有数值才更新。
-            if (dollars.isEmpty()) return;
-            if (dollars.equals(sTabDollars.get(accountId))) return;   // 未变: 免重渲染/重落盘
-            sTabDollars.put(accountId, dollars);
-            scheduleSaveTabDollars();
-            main.post(MainActivity.this::scheduleRenderTabStrip);
+            ipcSetTabDollars(accountId, dollars);
         }
         /** 打开系统 VPN 设置 (用户自行连接已配置的 VPN/导入的 Clash·sing-box·V2Ray 配置)。 */
         @JavascriptInterface public void openVpnSettings() {

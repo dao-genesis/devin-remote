@@ -1433,6 +1433,13 @@ public class RelayService extends Service {
         @JavascriptInterface public void vaultSave(String key, String json) { if (key != null) vaultWrite(key, json); }
         @JavascriptInterface public String vaultLoad(String key) { return key == null ? "" : vaultRead(key); }
         @JavascriptInterface public void reload() { main.post(() -> { if (engine != null) engine.reload(); }); }
+        // 常驻引擎后台额度/状态权威刷新 → 直推前台页签: 切号板不在/后台(计时器被暂停)时, 页签金额与状态点仍恒鲜。
+        @JavascriptInterface public void setTabDollars(String accountId, String dollars) {
+            MainActivity m = MainActivity.sInstance; if (m != null) m.ipcSetTabDollars(accountId, dollars);
+        }
+        @JavascriptInterface public void setTabStatus(String accountId, String convName, String status) {
+            MainActivity m = MainActivity.sInstance; if (m != null) m.ipcSetTabStatus(accountId, convName, status);
+        }
         @JavascriptInterface public void log(String s) { android.util.Log.i("RTFlowEngine", s == null ? "" : s); }
         /** 对话追踪·全局系统通知 (引擎后台检测到会话卡住/待处理/结束时调用; 软件被切后台/锁屏亦可弹)。 */
         @JavascriptInterface public void notifyGlobal(String tag, String title, String text) {
