@@ -10874,3 +10874,17 @@ real card across a QGraphicsScene, and the semantic moves counter is the
 ground truth that the drop *registered as a legal move* rather than
 snapping back — a nice cross-floor assertion: pixel gesture, semantic
 receipt.
+
+## F332 — LibreOffice Writer: authoring, and the missing-module trap
+
+New-machine friction first: launching `libreoffice --writer` produced a
+Start Center whose 'Writer Document' entry sat permanently greyed and no
+Writer window ever came — because Ubuntu ships `libreoffice-core`+`calc`
+here without `libreoffice-writer` at all. The floor could see the symptom
+(a Start Center that never advances) but the diagnosis lived in dpkg; one
+`apt-get install libreoffice-writer` later, `lowriter` opens a real
+document window (1905 a11y nodes — the richest tree yet). The arc: type a
+sentence, Ctrl+A + Ctrl+B, Ctrl+S, name it in the KDE save dialog, Enter.
+Ground truth from the ODT zip itself: content.xml carries the sentence and
+`font-weight="bold"`. Lesson filed: a greyed launcher entry is a *package*
+smell, not a floor flaw — check dpkg before blaming the tree.
