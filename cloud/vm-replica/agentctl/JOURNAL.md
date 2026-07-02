@@ -10745,3 +10745,14 @@ board) while ~10% of the window's pixels changed (pixel corroboration). The
 Hint flash is too brief for a 1.5s-later capture to catch (diff ~0) — a
 reminder that transient highlights need capture timed inside the flash, not
 after it. Chrome semantic, board pixel: both floors held, no fix needed.
+
+## F321 — Inkscape: vector drawing with SVG ground truth
+
+Inkscape 1.1's Welcome dialog is a three-tab affair; 'New Document' lives on
+the 'Time to Draw' tab — the first uia_click found the button by name but the
+dialog stayed (the button on a hidden tab; F316's SHOWING ranking made the
+second attempt after selecting the tab hit the visible one). Then a full
+vector arc: 'r' rectangle tool, drag across canvas centre — sampled canvas
+pixel flips white→red — Ctrl+S, type path, Enter. Ground truth from the
+saved document itself: `grep -c '<rect'` = 1 in ink_out.svg. Semantic chrome
++ pixel canvas + on-disk artifact: all three tiers agreeing.
