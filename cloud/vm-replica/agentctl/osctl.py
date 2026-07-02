@@ -6884,23 +6884,39 @@ for _c in range(1, 13):
     _VK_BY_NAME[f"f{_c}"] = 0x70 + _c - 1
 
 
-def hotkey(spec: str, hold: float = 0.0) -> None:
+def hotkey(spec: str, *more: str, hold: float = 0.0) -> None:
     """F284: speak a keyboard shortcut as the word it is — ``'ctrl+shift+e'``,
     ``'alt+f4'``, ``'ctrl+l'``. Presses in order, releases in reverse (the
     chord discipline); ``hold`` keeps the chord down for state-sampling
-    surfaces (see :func:`tap`)."""
+    surfaces (see :func:`tap`).
+
+    F317: ``hotkey('ctrl', 'z')`` — the pyautogui-shaped spelling — used to
+    bind ``'z'`` to *hold* and die comparing str to int. Both spellings are
+    natural enough that the floor should speak them; extra positional args
+    now join the chord."""
+    if more:
+        spec = "+".join((spec,) + tuple(more))
     vks = []
     for part in spec.replace(" ", "").split("+"):
         vk = _VK_BY_NAME.get(part.lower())
         if vk is None:
             raise ValueError(f"hotkey: unknown key {part!r}")
         vks.append(vk)
-    for vk in vks:
-        key_down(vk)
-    if hold > 0:
-        time.sleep(hold)
-    for vk in reversed(vks):
-        key_up(vk)
+    # F318: never leave a chord half-pressed. An exception between the downs
+    # and the ups (bad `hold`, a dying display connection) left Ctrl stuck
+    # down for the whole session — every later keystroke and click silently
+    # became Ctrl+<x> (Esc opened KDE's System Activity, clicks toggled
+    # selections). The downs are now always unwound.
+    pressed = []
+    try:
+        for vk in vks:
+            key_down(vk)
+            pressed.append(vk)
+        if hold > 0:
+            time.sleep(hold)
+    finally:
+        for vk in reversed(pressed):
+            key_up(vk)
 
 
 def replace_text(text: str, settle: float = 0.08) -> None:

@@ -10701,3 +10701,25 @@ hidden twin, and the click at that stale rect landed on whatever window sat
 beneath. Fix: SHOWING now ranks above rect validity (showing+exact >
 showing+substring > hidden-exact > anything). Solve then actually solves:
 90% of the board repainted, Congratulations read from the app's own dialog.
+
+## F317 — KiCad (PCB/EDA suite): first-run gauntlet, then a schematic wire
+
+KiCad 6 greets a fresh machine with three consecutive first-run dialogs
+(settings path, symbol-library table — plus another settings dialog for the
+standalone Schematic Editor). All cleared semantically by name. Standalone
+eeschema then loads no sheet: 'w' + clicks silently draw nothing until File >
+New... creates a schematic (dialog typed a full path, Enter). The wire arc
+itself: move to start, 'w', move, *double-click* to commit (a single click +
+Esc cancels the pending run — Esc in KiCad abandons, not finishes). Ground
+truth came from the saved .kicad_sch: `grep -c wire` = 1. Along the way
+`hotkey('ctrl', 'z')` — the pyautogui-shaped spelling — raised TypeError
+('z' bound to hold); extra positional args now join the chord.
+
+## F318 — the half-pressed chord: one exception, then every key is Ctrl+key
+
+The F317 TypeError fired *between* hotkey's key-downs and key-ups: Ctrl went
+down and never came up. From then on every keystroke and click was silently
+Ctrl+<x> — Esc opened KDE's System Activity, canvas clicks toggled
+selections — session-wide poltergeist from one dead call. hotkey now unwinds
+whatever it pressed in a finally block; no exception path can leave a
+modifier stuck.
