@@ -2,6 +2,24 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.331 · 提示缓存从根修复(命中率≈0 → 真命中) + 面板缓存命中率观照
+: 用户反馈外接 API 缓存命中率几乎为零。根因三重: ① Anthropic 仅 thinking 时才钉 system
+  cache_control/发 prompt-caching beta 头,工具与对话历史从不钉断点 → 非 thinking 路径
+  缓存归零、thinking 路径仅 system 小段可缓存; ② OpenAI 兼容流式请求不发
+  `stream_options.include_usage` → 流式响应无 usage 块,DeepSeek 的 `prompt_cache_hit_tokens`
+  字段亦未提取 → cached 永为 0(假零); ③ `_recordUsage` 只聚合 input/output,cached 丢弃,
+  面板无从展示。
+- `adapters.js` Anthropic: system 恒为 content-block 数组并钉 `cache_control:{type:"ephemeral"}`;
+  末位工具钉断点(全部工具定义可缓存);新增 `_applyMessageCacheBreakpoint` 末条消息钉断点
+  (下一轮整段历史成缓存前缀 · 逐轮递增命中);`anthropic-beta: prompt-caching-2024-07-31` 恒发。
+  usage 增提 `cacheWrite`(cache_creation_input_tokens)。
+- `adapters.js` OpenAI Chat: cached 提取兼容 DeepSeek `prompt_cache_hit_tokens`(流式+unary)。
+- `dao_router.js`: 流式请求附 `stream_options:{include_usage:true}`(`provCfg.streamUsage=false` 可关);
+  `_tokenCount`/`_recordUsage`/`usage()` 全链路聚合 cached+cacheWrite,按渠道/模型给出
+  `hitRate`(%); unary 路径也回传 tokenCount(旧版 unary 用量从不记账)。
+- `extension.js` 外接API面板: 渠道卡新增「◈ 缓存命中 x% · N tok · 写M」行,命中率绿/黄/红三色观照。
+- 自检新增 L4.5「提示缓存」9 项断言(dao-test.js 全量 327 项全过)。
+
 v9.9.330 · 治本 · 扩展↔LS 握手 wedge 自愈(从根解「连不上官方服务」反复复发)
 : 真机根因定位:反代 :8937 健康、锚定亦在、预热帧已跨重启常驻(#937),但 Cascade 仍反复
 卡「Connecting to server…」。真源**不是网络/配额/预热帧**,而是 codeium 扩展客户端的

@@ -276,12 +276,15 @@ const OpenAIChatAdapter = {
       result.finishReason = choice.finish_reason;
     }
 
-    // Token 使用
+    // Token 使用 (cached: OpenAI prompt_tokens_details.cached_tokens · DeepSeek prompt_cache_hit_tokens)
     if (obj.usage) {
       result.usage = {
         input: obj.usage.prompt_tokens || 0,
         output: obj.usage.completion_tokens || obj.usage.output_tokens || 0,
-        cached: obj.usage.prompt_tokens_details?.cached_tokens || 0,
+        cached:
+          obj.usage.prompt_tokens_details?.cached_tokens ||
+          obj.usage.prompt_cache_hit_tokens ||
+          0,
       };
     }
 
@@ -312,7 +315,10 @@ const OpenAIChatAdapter = {
         ? {
             input: obj.usage.prompt_tokens || 0,
             output: obj.usage.completion_tokens || obj.usage.output_tokens || 0,
-            cached: obj.usage.prompt_tokens_details?.cached_tokens || 0,
+            cached:
+              obj.usage.prompt_tokens_details?.cached_tokens ||
+              obj.usage.prompt_cache_hit_tokens ||
+              0,
           }
         : null,
     };
@@ -375,16 +381,16 @@ const AnthropicAdapter = {
     };
 
     // System prompt (Anthropic 独立字段)
+    //   ★ 提示缓存: system 恒为 content-block 数组并钉 cache_control 断点
+    //   (旧版仅 thinkingEnabled 时才加 → 非 thinking 路径缓存命中率归零)
     if (systemContent) {
-      body.system = thinkingEnabled
-        ? [
-            {
-              type: "text",
-              text: systemContent,
-              cache_control: { type: "ephemeral" },
-            },
-          ]
-        : systemContent;
+      body.system = [
+        {
+          type: "text",
+          text: systemContent,
+          cache_control: { type: "ephemeral" },
+        },
+      ];
     }
 
     // 思考模式 (Anthropic extended thinking)
@@ -401,10 +407,18 @@ const AnthropicAdapter = {
     // 工具
     if (tools && tools.length > 0) {
       body.tools = tools.map((t) => _convertToolToAnthropic(t));
+      // ★ 提示缓存: 末位工具钉断点 → 全部工具定义前缀可缓存
+      const lastTool = body.tools[body.tools.length - 1];
+      if (lastTool && typeof lastTool === "object") {
+        lastTool.cache_control = { type: "ephemeral" };
+      }
       if (toolChoice) {
         body.tool_choice = _convertToolChoiceToAnthropic(toolChoice);
       }
     }
+
+    // ★ 提示缓存: 末条消息钉断点 → 下一轮整段历史成为缓存前缀 (递增缓存)
+    _applyMessageCacheBreakpoint(body.messages);
 
     return body;
   },
@@ -427,10 +441,9 @@ const AnthropicAdapter = {
       if (k && v) headers[k.trim()] = v.trim();
     }
 
-    // 思考模式 Beta 头
-    if (body.thinking || provCfg.thinkingEnabled) {
-      headers["anthropic-beta"] = _composeAnthropicBetaHeader(provCfg);
-    }
+    // Beta 头: 提示缓存恒启用 · thinking 按需叠加
+    //   (旧版仅 thinking 时才发 → 部分兼容网关不识 cache_control 而直丢 → 命中率0)
+    headers["anthropic-beta"] = _composeAnthropicBetaHeader(provCfg);
 
     return { headers };
   },
@@ -462,6 +475,7 @@ const AnthropicAdapter = {
               input: msg.usage.input_tokens || 0,
               output: 0,
               cached: msg.usage.cache_read_input_tokens || 0,
+              cacheWrite: msg.usage.cache_creation_input_tokens || 0,
             }
           : null,
       };
@@ -594,6 +608,7 @@ const AnthropicAdapter = {
             input: obj.usage.input_tokens || 0,
             output: obj.usage.output_tokens || 0,
             cached: obj.usage.cache_read_input_tokens || 0,
+            cacheWrite: obj.usage.cache_creation_input_tokens || 0,
           }
         : null,
     };
@@ -1154,7 +1169,50 @@ function _convertMessagesToResponsesInput(messages, system) {
  *
  *   OpenAI:  { role: "assistant", reasoning_content: "..." }
  *   Anthropic: { role: "assistant", content: [{ type: "thinking", thinking }] }
+ *
+ * ★ 提示缓存 · 末条消息钉 cache_control 断点 (增量对话缓存 · 见下 _applyMessageCacheBreakpoint)
+ *   Anthropic 缓存以断点为界: 断点及之前的全部前缀可被缓存/复用。
+ *   末条消息钉断点 → 下一轮请求整段历史成为缓存前缀 → 逐轮递增命中。
+ *   规则:
+ *     - string content → 转 block 数组后钉在 text block 上 (空文本不钉 · API 拒绝空 text)
+ *     - block 数组 → 钉在最后一个可缓存 block (text/tool_result/tool_use/image)
+ *     - thinking block 不可钉 (API 不支持) → 向前找可缓存 block
  */
+const _CACHEABLE_BLOCK_TYPES = new Set([
+  "text",
+  "tool_result",
+  "tool_use",
+  "image",
+]);
+function _applyMessageCacheBreakpoint(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return;
+  const last = messages[messages.length - 1];
+  if (!last || typeof last !== "object") return;
+
+  if (typeof last.content === "string") {
+    if (!last.content) return; // 空文本 block API 会拒绝
+    last.content = [
+      {
+        type: "text",
+        text: last.content,
+        cache_control: { type: "ephemeral" },
+      },
+    ];
+    return;
+  }
+
+  if (Array.isArray(last.content)) {
+    for (let i = last.content.length - 1; i >= 0; i--) {
+      const block = last.content[i];
+      if (!block || typeof block !== "object") continue;
+      if (!_CACHEABLE_BLOCK_TYPES.has(block.type)) continue;
+      if (block.type === "text" && !block.text) continue;
+      block.cache_control = { type: "ephemeral" };
+      return;
+    }
+  }
+}
+
 function _convertMessagesToAnthropicFormat(messages) {
   const result = [];
 

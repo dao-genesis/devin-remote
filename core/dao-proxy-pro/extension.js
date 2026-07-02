@@ -5399,6 +5399,16 @@ function getEaConfigHtml(port, nonce) {
       if (us && us.calls) {
         var costStr = (us.cost != null) ? (' · ≈' + (us.currency === 'USD' ? '$' : '') + us.cost + (us.currency && us.currency !== 'USD' ? (' ' + us.currency) : '')) : '';
         usageLine = '<div style="font-size:9px;opacity:0.6">▦ ' + us.calls + ' 次 · ' + _fmtTok(us.total) + ' tok (入' + _fmtTok(us.input) + '/出' + _fmtTok(us.output) + ')' + costStr + '</div>';
+        // ★ 缓存命中行: 命中率% + 命中 tok (+ 缓存写入 tok · Anthropic)
+        var hr = Number(us.hitRate) || 0;
+        var cachedTok = Number(us.cached) || 0;
+        if (cachedTok > 0 || hr > 0) {
+          var hrColor = hr >= 50 ? '#6bb86b' : (hr >= 20 ? '#c9a94f' : '#e08080');
+          var cwStr = (Number(us.cacheWrite) || 0) > 0 ? (' · 写' + _fmtTok(us.cacheWrite)) : '';
+          usageLine += '<div style="font-size:9px;opacity:0.75">◈ 缓存命中 <span style="color:' + hrColor + ';font-weight:600">' + hr + '%</span> · ' + _fmtTok(cachedTok) + ' tok' + cwStr + '</div>';
+        } else {
+          usageLine += '<div style="font-size:9px;opacity:0.4">◈ 缓存命中 0% · 无缓存复用</div>';
+        }
       }
       var row = document.createElement('div');
       row.className = 'model-item';

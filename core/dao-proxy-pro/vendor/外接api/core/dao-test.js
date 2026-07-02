@@ -560,6 +560,144 @@ async function runSeededBaseCheck() {
   } catch {}
 }
 
+// ─── L4.5: 提示缓存 (prompt caching) ──
+//   Anthropic: system/末位工具/末条消息钉 cache_control 断点 + 恒发 prompt-caching beta 头
+//   OpenAI/DeepSeek: cached 提取 (prompt_tokens_details / prompt_cache_hit_tokens)
+//   dao_router: stream_options.include_usage + usage() 聚合 cached/hitRate
+async function runCacheCheck() {
+  console.log(header("\n═══════════════════════════════════════════"));
+  console.log(header("  L4.5 · 提示缓存 (缓存命中率)"));
+  console.log(header("═══════════════════════════════════════════\n"));
+
+  const checks = [];
+  let adapters;
+  try {
+    const p = path.join(__dirname, "adapters.js");
+    delete require.cache[require.resolve(p)];
+    adapters = require(p);
+  } catch (e) {
+    console.log(fail(`adapters.js 加载失败: ${e.message}`));
+    totalFail++;
+    return;
+  }
+
+  const anth = adapters.adapterFor("anthropic");
+  const body = anth.buildRequest({
+    messages: [
+      { role: "system", content: "you are helpful" },
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" },
+      { role: "user", content: "world" },
+    ],
+    tools: [
+      { function: { name: "a", description: "d", parameters: {} } },
+      { function: { name: "b", description: "d", parameters: {} } },
+    ],
+    model: "claude-sonnet-4-5",
+    maxOutputTokens: 100,
+    thinkingEnabled: false,
+  });
+
+  checks.push({
+    name: "Anthropic system 恒钉 cache_control (非 thinking 亦钉)",
+    pass:
+      Array.isArray(body.system) &&
+      body.system[0] &&
+      body.system[0].cache_control &&
+      body.system[0].cache_control.type === "ephemeral",
+  });
+  checks.push({
+    name: "Anthropic 末位工具钉 cache_control (工具定义可缓存)",
+    pass:
+      Array.isArray(body.tools) &&
+      !!body.tools[body.tools.length - 1].cache_control,
+  });
+  const lastMsg = body.messages[body.messages.length - 1];
+  const lastBlocks = Array.isArray(lastMsg.content) ? lastMsg.content : [];
+  checks.push({
+    name: "Anthropic 末条消息钉 cache_control (增量对话缓存)",
+    pass: lastBlocks.some((b) => b && b.cache_control),
+  });
+
+  const opts = anth.buildRequestOpts(
+    { apiKey: "k" },
+    body,
+    new URL("https://api.anthropic.com/v1/messages"),
+  );
+  checks.push({
+    name: "Anthropic 恒发 prompt-caching beta 头",
+    pass: String(opts.headers["anthropic-beta"] || "").includes(
+      "prompt-caching",
+    ),
+  });
+
+  // Anthropic usage: cache_read/cache_creation 提取
+  const msgStart = anth.parseSSELine(
+    JSON.stringify({
+      type: "message_start",
+      message: {
+        usage: {
+          input_tokens: 10,
+          cache_read_input_tokens: 90,
+          cache_creation_input_tokens: 5,
+        },
+      },
+    }),
+    "message_start",
+  );
+  checks.push({
+    name: "Anthropic usage 提取 cached+cacheWrite",
+    pass:
+      msgStart.usage &&
+      msgStart.usage.cached === 90 &&
+      msgStart.usage.cacheWrite === 5,
+  });
+
+  // OpenAI Chat usage: OpenAI 与 DeepSeek 两种字段
+  const chat = adapters.adapterFor("openai-chat");
+  const oaUsage = chat.parseSSELine(
+    JSON.stringify({
+      choices: [{ delta: {} }],
+      usage: { prompt_tokens: 100, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 80 } },
+    }),
+  );
+  const dsUsage = chat.parseSSELine(
+    JSON.stringify({
+      choices: [{ delta: {} }],
+      usage: { prompt_tokens: 100, completion_tokens: 5, prompt_cache_hit_tokens: 60 },
+    }),
+  );
+  checks.push({
+    name: "OpenAI Chat usage cached (prompt_tokens_details.cached_tokens)",
+    pass: oaUsage.usage && oaUsage.usage.cached === 80,
+  });
+  checks.push({
+    name: "DeepSeek usage cached (prompt_cache_hit_tokens)",
+    pass: dsUsage.usage && dsUsage.usage.cached === 60,
+  });
+
+  // dao_router 源码级验证
+  const routerSrc = fs.readFileSync(path.join(__dirname, "dao_router.js"), "utf8");
+  checks.push({
+    name: "dao_router 流式请求 stream_options.include_usage",
+    pass: routerSrc.includes("stream_options") && routerSrc.includes("include_usage"),
+  });
+  checks.push({
+    name: "dao_router usage() 聚合 cached + hitRate",
+    pass: routerSrc.includes("hitRate") && routerSrc.includes("_hitRate"),
+  });
+
+  for (const c of checks) {
+    if (c.pass) {
+      console.log(ok(c.name));
+      totalPass++;
+    } else {
+      console.log(fail(c.name));
+      totalFail++;
+    }
+  }
+}
+
 // ─── 主入口 ──
 async function main() {
   const start = Date.now();
@@ -583,6 +721,7 @@ async function main() {
     // 协议验证 (非quick模式)
     if (!optQuick) {
       await runProtocolCheck();
+      await runCacheCheck();
     }
 
     // L6: 端到端 (仅--e2e)
