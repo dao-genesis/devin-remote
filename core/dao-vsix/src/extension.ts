@@ -1079,10 +1079,18 @@ function checkAuth(req: any): boolean {
     //   令代码自身注释的不变式真正成立: 机器级权威令牌与本窗口 ws.token 皆放行, 换牌/多实例不断链。
     const machineTok = bridgeAuthoritativeToken();
     if (machineTok && auth === `Bearer ${machineTok}`) return true;
+    // 归一令牌域 — 帛书·「道生一」: 常驻桥(dao-bridge)持有公网隧道时, 其发布令牌(bridge/conn.json)
+    //   即 /api/exec 等桥侧端点的真验源; 云端按知识库拿到的正是这枚配对令牌。若插件侧端点
+    //   (/api/connection·/api/workspace 等经桥反代到本实例)不认它, 同一 URL 上便裂成多令牌域
+    //   (实测: 桥牌 exec 200 而 connection 401; 机器牌反之)→ 云端无论持哪枚都只能操作半张面。
+    //   故把桥发布令牌一并放行, 令「知识库里那一枚」贯通全部 /api 面。
+    const pubTok = bridgePublishedConnToken();
+    if (pubTok && auth === `Bearer ${pubTok}`) return true;
     const url = new URL(req.url || '/', `http://localhost:${ws.port}`);
     if (url.searchParams.get('master_token') === ws.token) return true;
     if (bridgeToken && url.searchParams.get('master_token') === bridgeToken) return true;
     if (machineTok && url.searchParams.get('master_token') === machineTok) return true;
+    if (pubTok && url.searchParams.get('master_token') === pubTok) return true;
     // Local loopback exempt for read-only endpoints; relay/public must carry token
     const remoteAddr = req.socket?.remoteAddress || '';
     if (remoteAddr === '127.0.0.1' || remoteAddr === '::1' || remoteAddr === '::ffff:127.0.0.1') {
@@ -4800,13 +4808,15 @@ function bridgeWriteArtifacts() {
     fs.writeFileSync(path.join(BRIDGE_DIR, 'workspace.md'), bridgeGenerateCloudMd(), 'utf8');
 }
 
-function bridgeGenerateCloudMd(): string {
+function bridgeGenerateCloudMd(pair?: { url: string; token: string }): string {
     const wsInfo = { name: vscode.workspace.workspaceFolders?.[0]?.name || 'workspace', root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', host: os.hostname() };
     const ts = new Date().toISOString();
-    const tok = bridgeAuthoritativeToken();
+    // 帛书·「URL 与 Token 恒成对」: 注入的令牌必须与注入的 URL 同源配对(经实测有效的那一对),
+    //   而非独立各取所谓权威 — 旧法 URL 取常驻桥隧道、Token 取机器牌, 两相脱域 → 云端 exec 恒 401。
+    const tok = (pair && pair.token) || bridgeEffectiveToken();
     // ① 反向注入自愈: 公网URL 取「进程内隧道 ∪ 常驻桥已发布连接」的有效值, 不再只认进程内 bridgeUrl。
     //   独立 dao-bridge 常驻桥持有隧道时, 进程内 bridgeUrl 恒空 → 旧法注入「(未连接)」害云端找不到端口; 此处回归活地址。
-    const url = bridgeEffectiveUrl() || '(未连接)';
+    const url = (pair && pair.url) || bridgeEffectiveUrl() || '(未连接)';
     const port = bridgeMachinePort() || ws.port || DEFAULT_PORT;
     // 道法自然 · 回归本源 (dao-bridge 初始形态): 内网穿透文档只讲「整机直连」——
     //   接入信息 + 基础整机端点 + Python SDK。四大模块的深层操作已独立为 DAO Bridge MCP
@@ -4851,7 +4861,7 @@ function bridgeGenerateCloudMd(): string {
         '',
         '```',
         `去中心化 Session: ${sigState.session || sigSessionId()}`,
-        `Token(同上):     ${tok}`,
+        `Token(mesh 专用): ${bridgeAuthoritativeToken() || tok}`,
         `Brokers:         ${(sigState.servers.length ? sigState.servers : SIG_DEFAULT_SERVERS).join('  ')}`,
         '```',
         '',
@@ -5299,8 +5309,25 @@ function bridgeIsLeaderInstance(): boolean {
     if (!lp) return true;
     return lp === (ws.port || 0);
 }
+// 帛书·「URL 与 Token 恒成对」: 令牌恒与 bridgeEffectiveUrl 同源 —
+//   经实测有效环采纳的配对优先; 次之, URL 若来自常驻桥发布连接, 令牌亦取该文件同一对;
+//   仅进程内自有隧道(或无发布对)才回落机器级权威令牌。根治「URL 取桥、Token 取机」的脱域。
 function bridgeEffectiveToken(): string {
+    if (_bridgePublishedPair && _bridgePublishedPair.url && _bridgePublishedPair.url === bridgeEffectiveUrl()) return _bridgePublishedPair.token;
+    if (!bridgeUrl) {
+        const t = bridgePublishedConnToken();
+        if (t) return t;
+    }
     return bridgeAuthoritativeToken();
+}
+// 最近一次「实测有效」采纳的公网配对(URL+Token 同源成对) — 发布/签名/生成文档的单一真相源。
+let _bridgePublishedPair: { url: string; token: string; source: string } | null = null;
+function bridgePublishedConnToken(): string {
+    try {
+        const pub = bridgeReadPublishedConn();
+        if (pub && pub.token && pub.ageMs < BRIDGE_CONN_FRESH_MS) return String(pub.token);
+    } catch { /* 守柔 */ }
+    return '';
 }
 // ═══ 主动有效性探测 — 帛书·「以实际有效性为基准」 ═══
 //   不止探"隧道是否 2xx 活着"(/api/health 免鉴权 → 隧道一通即 200, 验不出令牌失效),
@@ -5318,17 +5345,25 @@ function bridgeProbeEffective(rawUrl: string, token: string, timeoutMs: number =
             const isHttps = u.protocol === 'https:';
             const mod = require(isHttps ? 'https' : 'http');
             const headers: any = { 'Authorization': 'Bearer ' + token };
+            // 帛书·「以实际有效性为基准」: 探云端 Agent 真正操作整机的那个端点 —— POST /api/exec 空体。
+            //   桥原生 exec 端点(公网隧道真正代理到的那层)对有效令牌返回 400「cmd/file required」(已鉴权·缺参),
+            //   对失效令牌返回 401/403。以此单一探针即锁定「能真正 exec 操作整机」的那枚令牌(而非仅能读半张面的牌),
+            //   且空体不触发任何真实命令(零副作用)。根治「/api/next 属插件域, 探它选中的牌恰恰 exec 不了」的错配。
+            const innerBody = JSON.stringify({});
             let postData: string | null = null;
             const opts: any = { hostname: u.hostname, port: u.port || (isHttps ? 443 : 80), timeout: timeoutMs, headers };
             if (relay) {
                 opts.method = 'POST';
                 opts.path = (u.pathname || '/') + (u.search || '');
-                postData = JSON.stringify({ path: '/api/next', method: 'GET', body: {} });
+                postData = JSON.stringify({ path: '/api/exec', method: 'POST', body: {} });
                 headers['Content-Type'] = 'application/json';
                 headers['Content-Length'] = Buffer.byteLength(postData);
             } else {
-                opts.method = 'GET';
-                opts.path = '/api/next';
+                opts.method = 'POST';
+                opts.path = '/api/exec';
+                postData = innerBody;
+                headers['Content-Type'] = 'application/json';
+                headers['Content-Length'] = Buffer.byteLength(postData);
             }
             if (isHttps) opts.rejectUnauthorized = false;
             const req = mod.request(opts, (r: any) => {
@@ -5338,8 +5373,14 @@ function bridgeProbeEffective(rawUrl: string, token: string, timeoutMs: number =
                 r.on('data', (c: string) => { if (body.length < 8192) body += c; });
                 r.on('end', () => {
                     if (sc === 401 || sc === 403) return fin(false, sc, 'token-stale');
+                    // 400「缺参」= 已鉴权(令牌真有效, 只是空体没给 cmd) → 正是我们要的「能 exec」信号。
+                    if (sc === 400) {
+                        if (relay) { try { const j = JSON.parse(body); if (j && j.status === 401) return fin(false, 401, 'token-stale'); } catch { /* 守柔 */ } }
+                        return fin(true, sc, 'ok-authed');
+                    }
+                    if (sc === 404 || sc === 405) return fin(true, sc, 'ok-no-endpoint');
                     if (sc < 200 || sc >= 300) return fin(false, sc, sc >= 500 ? 'tunnel-down' : 'http');
-                    if (relay) { try { const j = JSON.parse(body); return fin(!j.error, sc, j.error ? 'inner-error' : 'ok'); } catch { return fin(body.length > 0, sc, 'ok'); } }
+                    if (relay) { try { const j = JSON.parse(body); if (j && (j.status === 401 || j.status === 403)) return fin(false, j.status, 'token-stale'); return fin(!j.error, sc, j.error ? 'inner-error' : 'ok'); } catch { return fin(body.length > 0, sc, 'ok'); } }
                     return fin(true, sc, 'ok');
                 });
             });
@@ -5390,22 +5431,44 @@ function bridgeMcpToken(): string {
 //   根治: 多实例/旧实例把「(未连接)」或已轮换的死地址写回账号知识库, 致云端读库连不上端口。
 // 独立闭环(鸡犬相闻·不相往来): 只探测进程内自有隧道, 不读外部 conn 文件
 async function bridgeResolveLiveConn(timeoutMs: number = 5000): Promise<{ url: string; token: string; source: string } | null> {
-    const cands: { url: string; token: string; mtime: number; source: string }[] = [];
-    if (bridgeUrl) cands.push({ url: bridgeUrl, token: ws.token || bridgeToken || '', mtime: Number.MAX_SAFE_INTEGER, source: 'inprocess' });
-    // 进程内隧道死/空时, 纳入常驻桥(dao-bridge)已发布的稳定隧道为候选(经其代理直达本机 dao-vsix:port);
-    //   探活/注入须配机器级权威令牌(bridgeAuthoritativeToken), 而非常驻桥自身 token。
+    // 帛书·「URL 与 Token 恒成对·以实测有效性为唯一裁决」— 根治多令牌域脱钩的总根:
+    //   旧法把常驻桥发布 URL 强配机器级权威令牌(另一域的牌), 再用免鉴权 /api/health 探「活」→
+    //   错配对永远探不出错, 反注入恒发布「URL 对而 Token 错」→ 云端 exec 恒 401, 改多少次都坏。
+    //   新法: 候选一律以「同源配对」入列, 逐对用**需鉴权端点**实测(bridgeProbeEffective),
+    //   首个真能操作的配对胜出; 全部鉴权失败才退而取首个隧道尚活者(聊胜于无)。
+    const cands: { url: string; token: string; source: string }[] = [];
+    if (bridgeUrl) cands.push({ url: bridgeUrl, token: ws.token || bridgeToken || '', source: 'inprocess' });
     try {
         const pub = bridgeReadPublishedConn();
         if (pub && pub.url && pub.ageMs < BRIDGE_CONN_FRESH_MS) {
-            cands.push({ url: pub.url, token: bridgeAuthoritativeToken() || pub.token || '', mtime: Date.now() - pub.ageMs, source: pub.source || 'published' });
+            // 同源配对优先(常驻桥自身令牌—即其 /api/exec 真验源); 机器级权威牌作交叉候选兑底。
+            if (pub.token) cands.push({ url: pub.url, token: pub.token, source: (pub.source || 'published') + ':paired' });
+            const mt = bridgeAuthoritativeToken();
+            if (mt && mt !== pub.token) cands.push({ url: pub.url, token: mt, source: (pub.source || 'published') + ':machine-token' });
         }
     } catch { /* 守柔 */ }
     const seen = new Set<string>();
+    let firstAlive: { url: string; token: string; source: string } | null = null;
     for (const c of cands) {
-        if (seen.has(c.url)) continue;
-        seen.add(c.url);
+        const key = c.url + '|' + c.token;
+        if (seen.has(key) || !c.url) continue;
+        seen.add(key);
         const tok = c.token || bridgeToken || ws.token || '';
-        try { if (await bridgeProbeAlive(c.url, timeoutMs, tok)) { daoLoopLog('tunnel', 'resolve-live → ' + c.url + ' (src=' + c.source + ')'); return { url: c.url, token: tok, source: c.source }; } } catch { /* 守柔 */ }
+        try {
+            const pe = await bridgeProbeEffective(c.url, tok, timeoutMs);
+            if (pe.ok) {
+                daoLoopLog('tunnel', 'resolve-live → ' + c.url + ' (src=' + c.source + ' 实测鉴权通)');
+                _bridgePublishedPair = { url: c.url, token: tok, source: c.source };
+                return { url: c.url, token: tok, source: c.source };
+            }
+            if (!firstAlive && pe.reason !== 'timeout' && pe.reason !== 'unreachable' && pe.reason !== 'tunnel-down') {
+                firstAlive = { url: c.url, token: tok, source: c.source + ':alive-only(' + pe.reason + ')' };
+            }
+        } catch { /* 守柔 */ }
+    }
+    if (firstAlive) {
+        daoLoopLog('tunnel', 'resolve-live → ' + firstAlive.url + ' (src=' + firstAlive.source + ' 无配对实测通·退取隧道尚活者)');
+        return firstAlive;
     }
     daoLoopLog('tunnel', 'resolve-live → 无活地址(候选' + cands.length + '皆死)');
     return null;
@@ -11639,9 +11702,12 @@ let _lastInjectedBridgeToken = '';
 let _bridgeReinjectInflight = false;
 let _bridgeReinjectTimer: ReturnType<typeof setTimeout> | null = null;
 function bridgeCurrentSig(): string {
+    // 帛书·「URL 与 Token 恒成对」: 签名里的 url/tok 必须同源配对(与实际发布一致),
+    //   否则令牌轮换而签名里仍是另一域的机器牌 → 签名不翻·永不重注的盲区。
     let url = bridgeUrl || '';
-    const tok = bridgeAuthoritativeToken();
-    try { const c = bridgeReadPublishedConn(); if (c) { if (c.url) url = c.url; } } catch { /* 守柔 */ }
+    let tok = bridgeAuthoritativeToken();
+    try { const c = bridgeReadPublishedConn(); if (c && c.url) { url = c.url; if (c.token) tok = c.token; } } catch { /* 守柔 */ }
+    if (_bridgePublishedPair && _bridgePublishedPair.url === url) tok = _bridgePublishedPair.token;
     let mcpUrl = '', mcpTok = '';
     try { const ep = daoResolveMcpEndpoint(); if (ep) { mcpUrl = ep.url; mcpTok = ep.token; } } catch { /* 守柔 */ }
     // 软编码·实时态: 设备/IDE/工作区/工具集/版本任一变即翻签名 → 反向注入随之刷新(不含易变时间戳, 杜绝无谓 churn)。
@@ -11671,9 +11737,11 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
             daoLoopLog('tunnel', 'reinject ABORT(' + reason + '): 无活地址→守柔不覆盖, 待探活环刷新');
             return { injected: 0, changed: false };
         }
+        // 帛书·「URL 与 Token 恒成对」: 注入物恒为探活胜出的那一对(实测鉴权通), 不另取另一域的权威牌。
+        const livePair = { url: live.url, token: live.token || bridgeAuthoritativeToken() };
         // 同步 MCP 档案条目(URL 轮换自更) → 取最新钉住条目
         try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
-        const md = bridgeGenerateCloudMd();
+        const md = bridgeGenerateCloudMd(livePair);
         const mcpMd = bridgeGenerateMcpUsageMd();
         const p = loadInjectProfile();
         const mcpEntry = (p.mcps || []).find(m => m && m.name === DAO_MCP_NAME) || null;
@@ -11711,8 +11779,8 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
             injected++;
         }
         _lastBridgeReinjectSig = sig;
-        _lastInjectedBridgeUrl = bridgeUrl; // 记录实注活址 → 探活环据此对账, 杜绝 KB 与内部态脱钩
-        _lastInjectedBridgeToken = bridgeAuthoritativeToken(); // 记录实注令牌(权威恒稳源) → 探活环据此对账, 杜绝已发布令牌与服务端真验源脱钩
+        _lastInjectedBridgeUrl = livePair.url; // 记录实注活址 → 探活环据此对账, 杜绝 KB 与内部态脱钩
+        _lastInjectedBridgeToken = livePair.token; // 记录实注配对令牌(与 URL 同源·实测鉴权胜出者) → 探活环据此对账
         try { bridgeSaveLastInject(_lastInjectedBridgeUrl, _lastInjectedBridgeToken); } catch { /* 守柔 */ }
         try { console.log('[dao] bridge real-time reinject (' + reason + ') → ' + injected + ' org(s)'); } catch { /* 守柔 */ }
     } finally { _bridgeReinjectInflight = false; }
