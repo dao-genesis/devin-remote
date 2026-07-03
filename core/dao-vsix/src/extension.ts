@@ -12415,7 +12415,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   <div class="loading" id="loading"><span class="spinner"></span>Loading Devin Cloud...</div>
   <iframe id="devin-frame" src="${escapeHtml(proxyUrl)}"
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-popups-to-escape-sandbox"
-          allow="clipboard-read; clipboard-write; fullscreen"
+          allow="clipboard-read; clipboard-write; fullscreen; microphone; camera"
           onload="onLoad()" onerror="onError()">
   </iframe>
 </div>

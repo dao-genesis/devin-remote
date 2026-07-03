@@ -278,7 +278,7 @@ function _ideBrowserHtml(url, email) {
     '<!DOCTYPE html><html><head><meta charset="utf-8">' +
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; frame-src http://localhost:* http://127.0.0.1:*;">' +
     "<style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#1e1e1e}iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style></head>" +
-    '<body><iframe src="' + u + '" allow="clipboard-read; clipboard-write"></iframe>' +
+    '<body><iframe src="' + u + '" allow="clipboard-read; clipboard-write; microphone; camera"></iframe>' +
     "<script>try{var v=acquireVsCodeApi();v.setState({email:" + em + "});}catch(e){}</script>" +
     "</body></html>"
   );
@@ -875,7 +875,7 @@ function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[
   x.onclick=function(e){e.stopPropagation();closeTab(id);};
   btn.title='双击复制账号密码';
   BAR.appendChild(btn);
-  var fr=document.createElement('iframe');fr.setAttribute('allow','clipboard-read; clipboard-write');fr.style.display='none';
+  var fr=document.createElement('iframe');fr.setAttribute('allow','clipboard-read; clipboard-write; microphone; camera');fr.style.display='none';
   fr.addEventListener('load',function(){setLoading(id,false);});fr.addEventListener('error',function(){setLoading(id,false);});
   S.appendChild(fr);
   tabs[id]={btn:btn,frame:fr,url:m.url,email:m.email||'',zoom:1,meta:m,loading:false,_loaded:false,_dot:dot,_lbl:lb,_amt:am};order.push(id);applyZoom(tabs[id]);setActive(id);sync();schedPersist();try{schedStatusSoon();}catch(e){}
@@ -957,7 +957,7 @@ function mountBoardSolo(html,tab,srcUrl){tab=tab||'overview';var id=boardId(tab)
     x.onclick=function(e){e.stopPropagation();closeTab(id);};btn.appendChild(x);
     bindTabBtn(btn,id);
     BAR.appendChild(btn);
-    var fr=document.createElement('iframe');fr.setAttribute('allow','clipboard-read; clipboard-write');fr.style.cssText='width:100%;height:100%;border:none;background:#1e1e1e;display:none';
+    var fr=document.createElement('iframe');fr.setAttribute('allow','clipboard-read; clipboard-write; microphone; camera');fr.style.cssText='width:100%;height:100%;border:none;background:#1e1e1e;display:none';
     fr.addEventListener('load',function(){b.ready=true;if(b._initTO){clearTimeout(b._initTO);b._initTO=null;}setLoading(id,false);vscode.postMessage({type:'cloudReady',board:tab});});
     fr.addEventListener('error',function(){if(b._initTO){clearTimeout(b._initTO);b._initTO=null;}setLoading(id,false);});
     S.appendChild(fr);b.frame=fr;
@@ -1819,6 +1819,7 @@ async function shellHandleMessage(sid, m) {
             const amap = new Map();
             for (const s of (act || [])) { const id2 = String(s.devinId || '').replace(/^devin-/, ''); if (id2) amap.set(id2, s); }
             let h = null, dollars = null;
+            try { await _refreshHealthForTick(email); } catch (e) {}
             try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
             for (const t of tl) {
               const sid = String(t.devinId || '').replace(/^devin-/, '');
@@ -2426,6 +2427,22 @@ function _classStr(s){s=String(s==null?'':s).toLowerCase().trim();if(!s)return '
   if(/finished|completed|done|stopped|suspend|expired|exited|archived|deleted/.test(s))return 'finished';
   if(/running|working|in_progress|streaming|active|started|resumed|busy|thinking|executing|coding|planning|testing/.test(s))return 'running';
   return 'running';}
+// 归一 · 状态轮询中的额度保鲜(限频·仅 session-cache 快路·零 devinLogin·零限速风险):
+//   getHealth 只读缓存 → 标签 $ 额度可能长期陈旧; 此处每账号限频(默 300s)经 verifyOneAccount
+//   缓存快路真拉一次 planStatus 回写 setHealth, 让状态轮询回填的额度真正保鲜。
+const _healthTickAt = new Map();
+async function _refreshHealthForTick(email) {
+  try {
+    const k = String(email || '').toLowerCase(); if (!k) return;
+    const iv = Math.max(60, +_cfg('statusHealthRefreshSec', 300) || 300) * 1000;
+    const last = _healthTickAt.get(k) || 0; if (Date.now() - last < iv) return;
+    _healthTickAt.set(k, Date.now());
+    const a = (_store.accounts || []).find((x) => String(x.email || '').toLowerCase() === k); if (!a) return;
+    if (!_getCachedSession(a.email)) return; // 无缓存会话 → 不走全路(防批量 devinLogin 触限速)
+    const vr = await verifyOneAccount(a);
+    if (vr && vr.ok && vr.q) _store.setHealth(a.email, vr.q);
+  } catch (e) {}
+}
 // 归一 · 多实例标签状态实时轮询(对齐手机端·仅打开中的少量标签·每账号一次 listSessions):
 //   命中活跃会话 → running/awaiting/blocked + 回填对话名; 未命中 → finished。并回填实时额度。
 let _multiStatusTimer = null;
@@ -2444,6 +2461,7 @@ async function _multiTabStatusTick() {
       const amap = new Map();
       for (const s of (active || [])) { const id = String(s.devinId || '').replace(/^devin-/, ''); if (id) amap.set(id, s); }
       let dollars = null;
+      try { await _refreshHealthForTick(email); } catch (e) {}
       try { const h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
       for (const t of tabsForEmail) {
         const sid = String(t.devinId || '').replace(/^devin-/, '');
