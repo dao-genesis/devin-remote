@@ -1079,18 +1079,16 @@ function checkAuth(req: any): boolean {
     //   令代码自身注释的不变式真正成立: 机器级权威令牌与本窗口 ws.token 皆放行, 换牌/多实例不断链。
     const machineTok = bridgeAuthoritativeToken();
     if (machineTok && auth === `Bearer ${machineTok}`) return true;
-    // 归一令牌域 — 帛书·「道生一」: 常驻桥(dao-bridge)持有公网隧道时, 其发布令牌(bridge/conn.json)
-    //   即 /api/exec 等桥侧端点的真验源; 云端按知识库拿到的正是这枚配对令牌。若插件侧端点
-    //   (/api/connection·/api/workspace 等经桥反代到本实例)不认它, 同一 URL 上便裂成多令牌域
-    //   (实测: 桥牌 exec 200 而 connection 401; 机器牌反之)→ 云端无论持哪枚都只能操作半张面。
-    //   故把桥发布令牌一并放行, 令「知识库里那一枚」贯通全部 /api 面。
-    const pubTok = bridgePublishedConnToken();
-    if (pubTok && auth === `Bearer ${pubTok}`) return true;
+    // 帛书·「得一」单一令牌权威 — 反向注入恒发布「本实例可达端点 + 机器级权威令牌(dao-conn-current.json)」
+    //   同源一对(见 bridgeEffectiveUrl/bridgeEffectiveToken)。故此处只认「本窗口私牌 ∪ 内穿令牌 ∪ 机器权威牌」。
+    //   切勿放行「他者进程(独立 dao-bridge 扩展)写入共享文件的令牌」: 它与本可达端点真验源不同域,
+    //   且该桥恒写 url=""(从不发布可达 URL)→ 从不会成为被注入的 URL → 放行其令牌只会引入错域令牌
+    //   (实测共享文件同时并存 e40b6/a3f46/4092e0 多枚互异令牌)→ 云端按库读到的令牌打可达端点必 401。
+    //   令牌与地址恒同源成对, 方为「一枚令牌贯通全 /api 面」之本(而非广收百家令牌)。
     const url = new URL(req.url || '/', `http://localhost:${ws.port}`);
     if (url.searchParams.get('master_token') === ws.token) return true;
     if (bridgeToken && url.searchParams.get('master_token') === bridgeToken) return true;
     if (machineTok && url.searchParams.get('master_token') === machineTok) return true;
-    if (pubTok && url.searchParams.get('master_token') === pubTok) return true;
     // Local loopback exempt for read-only endpoints; relay/public must carry token
     const remoteAddr = req.socket?.remoteAddress || '';
     if (remoteAddr === '127.0.0.1' || remoteAddr === '::1' || remoteAddr === '::ffff:127.0.0.1') {
@@ -5260,12 +5258,10 @@ function bridgeProbeAlive(rawUrl: string, timeoutMs: number = 6000, token: strin
 //   进程内自有隧道(quick-tunnel)优先; 其空/死(常驻桥 dao-bridge 持有稳定隧道、bridgeUrl 恒空)时
 //   回归常驻桥已发布的新鲜活地址 → 杜绝注入「(未连接)」/死址致云端连不上(见 bridgeGenerateCloudMd 注)。
 function bridgeEffectiveUrl(): string {
-    if (bridgeUrl) return bridgeUrl;
-    try {
-        const pub = bridgeReadPublishedConn();
-        if (pub && pub.url && pub.ageMs < BRIDGE_CONN_FRESH_MS) return pub.url;
-    } catch { /* 守柔 */ }
-    return '';
+    // 帛书·「独立闭环·得一」: 公网 URL 恒取本实例自有隧道 — 不再回落他者进程(独立 dao-bridge 扩展)
+    //   发布的 conn.json。该桥恒写 url=""(从不发布可达地址), 回落之只得空址 → 徒污染同源配对。
+    //   本实例自有隧道空/死时, 存活探测环(bridgeLiveness)会重起隧道; 期间诚实回空(不臆造死址)。
+    return bridgeUrl || '';
 }
 // 帛书·「以实际有效性为基准·重新模拟配源」: 发布/探活/签名/去中心化会话一律取「服务端实际校验且
 //   机器级恒稳」的权威令牌 ws.token (即 dao-conn-current.json 之 token), 而非随隧道轮换的 bridgeToken。
@@ -5313,11 +5309,8 @@ function bridgeIsLeaderInstance(): boolean {
 //   经实测有效环采纳的配对优先; 次之, URL 若来自常驻桥发布连接, 令牌亦取该文件同一对;
 //   仅进程内自有隧道(或无发布对)才回落机器级权威令牌。根治「URL 取桥、Token 取机」的脱域。
 function bridgeEffectiveToken(): string {
-    if (_bridgePublishedPair && _bridgePublishedPair.url && _bridgePublishedPair.url === bridgeEffectiveUrl()) return _bridgePublishedPair.token;
-    if (!bridgeUrl) {
-        const t = bridgePublishedConnToken();
-        if (t) return t;
-    }
+    // 帛书·「得一」: 令牌恒取机器级权威牌(dao-conn-current.json / api-token) — 与 bridgeEffectiveUrl
+    //   之本实例可达端点同源成对。不再回落他者进程共享文件里的令牌(错域·致云端 401, 详见 checkAuth 注)。
     return bridgeAuthoritativeToken();
 }
 // 最近一次「实测有效」采纳的公网配对(URL+Token 同源成对) — 发布/签名/生成文档的单一真相源。
