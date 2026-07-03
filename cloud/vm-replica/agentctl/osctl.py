@@ -550,7 +550,15 @@ def screen_brief(max_controls: int = 12, deep: bool = False,
     CheckBox, RadioButton, TabItem before List/Tree rows), capped at
     ``max_controls``. Typical weight: a few hundred bytes — titles-rung cost
     with rung-2 knowledge in it. The full dict remains one call away when an
-    act genuinely needs row-level data; this is the default checkpoint read."""
+    act genuinely needs row-level data; this is the default checkpoint read.
+
+    F371 — geometry votes on *relevance*: AT-SPI happily lists controls that
+    have no on-screen presence (Dolphin's collapsed search toolbar offers
+    "Save this search…" with no extent), and (name,type) ranking knows kind
+    but not relevance, so F370's brief was half furniture. A control the
+    toolkit gives no rect is not currently an offer — drop it. Truthful
+    degrade: if *no* control carries a rect (a backend without extents), the
+    filter stands down rather than blanking the observation."""
     _PRIORITY = {"button": 0, "menuitem": 1, "edit": 2, "text": 2,
                  "combobox": 3, "checkbox": 4, "radiobutton": 4, "tabitem": 5,
                  "listitem": 8, "dataitem": 9, "treeitem": 9}
@@ -564,6 +572,8 @@ def screen_brief(max_controls: int = 12, deep: bool = False,
         lines.append("WIN%s %s%s" % (mark, w["title"], geo))
         if w["active"]:
             controls = w["actions"]
+    if any(a.get("rect") for a in controls):
+        controls = [a for a in controls if a.get("rect")]
     seen = set()
     picked = []
     for a in sorted(controls, key=lambda a: _PRIORITY.get(

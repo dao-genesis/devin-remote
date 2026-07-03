@@ -11567,3 +11567,23 @@ happily lists controls with no on-screen presence. The projection cut
 refinement when practice demands it: let geometry vote — a control
 whose rect is empty or outside its window's frame is furniture, not
 an offer.
+
+## F371 — geometry votes: a control without an extent is not an offer
+
+F370's demand, delivered. The reason Dolphin's brief was half
+furniture turned out to be crisp: AT-SPI lists the collapsed search
+toolbar's buttons ("Save this search…", Stop, the scroll arrows) with
+*no rect at all* — the toolkit itself is saying "this has no
+on-screen presence right now". So relevance needs no heuristic:
+geometry already votes. `screen_brief` now drops controls that carry
+no extent — with a truthful degrade, learned from the floor's own
+style: if *no* control in the window has a rect (a backend without
+extents), the filter stands down instead of blanking the observation.
+Live re-read of the same Dolphin window: the furniture is gone and
+the line fills with Back/Forward/Home/Split/Open Menu and the menubar
+— everything a hand could actually reach — at the same 469 bytes.
+Regression pins both branches. The quiet lesson: before inventing a
+relevance model, check whether the toolkit already told you — absence
+of geometry *is* the signal, the same way an empty title or a missing
+a11y tree were signals in earlier arcs. The floor's job is to listen,
+not to guess.
