@@ -5461,19 +5461,13 @@ async function bridgeResolveLiveConn(timeoutMs: number = 5000): Promise<{ url: s
     // 帛书·「URL 与 Token 恒成对·以实测有效性为唯一裁决」— 根治多令牌域脱钩的总根:
     //   旧法把常驻桥发布 URL 强配机器级权威令牌(另一域的牌), 再用免鉴权 /api/health 探「活」→
     //   错配对永远探不出错, 反注入恒发布「URL 对而 Token 错」→ 云端 exec 恒 401, 改多少次都坏。
-    //   新法: 候选一律以「同源配对」入列, 逐对用**需鉴权端点**实测(bridgeProbeEffective),
-    //   首个真能操作的配对胜出; 全部鉴权失败才退而取首个隧道尚活者(聊胜于无)。
+    //   新法·「得一」: 候选**只**含「本实例自有隧道 + 机器级权威令牌」这一同源对, 用需鉴权端点实测。
+    //   切勿再读他者进程(独立 dao-bridge)发布的 conn.json 入列 —— 其 (url, token) 是另一域:
+    //   即便 foreign-url/api/exec 用 foreign-token 探得 200(常驻桥原生验此牌), 该 URL 反代到本插件的
+    //   /api/connection 等面时, 本进程 checkAuth 只认机器权威牌 → foreign-token 恒 401 → 云端裂脑复发。
+    //   故注入面与鉴权面同守单一权威: 只发布本实例可达端点, 令牌恒取机器权威牌(与 checkAuth 同源)。
     const cands: { url: string; token: string; source: string }[] = [];
-    if (bridgeUrl) cands.push({ url: bridgeUrl, token: ws.token || bridgeToken || '', source: 'inprocess' });
-    try {
-        const pub = bridgeReadPublishedConn();
-        if (pub && pub.url && pub.ageMs < BRIDGE_CONN_FRESH_MS) {
-            // 同源配对优先(常驻桥自身令牌—即其 /api/exec 真验源); 机器级权威牌作交叉候选兑底。
-            if (pub.token) cands.push({ url: pub.url, token: pub.token, source: (pub.source || 'published') + ':paired' });
-            const mt = bridgeAuthoritativeToken();
-            if (mt && mt !== pub.token) cands.push({ url: pub.url, token: mt, source: (pub.source || 'published') + ':machine-token' });
-        }
-    } catch { /* 守柔 */ }
+    if (bridgeUrl) cands.push({ url: bridgeUrl, token: bridgeAuthoritativeToken() || ws.token || bridgeToken || '', source: 'inprocess' });
     const seen = new Set<string>();
     let firstAlive: { url: string; token: string; source: string } | null = null;
     for (const c of cands) {
@@ -11729,12 +11723,12 @@ let _lastInjectedBridgeToken = '';
 let _bridgeReinjectInflight = false;
 let _bridgeReinjectTimer: ReturnType<typeof setTimeout> | null = null;
 function bridgeCurrentSig(): string {
-    // 帛书·「URL 与 Token 恒成对」: 签名里的 url/tok 必须同源配对(与实际发布一致),
-    //   否则令牌轮换而签名里仍是另一域的机器牌 → 签名不翻·永不重注的盲区。
-    let url = bridgeUrl || '';
-    let tok = bridgeAuthoritativeToken();
-    try { const c = bridgeReadPublishedConn(); if (c && c.url) { url = c.url; if (c.token) tok = c.token; } } catch { /* 守柔 */ }
-    if (_bridgePublishedPair && _bridgePublishedPair.url === url) tok = _bridgePublishedPair.token;
+    // 帛书·「URL 与 Token 恒成对·签名须映实际发布」: 签名里的 url/tok 必须与真正写进知识库的一致
+    //   ——即 bridgeEffectiveUrl()/bridgeEffectiveToken()(本实例可达隧道 + 机器权威牌·单一权威)。
+    //   切勿再以他者进程 conn.json 的 (url,token) 覆写: 那与实际注入内容异源 → 签名恒对不上实注,
+    //   或永不翻(漏注)、或反复翻(徒 churn)。得一: 签名 = 实注对。
+    const url = bridgeEffectiveUrl();
+    const tok = bridgeEffectiveToken();
     let mcpUrl = '', mcpTok = '';
     try { const ep = daoResolveMcpEndpoint(); if (ep) { mcpUrl = ep.url; mcpTok = ep.token; } } catch { /* 守柔 */ }
     // 软编码·实时态: 设备/IDE/工作区/工具集/版本任一变即翻签名 → 反向注入随之刷新(不含易变时间戳, 杜绝无谓 churn)。
