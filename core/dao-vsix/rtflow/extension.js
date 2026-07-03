@@ -1,3 +1,4 @@
+// WAM · 万法归宗 v4.10.1 · 归零清理闭环终于会触发: 24h 冷却锚点本源起算(不再每周期重置)+全量备份+清理后自动出库·备份严格校验 · 道法自然
 // WAM · 万法归宗 v4.9.0 · 自动清理默认开 + 归零移除(额度归零账号全量备份+清理后自动出库·备份严格校验) · 道法自然
 // WAM · 万法归宗 v4.5.0 · 对话额度上限(余额-缓冲·自动中停)·自动清理阈值$1·余额精确到分 · 道法自然
 // WAM · 万法归宗 v4.4.0 · 文件夹备份·HTML/MD双视图·自动备份阈值·自动清理 · 道法自然
@@ -12000,7 +12001,19 @@ async function _dvAutoBackupRun() {
           backupOk = _dvBackupVerifiedFull(backupRes);
           if (!backupOk) log("auto-backup: " + acc.email + " 备份未通过完整性校验 → 跳过自动清理(未全量备份不删) · " + _dvBackupVerifyNote(backupRes));
           // v4.9.11: 记录备份完成时间 (24h 冷却期起算点)
-          if (backupOk) devinCloud.setCleanupState(acc.email, { backupCompletedAt: Date.now() });
+          // v4.10.1 · 正本清源修复「归零清理从不触发」: 旧法每周期都把 backupCompletedAt 重置为 now,
+          //   而备份定时器远比 24h 频繁(默 ~小时级) → now-backupCompletedAt 恒 < 24h → isCleanupReady 的
+          //   cooldown 门永不满足 → 额度归零账号「全量备份→清理→出库」闭环从系统构建至今一次都没触发过
+          //   (实测桌面 cleanup_state.json: 数十账号 backupCompletedAt 全被刷成近 1~2 小时内的同一批时戳)。
+          //   修法: 冷却期锚点「本源起算」—— 仅当尚无锚点、或上轮已清理(cleanedAt≥旧锚点·需为新一轮重新起算)时落点;
+          //   低额度周期内每轮照常全量备份刷新数据, 但锚点保持不动 → 24h 真正能走完。账号充值再用则由 lastConvUpdateAt
+          //   的 recent_update 门守住近 24h 活跃, 不会误清。
+          if (backupOk) {
+            const _cs = devinCloud.getCleanupState(acc.email);
+            if (!_cs || !_cs.backupCompletedAt || (_cs.cleanedAt && _cs.cleanedAt >= _cs.backupCompletedAt)) {
+              devinCloud.setCleanupState(acc.email, { backupCompletedAt: Date.now() });
+            }
+          }
         } catch (be) {
           log("auto-backup full error: " + acc.email + ": " + (be.message || be) + " → 跳过自动清理(未备份不删)");
         }
