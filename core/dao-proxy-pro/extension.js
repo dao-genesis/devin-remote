@@ -4760,9 +4760,12 @@ async function cmdExternalApiToggle() {
 //   左: 用户可用模型 (官方) · 右: 外接API模型 · SVG连线
 // ════════════════════════════════════════════════════════════════
 
-function getEaConfigHtml(port, nonce) {
+function getEaConfigHtml(port, nonce, opts) {
   const N = nonce || _genNonce();
   const proxyPort = port || 0;
+  // 归一(dao-one)折入模式: 复用二合一本源「🌐 内网穿透」板块(单隧道直达已暴露 /v1),
+  //   故本面板隐藏自带的 ⑤ 内网穿透 子页, 不重复起第二条 cloudflared 隧道 (道并行而不相悖)。
+  const foldBridge = !!(opts && opts.foldBridge);
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -4937,7 +4940,7 @@ function getEaConfigHtml(port, nonce) {
     <button class="dao-tab" data-pane="paneProvider">② 渠道配置</button>
     <button class="dao-tab" data-pane="paneRouter">③ 模型路由</button>
     <button class="dao-tab" data-pane="paneRevproxy">④ 模型反代</button>
-    <button class="dao-tab" data-pane="paneBridge">⑤ 内网穿透</button>
+    ${foldBridge ? '' : '<button class="dao-tab" data-pane="paneBridge">⑤ 内网穿透</button>'}
   </div>
 
   <!-- ① 本源观照 (IDE 左侧复刻 · 道/官/编 + 经文 + 本源体池 · 与左侧完全一致) -->
@@ -5099,7 +5102,13 @@ function getEaConfigHtml(port, nonce) {
   </div>
 
   <!-- ⑤ 内网穿透 · DAO Bridge (反者道之动 · 把反代端点直暴公网 · 零账号去中心化 · 公网直调反带模型) -->
-  <div class="dao-pane" id="paneBridge">
+  <div class="dao-pane" id="paneBridge">${foldBridge ? `
+    <div style="padding:14px 10px;font-size:12px;line-height:1.9;opacity:0.9">
+      <div style="font-weight:600;margin-bottom:6px">☯ 内网穿透已归一</div>
+      归一插件(dao-one)中，本模块的公网穿透复用二合一本源的「🌐 内网穿透 · DAO Bridge」板块——同一条 cloudflared 隧道经<b>单隧道直达</b>已把反代端点(<code>/v1/*</code> 与 <code>/origin/revproxy/*</code>)一并暴露公网，无需再单独起隧道。请到全能板顶部的「🌐 内网穿透」板块启动隧道并复制公网 Base URL。
+      <span style="opacity:0.55">道并行而不相悖 · 不重复造轮子。</span>
+    </div>
+  ` : `
     <div style="display:flex;align-items:center;gap:8px;padding:6px 2px;border-bottom:1px solid rgba(128,128,128,0.18);flex-wrap:wrap">
       <span style="font-weight:600;font-size:12px">☯ 内网穿透 · DAO Bridge</span>
       <span id="brgStat" style="font-size:10px;opacity:0.65;margin-left:auto">加载中…</span>
@@ -5175,7 +5184,7 @@ function getEaConfigHtml(port, nonce) {
       </div>
       <div id="brgCfState" style="font-size:10px;opacity:0.6;margin-top:4px">未登录 Cloudflare (默认走零账号快速隧道)</div>
     </details>
-  </div>
+  `}</div>
 
   <!-- 路由编辑弹窗 -->
   <div class="route-modal" id="routeModal">

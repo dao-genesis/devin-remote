@@ -142,7 +142,7 @@
 +    if (!usePort) return { type: 'proxyPanel', ok: false, error: 'dao-proxy-pro 反代尚未就绪 (~/.dao/origin-port.json 未生成)。稍候重试。' };
 +    try {
 +        const nonce = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-+        let html: string = mod.getEaConfigHtml(usePort, nonce);
++        let html: string = mod.getEaConfigHtml(usePort, nonce, { foldBridge: true });
 +        const shimTag = '<script nonce="' + nonce + '">' + PROXY_FETCH_SHIM + '</script>';
 +        html = (html.indexOf('</head>') !== -1) ? html.replace('</head>', shimTag + '</head>') : (shimTag + html);
 +        return { type: 'proxyPanel', ok: true, html: html, port: usePort };
