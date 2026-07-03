@@ -11692,3 +11692,24 @@ no scriptable export, the print pipeline is a universal artifact
 factory — every GUI toolkit ships one, it always writes a file, and
 PDF yields to text tools. (Corollary bagged en route: `pdftotext`
 lives in poppler-utils, not installed by default.)
+
+## F377 — Inkscape: vector editors save their canvas as prose
+
+First GTK creative-suite arc. Three grounds walked. One: the welcome
+dialog ("Quick Setup / Time to Draw") is GTK's thin-a11y counterpart
+of F374's QML — its tabs enumerate with *no rects*, so the F371
+furniture rule correctly hid them from the brief; Escape dismissed
+the whole dialog, which is often the cheapest verb a first-run
+screen accepts. Two: the act itself is single-key-tool + drag —
+`r` arms the rectangle tool, one `drag()` across the canvas draws
+it — and the title bar narrated the whole lifecycle unprompted
+(`Inkscape 1.1` → `New document 1` → `*New document 1` → 
+`f377_rect.svg`), the dirty-star convention from KWrite (F367)
+holding across toolkits. Three, the receipt: an SVG is XML — the
+saved file contains `<rect width="123.9" height="82.6"
+x="23.9" y="102.0">`, the drawn geometry *as prose*, exact to the
+drag delivered (300x200 px at 96dpi ≈ 79x53mm... in user units,
+proportions matching the gesture). Vector editors join CAD (F372)
+in the friendliest class: the document *is* a text artifact, so
+verification never needs the canvas. GTK save dialogs accept a full
+absolute path typed straight into the Name field — no tree walking.
