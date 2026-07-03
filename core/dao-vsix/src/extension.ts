@@ -4340,6 +4340,18 @@ function cfReadUrlFromLog(): string {
     } catch {}
     return '';
 }
+// 帛书补丁·「知止不殆」: 探测 cloudflared 日志是否含 Cloudflare 限流签名(1015/429/Too Many Requests)。
+//   quick-tunnel 被限流时, cloudflared 常仍存活甚或打印出一个 trycloudflare URL, 但该 URL 边缘恒 530 —
+//   若仅凭「日志有 URL」即判成功清零退避, liveness 探 530 又重建 → 越锤越死(正是用户所遇之根)。
+//   故凡见限流签名, 一律施「限流专用长冷却」, 让按 IP 的封禁自然消退, 不争而自复。
+const CF_RATELIMIT_COOLDOWN_MS = 20 * 60 * 1000; // 20min: trycloudflare 按 IP 限流冷却通常约此量级
+function cfLogHasRateLimit(): boolean {
+    try {
+        const txt = fs.readFileSync(CF_LOG, 'utf8');
+        return /\b1015\b|\b429\b|Too Many Requests|rate.?limit|error unmarshaling QuickTunnel/i.test(txt);
+    } catch { /* 守柔 */ }
+    return false;
+}
 // PID 文件里的 cloudflared 是否仍存活(脱宿主孤儿进程仍在跑则复用, 不再新起隧道)
 function cfPidAlive(): number {
     try {
@@ -4571,7 +4583,15 @@ async function bridgeStartTunnel(named: boolean): Promise<{ ok: boolean; reason?
                 const _sa = Date.now() - _cfLastStartMs;
                 const _haveUrl = !!cfReadUrlFromLog();
                 const _aliveNow = !!cfPidAlive();
-                if (_haveUrl) { _cfSpawnFails = 0; _cfBackoffUntilMs = 0; _cfLastCountedStartMs = _cfLastStartMs; }
+                // 限流签名优先: 即便日志已打印 URL, 只要见 1015/429 即知该 URL 边缘恒 530 → 施长冷却,
+                //   不清零退避、不复用假 URL。让按 IP 封禁自消, 杜绝「有 URL 即判成功」的越锤越死盲区。
+                if (cfLogHasRateLimit()) {
+                    _cfLastCountedStartMs = _cfLastStartMs;
+                    _cfSpawnFails = Math.min(_cfSpawnFails + 1, 8);
+                    _cfBackoffUntilMs = Date.now() + CF_RATELIMIT_COOLDOWN_MS;
+                    daoLoopLog('tunnel', '隧道限流(1015/429)#' + _cfSpawnFails + '→长冷却' + Math.round(CF_RATELIMIT_COOLDOWN_MS / 60000) + 'min');
+                }
+                else if (_haveUrl) { _cfSpawnFails = 0; _cfBackoffUntilMs = 0; _cfLastCountedStartMs = _cfLastStartMs; }
                 else if ((!_aliveNow && _sa > 6000) || _sa > CF_ESTABLISH_GRACE_MS) {
                     _cfLastCountedStartMs = _cfLastStartMs;
                     _cfSpawnFails = Math.min(_cfSpawnFails + 1, 8);
@@ -5438,19 +5458,13 @@ function bridgeLoadLastInject(): void {
         if (j && typeof j.token === 'string' && j.token) _lastInjectedBridgeToken = j.token;
     } catch { /* 守柔 */ }
 }
+// 帛书·「得一」: MCP 探活/令牌与实注端点恒同源 — 皆取 daoResolveMcpEndpoint(本体 /mcp·机器权威牌),
+//   杜绝「探 9100 旧网关而实注本体 /mcp」的错位盲区(GET /mcp 返 405 亦属 2xx-4xx·探活判活)。
 function bridgeMcpUrl(): string {
-    try {
-        const mf = path.join(process.env.ProgramData || 'C:\\ProgramData', 'dao_vm', 'mcp_public.json');
-        if (fs.existsSync(mf)) { const j = JSON.parse(fs.readFileSync(mf, 'utf8')); return String(j.url || ''); }
-    } catch { /* 守柔 */ }
-    return '';
+    try { const ep = daoResolveMcpEndpoint(); return ep ? ep.url : ''; } catch { return ''; }
 }
 function bridgeMcpToken(): string {
-    try {
-        const mf = path.join(process.env.ProgramData || 'C:\\ProgramData', 'dao_vm', 'mcp_public.json');
-        if (fs.existsSync(mf)) { const j = JSON.parse(fs.readFileSync(mf, 'utf8')); return String(j.token || ''); }
-    } catch { /* 守柔 */ }
-    return '';
+    try { const ep = daoResolveMcpEndpoint(); return ep ? ep.token : ''; } catch { return ''; }
 }
 // ① 反向注入自愈 · 活地址解析 — 帛书·「自知者明」:
 //   汇集候选公网地址(进程内隧道 + 各已发布 conn 文件), 按新鲜度逐一 /api/health 探活,
@@ -11671,19 +11685,24 @@ function daoSyncPatSecretIntoProfile(): void {
 // 守柔·自愈: 公网快速隧道地址重启会变, 故每次激活幂等校正 — 仅当 url 变化时改写, 不制造无谓写入。
 const DAO_MCP_NAME = 'DAO Bridge MCP';
 const DAO_MCP_PUBLIC_FILE = path.join(process.env.ProgramData || 'C:\\ProgramData', 'dao_vm', 'mcp_public.json');
-// 归一 · 反注 MCP 蹭耐用桥隧道: 综合 MCP(mcp_http.py)的自起快速隧道既翻倍触发 Cloudflare 限流
-//   又死不自愈(常见 mcp_public.json 里 url=null)。故归一 — 优先把注入地址定为 <常驻桥URL>/mcp,
-//   由常驻桥(dao-bridge)把 /mcp 流式反代到本机 9100; 桥隧道单条且自愈, 杜绝第二条脆弱隧道。
-//   仅当桥 URL 暂不可知时, 才回退沿用 MCP 自身隧道地址(若存在)。token 取 MCP 服务端令牌(桥原样透传)。
+// 归一 · 反注 MCP = 插件本体 /mcp: 见 daoResolveMcpEndpoint 注(单隧道·单令牌·全量工具)。
 function daoResolveMcpEndpoint(): { url: string; token: string } | null {
-    let pub: any = {};
-    try { if (fs.existsSync(DAO_MCP_PUBLIC_FILE)) pub = JSON.parse(fs.readFileSync(DAO_MCP_PUBLIC_FILE, 'utf8')); } catch { return null; }
-    const token = String(pub.token || '').trim();
-    let base = String(bridgeUrl || '').trim();
-    if (!/^https?:\/\//.test(base)) { try { const c = bridgeReadPublishedConn(); if (c && c.url) base = String(c.url).trim(); } catch { /* 守柔 */ } }
-    if (/^https?:\/\//.test(base)) return { url: base.replace(/\/+$/, '') + '/mcp', token };
-    const legacy = String(pub.url || '').trim();
-    if (/^https?:\/\//.test(legacy)) return { url: legacy, token };
+    // 帛书·「得一·归一」: 综合 MCP(四模块·全量工具)即插件本体自带 /mcp(daoMcpHandle)——
+    //   与 /api 同一进程、同一自有隧道、同一机器权威令牌(checkAuth 放行)。故反注 MCP 端点恒 =
+    //   本实例可达隧道 /mcp, 一举归一三利: ①单隧道(免第二条脆弱快速隧道·正是触发 Cloudflare 1015
+    //   限流之源) ②单令牌(免跨域 401: 旧法用 9100 py 网关令牌配自有隧道 /mcp, 而本进程 checkAuth
+    //   只认机器权威牌 → 恒 401) ③全量工具(旧 9100 py 网关仅 26 工具, 本体 /mcp 由 daoMcpToolDefs
+    //   实时生成 64 工具)。本实例自有隧道空/死时诚实回 null(守柔·待探活环重起, 不注死址)。
+    const base = bridgeEffectiveUrl();
+    if (/^https?:\/\//.test(base)) return { url: base.replace(/\/+$/, '') + '/mcp', token: bridgeEffectiveToken() };
+    // 回退(保守兼容): 仅当自有隧道暂不可知且旧网关确有可达地址(极少)时沿用之。
+    try {
+        if (fs.existsSync(DAO_MCP_PUBLIC_FILE)) {
+            const pub = JSON.parse(fs.readFileSync(DAO_MCP_PUBLIC_FILE, 'utf8'));
+            const legacy = String(pub.url || '').trim();
+            if (/^https?:\/\//.test(legacy)) return { url: legacy, token: String(pub.token || '').trim() };
+        }
+    } catch { /* 守柔 */ }
     return null;
 }
 function daoSyncDaoMcpIntoProfile(): void {
