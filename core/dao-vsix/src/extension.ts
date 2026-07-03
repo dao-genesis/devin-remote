@@ -13016,7 +13016,11 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
     const _fwdProto = (String(_hh['x-forwarded-proto'] || '').split(',')[0].trim()) || 'https';
     let localBase: string;
     if (_isLocalHost) {
-        localBase = `http://localhost:${ws.port}`;
+        // 守其雌·并理别名: 本地访问须回链「访问者实际所用主机」, 不可一律钉死 localhost。
+        //   病根: 经 127.0.0.1:<port> 打开时若回链归一为 localhost:<port>, 页面 origin(127.0.0.1)
+        //   与注入的 WEBAPP_HOST(localhost) 不符 → SPA 主机守卫硬跳 https://localhost/login
+        //   (Chrome 视 https 本地 → ERR_SSL_PROTOCOL_ERROR / iframe 破图)。故保留原主机别名, 仅缺失时回落 localhost。
+        localBase = `http://${_reqHost || ('localhost:' + ws.port)}`;
     } else if (_reqHost) {
         localBase = `${_fwdProto}://${_reqHost}`;
     } else {
