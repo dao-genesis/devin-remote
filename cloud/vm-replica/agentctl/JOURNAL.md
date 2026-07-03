@@ -11350,3 +11350,81 @@ arithmetic complement to the byte. Also reconfirmed twice: GTK dialog
 buttons (Export) swallow synthetic clicks even *after* activation —
 the mnemonic (Alt+E) is the reliable path into GTK dialogs, not the
 pointer.
+
+## F361 — SuperTux worldmap: Return is a place, not a button
+
+Fresh VM, same game as F345, one floor higher: the worldmap. The
+previous session died here clicking 'Start Game' with zero-width
+synthetic clicks; this arc replayed it with F345's law (hold-taps,
+key_down/key_up spans) and every menu yielded on the first try. The
+new lesson lives on the worldmap: Return there is *positional* — it
+enters whatever level dot Tux is standing on, and if he stands on
+nothing it replays the last cutscene instead. Same key, three
+meanings (menu-confirm, cutscene-advance, level-enter), disambiguated
+only by where the avatar is. Locomotion proof was the camera itself:
+region_diff 0.29 during the intro, 0.999 once a held RIGHT scrolled
+the level. The exit receipt was the purest one a game offers: the
+savegame (~/.local/share/supertux2/profile1/world1.stsg) did NOT
+change on level-abort but was rewritten the instant 'Leave World' was
+chosen — 'solved #t' appearing for the visited level. Games persist
+at chapter boundaries, not keystrokes; assert on the boundary, not in
+the middle.
+
+## F362 — Synaptic: root GUIs, a search that boils the ocean, and type-ahead as index
+
+The 'new computer, install software' ritual, done entirely through the
+package-manager GUI (sudo synaptic on :0). Three lessons. First, the
+default Find scope ('Description and Name') over 116k packages is a
+minutes-long boil that pegs a core and matches 7,809 rows for 'sl' —
+the naive watcher that polled the result list outlived its own
+timeout and died with nothing. The cost of a query lives in its
+*scope*, not its length. Second, GTK treeviews carry their own index:
+click a row, type two letters, and type-ahead jumps straight to the
+`sl` package — an O(1) door beside the O(n) search that was still
+churning. Third, the Ctrl+I homonym from F360 resolves the *other*
+way here: in Synaptic Ctrl+I is Mark-for-Installation, exactly what
+was wanted — same chord, opposite fates in two apps, which is the
+final proof that accelerators are per-application dialects. Apply
+lived behind a Summary modal (Alt+A mnemonic, GTK dialogs still
+swallow pointer clicks), and the receipt was the OS package database
+itself: dpkg -s sl flipped to 'install ok installed' — the same
+kernel-truth floor as F359, one layer up the stack.
+
+## F363 — xterm+vim: the window that renames itself, and an editor with a memory
+
+First TUI arc: no widgets, no tree, no menus — the terminal grid is
+the whole GUI, and vim's modal grammar is the only API. Two traps.
+First, launch(wait_title='xterm') returned None: xterm immediately
+retitles itself to `user@host: cwd`, so the app's *name* never
+appears in its own title. Titles are advertising chosen by the
+program, not identity — match on what the program will say, not what
+it is called. Second, the editor remembers: the plan was 'reopen,
+dd deletes line 1', but vim's viminfo restored the cursor to the
+*last edited line* (line 2), and dd obediently deleted the reminder
+instead of the grocery line. The artifact caught it instantly —
+content after ZZ was the grocery line, the inverse of the prediction.
+Position-dependent verbs (dd, x, p) are only as safe as your claim
+about where the cursor is, and editors carry cross-session state that
+falsifies fresh-start assumptions. Insert-write-escape-:wq and
+normal-mode dd+ZZ both verified byte-exact on disk; the file is the
+only floor a TUI needs.
+
+## F364 — Thunderbird: a wizard that closes without doing anything
+
+Email client, fresh profile. The account-setup modal and the privacy
+tab were pre-acts (Ctrl+W clears both; New Message stays greyed —
+composing is identity-gated). The Feed Account Wizard became the real
+subject: four escalating channels tried to press its Finish button —
+Return on the default-styled button, a pointer click on its exact
+pixels, an AT-SPI invoke (Thunderbird exposes no tree on this bus),
+and a blind Tab-walk plus Space. All four *closed the wizard*; none
+created the account. The receipt floor never lied: prefs.js gained no
+mail.server/mail.account keys and no Mail/ directory appeared, even
+after Ctrl+Q flushed the profile to disk. Without the artifact check,
+an agent would have reported success four separate times — the
+dialog's disappearance is theatre, not evidence. Corollary of F337
+(Ark's menu item that says yes but does nothing), scaled up to a
+whole wizard: the *only* trustworthy postcondition of a multi-step
+dialog is the state it was supposed to create, read from outside the
+app. When a wizard is broken, no input channel can fix it — detect,
+record, and walk away.
