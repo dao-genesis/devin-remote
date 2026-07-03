@@ -11713,3 +11713,26 @@ proportions matching the gesture). Vector editors join CAD (F372)
 in the friendliest class: the document *is* a text artifact, so
 verification never needs the canvas. GTK save dialogs accept a full
 absolute path typed straight into the Name field — no tree walking.
+
+## F378 — the browser arc that indicted the floor: silent degrade lies
+
+Goal: read a web page through the OS floor alone — navigate by
+omnibox paste (the founding F003 atomic-paste primitive still
+holds), select-all, copy, receipt from clipboard bytes. Navigation
+worked; the copy read came back as the planted sentinel, then as
+empty — for *five diagnoses in a row* the evidence pointed at Chrome
+(focus? selection? ownership?), and clicking a link even navigated,
+proving input was landing. The real culprit was the floor itself:
+`get_clipboard` shells out to `xclip`, xclip was not installed on
+this fresh VM, and the code *silently fell back to the local cache*
+— returning stale sentinel or '' with a straight face. One
+`apt-get install xclip` later the same act produced the page's full
+text in one read. The lesson outranks the arc: a perception verb
+that cannot reach its ground must say so, not answer from memory —
+a silent fallback converts an environment defect into a phantom
+application bug and taxes the investigation at the most expensive
+rung (five acts spent chasing Chrome). Degrade honestly: raise, or
+tag the answer as cached. Also bagged: Chrome never grants PRIMARY
+(drag-select reads empty there), so on browsers only CLIPBOARD via
+Ctrl+C is real; and page text via select-all is itself a rung-2-
+priced read of an otherwise canvas-priced surface.
