@@ -33,9 +33,22 @@ CONFIG_DIR  = r'C:\ProgramData\dao_vm'
 CONFIG_PATH = os.path.join(CONFIG_DIR, 'config.json')
 STEALTH_LOG = os.path.join(CONFIG_DIR, 'stealth.log')
 
+os.makedirs(CONFIG_DIR, exist_ok=True)
+# Stealth runs windowless (pythonw): sys.stdout/stderr are None there, so a plain
+# StreamHandler is invalid and any stray print() raises OSError [Errno 22] and can
+# crash a request. Always log to a file; add a console handler only when a real
+# stdout exists, and redirect None std streams to the log so print() never throws.
+_handlers = [logging.FileHandler(STEALTH_LOG, encoding='utf-8')]
+if sys.stdout is not None:
+    try: _handlers.append(logging.StreamHandler())
+    except Exception: pass
 logging.basicConfig(level=logging.INFO, format='[host %(asctime)s] %(message)s',
-                    datefmt='%H:%M:%S')
+                    datefmt='%H:%M:%S', handlers=_handlers)
 log = logging.getLogger('host')
+if sys.stdout is None or sys.stderr is None:
+    _null = open(STEALTH_LOG, 'a', encoding='utf-8', buffering=1)
+    if sys.stdout is None: sys.stdout = _null
+    if sys.stderr is None: sys.stderr = _null
 
 def load_config():
     os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -178,6 +191,95 @@ def inner_health(port, timeout=3):
     except Exception:
         return None
 
+def _session_id(name):
+    """Numeric RDP session id for account <name>, or '' if it has no active
+    session. Parsed from quser (locale-neutral: the id is the first pure-digit
+    column, regardless of the SESSIONNAME/STATE wording)."""
+    try:
+        out, _, _ = ps_run(
+            rf"$q = quser 2>$null | Where-Object {{ $_ -match '\b{name}\b' }};"
+            rf"if ($q) {{ (($q -replace '\s+',' ').Trim().Split(' ') | "
+            rf"Where-Object {{ $_ -match '^\d+$' }} | Select-Object -First 1) }} "
+            rf"else {{ '' }}", timeout=20)
+        return (out or '').strip().splitlines()[-1].strip() if (out or '').strip() else ''
+    except Exception:
+        return ''
+
+def _oobe_active(name):
+    """True while first-logon OOBE consent UI is still running in <name>'s
+    session. The desktop shell (explorer/StartMenu) actually starts *underneath*
+    the OOBE overlay, so shell-presence is a false 'done' signal; the reliable
+    language/region-neutral signal is the OOBE host process itself
+    (WWAHost renders the UWP consent/privacy pages incl. China's cross-border
+    data-consent; CloudExperienceHost/FirstLogonAnim cover the classic flow).
+    We scope the check to the account's own session id so other users' UWP
+    apps never confuse it."""
+    sid = _session_id(name)
+    if not sid:
+        return False
+    try:
+        out, _, _ = ps_run(
+            rf"$p = Get-Process WWAHost,CloudExperienceHost,FirstLogonAnim "
+            rf"-EA SilentlyContinue | Where-Object {{ $_.SI -eq {int(sid)} }};"
+            rf"if ($p) {{ 'OOBE' }} else {{ 'DONE' }}", timeout=20)
+        return 'OOBE' in out
+    except Exception:
+        return False
+
+def advance_oobe(name, port, max_steps=16, settle=42):
+    """Auto-advance the first-logon OOBE for a freshly created account until the
+    desktop is clear. Region/language-agnostic: the OOBE consent pages (incl.
+    China's cross-border data-consent + Microsoft-account pages) activate their
+    default 'next/accept' button on Enter. We press Enter while the OOBE host is
+    up, requiring two consecutive clear reads (guards the brief gap between
+    consecutive OOBE pages), then Esc to dismiss any stray Start menu.
+
+    The OOBE host (WWAHost/CloudExperienceHost) spawns a few seconds *after* the
+    session logs on, so a check fired the instant the inner agent boots races
+    ahead of it and misreads 'no-oobe'. We therefore wait up to `settle` seconds
+    for the host to appear; if it never does, the account is already onboarded
+    (attach/existing) and we no-op."""
+    waited = 0
+    while waited < settle:
+        if _oobe_active(name):
+            break
+        time.sleep(3)
+        waited += 3
+    else:
+        return {'ok': True, 'oobe': 'no-oobe', 'steps': 0}
+    steps = 0
+    clear = 0
+    for _ in range(max_steps):
+        if _oobe_active(name):
+            clear = 0
+            try:
+                inner_request(port, {'action': 'key', 'key': 'enter'}, timeout=20)
+            except Exception:
+                pass
+            steps += 1
+        else:
+            clear += 1
+            if clear >= 2:
+                # Win11's first desktop auto-opens Start a beat after the final
+                # OOBE page closes. Esc does NOT dismiss Win11 Start (it only
+                # clears the search box) -- the reliable, language-neutral toggle
+                # is the Win key, applied by ensure_desktop only while a shell
+                # flyout host is actually foreground (so we never open Start on
+                # an already-clean desktop). Settle first, then close.
+                time.sleep(2.0)
+                closed = None
+                try:
+                    closed = inner_request(port, {'action': 'ensure_desktop'},
+                                           timeout=20)
+                except Exception:
+                    pass
+                return {'ok': True, 'oobe': 'advanced-to-desktop',
+                        'steps': steps, 'ensure_desktop': closed}
+        time.sleep(2.5)
+    done = not _oobe_active(name)
+    return {'ok': done, 'oobe': 'advanced-to-desktop' if done else 'still-in-oobe',
+            'steps': steps}
+
 def find_next_port():
     used = {v['port'] for v in vms.values()}
     p = BASE_PORT
@@ -218,6 +320,11 @@ Write-Output 'user-ok'
     out, err, _ = ps_run(s1)
     if 'user-ok' not in out:
         return {'error': f'user creation failed: {out} {err}'}
+
+    # Skip first-logon OOBE privacy-consent screens so the new account lands on
+    # the desktop (otherwise GUI automation stalls on "隐私设置" consent pages).
+    # On-demand (Wu Wei); reverted on hibernate.
+    _ensure_oobe_bypass()
 
     # NOTE: do NOT pre-create C:\Users\<name>; that forces the real profile to land
     # at C:\Users\<name>.<HOST>. Instead use a machine-wide launcher + scheduled task
@@ -264,6 +371,11 @@ Write-Output 'rdp-started'
             time.sleep(2)
             h = inner_health(port)
             if h and h.get('status') == 'ok':
+                # 4) auto-advance first-logon OOBE so the account lands on the desktop
+                try:
+                    vms[name]['oobe'] = advance_oobe(name, port)
+                except Exception as e:
+                    vms[name]['oobe'] = {'ok': False, 'error': str(e)}
                 vms[name]['status'] = 'running'
                 vms[name]['session_user'] = h.get('user', name)
                 return
@@ -372,26 +484,50 @@ if ($s) {{ $id = ($s -replace '\\s+',' ').Trim().Split(' ')[2]; logoff $id 2>$nu
 #   ready for vm.create. The daemon itself stays running (lightweight, invisible)
 #   to accept the wake command.
 
+# Language-neutral edition classification by numeric OperatingSystemSKU
+# (Win32_OperatingSystem.OperatingSystemSKU == PRODUCT_* from GetProductInfo).
+# Caption is localized (e.g. Chinese "教育版"), so NEVER classify by caption text.
+_SKU_HOME = {98, 99, 100, 101}                       # Core / CoreN / CoreCountrySpecific / CoreSingleLanguage
+_SKU_PRO  = {48, 49, 69, 103, 161, 162}              # Professional / N / SNGL / WMC / ForWorkstations(+N)
+_SKU_EDU  = {121, 122}                                # Education / EducationN
+_SKU_ENT  = {4, 27, 70, 72, 84, 135, 175, 191, 407, 408, 409, 410}  # Enterprise family + multi-session(135)
+_SKU_LTSC = {125, 126, 133, 134, 175, 183, 184}      # Enterprise LTSB/LTSC (S) + IoT Enterprise LTSC
+
 def _os_edition():
-    """Detect Windows edition (Home/Pro/Enterprise/Server/LTSC) and build.
-    Returns dict with edition, version, build, is_server, is_home, is_ltsc."""
+    """Detect Windows edition language-neutrally via OperatingSystemSKU + ProductType.
+    Returns edition (caption, display-only), version, build, sku, and boolean class flags.
+    Robust across localized (non-English) Windows where the caption is translated."""
     try:
         out, _, _ = ps_run(
             "$os = Get-CimInstance Win32_OperatingSystem; "
-            "$ed = $os.Caption; $ver = $os.Version; $build = $os.BuildNumber; "
-            "[pscustomobject]@{edition=$ed;version=$ver;build=$build} | ConvertTo-Json -Compress",
+            "[pscustomobject]@{edition=$os.Caption;version=$os.Version;build=$os.BuildNumber;"
+            "sku=[int]$os.OperatingSystemSKU;ptype=[int]$os.ProductType} | ConvertTo-Json -Compress",
             timeout=15)
         d = json.loads(out.strip().splitlines()[-1])
-        cap = d.get('edition', '')
+        cap = d.get('edition', '') or ''
+        sku = d.get('sku')
+        ptype = d.get('ptype')            # 1=Workstation, 2=DomainController, 3=Server
+        capl = cap.lower()
+        is_server = (ptype in (2, 3)) or ('server' in capl)
+        is_home = (sku in _SKU_HOME)
+        is_edu = (sku in _SKU_EDU)
+        is_pro = (sku in _SKU_PRO)
+        is_ent = (sku in _SKU_ENT) or is_edu   # Education is Enterprise-class for RDP/multi-session
+        is_ltsc = (sku in _SKU_LTSC)
+        # Fallback to caption substrings only if SKU is unknown/None (keeps old behavior working)
+        if sku is None or not (is_home or is_pro or is_ent or is_server):
+            is_server = is_server or ('server' in capl)
+            is_home = is_home or ('home' in capl)
+            is_pro = is_pro or ('pro' in capl and 'home' not in capl)
+            is_ent = is_ent or ('enterprise' in capl) or ('education' in capl) or ('教育' in cap) or ('企业' in cap)
+            is_ltsc = is_ltsc or ('ltsc' in capl) or ('ltsb' in capl)
+            is_home = is_home or ('家庭' in cap)
+            is_pro = is_pro or ('专业' in cap)
         return {
-            'edition': cap,
-            'version': d.get('version', ''),
-            'build': d.get('build', ''),
-            'is_server': 'server' in cap.lower(),
-            'is_home': 'home' in cap.lower(),
-            'is_pro': 'pro' in cap.lower() and 'home' not in cap.lower(),
-            'is_enterprise': 'enterprise' in cap.lower() or 'education' in cap.lower(),
-            'is_ltsc': 'ltsc' in cap.lower() or 'ltsb' in cap.lower(),
+            'edition': cap, 'version': d.get('version', ''), 'build': d.get('build', ''),
+            'sku': sku, 'product_type': ptype,
+            'is_server': is_server, 'is_home': is_home, 'is_pro': is_pro,
+            'is_enterprise': is_ent, 'is_education': is_edu, 'is_ltsc': is_ltsc,
         }
     except Exception as e:
         return {'edition': 'unknown', 'error': str(e)}
@@ -452,6 +588,50 @@ def _unregister_all_agent_tasks():
            "Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue",
            timeout=20)
 
+_OOBE_KEY = r'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE'
+
+def _ensure_oobe_bypass():
+    """Skip the first-logon OOBE 'privacy settings' consent screens so freshly
+    created VM accounts land directly on the desktop (needed for GUI automation).
+    Machine-wide policy DisablePrivacyExperience=1. On-demand only (Wu Wei): set
+    at vm.create, reverted at hibernate. Records prior state for clean revert."""
+    try:
+        out, _, _ = ps_run(
+            "$k='HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\OOBE';"
+            "$v=(Get-ItemProperty -Path $k -Name DisablePrivacyExperience -EA SilentlyContinue)."
+            "DisablePrivacyExperience;"
+            "if ($null -eq $v) {'none'} else {[string][int]$v}", timeout=15)
+        prior = (out.strip().splitlines() or ['none'])[-1].strip()
+        # only capture prior state the first time (don't clobber across repeated creates)
+        if 'oobe_prev' not in _stealth_state:
+            _stealth_state['oobe_prev'] = prior  # 'none' or the prior int as string
+        ps_run(
+            "$k='HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\OOBE';"
+            "New-Item -Path $k -Force | Out-Null;"
+            "New-ItemProperty -Path $k -Name DisablePrivacyExperience -Value 1 "
+            "-PropertyType DWord -Force | Out-Null", timeout=15)
+        return {'ok': True, 'prior': _stealth_state.get('oobe_prev')}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+def _revert_oobe_bypass():
+    """Restore the OOBE privacy-consent policy to its pre-VM state (zero footprint)."""
+    prior = _stealth_state.pop('oobe_prev', None)
+    if prior is None:
+        return {'ok': True, 'note': 'we never set it'}
+    try:
+        if prior == 'none':
+            ps_run("Remove-ItemProperty -Path "
+                   "'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\OOBE' "
+                   "-Name DisablePrivacyExperience -EA SilentlyContinue", timeout=15)
+            return {'ok': True, 'restored': 'removed (was absent)'}
+        ps_run("Set-ItemProperty -Path "
+               "'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\OOBE' "
+               f"-Name DisablePrivacyExperience -Value {int(prior)}", timeout=15)
+        return {'ok': True, 'restored': prior}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
 def _revert_multisession():
     """Revert in-memory termsrv.dll patches (return to native single-session).
     This is a clean revert — a service restart also achieves the same."""
@@ -501,6 +681,9 @@ def hibernate():
     # 4. Revert termsrv.dll patch
     revert = _revert_multisession()
     results['termsrv_revert'] = revert
+
+    # 4.5 Restore OOBE privacy-consent policy to pre-VM state
+    results['oobe_revert'] = _revert_oobe_bypass()
 
     # 5. Clean temp files
     if CFG.get('cleanup_temp_on_hibernate', True):
@@ -753,15 +936,18 @@ def ensure_multisession():
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import ts_multifix
         r = ts_multifix.ensure_multisession()
-        print(f'[host] multi-session: {r}')
+        log.info('multi-session: %s', r)
         return r
     except Exception as e:
-        print(f'[host] multi-session enable skipped: {e}')
+        log.info('multi-session enable skipped: %s', e)
         return {'ok': False, 'error': str(e)}
 
 
 def main():
-    ensure_multisession()
+    # Wu Wei: boot DORMANT. Do NOT patch termsrv at startup — that would leave a
+    # non-zero footprint while idle. Multi-session is enabled lazily on the first
+    # vm.create / host.wake (both call ensure_multisession). The control plane
+    # itself is invisible (127.0.0.1 socket, no window, no tray).
     # Auto-attach any inner agents already alive on base_port..+10
     for i in range(10):
         port = BASE_PORT + i

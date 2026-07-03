@@ -78,6 +78,11 @@ gdi32.GetDIBits.argtypes = [_VP, _VP, _wt.UINT, _wt.UINT, _VP, _VP, _wt.UINT]
 gdi32.DeleteObject.argtypes = [_VP]
 gdi32.DeleteDC.argtypes = [_VP]
 kernel32 = ctypes.windll.kernel32
+kernel32.OpenProcess.restype = _VP
+kernel32.OpenProcess.argtypes = [_wt.DWORD, _wt.BOOL, _wt.DWORD]
+kernel32.QueryFullProcessImageNameW.argtypes = [_VP, _wt.DWORD, _wt.LPWSTR,
+                                                ctypes.POINTER(_wt.DWORD)]
+kernel32.CloseHandle.argtypes = [_VP]
 user32.GetForegroundWindow.restype = _VP
 user32.SetForegroundWindow.argtypes = [_VP]
 user32.SetActiveWindow.restype = _VP; user32.SetActiveWindow.argtypes = [_VP]
@@ -488,6 +493,47 @@ def foreground_info():
     hwnd = user32.GetForegroundWindow()
     return {'hwnd': int(hwnd or 0), 'title': _win_title(hwnd) if hwnd else ''}
 
+def _proc_of_hwnd(hwnd):
+    """Base image name (e.g. 'explorer.exe') of the process owning hwnd, '' on
+    failure. Uses QueryFullProcessImageName (PROCESS_QUERY_LIMITED_INFORMATION),
+    which works cross-integrity for the shell hosts we care about."""
+    if not hwnd:
+        return ''
+    pid = ctypes.wintypes.DWORD(0)
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if not pid.value:
+        return ''
+    hp = kernel32.OpenProcess(0x1000, False, pid.value)  # QUERY_LIMITED_INFORMATION
+    if not hp:
+        return ''
+    try:
+        buf = ctypes.create_unicode_buffer(512); sz = ctypes.wintypes.DWORD(512)
+        if kernel32.QueryFullProcessImageNameW(hp, 0, buf, ctypes.byref(sz)):
+            return buf.value.rsplit('\\', 1)[-1]
+        return ''
+    finally:
+        kernel32.CloseHandle(hp)
+
+# Shell flyout hosts that own the foreground window while Start / search is open.
+_SHELL_FLYOUT_HOSTS = {'startmenuexperiencehost.exe', 'searchhost.exe',
+                       'searchapp.exe', 'shellexperiencehost.exe'}
+
+def ensure_desktop(max_iter=5):
+    """Close a lingering Start / search flyout so the session lands on a clean
+    desktop. Win11's Start does NOT close on Esc (Esc only clears its search
+    box); the reliable toggle is the Win key. We tap Win only while a shell
+    flyout host is *actually* the foreground window, so we never accidentally
+    *open* Start when the desktop is already clear. Language/edition-neutral
+    (matches process image names, not UI strings)."""
+    closed = 0
+    for _ in range(max_iter):
+        proc = _proc_of_hwnd(user32.GetForegroundWindow()).lower()
+        if proc in _SHELL_FLYOUT_HOSTS:
+            press_key('win'); closed += 1; time.sleep(0.6)
+        else:
+            break
+    return {'closed': closed, 'foreground': foreground_info()}
+
 def find_window(title=None, hwnd=None):
     if hwnd:
         return int(hwnd)
@@ -652,6 +698,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                     'foreground': foreground_info()}
         elif action == 'foreground':
             return {'ok': True, 'foreground': foreground_info()}
+        elif action == 'ensure_desktop':
+            return {'ok': True, **ensure_desktop(int(body.get('max_iter', 5)))}
         elif action == 'ui_info':
             return {'windows': list_windows()}
         elif action == 'ui_tree':

@@ -210,4 +210,67 @@ python clients/pull141.py 'C:\dao_vm\<file>' <local>
 
 ---
 
+## 14. v3 上机实测结果(141 · Win11 教育版 26200 · 本会话已跑通)
+> DAO Bridge 已恢复(公网URL `capital-eagles-neck-verified`,token `dao-vsix-5ed8…`);
+> v3 全套已部署至 `C:\dao_vm\` 并编译通过。以下为真机验证结论:
+
+1. **开机静默(无为)**:守护进程 `main()` 已去掉启动即 `ensure_multisession()`;
+   实测启动日志零 termsrv 补丁。多会话补丁改为 `vm.create`/`host.wake` 时惰性施加。
+2. **零足迹休眠**:`host.hibernate` → `termsrv` 还原原生(`applied=False`,
+   `bServerSku 1→0`,`cdefpolicy_jne 0xEB→0x75`)+ 清残留计划任务(`agent_tasks=[]`)
+   + 杀本系统 mstsc + 删 `C:\dao_vm\start_*.bat`;`host.stealth_status` 回
+   `mode=hibernating, footprint=zero`。**administrator console(会话#1)全程 Active 不受影响**。
+3. **唤醒往返**:`host.wake` → 多会话补丁复原(`bServerSku 0→1, jne 0x75→0xEB, applied=True`)。
+4. **端到端 vm.create**:`vm.create vm01` → RDP 会话#2(`rdp-tcp#0`)Active 上线;
+   `vm.exec whoami`=`desktop-master\vm01`;`vm.desktop_info`=1280×800;
+   `vm.screenshot` BitBlt 截屏成功(179KB PNG,真机桌面首登 OOBE 画面)。
+   随后 `host.hibernate` → `destroyed=['vm01']`、mstsc killed=1、footprint 归零。
+5. **通用性缺陷已修(真机验证)**:`_os_edition()` 旧代码只按**英文** caption 子串判版本,
+   本机为**中文 Win11 教育版**→ 全 flag=false。已改为**语言中立**的数字 `OperatingSystemSKU`+
+   `ProductType` 判定:实测 `sku=121 → is_education=true, is_enterprise=true, product_type=1`。
+   caption 仅作显示、不再参与分类;SKU 为 None 时才回落 caption(含中文「教育/企业/家庭/专业」子串)兜底。
+6. **build 号澄清(非缺陷)**:`os_info` 的 build `26200` 是**系统版本号**;
+   `termsrv.dll` 二进制版本是 `26100.8521`,恰在 `ts_multifix` OFFSETS 内置表中
+   (`source=builtin, sig_ok=True, applied=True`)。两者是不同维度,偏移表按 dll 版本命中,正确。
+
+**下一步(未做,留给后续)**:§13 第 6 项闲时自动休眠计时验证;第 7 项 GUI 预测层
+(`vm.observe/find/act`)对齐 agentctl F381/F382 在 vm01 内跑归档/存 docx。
+
+---
+
+## 15. v3.2 — 首登 OOBE 自动落桌 + 静默守护稳定性(141 真机跑通)
+
+> 承接 §14 遗留的「首登 OOBE 弹窗自动消除」,并修掉一个会让**静默守护进程静默崩溃**的隐性缺陷。
+
+1. **OOBE 自动推进(语言/版次中立)**:`vm_host_daemon.py::advance_oobe()` 轮询
+   `_oobe_active()`,在 OOBE 页上反复送 `Enter` 直至落桌(实测 `steps=2`);落桌后**不再用 Esc**。
+2. **真因:Win11 开始菜单不吃 Esc**。Esc 只清空开始菜单内的搜索框,**不关闭** Start 浮层;
+   可靠且语言中立的开关是 **Win 键**。新增 `vm_inner_agent.py::ensure_desktop(max_iter=5)`:
+   仅当**前台窗口的所属进程**属于 shell 浮层宿主白名单
+   (`startmenuexperiencehost.exe / searchhost.exe / searchapp.exe / shellexperiencehost.exe`,
+   进程名匹配、非本地化 UI 串)时才点一下 Win 键 → 决不会在已干净的桌面上误开 Start。
+   进程名经 `QueryFullProcessImageName`(`PROCESS_QUERY_LIMITED_INFORMATION`)取得,跨完整性级别可用。
+   `advance_oobe` 落桌后 settle 2s 调用之;新增 dispatch `ensure_desktop` 与代理 `vm.ensure_desktop`。
+   实测 vm06:`oobe=advanced-to-desktop, steps=2, ensure_desktop={closed:0}`(前台为机器级自启应用、
+   非 shell 宿主→正确地不动),`vm.screenshot` 得**干净可用桌面、无 OOBE / 无残留 Start**;
+   `whoami=desktop-master\vm06`、`query session`=会话#7 `rdp-tcp#0` Active → 确系**隔离 RDP 会话**。
+   (会话内可见的图标来自 `C:\Users\Public\Desktop` 公共快捷方式、可见的第三方 App 来自 HKLM 全局自启,
+   属机器级继承,非本系统行为。)
+3. **静默守护稳定性缺陷(真机暴露并修复)**:守护须**无窗**运行(`pythonw`,静默要求),但
+   `ensure_multisession()` 里两处裸 `print()` 在 `sys.stdout is None`(pythonw)或 stdout 管道被关时
+   抛 `OSError [Errno 22] Invalid argument`,导致 `vm.create` 返回 500、整条创建链路崩。
+   修法:两处 `print()` 改走 `log.info`;日志改为**始终挂 `FileHandler`**(`C:\ProgramData\dao_vm\stealth.log`),
+   仅在存在真实 stdout 时才追加 `StreamHandler`;并在 `sys.stdout/stderr is None` 时把二者重定向到日志文件,
+   使任何残留 `print()` 永不抛异常。守护遂可 `pythonw` 无窗常驻(PID 由 `Start-Process -WindowStyle Hidden` 拉起)。
+4. **完整往返复验(新守护)**:`vm.create vm06`(落桌洁净)→ `host.hibernate`
+   (`destroyed=[vm06]`、mstsc killed=1、`termsrv_revert` 还原原生、`oobe_revert.restored=1`)
+   → `host.stealth_status` = `mode=hibernating, active_vms=0, agent_tasks=[], footprint=zero`,
+   仅剩 administrator console 会话 → **完全静默、太上下知有之**。
+
+**下一步(留给后续)**:§13 第 6 项闲时自动休眠计时;把守护无窗常驻固化为登录触发的隐藏计划任务
+(现为 `Start-Process -WindowStyle Hidden pythonw`,重启不自起);第 7 项 GUI 预测层
+(`vm.observe/find/act`)在 vm 内跑 F381/F382 归档/存 docx。
+
+---
+
 — 推进到底,道法自然,无为而无不为。
