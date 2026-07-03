@@ -11408,3 +11408,23 @@ about where the cursor is, and editors carry cross-session state that
 falsifies fresh-start assumptions. Insert-write-escape-:wq and
 normal-mode dd+ZZ both verified byte-exact on disk; the file is the
 only floor a TUI needs.
+
+## F364 — Thunderbird: a wizard that closes without doing anything
+
+Email client, fresh profile. The account-setup modal and the privacy
+tab were pre-acts (Ctrl+W clears both; New Message stays greyed —
+composing is identity-gated). The Feed Account Wizard became the real
+subject: four escalating channels tried to press its Finish button —
+Return on the default-styled button, a pointer click on its exact
+pixels, an AT-SPI invoke (Thunderbird exposes no tree on this bus),
+and a blind Tab-walk plus Space. All four *closed the wizard*; none
+created the account. The receipt floor never lied: prefs.js gained no
+mail.server/mail.account keys and no Mail/ directory appeared, even
+after Ctrl+Q flushed the profile to disk. Without the artifact check,
+an agent would have reported success four separate times — the
+dialog's disappearance is theatre, not evidence. Corollary of F337
+(Ark's menu item that says yes but does nothing), scaled up to a
+whole wizard: the *only* trustworthy postcondition of a multi-step
+dialog is the state it was supposed to create, read from outside the
+app. When a wizard is broken, no input channel can fix it — detect,
+record, and walk away.
