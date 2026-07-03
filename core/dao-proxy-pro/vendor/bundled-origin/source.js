@@ -4668,6 +4668,16 @@ function _writeEndpointDiscovery() {
       handoff_url: base + "/origin/ea/handoff.md",
       overview_url: base + "/origin/ea/overview",
       health_url: base + "/origin/health",
+      // ★ 反带 API (反者道之动) · 标准本地端点自省 · 任意本地 Agent 凭此直连数据面
+      revproxy: {
+        base: base + "/v1",
+        chat_url: base + "/v1/chat/completions",
+        messages_url: base + "/v1/messages",
+        models_url: base + "/v1/models",
+        status_url: base + "/origin/revproxy/status",
+        key_hint:
+          "GET /origin/revproxy/status (本机) 返回 apiKey; 或读 ~/.codeium/dao-byok/revproxy.json 之 apiKey",
+      },
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(
@@ -4864,6 +4874,125 @@ function _buildHandoffMd() {
   L.push("3. `swe-1-6-fast` / `MODEL_SWE_1_6_FAST` (Fast) → `deepseek` (全链路打通)");
   L.push("4. GitHub Models (`gpt-4.1` / `gpt-4o` 等) → `github` 渠道 (PAT 作 key)");
   L.push("");
+  // ★ 反带 API (反者道之动) · 把已接通模型反向暴露为标准本地端点 · 任意本地 AIGen 直连
+  {
+    let rpBase = base;
+    let rpKey = "";
+    let rpEnabled = null;
+    let rpDisabled = [];
+    try {
+      const m = _getRevproxy && _getRevproxy();
+      if (m && m.loadConfig) {
+        const rc = m.loadConfig() || {};
+        rpKey = rc.apiKey || "";
+        rpEnabled = !!rc.enabled;
+        rpDisabled = Array.isArray(rc.disabledModels) ? rc.disabledModels : [];
+      }
+    } catch (_) {}
+    L.push("## 五、反带 API (Reverse-Proxy · 反者道之动 · 任意本地 AIGen 直连底层)");
+    L.push("");
+    L.push(
+      "> 与「二、路由」正向相反: 把渠道/路由里已接通的模型(免费官方 / 第三方渠道)**反向**暴露为",
+    );
+    L.push(
+      "> 标准 **OpenAI** 与 **Anthropic(Claude)** 本地端点。任意本机 AIGen / 脚本 / 设备凭标准 SDK 直调,",
+    );
+    L.push("> 脱离 Devin Desktop。四十章「反者道之动」。");
+    L.push("");
+    L.push(
+      "- 数据面 Base URL: `" +
+        rpBase +
+        "/v1`" +
+        (rpEnabled === null
+          ? ""
+          : rpEnabled
+            ? " · 状态: **已启用**"
+            : " · 状态: **未启用**(先在④面板或 POST /origin/revproxy/config `{\"enabled\":true}` 开启)"),
+    );
+    L.push(
+      "- 鉴权: `Authorization: Bearer <apiKey>`" +
+        (rpKey
+          ? " · 当前 key: `" + rpKey + "` (仅本机文档可见)"
+          : " · 读 `GET /origin/revproxy/status`(本机) 之 `apiKey`, 或 `~/.codeium/dao-byok/revproxy.json`"),
+    );
+    L.push(
+      "- 选择性反带: 默认**全模型皆反带**; 已排除(不外接) `" +
+        rpDisabled.length +
+        "` 个。`/v1/models` 只列已外接者, 调用被排除模型直接 403 `model_not_exposed`。",
+    );
+    L.push("");
+    L.push("### 数据面 (标准 SDK · 即调即用)");
+    L.push("```bash");
+    L.push("# OpenAI 兼容 · 一次对话补全 (model 可填 modelUid 或家族别名如 glm-4.7)");
+    L.push("curl -X POST " + rpBase + "/v1/chat/completions \\");
+    L.push(
+      "  -H 'Content-Type: application/json' -H 'Authorization: Bearer " +
+        (rpKey || "$REVPROXY_KEY") +
+        "' \\",
+    );
+    L.push(
+      "  -d '" +
+        JSON.stringify({
+          model: "swe-1-6",
+          messages: [{ role: "user", content: "你好" }],
+          stream: false,
+        }) +
+        "'",
+    );
+    L.push("# 列出可反带模型 (仅已外接者)");
+    L.push(
+      "curl -s " +
+        rpBase +
+        "/v1/models -H 'Authorization: Bearer " +
+        (rpKey || "$REVPROXY_KEY") +
+        "'",
+    );
+    L.push("# Anthropic(Claude) 兼容 · POST " + rpBase + "/v1/messages");
+    L.push("```");
+    L.push("");
+    L.push("### 管理面 (Agent 热管理 · 即时生效·不重启)");
+    L.push("- `GET /origin/revproxy/status` — 状态 + 全模型(含 `exposed` 外接标记) + 家族 + 配额");
+    L.push(
+      "- `POST /origin/revproxy/config` — 热配 `{enabled,applyInvert,isolatePrompt,exposeLan,defaultMaxTokens,disabledModels,regenerateKey}`",
+    );
+    L.push("- `POST /origin/revproxy/tier` — 热切某家族当前反代档位 `{familyUid, modelUid}`");
+    L.push("- `GET /origin/revproxy/warm` — 观照官方直通捕获帧(主槽/免费活水槽双帧)");
+    L.push("");
+    L.push("### 选择性反带 (万物并育·用户择去彼 · 支持批量)");
+    L.push("```bash");
+    L.push("# 排除某(些)模型不外接 (exposed:false)");
+    L.push("curl -X POST " + rpBase + "/origin/revproxy/models \\");
+    L.push(
+      "  -H 'Content-Type: application/json' -d '" +
+        JSON.stringify({ modelUids: ["gpt-4o", "claude-sonnet-4"], exposed: false }) +
+        "'",
+    );
+    L.push("# 恢复某(些)模型外接 (exposed:true)");
+    L.push(
+      "curl -X POST " +
+        rpBase +
+        "/origin/revproxy/models -H 'Content-Type: application/json' -d '" +
+        JSON.stringify({ modelUids: ["gpt-4o"], exposed: true }) +
+        "'",
+    );
+    L.push("# 批量全选/全不选外接");
+    L.push(
+      "curl -X POST " +
+        rpBase +
+        "/origin/revproxy/models -H 'Content-Type: application/json' -d '" +
+        JSON.stringify({ setAll: "on" }) +
+        "'   # 全反带",
+    );
+    L.push(
+      "curl -X POST " +
+        rpBase +
+        "/origin/revproxy/models -H 'Content-Type: application/json' -d '" +
+        JSON.stringify({ setAll: "off" }) +
+        "'  # 全不反带",
+    );
+    L.push("```");
+    L.push("");
+  }
   L.push("---");
   L.push("_本文件由 /origin/ea/handoff.md 实时生成 · 反映插件当前真实状态 · 端点发现文件 endpoint.json 保证跨重启可连 · v9.9.310_");
   return L.join("\n");
