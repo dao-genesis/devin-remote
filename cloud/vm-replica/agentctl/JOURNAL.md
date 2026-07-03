@@ -11608,3 +11608,24 @@ artifact* — DXF is text; the saved file yields `AcDbLine 10=0 20=0
 11=100 21=50`, the drawn geometry byte-exact, no pixel ever read.
 The whole arc — install, first-run dialog, draw, save, verify —
 ran on brief checkpoints and artifact receipts alone.
+
+## F373 — htop in Konsole: driving system administration through a TUI
+
+The task class the user actually cares about — managing the machine
+itself — done through our floor: a runaway process (`sleep 987654`,
+planted) hunted and killed *through htop's UI*, not by a shell kill.
+Konsole retitled itself to `agentctl : htop — Konsole` (the F363 law
+again — `wait_title='htop'` matched only because matching is
+substring). htop is pure rung-4 territory for perception — a canvas
+of cells — but its *input* grammar is honest function keys: F4
+filter narrowed 200 rows to the one victim (filter-then-act, the
+F362 scope lesson in TUI form), F9 opened the signal menu, Return
+sent SIGTERM. No pixel was read at all: the receipt came from the
+process table itself — the victim's pid vanished from `pgrep` while
+a decoy planted by an earlier crashed attempt survived, which is
+exactly the discrimination a real assertion needs (the *right*
+process died, not just *a* process). Two session-hygiene lessons
+rode along: a crashed arc leaves live props behind (kill your decoys
+before re-running), and a TUI's state machine has no window titles
+to narrate progress — sequence timing (`sleep` between F-keys) is
+the only synchronisation, so pad it.
