@@ -1,6 +1,6 @@
 {
-  "versionCode": 234,
-  "versionName": "0.37.130",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.130/DevinCloud-mobile-v0.37.130.apk",
-  "notes": "v0.37.130 · 双根治: ①归零账号「备份→清理→移出库」流水线抽出为共用模块 autoclean.js, 接入常驻后台引擎每轮心跳(不再依赖切号板在前台·实测全失效根因即切号板可见性门控); ②退格护栏——部分输入法在富文本编辑器按一次退格左右两侧同删, 现于捕获层拦下 IME 误发的向前删除/越过光标的删除区间, 只删左侧。"
+  "versionCode": 235,
+  "versionName": "0.37.131",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.131/DevinCloud-mobile-v0.37.131.apk",
+  "notes": "v0.37.131 · 自动发版(代码已更新, 版本号自动递增)"
 }
