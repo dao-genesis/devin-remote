@@ -11428,3 +11428,353 @@ whole wizard: the *only* trustworthy postcondition of a multi-step
 dialog is the state it was supposed to create, read from outside the
 app. When a wizard is broken, no input channel can fix it — detect,
 record, and walk away.
+
+## F365 — KCalc: the copy channel is not universal
+
+Installed fresh via `apt-get install kcalc` (dpkg is the receipt) and
+driven entirely from the keyboard: digits, `/`, and Return-as-equals
+echo straight into the display — `355/113` → `3.14159292035…`, the
+classic π convergent, read back by `ocr_text` with a digit whitelist.
+The surprise was on the read side. KCalc's display is a painted
+QLabel: AT-SPI exposes no value, and — unlike every editor and
+terminal so far — synthetic Ctrl+C leaves the clipboard untouched (a
+SENTINEL planted before the copy survived it, twice). read_selection
+(F195) assumes copy is the universal fallback for drawn surfaces;
+KCalc is the counterexample where even the copy channel is closed and
+pixels are the *only* reader. Ranking for drawn numeric displays:
+try the tree, try the copy, then OCR with a whitelist — and keep the
+whitelist tight, because the display's thin decimal point vanishes at
+OCR scale while every digit survives. One more calibration note:
+capture space is the real 1600x1200 root, not the 1568-wide scaled
+screenshot — regions measured on a saved PNG must be re-based before
+they are handed to ocr_text.
+
+## F366 — Dolphin→KWrite: XDND across processes is a pointer-channel act
+
+First cross-application drag-and-drop: a text file dragged out of
+Dolphin's icon view and dropped on KWrite's editor. Stage directions
+mattered more than the verb: KWrite had opened dead-centre *on top of*
+Dolphin, so the first job was `move_window` on both (EWMH), giving
+the drag a visible source and a visible target — a drag cannot cross
+a window that is not there. The drag itself worked first try, but
+only because it respected the same time-visibility law the keyboard
+learned in F345: `drag(steps=40, hold=0.3)` — a grab that lingers,
+then a glide with real intermediate motion events. XDND is a
+*negotiation* between source and target that happens during the
+motion; teleporting the pointer gives the protocol no time to offer,
+enter, and accept. Receipt stack: KWrite's title flipped from
+`Untitled` to `hello_dnd.txt`, and the buffer showed the file's exact
+bytes. Also learned: KWrite doesn't ask move-vs-copy for a drop —
+dropping a file on an editor *opens* it; the copy/move/link popup is
+a file-manager convention, not a toolkit one.
+
+## F367 — the economy arc: a whole act with zero image reads
+
+The user named the real enemy: token burn. An audit of the previous
+arcs shows where the budget went — not into the acts but into the
+*perception dialect*: full-screen PNGs saved and re-read through the
+vision channel at every checkpoint, each one costing orders of
+magnitude more than a text read, most of them confirming things a
+title bar had already said. The official screenshot→reason→click loop
+has exactly this cost profile; the floor was built to beat it and the
+agent had drifted back into it out of habit.
+
+So this arc ran a complete GUI act — KWrite: new document, type a
+line, Ctrl+Shift+S, retarget the Save dialog by path, Return, verify
+— with **zero image reads**. Perception came entirely from
+`screen_observe` (window list + active + focus + actionable controls
+of the foreground window, the set-of-marks idea from UFO/OmniParser
+rendered as cheap text), and the final receipt came from the artifact
+floor (`open(path).read()` — bytes exact). The Save dialog never
+needed to be *seen*: its title announced itself in the window list
+and its filename field, buttons and file tree arrived as named
+controls.
+
+The perception ladder, priced: (1) window titles — near-free, and
+programs *narrate* through them (Untitled → Untitled * → filename);
+(2) `screen_observe` actions — one a11y scan, decision-ready text;
+(3) region OCR — pixels, but only the pixels that matter, returned
+as text; (4) full-frame vision — the last resort, for surfaces that
+draw everything and name nothing (F365's KCalc display). Rule of
+the arc: climb the ladder from the cheap end, and let a rung's
+*failure* — not habit — be the only thing that promotes you to the
+next one. Screenshots are for humans and for genuinely opaque
+surfaces; agents should read titles, trees and files.
+
+## F368 — pricing the ladder in bytes: even meaning has a bill
+
+Put numbers on F367's ladder, measured live on this desktop (six
+windows up, a file dialog's worth of controls in the foreground):
+
+    window titles (list_windows)     175 B
+    screen_observe() as JSON      26,324 B
+    region PNG (KCalc display)       224 B
+    full-frame PNG (1600x1200)   349,223 B
+
+Two corrections to the intuition. First, the gap between the rungs is
+even bigger than assumed — titles to full frame is 1:2000 in bytes,
+and the vision channel multiplies the image side further since a full
+frame costs thousands of vision tokens to *read* while 175 bytes of
+titles cost a few dozen. Second — the surprise — rung 2 is not free:
+one `screen_observe` of a busy foreground window (a KDE file dialog
+enumerates every file as ListItem *and* DataItem) weighs 26 KB, a
+tenth of a screenshot. Meaning has a bill too. So the discipline
+gains a clause: don't dump the observation raw into the record —
+project it (titles + the few controls relevant to the act), or cap it
+at the source (`max_actions`). And a genuinely opaque surface read as
+a *region* (224 B for KCalc's whole display) is cheaper than an
+unpruned semantic scan — the ladder orders channels by typical cost,
+but the real rule is narrower: pay for exactly the pixels or nodes
+the act needs, on whichever channel sells them cheapest.
+
+## F369 — screen_brief: the projection becomes a primitive
+
+F368 priced the flaw; this arc grew the fix. The discipline said
+"project the observation, don't dump it raw" — but a discipline that
+lives only in prose gets forgotten, so the floor now sells the
+projection as its own verb. `screen_brief()` renders one compact text
+block: every window title with geometry (`*` active, `!` opaque), then
+the foreground window's actionable controls deduplicated by
+(name,type), command-like types ranked before row types (a KDE file
+dialog lists every file as ListItem *and* DataItem; Save/Cancel/File
+name must not drown under them), unnamed controls dropped, capped at
+`max_controls`. Verified live against the same Save File dialog that
+cost 26 KB raw in F368: the brief is 474 bytes — titles-rung cost
+carrying rung-2 knowledge — and its control line put Save, Cancel and
+the filename Edit first, exactly the three things the act needed. The
+full `screen_observe` dict stays one call away for row-level work;
+the brief is the default checkpoint read. Pattern note for the
+series: an arc that only *measures* a flaw is half done — the lesson
+should condense into a primitive the next arc can lean on (measure →
+discipline → verb), with a regression pinning the projection rules.
+
+## F370 — rename by type-ahead: the brief has a blind tier, and that is fine
+
+First arc to *live* on the new verb: Dolphin, select `hello_dnd.txt`
+by type-ahead (F362's O(1) index, reused), F2, retype, Return — file
+renamed, receipt from `os.listdir`. Two truths surfaced. One: the
+brief before and after the rename is byte-identical — a rename
+happens below the control tier, so the cheap checkpoint literally
+cannot see it; the artifact floor isn't just cheaper than pixels
+here, it is the *only* witness. Checkpoint rungs have blind tiers,
+and pairing brief (structure) with an artifact read (state) covers
+both for under a kilobyte. Two: the brief's control line for Dolphin
+ranked "Save this search…", Stop, Scroll Left — chrome from toolbars
+that aren't even visible — above anything act-relevant, because
+(name,type) ranking knows *kind* but not *relevance*; the a11y tree
+happily lists controls with no on-screen presence. The projection cut
+26 KB to half a K but the half-K is not yet all signal. Next
+refinement when practice demands it: let geometry vote — a control
+whose rect is empty or outside its window's frame is furniture, not
+an offer.
+
+## F371 — geometry votes: a control without an extent is not an offer
+
+F370's demand, delivered. The reason Dolphin's brief was half
+furniture turned out to be crisp: AT-SPI lists the collapsed search
+toolbar's buttons ("Save this search…", Stop, the scroll arrows) with
+*no rect at all* — the toolkit itself is saying "this has no
+on-screen presence right now". So relevance needs no heuristic:
+geometry already votes. `screen_brief` now drops controls that carry
+no extent — with a truthful degrade, learned from the floor's own
+style: if *no* control in the window has a rect (a backend without
+extents), the filter stands down instead of blanking the observation.
+Live re-read of the same Dolphin window: the furniture is gone and
+the line fills with Back/Forward/Home/Split/Open Menu and the menubar
+— everything a hand could actually reach — at the same 469 bytes.
+Regression pins both branches. The quiet lesson: before inventing a
+relevance model, check whether the toolkit already told you — absence
+of geometry *is* the signal, the same way an empty title or a missing
+a11y tree were signals in earlier arcs. The floor's job is to listen,
+not to guess.
+
+## F372 — LibreCAD: engineering software speaks a command language — use it
+
+First CAD arc (installed via apt mid-arc). Three findings. One:
+`wait_title='LibreCAD'` never matched — the first window is a
+`Welcome` unit-picker dialog; the F363 title law generalises from
+"programs rename themselves" to "programs may not be the first
+window they show". The brief identified it and its OK button in one
+text read; `uia_invoke` cleared it. Two — the big one: CAD tools
+carry a *command language* under the GUI. Instead of aiming a mouse
+at a snap grid (pixel-precision work at vision prices), typing into
+LibreCAD's command widget — `line` ⏎ `0,0` ⏎ `100,50` ⏎ — placed the
+line with *exact* coordinates, keyboard-only. Engineering software is
+the friendliest territory on the desktop for an agent because
+precision input is a first-class citizen: AutoCAD dialects, FreeCAD's
+Python console, KiCad's scripting — always look for the text-command
+floor before driving the canvas. Three: the receipt is a *parseable
+artifact* — DXF is text; the saved file yields `AcDbLine 10=0 20=0
+11=100 21=50`, the drawn geometry byte-exact, no pixel ever read.
+The whole arc — install, first-run dialog, draw, save, verify —
+ran on brief checkpoints and artifact receipts alone.
+
+## F373 — htop in Konsole: driving system administration through a TUI
+
+The task class the user actually cares about — managing the machine
+itself — done through our floor: a runaway process (`sleep 987654`,
+planted) hunted and killed *through htop's UI*, not by a shell kill.
+Konsole retitled itself to `agentctl : htop — Konsole` (the F363 law
+again — `wait_title='htop'` matched only because matching is
+substring). htop is pure rung-4 territory for perception — a canvas
+of cells — but its *input* grammar is honest function keys: F4
+filter narrowed 200 rows to the one victim (filter-then-act, the
+F362 scope lesson in TUI form), F9 opened the signal menu, Return
+sent SIGTERM. No pixel was read at all: the receipt came from the
+process table itself — the victim's pid vanished from `pgrep` while
+a decoy planted by an earlier crashed attempt survived, which is
+exactly the discrimination a real assertion needs (the *right*
+process died, not just *a* process). Two session-hygiene lessons
+rode along: a crashed arc leaves live props behind (kill your decoys
+before re-running), and a TUI's state machine has no window titles
+to narrate progress — sequence timing (`sleep` between F-keys) is
+the only synchronisation, so pad it.
+
+## F374 — System Settings (QML): where the semantic floor thins, the ladder carries
+
+Changing the machine's own configuration — Night Color — through the
+GUI. KDE's System Settings is the first Qt *Quick* subject, and QML
+is where the semantic floor visibly thins: the sidebar search
+swallowed Ctrl+F typing without navigating, and the KCM's central
+checkbox surfaced in AT-SPI as `CheckBox ''` with no name and no
+rect — a node that exists but cannot be found, read, or invoked by
+meaning. Three rungs failed honestly (brief showed only chrome;
+Tab+Space toggled nothing; uia had no handle), so the ladder promoted
+exactly as designed: region OCR over the KCM's frame found the
+literal word "Activate" at (878,415), the checkbox lives one icon
+width to its left, one click + a *semantic* Apply (that button is a
+real QWidget with a name) flipped it — and `kwinrc [NightColor]
+Active=true` receipted it. Direct KCM launch (`systemsettings5
+kcm_nightcolor`) beat driving the QML search — the command line is
+the semantic entrance when the GUI's own navigation is opaque. And
+the arc cleaned up after itself: Night Color *tints every pixel on
+the screen*, which would quietly poison every later pixel-rung arc —
+a state change whose blast radius crosses arc boundaries must be
+reverted (receipt: Active back to unset).
+
+## F375 — KMines: a painted board narrates through its status bar
+
+Second game arc, first board game. KMines splits cleanly along the
+F201 line: chrome is semantic (menus, New, difficulty combo all named
+in the brief) but the minefield is one painted QWidget — rung-4
+territory. Two working mistakes taught the geometry lessons. First,
+`capture_patch` takes *inclusive corners* `(minx,miny,maxx,maxy)`,
+not `(x,y,w,h)` — passing width/height silently produced a 1-pixel
+patch and a `region_diff` of `0/1`, a diagnosis that looked like "the
+click did nothing" when actually the *camera* was wrong; when a diff
+says nothing changed, first check what the patch actually framed
+(`total` tells you). Second, the board does not fill the window — the
+grid floats centered with a wide margin, so window-relative guesses
+landed on wallpaper; one region capture of the window calibrated the
+cell grid (36px cells, origin at +165,+88) and every later click
+landed. The receipt rung is the discovery: KMines *narrates through
+its status bar* — `Mines: 0/10` → `Mines: 1/10` around a right-click
+flag, read by a 200x25 OCR strip for a few hundred bytes. Painted
+games usually keep a text ledger somewhere on their own surface;
+find the ledger and you get artifact-floor-grade receipts without
+ever diffing the canvas.
+
+## F376 — print to PDF: the print pipeline is an artifact factory
+
+The printing workflow, end to end: KWrite, Ctrl+P, Qt's print dialog
+— which arrived *already* aimed at "Print to File (PDF)" on a
+printerless machine, a sensible default worth knowing (no printer ==
+file output preselected, nothing to switch). The dialog is honest
+QWidget territory: the brief named the Output file edit, Print and
+Cancel; `uia_find` gave the edit's rect, one click + Ctrl+A + retype
+retargeted it, semantic Print fired it. The receipt is the arc's
+point: a printed PDF is not an opaque blob — `pdftotext` recovered
+the document body byte-comparably (`economy of perception: text
+first, pixels last` on line 7, after KWrite's date/filename header
+furniture), so print-to-file turns *any* app's rendered view into a
+parseable artifact. That generalises: when an app has no Save As and
+no scriptable export, the print pipeline is a universal artifact
+factory — every GUI toolkit ships one, it always writes a file, and
+PDF yields to text tools. (Corollary bagged en route: `pdftotext`
+lives in poppler-utils, not installed by default.)
+
+## F377 — Inkscape: vector editors save their canvas as prose
+
+First GTK creative-suite arc. Three grounds walked. One: the welcome
+dialog ("Quick Setup / Time to Draw") is GTK's thin-a11y counterpart
+of F374's QML — its tabs enumerate with *no rects*, so the F371
+furniture rule correctly hid them from the brief; Escape dismissed
+the whole dialog, which is often the cheapest verb a first-run
+screen accepts. Two: the act itself is single-key-tool + drag —
+`r` arms the rectangle tool, one `drag()` across the canvas draws
+it — and the title bar narrated the whole lifecycle unprompted
+(`Inkscape 1.1` → `New document 1` → `*New document 1` → 
+`f377_rect.svg`), the dirty-star convention from KWrite (F367)
+holding across toolkits. Three, the receipt: an SVG is XML — the
+saved file contains `<rect width="123.9" height="82.6"
+x="23.9" y="102.0">`, the drawn geometry *as prose*, exact to the
+drag delivered (300x200 px at 96dpi ≈ 79x53mm... in user units,
+proportions matching the gesture). Vector editors join CAD (F372)
+in the friendliest class: the document *is* a text artifact, so
+verification never needs the canvas. GTK save dialogs accept a full
+absolute path typed straight into the Name field — no tree walking.
+
+## F378 — the browser arc that indicted the floor: silent degrade lies
+
+Goal: read a web page through the OS floor alone — navigate by
+omnibox paste (the founding F003 atomic-paste primitive still
+holds), select-all, copy, receipt from clipboard bytes. Navigation
+worked; the copy read came back as the planted sentinel, then as
+empty — for *five diagnoses in a row* the evidence pointed at Chrome
+(focus? selection? ownership?), and clicking a link even navigated,
+proving input was landing. The real culprit was the floor itself:
+`get_clipboard` shells out to `xclip`, xclip was not installed on
+this fresh VM, and the code *silently fell back to the local cache*
+— returning stale sentinel or '' with a straight face. One
+`apt-get install xclip` later the same act produced the page's full
+text in one read. The lesson outranks the arc: a perception verb
+that cannot reach its ground must say so, not answer from memory —
+a silent fallback converts an environment defect into a phantom
+application bug and taxes the investigation at the most expensive
+rung (five acts spent chasing Chrome). Degrade honestly: raise, or
+tag the answer as cached. Also bagged: Chrome never grants PRIMARY
+(drag-select reads empty there), so on browsers only CLIPBOARD via
+Ctrl+C is real; and page text via select-all is itself a rung-2-
+priced read of an otherwise canvas-priced surface.
+
+## F379 — the clipboard read goes native: honor the zero-dependency oath
+
+F378's indictment condensed into code the same day, the F369 pattern
+(measure → discipline → verb) applied to a defect instead of a cost.
+`get_clipboard` no longer needs xclip: `_sel_read` speaks the X
+selection protocol itself — XConvertSelection asks the current owner
+to write the text into a property on a scratch window, a short poll
+reads it back, UTF8_STRING tried before XA_STRING. This is the read
+the floor's own header always promised ("no third-party deps on
+either ground") — the *serve* side (`_clip_serve`) was already
+native, only the read side had quietly leaned on an external binary,
+and that lean is exactly where F378's silent lie lived: the
+fallback-to-cache now triggers only when the native path *and* xclip
+both fail, i.e. approximately never, instead of whenever a fresh VM
+lacked a package. Verified against both owners in play: KWrite's
+copy and Chrome's copy both arrive through the native read
+byte-identical to the xclip route. Dependency lesson, stated once:
+every subprocess call in a perception verb is a hidden environment
+assumption, and each one converts a missing package into a wrong
+answer somewhere down the line. The floor should speak protocols,
+not shell out to strangers.
+
+## F380 — the development loop: editor, terminal, artifact — three floors, one act
+
+Project development as the user does it: write code in an editor,
+run it in a terminal, believe the output. KWrite took the source by
+`type_unicode` (46 lines/sec of exact text, no autocomplete races),
+the Save dialog was retargeted by typed path as in F367, and the
+title flip to `f380_build.py — KWrite` plus a byte-compare of the
+saved file receipted the *edit* half. Konsole took the *run* half:
+`konsole --workdir` spawns pre-aimed (one less `cd`), and a single
+typed line ran the program. The receipt chain is the lesson: the
+program itself wrote `f380_out.json`, so the assertion read *the
+program's own artifact* — `{'msg': 'built by the floor', 'n': 5050}`,
+where 5050 = sum(range(101)) proves the code *executed* rather than
+merely existed (a copy-paste of intended output could not know it).
+Development is the friendliest domain of all: every step already
+deposits text artifacts (source file, exit status, output file), so
+the whole loop runs at rung 1-2 prices, and the terminal's title
+(`~ : bash — Konsole`) even narrates the shell's cwd. The floor
+that took a screenshot here would be paying for theatre.
