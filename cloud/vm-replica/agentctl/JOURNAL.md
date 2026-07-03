@@ -11547,3 +11547,23 @@ the brief is the default checkpoint read. Pattern note for the
 series: an arc that only *measures* a flaw is half done — the lesson
 should condense into a primitive the next arc can lean on (measure →
 discipline → verb), with a regression pinning the projection rules.
+
+## F370 — rename by type-ahead: the brief has a blind tier, and that is fine
+
+First arc to *live* on the new verb: Dolphin, select `hello_dnd.txt`
+by type-ahead (F362's O(1) index, reused), F2, retype, Return — file
+renamed, receipt from `os.listdir`. Two truths surfaced. One: the
+brief before and after the rename is byte-identical — a rename
+happens below the control tier, so the cheap checkpoint literally
+cannot see it; the artifact floor isn't just cheaper than pixels
+here, it is the *only* witness. Checkpoint rungs have blind tiers,
+and pairing brief (structure) with an artifact read (state) covers
+both for under a kilobyte. Two: the brief's control line for Dolphin
+ranked "Save this search…", Stop, Scroll Left — chrome from toolbars
+that aren't even visible — above anything act-relevant, because
+(name,type) ranking knows *kind* but not *relevance*; the a11y tree
+happily lists controls with no on-screen presence. The projection cut
+26 KB to half a K but the half-K is not yet all signal. Next
+refinement when practice demands it: let geometry vote — a control
+whose rect is empty or outside its window's frame is furniture, not
+an offer.
