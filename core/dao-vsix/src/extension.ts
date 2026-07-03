@@ -5322,10 +5322,44 @@ function bridgeEffectiveToken(): string {
 }
 // 最近一次「实测有效」采纳的公网配对(URL+Token 同源成对) — 发布/签名/生成文档的单一真相源。
 let _bridgePublishedPair: { url: string; token: string; source: string } | null = null;
+// 帛书·「令牌不系于地址」根治: 常驻桥(daobridge)发布 conn.json 时 url 常为空("")—隧道 URL 由
+//   其独立 cloudflared 侧另行持有—但 token 字段(即 /api/exec 真验源)恒在。旧 bridgeReadPublishedConn
+//   以「无有效 url 即整条丢弃」→ 连同 token 一并弃, 致 checkAuth 拿不到桥牌、云端持桥牌恒 401。
+//   故令牌解析须与地址解耦: 独立扫 conn.json / connection.json / cf-hub-conn.json 的 token 字段
+//   (无视 url 空否)及权威 bridge/auth-token 明文, 取最新鲜一枚。此乃「一枚令牌贯通全 /api 面」之本。
+function bridgeReadPublishedToken(): string {
+    const cands = [
+        path.join(BRIDGE_DIR, 'conn.json'),
+        path.join(BRIDGE_DIR, 'connection.json'),
+        path.join(os.homedir(), '.dao', 'cf-hub-conn.json'),
+    ];
+    let bestTok = '';
+    let bestMtime = -1;
+    for (const f of cands) {
+        try {
+            const st = fs.statSync(f);
+            const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+            const t = String((j && j.token) || '').trim();
+            if (t && t.length >= 16 && (Date.now() - st.mtimeMs) < BRIDGE_CONN_FRESH_MS && st.mtimeMs > bestMtime) {
+                bestTok = t; bestMtime = st.mtimeMs;
+            }
+        } catch { /* 守柔 */ }
+    }
+    // 权威明文令牌文件(常驻桥恒写): 若较上更新鲜则采纳。
+    try {
+        const f = path.join(BRIDGE_DIR, 'auth-token');
+        const st = fs.statSync(f);
+        const t = fs.readFileSync(f, 'utf8').trim();
+        if (t && t.length >= 16 && (Date.now() - st.mtimeMs) < BRIDGE_CONN_FRESH_MS && st.mtimeMs > bestMtime) {
+            bestTok = t; bestMtime = st.mtimeMs;
+        }
+    } catch { /* 守柔 */ }
+    return bestTok;
+}
 function bridgePublishedConnToken(): string {
     try {
-        const pub = bridgeReadPublishedConn();
-        if (pub && pub.token && pub.ageMs < BRIDGE_CONN_FRESH_MS) return String(pub.token);
+        const t = bridgeReadPublishedToken();
+        if (t) return t;
     } catch { /* 守柔 */ }
     return '';
 }
