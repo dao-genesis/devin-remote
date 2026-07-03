@@ -13636,3 +13636,31 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
         makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, fwdHeaders, false);
     });
 }
+
+// ═══════════════════════════════════════════════════════════
+// 帛书·「自知者明」— 反向注入·单一权威(得一)回归自测种子。
+//   仅当 DAO_SELFTEST=1 时暴露内部纯函数与状态注入口, 供无 vscode/无网络的 node 单测直接校验:
+//   多实例·多令牌·他者桥污染场景下, checkAuth/effective*/resolve/签名/MCP端点是否恒守同源一对。
+//   生产运行(activate 路径)绝不触及此分支 → 零副作用。
+// ═══════════════════════════════════════════════════════════
+if (process.env.DAO_SELFTEST === '1') {
+    (module as any).exports.__selftest = {
+        checkAuth,
+        bridgeMachineToken,
+        bridgeAuthoritativeToken,
+        bridgeEffectiveUrl,
+        bridgeEffectiveToken,
+        bridgeCurrentSig,
+        daoResolveMcpEndpoint,
+        cfLogHasRateLimit,
+        bridgeIsLeaderInstance,
+        bridgeMachinePort,
+        bridgeReadPublishedToken,
+        setState(s: { ws?: any; bridgeUrl?: string; bridgeToken?: string }) {
+            if (s.ws) ws = s.ws;
+            if (typeof s.bridgeUrl === 'string') bridgeUrl = s.bridgeUrl;
+            if (typeof s.bridgeToken === 'string') bridgeToken = s.bridgeToken;
+        },
+        paths: { DAO_DIR, DAO_CONN_CURRENT, BRIDGE_DIR, DAO_MCP_PUBLIC_FILE, CF_LOG },
+    };
+}

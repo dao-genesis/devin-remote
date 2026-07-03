@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "3.50.72",
+  "version": "3.50.73",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -793,7 +793,8 @@
   },
   "scripts": {
     "vscode:prepublish": "node ./build.js",
-    "compile": "node ./build.js"
+    "compile": "node ./build.js",
+    "test": "node ./build.js && node test/reverse-inject.test.js && node test/multi-instance.sim.js"
   },
   "devDependencies": {
     "@types/node": "^25.9.2",
