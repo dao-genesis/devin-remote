@@ -419,6 +419,26 @@ let KEY = "";
     ok("裁史: 单轮帧不变(幂等)", msgCount(_trimFrameHistory(single)) === 1);
     ok("裁史: 坏帧回退原 body 不崩", _trimFrameHistory(Buffer.alloc(0)).length === 0);
 
+    // 万模归一 retarget: field21=modelUid / field14=modelName 复用前改成本次请求真档
+    //   (免费帧缺失回退付费帧时, 若不改档上游按付费档跑 → 配额/internal error 之真因)
+    const { _retargetFrameModel, _frameModelInfo } = SRC;
+    const warmFrame = frameOf(
+      Buffer.concat([
+        strF(14, "GLM-5.2"),
+        strF(21, "glm-5-2"),
+        wrap(3, Buffer.concat([varF(2, 1), strF(3, "hi there")])),
+      ]),
+    );
+    ok("retarget前: 帧档=付费 glm-5-2", _frameModelInfo(warmFrame).modelUid === "glm-5-2");
+    const rt = _retargetFrameModel(warmFrame, "kimi-k2-7");
+    ok("retarget: field21(modelUid)→请求真档", _frameModelInfo(rt).modelUid === "kimi-k2-7");
+    ok("retarget: field14(modelName)一并同档", _frameModelInfo(rt).modelName === "kimi-k2-7");
+    ok("retarget: 正文(末条 user)保形不损", lastContent(rt) === "hi there");
+    ok("retarget: 输出帧可解析", require("../../bundled-origin/source.js")._test._pbParseOk(parseFrames(rt)[0].payload));
+    ok("retarget: 同档幂等(字节不变)", Buffer.compare(rt, _retargetFrameModel(rt, "kimi-k2-7")) === 0);
+    ok("retarget: 空档不改(回退原帧)", Buffer.compare(warmFrame, _retargetFrameModel(warmFrame, "")) === 0);
+    ok("retarget: 坏帧不崩回退", _retargetFrameModel(Buffer.alloc(0), "x").length === 0);
+
     // 回包解码: Connect end-stream 帧(gzip)载 JSON quota 错误 → parseFrames 解压 + JSON.parse 取 error
     const zlib = require("zlib");
     const errJson = JSON.stringify({ error: { code: "failed_precondition", message: "Your daily usage quota has been exhausted." } });

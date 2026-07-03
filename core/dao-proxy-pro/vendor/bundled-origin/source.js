@@ -7351,6 +7351,33 @@ function _swapLastUserMsg(capturedBody, newText) {
   return buildFrame(0, swapped);
 }
 
+// 帧档 retarget(万模归一·原汤化原食): 捕获帧顶层 field21=modelUid / field14=modelName
+//   恒钉预热那一档(如付费 glm-5-2)。免费档请求在缺免费帧时回退复用付费帧, 若不改档,
+//   上游按帧内付费档跑 → 配额耗尽 / internal error(实证 kimi-k2-7 回退 glm-5-2 恒败之真因)。
+//   正法: 复用前把 field21 retarget 成本次请求真档 → 任一捕获帧即成「万模通用模板」
+//   (换正文 + 换档 = 任意模型可复用)。field14 展示名一并同档, 免上游据旧名二次判档。
+//   仅当帧内档与目标档不同才改; 解析/序列化失败回退原帧(宁稳勿崩)。
+function _retargetFrameModel(frameBody, modelUid) {
+  if (!modelUid) return frameBody;
+  try {
+    const frames = parseFrames(frameBody);
+    if (!frames.length) return frameBody;
+    const payload = frames[0].payload;
+    const top = parseProto(payload);
+    const cur =
+      top[21] && top[21][0] && top[21][0].w === 2 && top[21][0].b
+        ? Buffer.from(top[21][0].b).toString("utf8")
+        : null;
+    if (cur === modelUid) return frameBody; // 已同档·无需改
+    const uidBuf = Buffer.from(String(modelUid), "utf8");
+    top[21] = [{ w: 2, b: uidBuf }];
+    if (top[14] && top[14][0] && top[14][0].w === 2) top[14] = [{ w: 2, b: uidBuf }];
+    const reser = serializeProto(top);
+    if (reser && reser.length && _pbParseOk(reser)) return buildFrame(0, reser);
+  } catch (_) {}
+  return frameBody;
+}
+
 // 去污染(实证·2026-07): 预热帧本携「预热对话整段历史」(field3 repeated, msgCount 可达十数条),
 //   官方直通复用时若原样带上, 云端把每次反代请求当作预热会话的续轮 → 回包被预热旧轮次串染,
 //   甚至可被 "复述上文" 类提问套出整段预热历史(隔离/隐私缺陷)。故复用前把消息数组裁成仅留末条
@@ -7489,6 +7516,13 @@ function _officialChatReplay(target, norm, sink) {
       if (_rc && _rc.isolatePrompt === false) _isolate = false;
     } catch (_) {}
     if (newBody && _isolate) newBody = _isolateChatFrameSP(newBody);
+    // 万模归一: 把复用帧的模型档 retarget 成本次请求真档(免费帧缺失回退付费帧时尤要),
+    //   令付费捕获帧成为任意(免费)模型通用模板, 不再冒付费档跑致 internal error。
+    try {
+      const wantUid =
+        target && (target.upstreamModel || target.modelUid || target.model);
+      if (newBody && wantUid) newBody = _retargetFrameModel(newBody, wantUid);
+    } catch (_) {}
     if (!newBody) {
       sink.onError &&
         sink.onError("官方直通: 捕获帧解析失败, 请重新预热一次官方对话");
@@ -8628,6 +8662,8 @@ module.exports = {
     _pbRebuildField,
     _swapLastUserMsg,
     _trimFrameHistory,
+    _retargetFrameModel,
+    _frameModelInfo,
     _pbKeepLastRepeated,
     _isolateChatFrameSP,
     _findMsgsArray,
