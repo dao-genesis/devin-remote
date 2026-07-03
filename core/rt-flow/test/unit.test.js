@@ -1099,6 +1099,20 @@ function test(name, fn) {
     } finally { server.close(); cloud.configure({ apiBase: prev.base, streamRetryDelayMs: prev.srd }); }
   });
 
+  // ── 切号激活决策 resolveSwitchActivation (注入降级 · 止 no-active 空转) ──────
+  console.log("\n[resolveSwitchActivation]");
+  test("注入成功 → 激活·不降级 (Windows 正常路径·行为不变)", () => {
+    assert.deepStrictEqual(cloud.resolveSwitchActivation(true, true), { activate: true, degraded: false });
+    // 注入成功即激活, tokenVerified 与否不改变结果
+    assert.deepStrictEqual(cloud.resolveSwitchActivation(true, false), { activate: true, degraded: false });
+  });
+  test("注入失败但 token 有效 → 仍激活·降级 (headless/Linux · 止 _tick 空转)", () => {
+    assert.deepStrictEqual(cloud.resolveSwitchActivation(false, true), { activate: true, degraded: true });
+  });
+  test("注入失败且 token 无效 → 不激活 (真失败·不误激活无效号)", () => {
+    assert.deepStrictEqual(cloud.resolveSwitchActivation(false, false), { activate: false, degraded: false });
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
