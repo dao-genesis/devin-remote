@@ -116,6 +116,20 @@ TOOLS = {
     'vm_restore':      ('vm.restore',      'Restore a VM profile snapshot by tag (tag required).',
                         *(_vm({'tag': {'type': S}, 'path': {'type': S}}, req=False))),
     'vm_snapshots':    ('vm.snapshots',    'List snapshot tags for a VM.', *(_vm())),
+    # --- Stealth / Silent mode (太上下知有之): zero-footprint when idle ---
+    'host_hibernate':  ('host.hibernate',  'Enter STEALTH/SILENT mode: gracefully tear down ALL VM activity (logoff+delete created accounts, kill mstsc windows, unregister inner-agent tasks, revert termsrv.dll multi-session patch, clean temp files). The user\'s machine returns to its PRISTINE daily state with ZERO visible/detectable footprint. The host daemon stays running (invisible) to accept host.wake. Attached (user-owned) sessions are only detached, never logged off.',
+                        {}, []),
+    'host_wake':       ('host.wake',       'Wake from stealth/hibernate: re-enable multi-session (adapts to the detected Windows edition) and ready the stack for vm.create. Does NOT auto-create any VMs.',
+                        {}, []),
+    'host_stealth_status': ('host.stealth_status', 'Report current stealth state + full system footprint: mode (active/hibernating), idle seconds, active VMs, live mstsc windows, dao_agent scheduled tasks, detected Windows edition/build, sessions, and a footprint verdict (zero/non-zero). Use to VERIFY the system is truly invisible when idle.',
+                        {}, []),
+    'host_stealth_config': ('host.stealth_config', 'Configure auto-hibernate: stealth_auto (bool, auto-hibernate when idle), stealth_idle_timeout (int seconds), cleanup_temp_on_hibernate (bool).',
+                        {'stealth_auto': {'type': 'boolean'}, 'stealth_idle_timeout': {'type': I},
+                         'cleanup_temp_on_hibernate': {'type': 'boolean'}}, []),
+    'host_cleanup':    ('host.cleanup',    'Remove leftover temp files (start_*.bat launchers) in C:\\dao_vm\\ without hibernating.',
+                        {}, []),
+    'host_os_info':    ('host.os_info',    'Detect the host Windows edition (Home/Pro/Enterprise/Server/LTSC), version, and build \u2014 for universal-adaptation diagnostics.',
+                        {}, []),
 }
 
 def tool_schema():
