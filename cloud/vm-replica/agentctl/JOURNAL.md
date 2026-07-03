@@ -10930,3 +10930,423 @@ frozen after Space (pause), 15% again after Space (resume). The lesson
 worth keeping: for continuous media the pixel floor's assertion is
 *temporal* — two captures and a diff turn 'is video actually rendering'
 into a number, and pause/resume becomes a crisp three-beat proof.
+
+## F336 — Okular: the document knows its own page
+
+PDF-viewer domain, fresh VM (this arc also re-proved the restore recipe:
+clone branch, symlink agentctl, apt python3-pil/gi/atspi, pip numpy for the
+pyenv interpreter — suite green first run). Okular's chrome is deeply
+semantic: 339 nodes, every menu action named (Find Next, Go to Page...).
+The arc: Ctrl+F, type_unicode the needle, Return — viewer jumps to page 2
+with the match highlighted (1.8% pixel diff on the content ROI confirms
+the jump). Two gaps surfaced and worth remembering: (1) Qt spin boxes
+(the page field) expose ctype='Edit' with an *empty* name and no value —
+uia_text(name=...) can't address them, so the numeric receipt came from
+ocr_text over the spin-box rect ('2' of '3'); (2) ocr_text is an optional
+extension — a bare box needs tesseract-ocr installed before the floor's
+perception is complete. Semantic verbs, pixel confirmation, OCR for the
+one number the tree refuses to speak.
+
+## F337 — Ark: the menu item that says yes but does nothing
+
+Archive-manager domain. The entry table is fully semantic — crane.txt /
+turtle.txt appear as named nodes, and the verb list is rich (Extract All,
+Extract To..., Quick Extract To...). The trap: uia_click('Extract To...')
+returned True yet no dialog appeared — the name matched a *menu item
+inside a closed menu*; AT-SPI happily 'clicks' it without the menu being
+posted, a silent no-op with a truthful return code. The fix was to press
+the visible toolbar Extract button by geometry, which posted a real
+'Extract — Ark' dialog; there Ctrl+L (KDE file-dialog location bar) +
+type_unicode set the destination, and the semantic Extract button
+finished the job. Ground truth on disk: f337_out/f337_arc/{crane,turtle}
+.txt with exact bytes. Lesson: a True from uia_click on a menu-item name
+is not a receipt — insist on a state change (new window, pixel diff, or
+disk) before believing it.
+
+## F338 — Audacity: give the app an ear before asking it to sing
+
+Audio-editing domain, and the first arc where the *machine itself* was the
+missing piece: a bare VM has no sound device, and Audacity greets that
+with a modal assertion (AudioIOBase.cpp getPlayDevIndex) that reappears
+faster than Continue can dismiss it. The floor fix is environmental, not
+UI: pulseaudio --start + module-null-sink + a two-line ~/.asoundrc
+(pcm/ctl !default pulse) gives PortAudio a device, and Audacity boots
+clean. From there the arc is textbook dual-floor: Generate > Tone... (all
+semantic; wx menus *do* post submenus on uia_click, unlike Ark's closed
+QMenu), OK for the default 440 Hz/30 s sine, File > Export — where the
+submenu needed a VK_RIGHT nudge to post before 'Export as WAV' became
+clickable — filename typed into the export dialog, metadata OK'd. Ground
+truth beyond pixels: the WAV on disk FFTs to a 440.0 Hz peak, mono,
+44.1 kHz, 30.0 s, amplitude 0.8 — the tone Audacity promised, byte-provable.
+
+## F339 — Dia: a silent tree, a talkative file
+
+Diagramming domain, and the starkest split yet: Dia (GTK2) exposes zero
+AT-SPI nodes — uia_find_all returns an empty tree, so the entire session
+is pixel geometry: palette clicks (Flowchart box at (18,287), diamond at
+(82,287)), drags on the canvas to size each shape, type_unicode straight
+into the diamond's in-place text cursor. The pixel receipt is honest but
+thin (0.64% ROI diff — line art is sparse). The real proof lives on disk:
+Ctrl+Shift+S posts a GTK Save dialog that *does* accept a full typed path,
+and the saved .dia is gzip'd XML naming exactly the truth — object types
+'Flowchart - Box' and 'Flowchart - Diamond', the 'decide' label embedded.
+When the accessibility floor is void, the artifact format is the semantic
+floor: parse what the app writes, not what it paints.
+
+## F340 — KAlgebra: the calculator answers in the tree, the graph answers in ink
+
+Math-tool domain, richly semantic (501 nodes). Calculator floor: click the
+expression Edit, type 6*7, Return — the result '42' lands as a *named
+AT-SPI node*, the cleanest receipt an app can give. Graph floor: the 2D
+tab's function Edit takes sin(x)*x, Return plots it (1.4% ROI diff), and
+the function list echoes 'sin(x)*x' as a checked row. Verifying the *math*
+from pixels taught a calibration humility: mapping data coords to screen
+px from the axis labels (±12.3485, ±10) missed the curve's analytic peak
+by ~25 px — axis-label-based calibration accumulates error from margins
+and label anchoring; column-scanning for the curve found it at y≈240 vs
+predicted 193. The zero-crossing at x=π *did* verify (curve pixel on the
+axis where x·sin x = 0). Lesson: pixel-verify invariants that are robust
+to calibration (zero crossings, symmetry, existence), not fine amplitudes
+— or calibrate from two known curve points, not from axis chrome.
+
+## F341 — KReversi: glossy art lies to single pixels
+
+Board-game domain with an adversary. Chrome is semantic (Start game
+button, live 'ubuntu: N / Computer: N' score labels, turn indicator), the
+board is pure pixels. First board read failed instructively: sampling one
+center pixel per cell counted 1 black vs the semantic 3 — KReversi's
+discs are *glossy*, and the specular highlight at a black disc's center
+reads bright. Fix: 11x11 sparse-patch majority vote per cell (>35%
+dark/bright), which reproduced the semantic score exactly. From the
+patch-read board a 20-line reversi engine (scan 8 directions, count
+flips) picked greedy moves and played 5 turns against the Easy AI —
+each move confirmed by the score labels ticking and the re-read board
+agreeing with the count (final 9–5, engine leading). Lesson: on rendered
+game art, classify regions, never points; and when an app publishes its
+own score semantically, use it as the referee for your pixel model.
+
+## F342 — Okteta: overwrite mode is a typed conversation with bytes
+
+Hex-editor domain. Okteta's tree is enormous (3088 nodes) and the status
+bar speaks live — 'Offset: 0000:0000', 'OVR' — so cursor state is
+semantically readable at every step. The arc: click the first hex cell,
+type '4a' (OVR mode consumes two nibbles and advances), Ctrl+G posts the
+Go-to-Offset dialog, type '20', Return, type '5a', Ctrl+S. Ground truth
+from xxd: byte 0 flipped 48→4A (H→J) and byte 0x20 flipped 45→5A (E→Z),
+nothing else disturbed — a byte-exact receipt for four keystrokes of
+payload. Notable floor detail: hex editing needed no uia_click at all;
+the whole edit was keyboard-shaped (cell click for caret, then nibbles +
+shortcuts), and the semantic layer served as the *witness* (offset label
+ticking 0000:0001 after the first byte) rather than the actor. Apps with
+modal-free, keyboard-first editing are the easiest citizens of the floor.
+
+## F343 — FreeCAD: parametric CAD speaks XML through a zip
+
+First heavy engineering arc (3D modeling, OpenCASCADE floor, 253 MB of
+apt). Launch quirk: osctl.launch hit a BadWindow X error racing FreeCAD's
+splash window (the wait_title match found a window that died before
+ConfigureWindow) — re-listing and re-acquiring the real main window
+recovers cleanly; splash screens are a launch-time hazard worth a retry
+loop. From there the whole arc stayed semantic: workbench ComboBox lists
+all 23 workbenches as ListItems (pick 'Part'), menu Part > Primitives >
+Cube posts fine on click-hover-click, and the new Cube lands in the model
+tree as a named node. The parametric heart: select Cube, the property
+grid exposes Length/Width/Height as DataItems; clicking the value cell,
+Ctrl+A, '30', Return re-dimensions the solid live (viewport stretches
+visibly). Ctrl+S posts the save dialog which accepts a full typed path.
+Ground truth: .FCStd is a zip — Document.xml inside carries
+Length=30, Width=10, Height=10 exactly as typed. CAD's artifact floor is
+the most articulate yet: the parametric model is *text*, and the GUI is
+just one editor of it.
+
+## F344 — KiCad: a PCB is an s-expression you edit through a viewport
+
+PCB/EDA domain, the user-named engineering target. First-run friction is
+its own floor: KiCad 6 greets a fresh box with two modal gates (settings
+migration, then global footprint-library-table setup) — both fully
+semantic, both cleared with a named OK. Project creation (Ctrl+N, typed
+/tmp path) lays down .kicad_pro/.kicad_sch/.kicad_pcb immediately. The
+PCB editor arc leaned on hotkey verbs, which wx exposes without any
+tree support needed: 'a' posts the Choose Footprint dialog (12,229 parts;
+typed filter 'R_0805_2012Metric', Return picks the top hit), a canvas
+click drops R1, 'x' routes a two-click track, Ctrl+S. Ground truth is the
+best kind — .kicad_pcb is a plain-text s-expression, and it now contains
+(footprint "Resistor_SMD:R_0805_2012Metric" (at 147.32 91.44)) plus two
+(segment ...) entries, exactly the actions performed. EDA tools share
+CAD's virtue: the artifact is source code, so every GUI gesture can be
+code-reviewed after the fact.
+
+## F345 — SuperTux: real-time games sample keys, they don't queue them
+
+First real-time action game (SDL2/OpenGL, zero AT-SPI nodes — the pixel
+floor is the only floor). The arc's defining flaw: instantaneous
+XTest taps (press+release in the same instant) are *lost* — the SDL event
+loop polls keyboard state per frame, and a zero-width press falls between
+frames. Menu Return did nothing three ways (tap, click on the item, tap
+after refocus) until tap(vk, hold=0.12) — a held press spanning several
+frames — activated Start Game instantly. Everything downstream obeyed the
+same law: hold-taps drove menu -> Story Mode -> skip intro -> worldmap ->
+level entry, and key_hold(Right, 1.2s)+held-space jumps ran Tux through
+Antarctica, HUD coin counter ticking 100 -> 101 (OCR needs the widest
+ROI; the count renders right-edge-anchored). Event-queue GUIs (Qt/GTK)
+buffer keystrokes; game loops *sample* them. Duration is not a nicety in
+the game domain — it is the difference between an event existing and not.
+
+## F346 — LibreOffice Calc: the spreadsheet floor is a keyboard grid
+
+Office domain. Surprise on the semantic floor: LibreOffice Calc exposes
+*zero* AT-SPI nodes here (its a11y bridge doesn't register the way KDE/Qt
+apps do), so despite being the archetypal "rich widget" app it behaves
+like a game engine for our purposes — keyboard-first, pixels as witness,
+artifact as truth. And keyboard-first is enough: the grid is itself an
+addressing scheme. Typed '5' Enter '7' Enter '=SUM(A1:A2)*3' Enter,
+Ctrl+S, typed /tmp/f346.ods into the Save dialog, Return through the
+Keep-format prompt. The .ods artifact (another XML-in-zip) carries the
+whole receipt: content.xml holds of:=SUM([.A1:.A2])*3 with
+office:value="36" — the formula *and* the app's own evaluation of it,
+5+7=12, x3=36 confirmed. Office files echo CAD/EDA: artifact-as-source.
+Lesson: never assume the semantic floor from an app's pedigree; probe it,
+and when it's empty, the artifact floor usually pays double.
+
+## F347 — GIMP: zoom is a coordinate transform, and the artifact proves it
+
+Raster-graphics domain. GIMP too exposes zero AT-SPI nodes (GTK2-era
+a11y), so the arc ran keyboard+pixels: Ctrl+N, Return through the New
+Image dialog (1920x1080 default), 'r' for rectangle-select, a 400x250
+screen drag, Ctrl+, to fill with FG black, Shift+Ctrl+E export, typed
+/tmp/f347.png, Return through the PNG options dialog. Screen sampling
+confirmed the fill live (region mean 0,0,0 inside vs 255,255,255
+outside). The artifact delivered the elegant receipt: the canvas was
+displayed at 50% zoom, and the exported PNG contains *exactly* 400,000
+black pixels — an 800x500 rectangle, the 400x250 screen drag doubled
+through the zoom transform. Every canvas app has this hidden scale
+factor between screen gesture and document coordinates; the artifact
+floor is where you find out whether you accounted for it. Also caught a
+self-API paper cut: sample_color takes (bbox) not (x,y) — misremembering
+one's own toolkit is a flaw class regression tests can't catch, only use.
+
+## F348 — Dolphin: file management is the rare arc where all floors agree
+
+Everyday file-manager domain. Dolphin is what the semantic floor was
+made for: 315 nodes, and every file is a named clickable citizen
+(note.txt found by name, folders too). The arc walked the daily verbs —
+F10 New Folder (modal, typed 'outbox'), F2 rename (inline editor,
+Ctrl+A + typed 'renamed.txt'), Ctrl+C on the file, double-click into
+outbox by its tree node rect, Ctrl+V — and after each verb os.path gave
+an instant, binary verdict: outbox created, renamed.txt present +
+note.txt gone, copy landed in outbox with source intact. No OCR, no
+pixel diffing, no zip parsing: when the app's whole job *is* the
+filesystem, the artifact floor is the filesystem, and verification cost
+rounds to zero. The healthy pattern to reuse: semantic to act (find by
+name, click), artifact to judge (stat the path), pixels not needed at all.
+
+## F349 — Konsole: the terminal is a GUI wrapper around the artifact floor
+
+Terminal-emulator domain. Konsole's chrome is semantic (251 nodes: tabs,
+menus, scrollbar) but the terminal *content* is not — the character grid
+exposes no AT-SPI text nodes, so what looks like the most text-native
+app on the desktop is, to the tree, a black pixel rectangle. The arc
+typed a live command through XTest ('echo $((6*7)) > /tmp/f349_out.txt
+&& date', Return) and the artifact floor answered instantly: the file
+holds 42. That loop — GUI keystrokes in, filesystem receipt out — makes
+terminals the easiest possible app to *drive* and the hardest to *read*:
+OCR of the glyph grid is possible but brittle, and my one attempt to
+OCR the prompt used display-absolute coordinates while the unmaximized
+window sat elsewhere — read garbage from the wrong region. Two lessons:
+(1) window-relative ROIs, always derive OCR regions from the window
+rect, never from display constants; (2) when driving a shell through a
+GUI, skip reading the screen — have every command write its own receipt
+to disk.
+
+## F350 — mpv: motion itself is the assertion, and windows must know where they are
+
+Media-player domain. mpv on a testsrc clip; the property under test is
+*time-varying pixels*, so region_diff graduated from change-detector to
+motion-meter: playing 15.7% frame-to-frame churn, Space -> paused 0.0%
+(dead still), Space -> resumed 15.7%. A three-state pixel proof of the
+play/pause toggle, symmetrical to the decimal.
+
+The arc's exposed flaw was in osctl itself: list_windows() returned
+{"id","title","desktop"} — a window you could *name* but not *locate*.
+The first run crashed on w['rect'], and the fallback (hardcoding the
+--geometry offsets) was exactly the display-absolute trap F349 warned
+about. Fixed at the backend: X11 list_windows now carries
+"rect" (x,y,w,h) via XGetGeometry+XTranslateCoordinates, so every
+window record is directly addressable for ROIs, patches, and OCR.
+Suite stays 33/33. Perception APIs should never hand you a name
+without a place.
+
+## F351 — KWrite: search & replace, where semantic names come in duplicate
+
+Text-editing domain. KWrite's find/replace bar (Ctrl+R) is a semantic
+minefield of *duplicate names*: 'Find:' exists as both a Text label and
+a ComboBox, ditto 'Replace:' — a blind uia_click(name='Find:') could
+land on the caption instead of the input. The arc filtered by
+(name, ctype) pairs, clicked the ComboBox rects directly, typed
+'the' -> 'ONE', hit the 'Replace All' Button node, Escape, Ctrl+S. The
+artifact floor read back the transformed document exactly: three lines,
+every leading 'the' now 'ONE' ('ONE quick brown fox / ONE lazy dog /
+ONE end'). The freshly-added window rect (F350) rode along: fields were
+found at y=1048 in a 1600x1200 screen without a single hardcoded
+coordinate. Lesson: a name is not an address — semantic targeting needs
+role plus name, because labels shadow the controls they describe.
+
+## F352 — KDE Colors KCM: QML settings panels are semantically hollow, config files are not
+
+System-configuration domain (the "manage the machine" verb). kcmshell5
+kcm_colors opened a QML module whose accessibility tree holds *only* the
+seven dialog buttons — the entire scheme grid (search field, accent
+swatches, Breeze Classic/Dark/Light cards) is invisible to AT-SPI. QML
+Kirigami surfaces are the Qt world's SDL: rich to the eye, mute to the
+tree. So the arc went pixels-to-artifact: screenshot to map the cards,
+click the Breeze Dark card, uia_click('Apply') (buttons at least are
+real), then read the receipt not from the screen but from the platform's
+own config store — kreadconfig5 kdeglobals General/ColorScheme flipped
+'' -> 'BreezeDark'. Desktop settings are a config-file domain wearing a
+GUI: the honest verification floor is the dotfile the panel writes.
+Restored the scheme afterwards; a practice arc should leave the desktop
+as it found it.
+
+## F353 — Chrome: when a page has no tree, its words must become click targets
+
+Web-browsing domain, the everyday king. Chrome (no a11y bridge enabled)
+exposes *zero* AT-SPI nodes — a page full of buttons is as mute as an
+SDL game. The arc drove browsing anyway: Ctrl+T, typed a file:// URL,
+title bar confirmed navigation, OCR read the page ('MARKER_ALPHA_7391 /
+Press Me'). Then the flaw: the button was *readable* but not *clickable*
+— ocr_text returns words without places, and the first click was a
+blind coordinate guess. Fixed in osctl: new ocr_boxes() parses
+tesseract's TSV, returning {"text","rect","conf"} per word with rects
+mapped back through the upscale factor to screen coordinates. Re-ran the
+arc pure: ocr_boxes found 'Press' at (24,255,141,85) conf 94, clicked
+its rect center, and the page mutated to 'CLICKED OK_ 5560' — DOM state
+change caused and observed entirely through pixels. Words-with-places
+turn any legible surface into a semantic tree. Suite stays 33/33.
+
+## F354 — Blender: modal keyboard grammar, and a save dialog that ignores you
+
+3D-modeling domain, the deepest keyboard grammar yet. Blender exposes
+zero AT-SPI nodes (custom OpenGL UI), so everything ran as pixels +
+Blender's own modal language. Two traps fired. First: transform keys
+are *selection-scoped and modal* — an early stray click deselected the
+cube, so 'g'/'x'/'2' fell through as global shortcuts and the '.' of
+'1.5' opened the pivot-point pie menu instead of typing a decimal.
+Inside a G/S modal, digits are numeric input; outside, they are commands
+— same keys, two grammars, and only pixel state tells you which one is
+listening. Reselect, then G X 2 Enter / S 1.5 Enter worked, sidebar OCR
+confirming Scale 1.500 live. Second: the Save file browser kept the
+default name — the typed 'f354.blend' never landed (field focus is
+click-position-sensitive) and Enter accepted 'untitled.blend'; the post-
+save window title was the tell. Ground truth came from the artifact via
+the app's own engine: blender --background --python-expr read back
+LOC (2,0,0) SCALE (1.5,1.5,1.5) — exactly the modal keystrokes. When an
+app has a CLI, the artifact floor can be *queried in the app's own
+words* rather than parsed by hand.
+
+## F355 — Inkscape: a welcome dialog that swallows the whole first act
+
+Vector-graphics domain. The trap fired *before* the arc began: Inkscape
+1.1 opens a Welcome/Quick-Setup dialog that shares the app's window
+title ('Inkscape 1.1'), so launch-by-title acquired the *dialog*, the
+maximize bounced off it, and an entire first pass of tool keys, drags
+and Ctrl+Shift+S was swallowed by a settings panel — every gesture
+"succeeded" and nothing happened. The tell was geometric: the acquired
+rect stayed 752x697 after a maximize. Escape dismissed the dialog and
+the real window announced itself with a *different* title ('New
+document 1 - Inkscape'). Then the arc ran clean: R-drag a rectangle,
+E-drag an ellipse, Ctrl+Shift+S -> a properly titled 'Select file to
+save to' dialog, path typed into the name field, saved. Artifact floor:
+parsed the SVG XML — one rect 144.6x103.3, one ellipse rx 41.3 ry 31.0,
+both proportional to the drags at the 64% zoom. Lesson (F343's splash
+trap, sharpened): title match is identity, not state — after acquiring
+a window, verify its *rect responds* to a state change before spending
+gestures on it.
+
+## F356 — DB Browser for SQLite: two-phase commit between screen and disk
+
+Database-tooling domain. Qt app with a *rich* semantic floor (552
+nodes) but the same duplicate-name hazard as F351 amplified: 'Execute
+SQL' exists simultaneously as MenuItem, Pane, Button and TabItem —
+four widgets, one name, four different meanings. Targeted the TabItem
+by (name, ctype), clicked into the editor, typed an INSERT + UPDATE,
+Ctrl+Return to execute. The subtle floor lesson: executing SQL mutates
+only the *session* — the on-disk .db stays stale until 'Write Changes'
+(Ctrl+S). An agent that verified the artifact right after execution
+would read the old rows and call the arc a failure; the app holds a
+two-phase commit between screen-state and disk-state, and the artifact
+floor only settles after the second phase. Post-save sqlite3 read:
+[('apple',7),('pear',5),('grape',9)] — both statements landed. GUIs
+buffer; artifacts lag; verify after the flush, not the gesture.
+
+## F357 — LibreCAD: CAD speaks coordinates, and an unfocused dialog eats clicks
+
+2D-CAD domain. Two lessons. First, the click-eating dialog, now
+reproduced twice in one session (Inkscape F355, LibreCAD Welcome):
+XTest clicks at correct absolute coordinates *silently vanish* when the
+target dialog exists but does not hold focus — pointer events go
+somewhere, just not into the unfocused Qt dialog. activate_window()
+first, then click, and the same coordinates land. The rule is now
+firm: never click a dialog you have not activated.
+
+Second, the joy: CAD is the one GUI genre with a *native numeric
+language*. No pixel-guessing of endpoints — Ctrl+M focused LibreCAD's
+command line, and 'line 0,0 100,50', 'circle 50,25 25' drew exact
+geometry the way a keyboard-first floor loves. The DXF artifact read
+back the arc verbatim: LINE 10/20=0,0 11/21=100,50; CIRCLE 10/20=50,25
+40=25. Every digit typed is a digit in the file — the tightest
+gesture-to-artifact correspondence of any arc so far, tighter even
+than the spreadsheet (F346), because not even a formula evaluator
+stands between input and ground truth.
+
+## F358 — KReversi: reading a board is building a domain model out of colour
+
+Board-game-vs-AI domain. KReversi's board is pure custom painting (76
+nodes, all chrome — none for the 64 squares), so the arc built the
+game state itself: divide the board rect into an 8x8 lattice, sample a
+16x16 patch at each cell center, classify by colour (dark=Black,
+bright=White, else empty). The opening read back exactly as reversi
+law demands: 2B/2W in the center cross. Clicked d3 as Black; the AI
+answered within seconds, and the re-read lattice showed 3B/3W with
+Black's column flipped — a *legal position transition*, not just "pixels
+changed". That is the step up from region_diff: the floor didn't
+observe THAT the screen changed, it parsed WHAT the new position is and
+could check it against the rules of the domain. Colour classification
+over a geometric lattice turns any custom-drawn board game into a
+readable, playable state machine — the same trick as the sudoku OCR
+grid (F235), minus the fonts.
+
+## F359 — Plasma System Monitor: the OS itself is the artifact floor
+
+System-management domain. A hybrid semantic surface: the Kirigami/QML
+shell exposes *sensor values* through AT-SPI (218 nodes carrying live
+strings like '1.3 GiB' used memory — the semantic floor can read
+telemetry directly), yet the sidebar's page items ('Processes') come
+back rect=None: name without a place, the inverse of F353's
+place-without-name. Pixel click on the sidebar landed the Processes
+page; typed 'sleep' into the filter; the planted `sleep 300` decoy
+appeared as the sole row. Selected it, hit End Process — and the kill
+was *not* where the click was: a confirmation dialog (in-window QML
+modal, invisible to list_windows) demanded a second End. The
+verification is the purest artifact floor yet: no file, no pixels —
+`pgrep -f 'sleep 300'` returned the PID before and *empty string
+after*. When the GUI's job is to manage the OS, the OS process table
+is the ground truth, and the kernel never lies about who is alive.
+
+## F360 — GIMP: a shortcut that lies, and menus you can only read
+
+Raster-editing domain, GTK2-era shell: zero AT-SPI nodes. Two traps in
+one arc. First, the shortcut homonym: Ctrl+I in GIMP is Select>Invert,
+NOT Colors>Invert — the arc pressed it, exported, and the artifact came
+back byte-identical to the input. No error, no beep: a shortcut that
+"works" while doing a different verb entirely. The exported PNG was
+the witness — same trap-class as F354's modal grammar, but here the
+grammar varies per *application*, so memorised accelerators are guesses
+until the artifact confirms them. Second, ocr_boxes earned its keep on
+a native GTK menu: with no semantic nodes, opening Colors and OCRing
+the dropdown produced clickable rects for every item; 'Invert' was
+read, clicked, and the re-export flipped exactly — corner
+(200,40,40)->(55,215,215), center (40,40,200)->(215,215,55), the
+arithmetic complement to the byte. Also reconfirmed twice: GTK dialog
+buttons (Export) swallow synthetic clicks even *after* activation —
+the mnemonic (Alt+E) is the reliable path into GTK dialogs, not the
+pointer.
