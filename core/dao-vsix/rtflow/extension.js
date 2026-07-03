@@ -567,6 +567,7 @@ function _multiShellHtml(opts) {
   opts = opts || {};
   const _mobile = !!opts.mobile;
   let _html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https:; frame-src blob: http://localhost:* http://127.0.0.1:*;">
 <style>
 *{box-sizing:border-box}
