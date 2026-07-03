@@ -234,8 +234,42 @@ python clients/pull141.py 'C:\dao_vm\<file>' <local>
    (`source=builtin, sig_ok=True, applied=True`)。两者是不同维度,偏移表按 dll 版本命中,正确。
 
 **下一步(未做,留给后续)**:§13 第 6 项闲时自动休眠计时验证;第 7 项 GUI 预测层
-(`vm.observe/find/act`)对齐 agentctl F381/F382 在 vm01 内跑归档/存 docx;首登 OOBE
-弹窗自动消除(新账号首次 RDP 落在「同意个人数据跨境传输」页,需 inner agent 自动跳过)。
+(`vm.observe/find/act`)对齐 agentctl F381/F382 在 vm01 内跑归档/存 docx。
+
+---
+
+## 15. v3.2 — 首登 OOBE 自动落桌 + 静默守护稳定性(141 真机跑通)
+
+> 承接 §14 遗留的「首登 OOBE 弹窗自动消除」,并修掉一个会让**静默守护进程静默崩溃**的隐性缺陷。
+
+1. **OOBE 自动推进(语言/版次中立)**:`vm_host_daemon.py::advance_oobe()` 轮询
+   `_oobe_active()`,在 OOBE 页上反复送 `Enter` 直至落桌(实测 `steps=2`);落桌后**不再用 Esc**。
+2. **真因:Win11 开始菜单不吃 Esc**。Esc 只清空开始菜单内的搜索框,**不关闭** Start 浮层;
+   可靠且语言中立的开关是 **Win 键**。新增 `vm_inner_agent.py::ensure_desktop(max_iter=5)`:
+   仅当**前台窗口的所属进程**属于 shell 浮层宿主白名单
+   (`startmenuexperiencehost.exe / searchhost.exe / searchapp.exe / shellexperiencehost.exe`,
+   进程名匹配、非本地化 UI 串)时才点一下 Win 键 → 决不会在已干净的桌面上误开 Start。
+   进程名经 `QueryFullProcessImageName`(`PROCESS_QUERY_LIMITED_INFORMATION`)取得,跨完整性级别可用。
+   `advance_oobe` 落桌后 settle 2s 调用之;新增 dispatch `ensure_desktop` 与代理 `vm.ensure_desktop`。
+   实测 vm06:`oobe=advanced-to-desktop, steps=2, ensure_desktop={closed:0}`(前台为机器级自启应用、
+   非 shell 宿主→正确地不动),`vm.screenshot` 得**干净可用桌面、无 OOBE / 无残留 Start**;
+   `whoami=desktop-master\vm06`、`query session`=会话#7 `rdp-tcp#0` Active → 确系**隔离 RDP 会话**。
+   (会话内可见的图标来自 `C:\Users\Public\Desktop` 公共快捷方式、可见的第三方 App 来自 HKLM 全局自启,
+   属机器级继承,非本系统行为。)
+3. **静默守护稳定性缺陷(真机暴露并修复)**:守护须**无窗**运行(`pythonw`,静默要求),但
+   `ensure_multisession()` 里两处裸 `print()` 在 `sys.stdout is None`(pythonw)或 stdout 管道被关时
+   抛 `OSError [Errno 22] Invalid argument`,导致 `vm.create` 返回 500、整条创建链路崩。
+   修法:两处 `print()` 改走 `log.info`;日志改为**始终挂 `FileHandler`**(`C:\ProgramData\dao_vm\stealth.log`),
+   仅在存在真实 stdout 时才追加 `StreamHandler`;并在 `sys.stdout/stderr is None` 时把二者重定向到日志文件,
+   使任何残留 `print()` 永不抛异常。守护遂可 `pythonw` 无窗常驻(PID 由 `Start-Process -WindowStyle Hidden` 拉起)。
+4. **完整往返复验(新守护)**:`vm.create vm06`(落桌洁净)→ `host.hibernate`
+   (`destroyed=[vm06]`、mstsc killed=1、`termsrv_revert` 还原原生、`oobe_revert.restored=1`)
+   → `host.stealth_status` = `mode=hibernating, active_vms=0, agent_tasks=[], footprint=zero`,
+   仅剩 administrator console 会话 → **完全静默、太上下知有之**。
+
+**下一步(留给后续)**:§13 第 6 项闲时自动休眠计时;把守护无窗常驻固化为登录触发的隐藏计划任务
+(现为 `Start-Process -WindowStyle Hidden pythonw`,重启不自起);第 7 项 GUI 预测层
+(`vm.observe/find/act`)在 vm 内跑 F381/F382 归档/存 docx。
 
 ---
 
