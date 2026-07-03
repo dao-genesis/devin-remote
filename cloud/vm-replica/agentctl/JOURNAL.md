@@ -11369,3 +11369,23 @@ change on level-abort but was rewritten the instant 'Leave World' was
 chosen — 'solved #t' appearing for the visited level. Games persist
 at chapter boundaries, not keystrokes; assert on the boundary, not in
 the middle.
+
+## F362 — Synaptic: root GUIs, a search that boils the ocean, and type-ahead as index
+
+The 'new computer, install software' ritual, done entirely through the
+package-manager GUI (sudo synaptic on :0). Three lessons. First, the
+default Find scope ('Description and Name') over 116k packages is a
+minutes-long boil that pegs a core and matches 7,809 rows for 'sl' —
+the naive watcher that polled the result list outlived its own
+timeout and died with nothing. The cost of a query lives in its
+*scope*, not its length. Second, GTK treeviews carry their own index:
+click a row, type two letters, and type-ahead jumps straight to the
+`sl` package — an O(1) door beside the O(n) search that was still
+churning. Third, the Ctrl+I homonym from F360 resolves the *other*
+way here: in Synaptic Ctrl+I is Mark-for-Installation, exactly what
+was wanted — same chord, opposite fates in two apps, which is the
+final proof that accelerators are per-application dialects. Apply
+lived behind a Summary modal (Alt+A mnemonic, GTK dialogs still
+swallow pointer clicks), and the receipt was the OS package database
+itself: dpkg -s sl flipped to 'install ok installed' — the same
+kernel-truth floor as F359, one layer up the stack.
