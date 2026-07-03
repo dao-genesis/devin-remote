@@ -11448,3 +11448,22 @@ OCR scale while every digit survives. One more calibration note:
 capture space is the real 1600x1200 root, not the 1568-wide scaled
 screenshot — regions measured on a saved PNG must be re-based before
 they are handed to ocr_text.
+
+## F366 — Dolphin→KWrite: XDND across processes is a pointer-channel act
+
+First cross-application drag-and-drop: a text file dragged out of
+Dolphin's icon view and dropped on KWrite's editor. Stage directions
+mattered more than the verb: KWrite had opened dead-centre *on top of*
+Dolphin, so the first job was `move_window` on both (EWMH), giving
+the drag a visible source and a visible target — a drag cannot cross
+a window that is not there. The drag itself worked first try, but
+only because it respected the same time-visibility law the keyboard
+learned in F345: `drag(steps=40, hold=0.3)` — a grab that lingers,
+then a glide with real intermediate motion events. XDND is a
+*negotiation* between source and target that happens during the
+motion; teleporting the pointer gives the protocol no time to offer,
+enter, and accept. Receipt stack: KWrite's title flipped from
+`Untitled` to `hello_dnd.txt`, and the buffer showed the file's exact
+bytes. Also learned: KWrite doesn't ask move-vs-copy for a drop —
+dropping a file on an editor *opens* it; the copy/move/link popup is
+a file-manager convention, not a toolkit one.
