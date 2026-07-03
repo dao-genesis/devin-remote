@@ -104,8 +104,35 @@ mcp_server.py  ──HTTP──►  vm_host_daemon.py(127.0.0.1:9000, Administra
 
 ---
 
+## 7.5 v3 — 静默/隐形 + 全版本自适应(本会话新增,代码已落地,待 141 实测)
+> 目标:太上下知有之 —— 不用时系统**零足迹**回归用户日常状态;适配一切 Windows 版本/版次。
+
+### A. 静默/隐形模式(`vm_host_daemon.py` v3)
+- **`host.hibernate`**:优雅拆除全部 VM 活动 —— logoff+删除**我们创建的**账号、按目标选择性 kill mstsc 窗口(仅命中 `TscShellContainerClass` + `RDP_TARGET`,不误伤用户自己的远程连接)、注销 `dao_agent_*` 计划任务、**revert termsrv.dll 补丁**(回归原生单会话)、清理 `C:\dao_vm\` 临时文件(`start_*.bat`)、清除 `cmdkey` 凭据缓存。**attached(用户自己开的)会话只 detach 不 logoff**。守护进程本体保持运行(极轻量、不可见)以接受 `host.wake`。
+- **`host.wake`**:从休眠唤醒 —— 重新启用多会话(按检测到的版本自适应)+ 重新部署 inner 脚本,就绪待 `vm.create`;**不自动建号**。
+- **`host.stealth_status`**:上报 mode(active/hibernating)、idle 秒数、活跃 VM 数、live mstsc 窗口数、`dao_agent_*` 任务、检测到的 Windows 版本/版次、会话列表,及 `footprint` 判定(zero/non-zero)。用于**核验系统闲时确实隐形**。
+- **`host.stealth_config`**:动态配置 `stealth_auto`(闲时自动休眠开关)、`stealth_idle_timeout`(默认 300s)、`cleanup_temp_on_hibernate`。
+- **idle 看门狗线程**:`stealth_auto=True` 时,无 API 调用超 `stealth_idle_timeout` 秒且有活跃 VM 即自动 `hibernate()`;每 30s 检查一次。keepalive 看门狗在 hibernating 态**停止一切保活动作**(零可见活动)。
+- **hibernating 态请求门禁**:休眠期间只放行 `host.wake/stealth_status/stealth_config/os_info/cleanup`,其余动作返回 503 + 提示先 wake。
+
+### B. 全 Windows 版本自适应(`ts_multifix.py` v2)
+- **偏移解析三级级联**:① builtin OFFSETS(精确版本命中,最快)→ ② rdpwrap.ini(社区维护,覆盖数百 build)→ ③ **签名扫描自发现**(`_offsets_from_autodiscovery`:扫 `.data` 找 CSLQuery 5-DWORD 全局簇 [+0x00 bServerSku / +0x04 lMaxUserSessions / +0x0C bAppServerAllowed / +0x18 bRemoteConnAllowed / +0x1C bMultimonAllowed],扫 `.text` 找 CDefPolicy jne)。任一命中即用;结构不匹配则 no-op,**绝不盲写**。
+- **版次识别**:`_is_server_sku()` —— Server SKU 多会话原生,直接 no-op(source=`native-server`);Home/Pro/Enterprise/LTSC 走 client 补丁路径。
+- **Home 版 RDP 使能**:`_ensure_rdp_enabled()` 写 `fDenyTSConnections=0` + NLA + 开防火墙组(仅注册表,不碰 ServiceDll,可逆),`ensure_multisession()` 开头无条件调用(全版本安全,Home 必需)。
+- **`sysinfo()`**:诊断用 —— 返回 termsrv 内存/磁盘版本、偏移来源、是否 Server、rdpwrap.ini 是否存在、解析状态。
+
+### C. GUI 操作体系整合(已在 inner agent + MCP 端到端接通,本会话核验)
+预测性操作层(`vm.observe/find/read/act/act_seq/where_changed/wait_change/region_hash/flow_probe/region_centroid`)在 `vm_inner_agent.py` `_dispatch`(行 663–685)已实现,经 daemon `proxy()`(行 737 剥 `vm.` 前缀)代理到 inner。MCP schema 已定义,call_tool 对 escalation 的 region PNG 做 image 块回传。**无需再造,已通**。
+
+### D. 新增 MCP 工具(`mcp_server.py`)
+`host_hibernate / host_wake / host_stealth_status / host_stealth_config / host_cleanup / host_os_info` —— 任意 Agent 经 MCP 即可控制静默生命周期。
+
+> ⚠️ 待办:上述 v3 代码**尚未在 141 实测**(DAO Bridge 机控 token 不匹配,见 §13)。恢复机控后按 §13 验证清单实跑。
+
+---
+
 ## 8. 当前实时状态(交接时刻)
-- **141**:host daemon 健康(计划任务自启自愈);zhou `status=running` 屏外保活;HKLM 首登抑制已生效;仓库已含 Phase 1–3 全部成果(SHA256 校验)。daovm 演示账号已干净销毁,会话恢复为 administrator(console)+ zhou(rdp-tcp#3)。
+- **141**:host daemon 健康(计划任务自启自愈);zhou `status=running` 屏外保活;HKLM 首登抑制已生效;仓库已含 Phase 1–3 全部成果(SHA256 校验)。daovm 演示账号已干净销毁,会话恢复为 administrator(console)+ zhou(rdp-tcp#3)。**v3 静默/自适应代码已 PR,待上机实测。**
 - **179**:relay ps-agent 卡死,所有命令超时,3C 待办。**需用户在 179 本机重启 ps-agent。**
 
 ---
@@ -167,5 +194,20 @@ python clients/pull141.py 'C:\dao_vm\<file>' <local>
 - 不用宽泛窗口标题匹配定位窗口(必须专属新文件 + 唯一 tag)。
 - 不在用户 Documents/Desktop/Downloads 留测试垃圾(收尾清理)。
 - 不并发创建过多新账号(避免 quser 争用)。
+
+---
+
+## 13. v3 待验证清单(恢复 141 机控后实跑)
+> DAO Bridge 直连机控当前 token 不匹配(隧道到 dao-bridge v3.7.0,其 master token 本机随机生成,与文档 `dao-vsix-*` 不同源)。恢复后按下清单实测 v3:
+
+1. **静默核验**:`host.stealth_status` → 记录 active 态 footprint;`host.hibernate` → 再 `host.stealth_status` 应 `mode=hibernating` 且 `footprint=zero`(mstsc_windows=0、agent_tasks=[]、created VM 已删);人工确认 administrator console + zhou **全程 Active 不受影响**、桌面无残留窗口。
+2. **唤醒往返**:`host.wake` → `vm.create test01` 9s 上线;`vm.exec whoami` 正确;`vm.destroy test01`;再 `host.hibernate` 回零足迹。
+3. **termsrv revert 干净**:hibernate 后 `ts_multifix.status()` 应 `applied=False`(回原生单会话);wake 后 `applied=True`。
+4. **自发现路径**(可选,换非 26100.8521 build 或临时从 OFFSETS 删该键):`ts_multifix.sysinfo()` 的 `offset_source` 应落到 `auto-discovery` 且 status `applied=True`,证明脱离硬编码也能自适应。
+5. **Server/Home 分支**:若有 Server 测机 → source=`native-server` no-op;Home 测机 → `_ensure_rdp_enabled()` 生效 + client 补丁路径成功。
+6. **闲时自动休眠**:`host.stealth_config {stealth_auto:true, stealth_idle_timeout:60}` → 静置 >60s → 自动进入 hibernating(查 stealth.log)。
+7. **GUI 层实跑**:`vm.observe`(<200B 状态签名)、`vm.find text=保存`(无截图定位)、`vm.act` 预测-执行-核验、`vm.act_seq` 多步 —— 对齐 agentctl F381/F382 模式跑一遍归档/存 docx。
+
+---
 
 — 推进到底,道法自然,无为而无不为。

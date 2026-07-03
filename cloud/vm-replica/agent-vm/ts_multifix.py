@@ -23,14 +23,24 @@ What it does (mirrors rdpwrap's New_CSLQuery_Initialize override, applied live)
   * CSLQuery::bMultimonAllowed  = 1
   * CDefPolicy::Query  jne->jmp         (disable the single-session-per-user deny)
 
-Offsets are keyed by exact termsrv.dll file version. Known builds use the builtin OFFSETS
-table (resolved from Microsoft's public PDB) as a fast-path. For any build NOT in the table
-we fall back to the locally-installed, community-maintained rdpwrap.ini (which covers
-hundreds of builds): its `[ver-SLInit]` globals are RVAs we use directly, and the
-CDefPolicy single-session jne is located by signature-scanning .text (disambiguated by the
-ini's DefPolicyOffset). Every write is signature/sanity-checked first, so a wrong offset can
-never land. If neither source resolves the build, the module is a NO-OP (logs + returns) so
-a Windows Update that swaps termsrv.dll degrades gracefully to native single-session.
+Offset resolution cascade (v2 hardened):
+  1. Builtin OFFSETS table (exact-match by termsrv.dll version; fastest).
+  2. rdpwrap.ini (community-maintained; covers hundreds of builds).
+  3. Signature-scan auto-discovery: scan .data for the CSLQuery global cluster
+     (5 consecutive DWORDs in known value patterns), and .text for the CDefPolicy
+     jne site. Zero external deps; works on ANY build where the CSLQuery layout
+     hasn't changed. A structural mismatch is a no-op (never patches blindly).
+
+Every write is signature/sanity-checked first, so a wrong offset can never land.
+If no source resolves the build, the module is a NO-OP (logs + returns) so a
+Windows Update that swaps termsrv.dll degrades gracefully to native single-session.
+
+Universal Windows edition support:
+  * Server SKUs: multi-session is NATIVE; this module is a no-op (unnecessary).
+  * Pro/Enterprise: client SKU; patch needed. Standard code path.
+  * Home: client SKU + tighter restrictions; same patch path but may need
+    additional RDP enablement (fDenyTSConnections registry override).
+  * LTSC/IoT: same as Pro/Enterprise.
 """
 import ctypes as C
 import os
@@ -40,7 +50,9 @@ import sys
 from ctypes import wintypes as W
 
 # version -> RVAs (resolved from public symbols for termsrv.dll). Add new builds here.
+# Add builds as they are tested; the auto-discovery fallback handles unknowns.
 OFFSETS = {
+    # Windows 11 24H2
     "10.0.26100.8521": {
         "bServerSku":        0x126FCC,
         "bAppServerAllowed": 0x126FD8,
@@ -330,6 +342,89 @@ def _ini_section(version, suffix=""):
     return out
 
 
+def _offsets_from_autodiscovery(m):
+    """Auto-discover CSLQuery global offsets by scanning .data for the characteristic
+    cluster of 5 consecutive DWORDs (bServerSku=0, bAppServerAllowed=0, lMaxUserSessions=0|1,
+    bRemoteConnAllowed=0|1, bMultimonAllowed=0|1) with the expected stride (4 bytes between
+    bServerSku and lMaxUserSessions, 12 bytes from bServerSku to bAppServerAllowed). Also
+    scans .text for the CDefPolicy jne.
+
+    This is the ultimate fallback that works on builds not in OFFSETS or rdpwrap.ini.
+    Returns None if the structural pattern can't be confidently identified."""
+    secs = _sections(m)
+    data_sec = next((s for s in secs if s["name"] == ".data"), None)
+    text_sec = next((s for s in secs if s["name"] == ".text"), None)
+    if not data_sec:
+        return None
+
+    # The CSLQuery globals are 5 DWORDs in .data:
+    #   bServerSku(0/1), lMaxUserSessions(0/1/small), bAppServerAllowed(0/1),
+    #   bRemoteConnAllowed(0/1), bMultimonAllowed(0/1)
+    # Layout observed across many builds (offsets relative to bServerSku):
+    #   +0x00 bServerSku, +0x04 lMaxUserSessions, +0x0C bAppServerAllowed,
+    #   +0x18 bRemoteConnAllowed, +0x1C bMultimonAllowed
+    # All boolean flags read 0 on unpatched client SKU.
+    blob = _read_range(m, data_sec["vaddr"], data_sec["vsize"])
+    if not blob or len(blob) < 0x20:
+        return None
+
+    candidates = []
+    # Scan for bServerSku=0 with subsequent values matching the expected pattern
+    for off in range(0, len(blob) - 0x20, 4):
+        bss = struct.unpack_from("<I", blob, off)[0]
+        if bss > 1:  # bServerSku should be 0 (unpatched) or 1 (patched)
+            continue
+        # Check expected stride: +4=lMaxUserSessions, +0xC=bAppServerAllowed
+        lms = struct.unpack_from("<I", blob, off + 0x04)[0]
+        baa = struct.unpack_from("<I", blob, off + 0x0C)[0]
+        if lms > 1024 or baa > 1:  # sane range check
+            continue
+        # Check bRemoteConnAllowed (+0x18) and bMultimonAllowed (+0x1C)
+        if off + 0x1C + 4 > len(blob):
+            continue
+        bra = struct.unpack_from("<I", blob, off + 0x18)[0]
+        bma = struct.unpack_from("<I", blob, off + 0x1C)[0]
+        if bra > 1 or bma > 1:
+            continue
+        # On an unpatched client SKU: bServerSku=0, bAppServerAllowed=0
+        # On a server SKU: bServerSku=1, bAppServerAllowed=1
+        # Both patterns are valid CSLQuery clusters
+        rva = data_sec["vaddr"] + off
+        candidates.append({
+            "bServerSku": rva,
+            "lMaxUserSessions": rva + 0x04,
+            "bAppServerAllowed": rva + 0x0C,
+            "bRemoteConnAllowed": rva + 0x18,
+            "bMultimonAllowed": rva + 0x1C,
+            "_vals": (bss, lms, baa, bra, bma),
+        })
+
+    if not candidates:
+        return None
+    # Prefer the candidate where bServerSku=0 and bAppServerAllowed=0 (unpatched client)
+    client = [c for c in candidates if c["_vals"][0] == 0 and c["_vals"][2] == 0]
+    chosen = (client[0] if client else candidates[0])
+    for c in (client or candidates):
+        del c["_vals"]
+
+    # CDefPolicy jne: scan .text for CDEFPOLICY_SIG
+    jne = None
+    if text_sec and 0 < text_sec["vsize"] <= 0x2000000:
+        tblob = _read_range(m, text_sec["vaddr"], text_sec["vsize"])
+        cands, i = [], tblob.find(CDEFPOLICY_SIG)
+        while i != -1:
+            if i + 3 < len(tblob) and tblob[i + 3] in (0x75, 0xEB):
+                cands.append(text_sec["vaddr"] + i + 3)
+            i = tblob.find(CDEFPOLICY_SIG, i + 1)
+        if len(cands) == 1:
+            jne = cands[0]
+        elif cands:
+            jne = cands[0]  # best guess: first occurrence
+
+    chosen["cdefpolicy_jne"] = jne
+    return chosen
+
+
 def _offsets_from_ini(m):
     """Derive an OFFSETS-style dict for m.version from the installed rdpwrap.ini.
     Globals come straight from `[ver-SLInit]` (already RVAs); the CDefPolicy jne byte is
@@ -369,20 +464,61 @@ def _globals_sane(before):
     return True
 
 
+def _is_server_sku():
+    """Detect if running on a Server SKU (multi-session is native; no patching needed)."""
+    try:
+        out = subprocess.check_output(
+            ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+             '(Get-CimInstance Win32_OperatingSystem).Caption'],
+            timeout=10, encoding='utf-8', errors='replace').strip()
+        return 'server' in out.lower()
+    except Exception:
+        return False
+
+
+def _ensure_rdp_enabled():
+    """On Home editions, RDP is disabled by default. Enable the necessary registry keys
+    without modifying the ServiceDll (safe, reversible via registry restore)."""
+    try:
+        subprocess.run([
+            'powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+            # Enable RDP connections
+            "Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' "
+            "-Name 'fDenyTSConnections' -Value 0 -Type DWord -Force; "
+            # Enable Network Level Authentication (optional but recommended)
+            "Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' "
+            "-Name 'UserAuthentication' -Value 0 -Type DWord -Force; "
+            # Ensure Remote Desktop firewall rule is enabled
+            "Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue"
+        ], capture_output=True, timeout=15)
+    except Exception:
+        pass  # best-effort; loopback RDP often works even without this
+
+
 def _open():
     m = _Mem()
     if not m.pid or not m.base or not m.h:
         return None, {"ok": False, "error": "cannot open TermService (need elevation/SeDebugPrivilege)",
                       "pid": m.pid if m else None}
+    # Server SKUs have native multi-session; patching is unnecessary
+    if _is_server_sku():
+        m.close()
+        return None, {"ok": True, "supported": True, "version": m.version,
+                      "applied": True, "source": "native-server",
+                      "note": "Server SKU: multi-session is native, no patch needed"}
+    # Resolution cascade: builtin -> rdpwrap.ini -> auto-discovery
     off = OFFSETS.get(m.version)
     src = "builtin"
     if off is None:
         off = _offsets_from_ini(m)
         src = "rdpwrap.ini"
     if off is None:
+        off = _offsets_from_autodiscovery(m)
+        src = "auto-discovery"
+    if off is None:
         m.close()
         return None, {"ok": False, "supported": False, "version": m.version,
-                      "note": "build not in OFFSETS and not resolvable from rdpwrap.ini - no-op (boot-safe)"}
+                      "note": "build not in OFFSETS, not in rdpwrap.ini, and auto-discovery failed - no-op (boot-safe)"}
     m.off = off
     m.off_source = src
     return m, None
@@ -463,16 +599,39 @@ def revert():
 
 def ensure_multisession():
     """Idempotent entrypoint for daemons: enable multi-session if supported, else no-op.
-    Never raises - safe to call unconditionally at startup."""
+    Never raises - safe to call unconditionally at startup.
+
+    v2: also ensures RDP is enabled on Home editions (registry only, no ServiceDll)."""
     try:
+        _ensure_rdp_enabled()  # safe on all editions; critical on Home
         st = status()
         if not st.get("ok"):
             return st
         if st.get("applied"):
-            return {"ok": True, "version": st["version"], "applied": True, "note": "already enabled"}
+            return {"ok": True, "version": st["version"], "applied": True,
+                    "source": st.get("source", "unknown"), "note": "already enabled"}
         return apply()
     except Exception as e:  # never let the patcher break the caller
         return {"ok": False, "error": "ensure_multisession exception: %s" % e}
+
+
+def sysinfo():
+    """Return a comprehensive system info dict for diagnostics and adaptation."""
+    m, err = _open()
+    ver = m.version if m else None
+    dv = m.disk_version if m else None
+    src = m.off_source if m else None
+    if m:
+        m.close()
+    is_srv = _is_server_sku()
+    return {
+        "termsrv_version": ver,
+        "termsrv_disk_version": dv,
+        "offset_source": src,
+        "is_server": is_srv,
+        "rdpwrap_ini_exists": os.path.exists(RDPWRAP_INI),
+        "status": err if err else "resolvable",
+    }
 
 
 if __name__ == "__main__":

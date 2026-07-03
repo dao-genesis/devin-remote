@@ -1,10 +1,22 @@
-r"""vm_host_daemon.py (v2) - Host daemon managing RDP "VM" sessions.
+r"""vm_host_daemon.py (v3) - Host daemon managing RDP "VM" sessions.
 
 Runs as Administrator in the INTERACTIVE console session (so mstsc can render the
 RDP windows). Exposes a REST API to manage account-backed "VMs" and proxies every
 operation to the per-session inner agents.
 
+v3 additions over v2:
+  * Stealth/Silent mode — zero-footprint when idle, system fully invisible to user:
+    - Idle detection watchdog: auto-hibernate after configurable inactivity timeout
+    - Graceful shutdown: logoff RDP sessions, kill mstsc, stop inner agents, revert
+      termsrv.dll patches, clean temp files. User's admin desktop pristine.
+    - On-demand cold restart: one API call wakes the full stack back up.
+    - System tray / process visibility: zero stray windows, zero tray icons.
+  * Universal Windows adaptation: auto-detect edition (Home/Pro/Enterprise/Server),
+    version (Win10/11 builds), and adapt ts_multifix strategy accordingly.
+  * Host-level lifecycle: hibernate / wake / stealth_status / cleanup commands.
+
 Lifecycle endpoints : vm.create / vm.ensure / vm.destroy / vm.list / vm.sessions
+Stealth endpoints   : host.hibernate / host.wake / host.stealth_status / host.cleanup
 Proxy endpoints     : vm.exec / vm.screenshot / vm.click / vm.double_click /
                       vm.right_click / vm.mouse_move / vm.drag / vm.scroll /
                       vm.type / vm.key / vm.hold_key / vm.file_read / vm.file_write /
@@ -15,10 +27,15 @@ config persisted to C:\ProgramData\dao_vm\config.json, idempotent ensure(), and
 robust connect via cmdkey + mstsc.
 """
 import http.server, json, subprocess, os, sys, time, threading, secrets
-import traceback, urllib.request, socketserver, base64, ctypes
+import traceback, urllib.request, socketserver, base64, ctypes, logging
 
 CONFIG_DIR  = r'C:\ProgramData\dao_vm'
 CONFIG_PATH = os.path.join(CONFIG_DIR, 'config.json')
+STEALTH_LOG = os.path.join(CONFIG_DIR, 'stealth.log')
+
+logging.basicConfig(level=logging.INFO, format='[host %(asctime)s] %(message)s',
+                    datefmt='%H:%M:%S')
+log = logging.getLogger('host')
 
 def load_config():
     os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -34,6 +51,10 @@ def load_config():
     cfg.setdefault('inner_exe', r'C:\dao_vm\dao_inner_agent.exe')
     cfg.setdefault('rdp_target', '127.0.0.2')
     cfg.setdefault('default_password', 'Vm@2026dao!')
+    # Stealth mode configuration
+    cfg.setdefault('stealth_idle_timeout', 300)   # seconds of inactivity before auto-hibernate
+    cfg.setdefault('stealth_auto', False)          # auto-hibernate when idle (opt-in)
+    cfg.setdefault('cleanup_temp_on_hibernate', True)
     json.dump(cfg, open(CONFIG_PATH, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
     return cfg
 
@@ -46,6 +67,14 @@ INNER_SCRIPT= CFG['inner_script']
 INNER_EXE   = CFG['inner_exe']
 RDP_TARGET  = CFG['rdp_target']
 DEFAULT_PW  = CFG['default_password']
+
+# ====== Stealth / Silent mode state ======
+_stealth_state = {
+    'mode': 'active',          # active | hibernating
+    'last_api_call': time.time(),
+    'hibernate_time': None,
+    'created_accounts': set(),  # accounts WE created (not attached)
+}
 
 def ensure_rdp_active(target=None, offscreen=True):
     """Keep the loopback RDP "VM" operable exactly like Devin's own VM.
@@ -94,12 +123,32 @@ def ensure_rdp_active(target=None, offscreen=True):
 
 def _keepalive_loop():
     """Optional watchdog: periodically re-assert that the target RDP session is active
-    (un-minimize + offscreen). Keeps the VM continuously operable without manual steps."""
+    (un-minimize + offscreen). Keeps the VM continuously operable without manual steps.
+    Skipped when in stealth/hibernate mode (zero visible activity)."""
     interval = int(CFG.get('keepalive_secs', 5))
     while True:
-        try: ensure_rdp_active(RDP_TARGET, offscreen=True)
-        except Exception: pass
+        if _stealth_state['mode'] == 'active':
+            try: ensure_rdp_active(RDP_TARGET, offscreen=True)
+            except Exception: pass
         time.sleep(interval)
+
+def _idle_watchdog():
+    """Auto-hibernate when no API calls received for stealth_idle_timeout seconds.
+    Only active when stealth_auto=True. Checks every 30s."""
+    while True:
+        time.sleep(30)
+        if not CFG.get('stealth_auto'):
+            continue
+        if _stealth_state['mode'] != 'active':
+            continue
+        if not vms:
+            continue  # nothing to hibernate
+        idle = time.time() - _stealth_state['last_api_call']
+        timeout = CFG.get('stealth_idle_timeout', 300)
+        if idle >= timeout:
+            log.info('idle %.0fs >= %ds, auto-hibernating', idle, timeout)
+            try: hibernate()
+            except Exception as e: log.warning('auto-hibernate failed: %s', e)
 
 def inner_launch_cmd():
     """Prefer the frozen inner-agent EXE (Python-free); else python + script."""
@@ -195,6 +244,7 @@ Write-Output 'rdp-started'
 
     vms[name] = {'port': port, 'status': 'starting', 'password': pw,
                  'created_at': time.strftime('%Y-%m-%d %H:%M:%S')}
+    _stealth_state['created_accounts'].add(name)
 
     def bring_up():
         # 1) wait for the RDP session to become active (first-logon profile creation)
@@ -304,7 +354,223 @@ if ($s) {{ $id = ($s -replace '\\s+',' ').Trim().Split(' ')[2]; logoff $id 2>$nu
                f"Remove-Item 'C:\\dao_vm\\start_{name}.bat' -Force -ErrorAction SilentlyContinue; "
                f"Get-CimInstance Win32_UserProfile | Where-Object {{ $_.LocalPath -like '*\\{name}*' }} | Remove-CimInstance -ErrorAction SilentlyContinue")
     vms.pop(name, None)
+    _stealth_state['created_accounts'].discard(name)
     return {'ok': True, 'name': name, 'destroyed': True}
+
+
+# ====== Stealth / Silent Mode (太上下知有之) ======
+#
+# Core principle: when the system is not actively being used, it must produce ZERO
+# side effects on the user's normal workflow. All RDP windows, daemon processes,
+# inner agents, and termsrv.dll patches are gracefully shut down. The user's
+# administrator console session remains completely untouched. On-demand, one API
+# call wakes everything back up.
+#
+# States: active → hibernating → active (on wake)
+# Transition: hibernate() tears down all created VMs, closes mstsc, reverts
+#   termsrv patch, cleans temp files. wake() re-enables multi-session and is
+#   ready for vm.create. The daemon itself stays running (lightweight, invisible)
+#   to accept the wake command.
+
+def _os_edition():
+    """Detect Windows edition (Home/Pro/Enterprise/Server/LTSC) and build.
+    Returns dict with edition, version, build, is_server, is_home, is_ltsc."""
+    try:
+        out, _, _ = ps_run(
+            "$os = Get-CimInstance Win32_OperatingSystem; "
+            "$ed = $os.Caption; $ver = $os.Version; $build = $os.BuildNumber; "
+            "[pscustomobject]@{edition=$ed;version=$ver;build=$build} | ConvertTo-Json -Compress",
+            timeout=15)
+        d = json.loads(out.strip().splitlines()[-1])
+        cap = d.get('edition', '')
+        return {
+            'edition': cap,
+            'version': d.get('version', ''),
+            'build': d.get('build', ''),
+            'is_server': 'server' in cap.lower(),
+            'is_home': 'home' in cap.lower(),
+            'is_pro': 'pro' in cap.lower() and 'home' not in cap.lower(),
+            'is_enterprise': 'enterprise' in cap.lower() or 'education' in cap.lower(),
+            'is_ltsc': 'ltsc' in cap.lower() or 'ltsb' in cap.lower(),
+        }
+    except Exception as e:
+        return {'edition': 'unknown', 'error': str(e)}
+
+def _kill_all_mstsc():
+    """Kill all mstsc.exe processes (RDP client windows). Safe: only affects
+    loopback RDP sessions WE created, not user's remote connections.
+    Selectively kills only mstsc windows targeting our RDP_TARGET."""
+    try:
+        u = ctypes.windll.user32
+        EnumProc = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+        targets = []
+        def cb(h, _):
+            n = u.GetWindowTextLengthW(h)
+            if n > 0:
+                b = ctypes.create_unicode_buffer(n + 1)
+                u.GetWindowTextW(h, b, n + 1)
+                cls = ctypes.create_unicode_buffer(256)
+                u.GetClassNameW(h, cls, 256)
+                if 'TscShellContainerClass' in cls.value and RDP_TARGET in b.value:
+                    pid = ctypes.c_ulong(0)
+                    u.GetWindowThreadProcessId(h, ctypes.byref(pid))
+                    targets.append(pid.value)
+            return 1
+        u.EnumWindows(EnumProc(cb), 0)
+        killed = 0
+        for pid in set(targets):
+            try:
+                ps_run(f'Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue', timeout=10)
+                killed += 1
+            except Exception:
+                pass
+        return {'killed': killed, 'pids': list(set(targets))}
+    except Exception as e:
+        return {'error': str(e)}
+
+def _cleanup_temp_files():
+    """Remove temporary files created by the VM system in C:\\dao_vm\\.
+    Preserves config files and scripts needed for restart."""
+    cleaned = []
+    keep = {'config.json', 'vm_inner_agent.py', 'dao_inner_agent.exe',
+            'vm_host_daemon.py', 'ts_multifix.py', 'stealth.log'}
+    dao_vm = r'C:\dao_vm'
+    if os.path.isdir(dao_vm):
+        for f in os.listdir(dao_vm):
+            fp = os.path.join(dao_vm, f)
+            if f in keep or not os.path.isfile(fp):
+                continue
+            # Only clean start_*.bat launchers and snapshot leftovers
+            if f.startswith('start_') and f.endswith('.bat'):
+                try: os.remove(fp); cleaned.append(f)
+                except Exception: pass
+    return cleaned
+
+def _unregister_all_agent_tasks():
+    """Unregister all dao_agent_* scheduled tasks."""
+    ps_run("Get-ScheduledTask | Where-Object {$_.TaskName -like 'dao_agent_*'} | "
+           "Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue",
+           timeout=20)
+
+def _revert_multisession():
+    """Revert in-memory termsrv.dll patches (return to native single-session).
+    This is a clean revert — a service restart also achieves the same."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import ts_multifix
+        return ts_multifix.revert()
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+def hibernate():
+    """Gracefully shut down all VM activity → zero footprint (太上下知有之).
+    The host daemon stays running (invisible, minimal CPU) to accept wake().
+    Steps:
+      1. Logoff all CREATED VM accounts (not attached user sessions)
+      2. Kill mstsc windows for our RDP target
+      3. Unregister scheduled tasks for inner agents
+      4. Revert termsrv.dll multi-session patch
+      5. Clean temporary files (opt-in)
+      6. Clear stored credential cache
+    """
+    if _stealth_state['mode'] == 'hibernating':
+        return {'ok': True, 'mode': 'hibernating', 'note': 'already hibernating'}
+
+    log.info('hibernating: shutting down all VMs')
+    results = {'destroyed': [], 'detached': [], 'errors': []}
+
+    # 1. Destroy created VMs, detach attached ones
+    for name in list(vms.keys()):
+        try:
+            if vms[name].get('attached'):
+                r = destroy_vm(name)  # detach only
+                results['detached'].append(name)
+            else:
+                r = destroy_vm(name, delete_user=True)
+                results['destroyed'].append(name)
+        except Exception as e:
+            results['errors'].append(f'{name}: {e}')
+
+    # 2. Kill remaining mstsc windows for our target
+    mstsc = _kill_all_mstsc()
+    results['mstsc'] = mstsc
+
+    # 3. Unregister all agent tasks
+    _unregister_all_agent_tasks()
+
+    # 4. Revert termsrv.dll patch
+    revert = _revert_multisession()
+    results['termsrv_revert'] = revert
+
+    # 5. Clean temp files
+    if CFG.get('cleanup_temp_on_hibernate', True):
+        results['cleaned'] = _cleanup_temp_files()
+
+    # 6. Clear stored credentials for our RDP target
+    ps_run(f"cmdkey /delete:TERMSRV/{RDP_TARGET} 2>$null", timeout=10)
+
+    _stealth_state['mode'] = 'hibernating'
+    _stealth_state['hibernate_time'] = time.strftime('%Y-%m-%d %H:%M:%S')
+    log.info('hibernate complete: %s', results)
+    return {'ok': True, 'mode': 'hibernating', **results}
+
+def wake():
+    """Wake from hibernate: re-enable multi-session, ready for vm.create.
+    Does NOT auto-create any VMs — the caller decides what to spin up."""
+    if _stealth_state['mode'] == 'active':
+        return {'ok': True, 'mode': 'active', 'note': 'already active'}
+
+    log.info('waking from hibernate')
+    # Re-enable multi-session
+    ms = ensure_multisession()
+    deploy_inner_script()
+
+    _stealth_state['mode'] = 'active'
+    _stealth_state['last_api_call'] = time.time()
+    _stealth_state['hibernate_time'] = None
+    log.info('wake complete: multisession=%s', ms)
+    return {'ok': True, 'mode': 'active', 'multisession': ms}
+
+def stealth_status():
+    """Current stealth state + system footprint report."""
+    # Count our processes
+    mstsc_count = 0
+    try:
+        out, _, _ = ps_run("(Get-Process mstsc -ErrorAction SilentlyContinue).Count", timeout=10)
+        mstsc_count = int(out.strip() or '0')
+    except Exception:
+        pass
+
+    # Check for stray dao_agent tasks
+    tasks = []
+    try:
+        out, _, _ = ps_run(
+            "Get-ScheduledTask | Where-Object {$_.TaskName -like 'dao_agent_*'} | "
+            "Select-Object TaskName,State | ConvertTo-Json -Compress", timeout=15)
+        t = json.loads(out.strip() or '[]')
+        tasks = t if isinstance(t, list) else [t] if t else []
+    except Exception:
+        pass
+
+    edition = _os_edition()
+    sessions = get_sessions()
+
+    return {
+        'ok': True,
+        'mode': _stealth_state['mode'],
+        'hibernate_time': _stealth_state['hibernate_time'],
+        'idle_seconds': round(time.time() - _stealth_state['last_api_call']),
+        'stealth_auto': CFG.get('stealth_auto', False),
+        'stealth_idle_timeout': CFG.get('stealth_idle_timeout', 300),
+        'active_vms': len(vms),
+        'vm_names': list(vms.keys()),
+        'mstsc_windows': mstsc_count,
+        'agent_tasks': tasks,
+        'os': edition,
+        'sessions': sessions,
+        'footprint': 'zero' if (_stealth_state['mode'] == 'hibernating'
+                                and mstsc_count == 0 and not tasks) else 'non-zero',
+    }
 
 def get_sessions():
     out, _, _ = ps_run("quser 2>$null")
@@ -403,9 +669,20 @@ class HostHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             if not self._auth_ok(): return self._respond({'error': 'unauthorized'}, 401)
+            _stealth_state['last_api_call'] = time.time()
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length).decode('utf-8')) if length else {}
-            self._respond(self._dispatch(body.get('action', ''), body))
+            action = body.get('action', '')
+            # In hibernate mode, only allow wake/status/stealth commands
+            if (_stealth_state['mode'] == 'hibernating'
+                    and action not in ('host.wake', 'host.stealth_status',
+                                       'host.stealth_config', 'host.health',
+                                       'host.os_info', 'host.cleanup')):
+                return self._respond(
+                    {'error': 'system hibernating — call host.wake first',
+                     'mode': 'hibernating',
+                     'hibernate_time': _stealth_state['hibernate_time']}, 503)
+            self._respond(self._dispatch(action, body))
         except Exception as e:
             self._respond({'error': str(e), 'trace': traceback.format_exc()}, 500)
     def _dispatch(self, action, body):
@@ -431,6 +708,26 @@ class HostHandler(http.server.BaseHTTPRequestHandler):
                 return {'ok': False, 'error': str(e)}
         if action == 'host.enable_multisession':
             return ensure_multisession()
+        # ── Stealth / Silent mode (太上下知有之) ──
+        if action == 'host.hibernate':
+            return hibernate()
+        if action == 'host.wake':
+            return wake()
+        if action == 'host.stealth_status':
+            return stealth_status()
+        if action == 'host.stealth_config':
+            # Update stealth config dynamically
+            for k in ('stealth_auto', 'stealth_idle_timeout', 'cleanup_temp_on_hibernate'):
+                if k in body:
+                    CFG[k] = body[k]
+            json.dump(CFG, open(CONFIG_PATH, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
+            return {'ok': True, 'config': {k: CFG.get(k) for k in
+                    ('stealth_auto', 'stealth_idle_timeout', 'cleanup_temp_on_hibernate')}}
+        if action == 'host.cleanup':
+            cleaned = _cleanup_temp_files()
+            return {'ok': True, 'cleaned': cleaned}
+        if action == 'host.os_info':
+            return _os_edition()
         if action == 'vm.snapshot':
             return snapshot_vm(body.get('name', body.get('vm', '')), body.get('tag'), body.get('path'))
         if action == 'vm.restore':
@@ -474,12 +771,17 @@ def main():
             vms[user.lower()] = {'port': port, 'status': 'running',
                                  'created_at': 'pre-existing', 'password': DEFAULT_PW,
                                  'session_user': user}
-            print(f'[host] attached existing agent {user} on :{port}')
+            log.info('attached existing agent %s on :%d', user, port)
     if CFG.get('keepalive', True):
         threading.Thread(target=_keepalive_loop, daemon=True).start()
-        print(f'[host] rdp keepalive watchdog on for {RDP_TARGET}')
+        log.info('rdp keepalive watchdog on for %s', RDP_TARGET)
+    # Idle watchdog for auto-hibernate (stealth_auto mode)
+    threading.Thread(target=_idle_watchdog, daemon=True).start()
+    edition = _os_edition()
+    log.info('os: %s', edition.get('edition', 'unknown'))
     srv = ThreadedServer(('127.0.0.1', PORT), HostHandler)
-    print(f'[vm_host_daemon v2] listening on 127.0.0.1:{PORT} (token={"on" if TOKEN else "off"})')
+    log.info('vm_host_daemon v3 listening on 127.0.0.1:%d (token=%s, stealth_auto=%s)',
+             PORT, 'on' if TOKEN else 'off', CFG.get('stealth_auto'))
     sys.stdout.flush()
     srv.serve_forever()
 
