@@ -11467,3 +11467,36 @@ enter, and accept. Receipt stack: KWrite's title flipped from
 bytes. Also learned: KWrite doesn't ask move-vs-copy for a drop —
 dropping a file on an editor *opens* it; the copy/move/link popup is
 a file-manager convention, not a toolkit one.
+
+## F367 — the economy arc: a whole act with zero image reads
+
+The user named the real enemy: token burn. An audit of the previous
+arcs shows where the budget went — not into the acts but into the
+*perception dialect*: full-screen PNGs saved and re-read through the
+vision channel at every checkpoint, each one costing orders of
+magnitude more than a text read, most of them confirming things a
+title bar had already said. The official screenshot→reason→click loop
+has exactly this cost profile; the floor was built to beat it and the
+agent had drifted back into it out of habit.
+
+So this arc ran a complete GUI act — KWrite: new document, type a
+line, Ctrl+Shift+S, retarget the Save dialog by path, Return, verify
+— with **zero image reads**. Perception came entirely from
+`screen_observe` (window list + active + focus + actionable controls
+of the foreground window, the set-of-marks idea from UFO/OmniParser
+rendered as cheap text), and the final receipt came from the artifact
+floor (`open(path).read()` — bytes exact). The Save dialog never
+needed to be *seen*: its title announced itself in the window list
+and its filename field, buttons and file tree arrived as named
+controls.
+
+The perception ladder, priced: (1) window titles — near-free, and
+programs *narrate* through them (Untitled → Untitled * → filename);
+(2) `screen_observe` actions — one a11y scan, decision-ready text;
+(3) region OCR — pixels, but only the pixels that matter, returned
+as text; (4) full-frame vision — the last resort, for surfaces that
+draw everything and name nothing (F365's KCalc display). Rule of
+the arc: climb the ladder from the cheap end, and let a rung's
+*failure* — not habit — be the only thing that promotes you to the
+next one. Screenshots are for humans and for genuinely opaque
+surfaces; agents should read titles, trees and files.
