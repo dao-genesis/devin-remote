@@ -11389,3 +11389,22 @@ lived behind a Summary modal (Alt+A mnemonic, GTK dialogs still
 swallow pointer clicks), and the receipt was the OS package database
 itself: dpkg -s sl flipped to 'install ok installed' — the same
 kernel-truth floor as F359, one layer up the stack.
+
+## F363 — xterm+vim: the window that renames itself, and an editor with a memory
+
+First TUI arc: no widgets, no tree, no menus — the terminal grid is
+the whole GUI, and vim's modal grammar is the only API. Two traps.
+First, launch(wait_title='xterm') returned None: xterm immediately
+retitles itself to `user@host: cwd`, so the app's *name* never
+appears in its own title. Titles are advertising chosen by the
+program, not identity — match on what the program will say, not what
+it is called. Second, the editor remembers: the plan was 'reopen,
+dd deletes line 1', but vim's viminfo restored the cursor to the
+*last edited line* (line 2), and dd obediently deleted the reminder
+instead of the grocery line. The artifact caught it instantly —
+content after ZZ was the grocery line, the inverse of the prediction.
+Position-dependent verbs (dd, x, p) are only as safe as your claim
+about where the cursor is, and editors carry cross-session state that
+falsifies fresh-start assumptions. Insert-write-escape-:wq and
+normal-mode dd+ZZ both verified byte-exact on disk; the file is the
+only floor a TUI needs.
