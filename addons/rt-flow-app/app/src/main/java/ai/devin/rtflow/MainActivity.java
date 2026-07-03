@@ -3234,6 +3234,13 @@ public class MainActivity extends AppCompatActivity {
         return urls.length() > 0 ? urls.optString(0) : "";
     }
 
+    /** 更新说明只留最新版一条: 历史版本号长列表对用户是负担, 用户只需最新版的最少量说明。 */
+    static String trimNotesLatest(String notes) {
+        if (notes == null) return "";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\nv\\d+\\.").matcher(notes);
+        if (m.find(1)) notes = notes.substring(0, m.start() + 1);
+        return notes.trim();
+    }
     /** 拉取在线版本清单并与本机比对。多镜像轮询 (去中心化, 任一可达即可)。后台线程调用。返回 JSON 串。 */
     String fetchUpdateInfo() {
         String lastErr = "无可用镜像";
@@ -3264,7 +3271,7 @@ public class MainActivity extends AppCompatActivity {
                 out.put("hasUpdate", latest > cur);
                 out.put("url", url);
                 out.put("urls", apkMirrors(url));
-                out.put("notes", m.optString("notes", ""));
+                out.put("notes", trimNotesLatest(m.optString("notes", "")));
                 out.put("source", murl);
                 return out.toString();
             } catch (Exception e) {
