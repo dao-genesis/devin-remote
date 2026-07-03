@@ -11428,3 +11428,23 @@ whole wizard: the *only* trustworthy postcondition of a multi-step
 dialog is the state it was supposed to create, read from outside the
 app. When a wizard is broken, no input channel can fix it — detect,
 record, and walk away.
+
+## F365 — KCalc: the copy channel is not universal
+
+Installed fresh via `apt-get install kcalc` (dpkg is the receipt) and
+driven entirely from the keyboard: digits, `/`, and Return-as-equals
+echo straight into the display — `355/113` → `3.14159292035…`, the
+classic π convergent, read back by `ocr_text` with a digit whitelist.
+The surprise was on the read side. KCalc's display is a painted
+QLabel: AT-SPI exposes no value, and — unlike every editor and
+terminal so far — synthetic Ctrl+C leaves the clipboard untouched (a
+SENTINEL planted before the copy survived it, twice). read_selection
+(F195) assumes copy is the universal fallback for drawn surfaces;
+KCalc is the counterexample where even the copy channel is closed and
+pixels are the *only* reader. Ranking for drawn numeric displays:
+try the tree, try the copy, then OCR with a whitelist — and keep the
+whitelist tight, because the display's thin decimal point vanishes at
+OCR scale while every digit survives. One more calibration note:
+capture space is the real 1600x1200 root, not the 1568-wide scaled
+screenshot — regions measured on a saved PNG must be re-based before
+they are handed to ocr_text.
