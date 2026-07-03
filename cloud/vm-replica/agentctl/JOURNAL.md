@@ -11629,3 +11629,25 @@ rode along: a crashed arc leaves live props behind (kill your decoys
 before re-running), and a TUI's state machine has no window titles
 to narrate progress — sequence timing (`sleep` between F-keys) is
 the only synchronisation, so pad it.
+
+## F374 — System Settings (QML): where the semantic floor thins, the ladder carries
+
+Changing the machine's own configuration — Night Color — through the
+GUI. KDE's System Settings is the first Qt *Quick* subject, and QML
+is where the semantic floor visibly thins: the sidebar search
+swallowed Ctrl+F typing without navigating, and the KCM's central
+checkbox surfaced in AT-SPI as `CheckBox ''` with no name and no
+rect — a node that exists but cannot be found, read, or invoked by
+meaning. Three rungs failed honestly (brief showed only chrome;
+Tab+Space toggled nothing; uia had no handle), so the ladder promoted
+exactly as designed: region OCR over the KCM's frame found the
+literal word "Activate" at (878,415), the checkbox lives one icon
+width to its left, one click + a *semantic* Apply (that button is a
+real QWidget with a name) flipped it — and `kwinrc [NightColor]
+Active=true` receipted it. Direct KCM launch (`systemsettings5
+kcm_nightcolor`) beat driving the QML search — the command line is
+the semantic entrance when the GUI's own navigation is opaque. And
+the arc cleaned up after itself: Night Color *tints every pixel on
+the screen*, which would quietly poison every later pixel-rung arc —
+a state change whose blast radius crosses arc boundaries must be
+reverted (receipt: Active back to unset).
