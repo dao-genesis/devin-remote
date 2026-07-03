@@ -11350,3 +11350,22 @@ arithmetic complement to the byte. Also reconfirmed twice: GTK dialog
 buttons (Export) swallow synthetic clicks even *after* activation —
 the mnemonic (Alt+E) is the reliable path into GTK dialogs, not the
 pointer.
+
+## F361 — SuperTux worldmap: Return is a place, not a button
+
+Fresh VM, same game as F345, one floor higher: the worldmap. The
+previous session died here clicking 'Start Game' with zero-width
+synthetic clicks; this arc replayed it with F345's law (hold-taps,
+key_down/key_up spans) and every menu yielded on the first try. The
+new lesson lives on the worldmap: Return there is *positional* — it
+enters whatever level dot Tux is standing on, and if he stands on
+nothing it replays the last cutscene instead. Same key, three
+meanings (menu-confirm, cutscene-advance, level-enter), disambiguated
+only by where the avatar is. Locomotion proof was the camera itself:
+region_diff 0.29 during the intro, 0.999 once a held RIGHT scrolled
+the level. The exit receipt was the purest one a game offers: the
+savegame (~/.local/share/supertux2/profile1/world1.stsg) did NOT
+change on level-abort but was rewritten the instant 'Leave World' was
+chosen — 'solved #t' appearing for the visited level. Games persist
+at chapter boundaries, not keystrokes; assert on the boundary, not in
+the middle.
