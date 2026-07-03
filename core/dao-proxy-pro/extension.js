@@ -4937,6 +4937,7 @@ function getEaConfigHtml(port, nonce) {
     <button class="dao-tab" data-pane="paneProvider">② 渠道配置</button>
     <button class="dao-tab" data-pane="paneRouter">③ 模型路由</button>
     <button class="dao-tab" data-pane="paneRevproxy">④ 模型反代</button>
+    <button class="dao-tab" data-pane="paneBridge">⑤ 内网穿透</button>
   </div>
 
   <!-- ① 本源观照 (IDE 左侧复刻 · 道/官/编 + 经文 + 本源体池 · 与左侧完全一致) -->
@@ -5095,6 +5096,85 @@ function getEaConfigHtml(port, nonce) {
       </div>
       <pre id="rpTestOut" style="display:none;max-height:200px;overflow:auto;margin:6px 0 0;padding:8px;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));border-radius:4px"></pre>
     </div>
+  </div>
+
+  <!-- ⑤ 内网穿透 · DAO Bridge (反者道之动 · 把反代端点直暴公网 · 零账号去中心化 · 公网直调反带模型) -->
+  <div class="dao-pane" id="paneBridge">
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 2px;border-bottom:1px solid rgba(128,128,128,0.18);flex-wrap:wrap">
+      <span style="font-weight:600;font-size:12px">☯ 内网穿透 · DAO Bridge</span>
+      <span id="brgStat" style="font-size:10px;opacity:0.65;margin-left:auto">加载中…</span>
+    </div>
+
+    <div style="font-size:11px;line-height:1.6;padding:6px 2px;opacity:0.85">
+      把「④ 模型反代」的本地端点经 <b>cloudflared 快速隧道</b>(零账号·去中心化)暴露到<b>公网</b>，
+      任意常用 AI 工具在公网环境把 Base URL 换成下方<b>公网URL</b>、Header 仍带同一 API Key，
+      即可直调反带出来的免费/付费模型。<span style="opacity:0.6">反者道之动 · 无名之樸。</span>
+    </div>
+
+    <!-- 隧道状态 + 启停 -->
+    <div style="border:1px solid rgba(128,128,128,0.22);border-radius:6px;padding:8px;margin:4px 2px">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span style="font-weight:600;font-size:11px">隧道状态</span>
+        <span id="brgState" style="font-size:11px;color:var(--vscode-descriptionForeground,#999)">未连接</span>
+        <span id="brgMode" style="font-size:10px;opacity:0.6"></span>
+        <span style="margin-left:auto"></span>
+        <button class="btn add" id="brgStart" title="启动快速隧道(零账号) · 把反代端点暴露公网">▶ 启动隧道</button>
+        <button class="btn" id="brgRestart" title="重启隧道(换新公网URL)">↻ 重启</button>
+        <button class="btn" id="brgStop" title="停止隧道 · 关闭公网暴露">■ 停止</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px">
+        <span style="font-weight:600;font-size:11px">公网 URL</span>
+        <code id="brgUrl" style="font-size:11px;background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));padding:2px 6px;border-radius:3px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</code>
+        <button class="btn" id="brgCopyUrl" title="复制公网 URL">复制</button>
+        <button class="btn" id="brgOpenConsole" title="在浏览器打开公网网页对话台(零鉴权直开)">🌐 网页对话台</button>
+      </div>
+      <div style="font-size:10px;opacity:0.6;margin-top:4px" id="brgBound">本地反代端口: —</div>
+    </div>
+
+    <!-- 公网接入信息 (任意 AI 工具直调) -->
+    <div style="border:1px solid rgba(128,128,128,0.22);border-radius:6px;padding:8px;margin:4px 2px">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span style="font-weight:600;font-size:11px">公网接入 (OpenAI / Anthropic 兼容)</span>
+        <button class="btn" id="brgCopyInfo" style="margin-left:auto" title="一键复制 公网Base + API Key + 调用示例 整段接入信息">📋 复制接入信息</button>
+      </div>
+      <div style="font-size:10px;line-height:1.7;margin-top:6px;opacity:0.9">
+        <div>Base URL: <code id="brgPubBase" style="background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));padding:1px 5px;border-radius:3px">—</code></div>
+        <div>对话补全: <code id="brgPubChat" style="background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));padding:1px 5px;border-radius:3px">—</code></div>
+        <div>Claude 端点: <code id="brgPubMsg" style="background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));padding:1px 5px;border-radius:3px">—</code></div>
+        <div>模型列表: <code id="brgPubModels" style="background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));padding:1px 5px;border-radius:3px">—</code></div>
+        <div>API Key: <code id="brgPubKey" style="background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));padding:1px 5px;border-radius:3px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom">—</code></div>
+      </div>
+      <div style="font-size:10px;opacity:0.55;margin-top:6px">Header: <code>Authorization: Bearer {API Key}</code> · model 可填 modelUid 或家族别名(如 glm-4.7)。公网访问需已设 API Key(启动隧道时自动确保)。</div>
+    </div>
+
+    <!-- 公网连通自测 (经公网URL发一次真请求) -->
+    <div style="border:1px solid rgba(128,128,128,0.22);border-radius:6px;padding:8px;margin:4px 2px">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span style="font-weight:600;font-size:11px">公网连通自测</span>
+        <input id="brgTestPrompt" placeholder="测试提示词 (默认: 你好)" style="flex:1;min-width:120px;font-size:11px;padding:2px 6px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-input-background,rgba(0,0,0,0.2));color:var(--vscode-input-foreground,var(--vscode-foreground))">
+        <button class="btn" id="brgHealth" title="经公网URL GET /v1/models · 验证隧道可达">health</button>
+        <button class="btn add" id="brgTestRun" title="经公网URL发一次标准 OpenAI 请求 · 验证公网全链路直调反带模型">▶ 公网直调测试</button>
+      </div>
+      <pre id="brgTestOut" style="display:none;max-height:200px;overflow:auto;margin:6px 0 0;padding:8px;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));border-radius:4px"></pre>
+    </div>
+
+    <!-- 固定域名 (可选·Cloudflare 命名隧道) -->
+    <details style="margin:4px 2px;border:1px solid rgba(128,128,128,0.18);border-radius:6px;padding:6px 8px">
+      <summary style="font-size:11px;font-weight:600;cursor:pointer;opacity:0.85">固定公网域名 (可选 · Cloudflare 命名隧道)</summary>
+      <div style="font-size:10px;line-height:1.6;margin-top:6px;opacity:0.8">
+        快速隧道每次重启换 URL。若要<b>固定不变</b>的公网域名，可在 Cloudflare Zero Trust 创建命名隧道，
+        把它的 <b>Tunnel Token</b>(形如 <code>eyJ…</code>) 粘到下面并保存，然后点「启动固定隧道」。
+        <span style="opacity:0.6">此为可选项，非前置条件。</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px">
+        <input id="brgCfEmail" placeholder="Cloudflare 邮箱 (可选)" style="flex:1;min-width:120px;font-size:11px;padding:2px 6px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-input-background,rgba(0,0,0,0.2));color:var(--vscode-input-foreground,var(--vscode-foreground))">
+        <input id="brgCfKey" type="password" placeholder="Tunnel Token (eyJ…)" style="flex:1.6;min-width:140px;font-size:11px;padding:2px 6px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-input-background,rgba(0,0,0,0.2));color:var(--vscode-input-foreground,var(--vscode-foreground))">
+        <button class="btn add" id="brgCfSave" title="保存 Cloudflare 凭证/命名隧道 Token">保存</button>
+        <button class="btn" id="brgStartNamed" title="用已保存的命名隧道 Token 启动固定域名隧道">▶ 启动固定隧道</button>
+        <button class="btn" id="brgLogout" title="清除已保存的 Cloudflare 凭证/命名隧道">✖ 注销</button>
+      </div>
+      <div id="brgCfState" style="font-size:10px;opacity:0.6;margin-top:4px">未登录 Cloudflare (默认走零账号快速隧道)</div>
+    </details>
   </div>
 
   <!-- 路由编辑弹窗 -->
@@ -6040,6 +6120,7 @@ function getEaConfigHtml(port, nonce) {
       }
       if (pane === 'paneRouter') { _scheduleWires(); }
       if (pane === 'paneRevproxy') { _rpRefresh(); }
+      if (pane === 'paneBridge') { _brgRefresh(); }
     });
   }
 
@@ -6322,6 +6403,126 @@ function getEaConfigHtml(port, nonce) {
         out.textContent = '✔ 全链路通 (标准 OpenAI 响应)\\n\\n模型: ' + (res.j.model || model) + '\\n回复:\\n' + c + '\\n\\n— 原始 —\\n' + JSON.stringify(res.j, null, 2);
       }).catch(function(e) { if (out) out.textContent = '✖ 网络/解析异常: ' + e.message; });
   }
+
+  // ═══ ⑤ 内网穿透 · DAO Bridge (反者道之动 · 把反代端点直暴公网) ═══
+  var _brgS = null;
+  var _brgPoll = null;
+  function _brgEl(id) { return document.getElementById(id); }
+  function _brgSet(id, t) { var e = _brgEl(id); if (e) e.textContent = t; }
+  function _brgApply(d) {
+    _brgS = d || {};
+    var running = !!d.running, url = d.url || '';
+    var state = _brgEl('brgState');
+    if (state) {
+      if (running && url) { state.textContent = '● 已连通'; state.style.color = '#3fb950'; }
+      else if (running) { state.textContent = '◌ 连接中…'; state.style.color = '#d29922'; }
+      else { state.textContent = '○ 未连接'; state.style.color = ''; }
+    }
+    _brgSet('brgMode', running ? (d.named ? '命名隧道·固定域名' : '快速隧道·零账号') : '');
+    _brgSet('brgStat', running ? (url ? '● 公网已暴露' : '◌ 隧道启动中') : '○ 未启动');
+    _brgSet('brgUrl', url || '—');
+    _brgSet('brgBound', '本地反代端口: ' + (d.boundPort || d.localPort || '—') + (d.bin ? ' · cloudflared: 已就绪' : ' · cloudflared: 未安装(启动时自动拉取)'));
+    _brgSet('brgPubBase', d.publicBase || '—');
+    _brgSet('brgPubChat', d.publicChat || '—');
+    _brgSet('brgPubMsg', d.publicMessages || '—');
+    _brgSet('brgPubModels', d.publicModels || '—');
+    _brgSet('brgCfState', d.cfLoggedIn ? ('已保存 Cloudflare 凭证' + (d.cfEmail ? ' (' + d.cfEmail + ')' : '') + (d.named ? ' · 命名隧道 Token 就绪' : '')) : '未登录 Cloudflare (默认走零账号快速隧道)');
+    // 公网 apiKey 取自 ④ 反代状态 (仅本机可见)
+    if (_rpStatus && _rpStatus.apiKey) _brgSet('brgPubKey', _rpStatus.apiKey);
+    else if (_rpStatus && _rpStatus.hasKey) _brgSet('brgPubKey', '(已设置·见④面板复制)');
+    else _brgSet('brgPubKey', '(未设置 — 公网访问前请在④面板设 API Key)');
+    // 连接中则起轮询等 URL
+    if (running && !url) { _brgStartPoll(); } else { _brgStopPoll(); }
+  }
+  function _brgRefresh() {
+    // 顺带取一次反代状态以拿 apiKey
+    fJson('/origin/revproxy/status').then(function(rp){ _rpStatus = rp || _rpStatus; }).catch(function(){})
+      .then(function(){ return fJson('/origin/revproxy/tunnel'); })
+      .then(function(d){ _brgApply(d); })
+      .catch(function(e){ _brgSet('brgStat', '状态获取失败: ' + e.message); });
+  }
+  function _brgStartPoll() {
+    if (_brgPoll) return;
+    _brgPoll = setInterval(function(){
+      fJson('/origin/revproxy/tunnel').then(function(d){
+        _brgApply(d);
+        if (d && d.url) _brgStopPoll();
+      }).catch(function(){});
+    }, 2500);
+  }
+  function _brgStopPoll() { if (_brgPoll) { clearInterval(_brgPoll); _brgPoll = null; } }
+  function _brgAction(action, extra) {
+    var body = Object.assign({ action: action }, extra || {});
+    _brgSet('brgStat', '执行 ' + action + '…');
+    return fPost('/origin/revproxy/tunnel', body).then(function(d){ _brgApply(d); return d; })
+      .catch(function(e){ _brgSet('brgStat', action + ' 失败: ' + e.message); throw e; });
+  }
+  function _brgClip(t) { try { navigator.clipboard.writeText(t); _brgSet('brgStat', '已复制'); } catch (e) {} }
+  function _brgTest() {
+    var out = _brgEl('brgTestOut');
+    var url = _brgS && _brgS.url;
+    if (!url) { if (out) { out.style.display = 'block'; out.textContent = '公网隧道未连通 · 请先启动隧道'; } return; }
+    var key = (_rpStatus && _rpStatus.apiKey) || '';
+    var model = (_rpStatus && _rpStatus.models && _rpStatus.models.length) ? (_rpStatus.models.find(function(m){ return m.exposed !== false; }) || _rpStatus.models[0]) : null;
+    model = model ? (model.uid || model.family || 'swe-1-6') : 'swe-1-6';
+    var prompt = (_brgEl('brgTestPrompt').value || '你好').trim();
+    if (out) { out.style.display = 'block'; out.textContent = '经公网 URL 请求中… (POST ' + url + '/v1/chat/completions · model=' + model + ')'; }
+    fetch(url + '/v1/chat/completions', {
+      method: 'POST', cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+      body: JSON.stringify({ model: model, messages: [{ role: 'user', content: prompt }], stream: false })
+    }).then(function(r){ return r.json().then(function(j){ return { status: r.status, j: j }; }); })
+      .then(function(res){
+        if (res.status >= 400) { out.textContent = '✖ HTTP ' + res.status + '\\n' + JSON.stringify(res.j, null, 2); return; }
+        var c = res.j && res.j.choices && res.j.choices[0] && res.j.choices[0].message ? res.j.choices[0].message.content : '';
+        out.textContent = '✔ 公网全链路通 (经隧道直调反带模型)\\n\\n公网URL: ' + url + '\\n模型: ' + (res.j.model || model) + '\\n回复:\\n' + c;
+      }).catch(function(e){ if (out) out.textContent = '✖ 公网请求异常: ' + e.message + '\\n(隧道可能仍在建立·或被 CF 拦截·稍候重试)'; });
+  }
+  function _brgHealth() {
+    var out = _brgEl('brgTestOut');
+    var url = _brgS && _brgS.url;
+    if (!url) { if (out) { out.style.display = 'block'; out.textContent = '公网隧道未连通 · 请先启动隧道'; } return; }
+    var key = (_rpStatus && _rpStatus.apiKey) || '';
+    if (out) { out.style.display = 'block'; out.textContent = 'GET ' + url + '/v1/models …'; }
+    fetch(url + '/v1/models', { cache: 'no-store', headers: { 'Authorization': 'Bearer ' + key } })
+      .then(function(r){ return r.json().then(function(j){ return { status: r.status, j: j }; }); })
+      .then(function(res){
+        var n = res.j && res.j.data ? res.j.data.length : 0;
+        out.textContent = (res.status < 400 ? '✔' : '✖') + ' HTTP ' + res.status + ' · 公网可达 · ' + n + ' 模型\\n' + JSON.stringify(res.j, null, 2).slice(0, 800);
+      }).catch(function(e){ if (out) out.textContent = '✖ 公网不可达: ' + e.message; });
+  }
+  function _brgCopyInfo() {
+    var s = _brgS || {};
+    var key = (_rpStatus && _rpStatus.apiKey) || '$REVPROXY_KEY';
+    var lines = [
+      '# DAO Bridge · 公网接入 (反带模型公网直调)',
+      'Base URL: ' + (s.publicBase || '(隧道未连通)'),
+      'API Key : ' + key,
+      'Header  : Authorization: Bearer ' + key,
+      '',
+      '# OpenAI 兼容 curl 示例',
+      'curl -X POST ' + (s.publicChat || '<公网URL>/v1/chat/completions') + ' \\\\',
+      '  -H "Content-Type: application/json" -H "Authorization: Bearer ' + key + '" \\\\',
+      '  -d \\'{"model":"swe-1-6","messages":[{"role":"user","content":"你好"}]}\\''
+    ];
+    _brgClip(lines.join('\\n'));
+  }
+  (function _brgWire() {
+    var m = {
+      brgStart: function(){ _brgAction('start'); },
+      brgRestart: function(){ _brgAction('restart'); },
+      brgStop: function(){ _brgAction('stop'); },
+      brgStartNamed: function(){ _brgAction('startNamed'); },
+      brgLogout: function(){ _brgAction('logout'); },
+      brgCopyUrl: function(){ _brgClip((_brgS && _brgS.url) || ''); },
+      brgCopyInfo: _brgCopyInfo,
+      brgTestRun: _brgTest,
+      brgHealth: _brgHealth,
+      brgCfSave: function(){ _brgAction('cfLogin', { email: (_brgEl('brgCfEmail').value || '').trim(), key: (_brgEl('brgCfKey').value || '').trim() }); },
+      brgOpenConsole: function(){ var u = _brgS && _brgS.publicConsole; if (u && _vscode) _vscode.postMessage({ type: 'openExternal', url: u }); else if (u) { try { window.open(u, '_blank'); } catch(e){} } }
+    };
+    Object.keys(m).forEach(function(id){ var e = _brgEl(id); if (e) e.addEventListener('click', m[id]); });
+  })();
 
   // ═══ ① 本源观照 · IDE 左侧复刻 (道/官/编 + 经文 + 本源体池 · 与左侧同源) ═══
   function _e1El(id) { return document.getElementById(id); }

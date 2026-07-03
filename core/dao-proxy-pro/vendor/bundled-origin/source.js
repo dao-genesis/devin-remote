@@ -4650,6 +4650,542 @@ function _extVersion() {
     return "";
   }
 }
+
+// ═══ 内网穿透 · DAO Bridge (反者道之动 · 把反代端点直暴公网) ══════════════════
+//   道义: 四十章「反者道之动·弱者道之用」。把本机反代端点(_actualPort 之 /v1/* 与
+//   /origin/revproxy/console 网页对话台)经 cloudflared 快速隧道(零账号·去中心化默认)
+//   暴露公网, 任意常用 AI 工具在公网直调反带出来的免费/付费模型。用户若要「固定不变
+//   的公网域名」才需自登 Cloudflare(命名隧道·可选前置非必需)。
+//   独立闭环(鸡犬之声相闻·民至老死不相往来): 用 -proxypro 后缀, 与 dao-vsix 整机穿透
+//   (绑 9920·machine control) 各管各的 cloudflared 进程, 互不侵夺。
+const _BRG_DIR = path.join(os.homedir(), ".dao", "bridge");
+const _BRG_LOG = path.join(_BRG_DIR, "cloudflared-proxypro.log");
+const _BRG_PID = path.join(_BRG_DIR, "cloudflared-proxypro.pid");
+const _BRG_PORT = path.join(_BRG_DIR, "cloudflared-proxypro.port");
+const _BRG_NAMED = path.join(_BRG_DIR, "named-tunnel-proxypro.json");
+const _BRG_CF_CRED = path.join(_BRG_DIR, "cf-credentials-proxypro.json");
+const _BRG_BIN_DIR = path.join(os.homedir(), ".dao", "bin");
+let _brgProc = null;
+let _brgUrl = "";
+let _brgStartMs = 0;
+let _brgFetching = false;
+function _brgEnsureDir() {
+  try {
+    fs.mkdirSync(_BRG_DIR, { recursive: true });
+  } catch (_) {}
+}
+// 从 cloudflared 日志抓最新 trycloudflare 公网 URL (排除 api.trycloudflare 心跳域)
+function _brgReadUrlFromLog() {
+  try {
+    const txt = fs.readFileSync(_BRG_LOG, "utf8");
+    const m = txt.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/g);
+    if (m && m.length) {
+      for (let i = m.length - 1; i >= 0; i--)
+        if (!/\/\/api\./.test(m[i])) return m[i];
+    }
+  } catch (_) {}
+  return "";
+}
+function _brgPidAlive() {
+  try {
+    const pid = parseInt(fs.readFileSync(_BRG_PID, "utf8").trim(), 10);
+    if (pid > 0) {
+      process.kill(pid, 0);
+      return pid;
+    }
+  } catch (_) {}
+  return 0;
+}
+function _brgReadBoundPort() {
+  try {
+    const n = parseInt(fs.readFileSync(_BRG_PORT, "utf8").trim(), 10);
+    if (n > 0) return n;
+  } catch (_) {}
+  return 0;
+}
+function _brgWriteBoundPort(p) {
+  try {
+    if (p) {
+      _brgEnsureDir();
+      fs.writeFileSync(_BRG_PORT, String(p), "utf8");
+    }
+  } catch (_) {}
+}
+function _brgReadNamedToken() {
+  try {
+    const j = JSON.parse(fs.readFileSync(_BRG_NAMED, "utf8"));
+    return (j && j.cfTunnelToken) || "";
+  } catch (_) {}
+  return "";
+}
+function _brgLoadCfCred() {
+  try {
+    return JSON.parse(fs.readFileSync(_BRG_CF_CRED, "utf8"));
+  } catch (_) {
+    return null;
+  }
+}
+function _brgSaveCfCred(c) {
+  _brgEnsureDir();
+  try {
+    fs.writeFileSync(_BRG_CF_CRED, JSON.stringify(c, null, 2), "utf8");
+  } catch (_) {}
+}
+function _brgCfState() {
+  let cfEmail = "",
+    cfSource = "",
+    cfLoggedIn = false,
+    named = false;
+  const c = _brgLoadCfCred();
+  if (c && (c.apiToken || c.globalApiKey || c.tunnelToken)) {
+    cfLoggedIn = true;
+    cfEmail = c.email || "";
+    cfSource = c.source || "";
+  }
+  if (_brgReadNamedToken()) named = true;
+  return { cfLoggedIn, cfEmail, cfSource, named };
+}
+function _brgFindCloudflared() {
+  const { execSync } = require("child_process");
+  const isWin = process.platform === "win32";
+  const cands = [
+    path.join(_BRG_BIN_DIR, isWin ? "cloudflared.exe" : "cloudflared"),
+    path.join(_BRG_DIR, isWin ? "cloudflared.exe" : "cloudflared"),
+    "C:\\Program Files\\cloudflared\\cloudflared.exe",
+    "C:\\cloudflared\\cloudflared.exe",
+    "/usr/local/bin/cloudflared",
+    "/usr/bin/cloudflared",
+    "/opt/homebrew/bin/cloudflared",
+  ];
+  for (const c of cands) {
+    try {
+      if (fs.existsSync(c)) return c;
+    } catch (_) {}
+  }
+  try {
+    if (isWin) {
+      const lines = execSync("where cloudflared", {
+        encoding: "utf8",
+        timeout: 5000,
+      })
+        .trim()
+        .split("\n");
+      for (const l of lines) {
+        const q = l.trim();
+        if (q && /\.exe$/i.test(q) && fs.existsSync(q)) return q;
+      }
+    } else {
+      const q = execSync("command -v cloudflared 2>/dev/null || true", {
+        encoding: "utf8",
+        timeout: 5000,
+        shell: "/bin/sh",
+      }).trim();
+      if (q && fs.existsSync(q)) return q;
+    }
+  } catch (_) {}
+  return "";
+}
+function _brgPlatformAsset() {
+  const p = process.platform,
+    a = process.arch;
+  if (p === "win32")
+    return {
+      asset:
+        a === "arm64"
+          ? "cloudflared-windows-arm64.exe"
+          : "cloudflared-windows-amd64.exe",
+      out: "cloudflared.exe",
+      tgz: false,
+    };
+  if (p === "darwin")
+    return {
+      asset:
+        a === "arm64"
+          ? "cloudflared-darwin-arm64.tgz"
+          : "cloudflared-darwin-amd64.tgz",
+      out: "cloudflared",
+      tgz: true,
+    };
+  return {
+    asset:
+      a === "arm64" ? "cloudflared-linux-arm64" : "cloudflared-linux-amd64",
+    out: "cloudflared",
+    tgz: false,
+  };
+}
+function _brgMirrors(asset) {
+  const gh =
+    "https://github.com/cloudflare/cloudflared/releases/latest/download/" +
+    asset;
+  return [
+    gh,
+    "https://ghfast.top/" + gh,
+    "https://gh-proxy.com/" + gh,
+    "https://mirror.ghproxy.com/" + gh,
+    "https://ghproxy.net/" + gh,
+  ];
+}
+function _brgDownload(u, dst, proxy) {
+  return new Promise((resolve) => {
+    const tmp = dst + ".part";
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      if (ok) {
+        try {
+          fs.renameSync(tmp, dst);
+        } catch (_) {
+          ok = false;
+        }
+      }
+      if (!ok) {
+        try {
+          fs.unlinkSync(tmp);
+        } catch (_) {}
+      }
+      resolve(ok);
+    };
+    const sink = (res, retry, depth) => {
+      if (
+        res.statusCode >= 300 &&
+        res.statusCode < 400 &&
+        res.headers.location
+      ) {
+        res.resume();
+        return retry(res.headers.location, depth + 1);
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return done(false);
+      }
+      const f = fs.createWriteStream(tmp);
+      res.pipe(f);
+      f.on("finish", () =>
+        f.close(() => {
+          try {
+            if (fs.statSync(tmp).size < 1000000) return done(false);
+          } catch (_) {
+            return done(false);
+          }
+          done(true);
+        }),
+      );
+      f.on("error", () => done(false));
+    };
+    const get = (link, depth) => {
+      if (depth > 6) return done(false);
+      let o;
+      try {
+        o = new URL(link);
+      } catch (_) {
+        return done(false);
+      }
+      const mod = o.protocol === "http:" ? http : https;
+      const req = mod.get(
+        {
+          hostname: o.hostname,
+          port: o.port || (o.protocol === "http:" ? 80 : 443),
+          path: o.pathname + o.search,
+          headers: { "User-Agent": "dao-proxypro-bridge fetch-cloudflared" },
+          timeout: 60000,
+        },
+        (res) => sink(res, get, depth),
+      );
+      req.on("error", () => done(false));
+      req.setTimeout(60000, () => {
+        req.destroy();
+        done(false);
+      });
+    };
+    get(u, 0);
+  });
+}
+// macOS 资产是 .tgz: 零依赖 gunzip + 手解 tar(512B 头块), 取出名为 cloudflared 的真二进制
+function _brgExtractTgz(tgzPath, outBin) {
+  try {
+    const buf = zlib.gunzipSync(fs.readFileSync(tgzPath));
+    let off = 0;
+    while (off + 512 <= buf.length) {
+      const header = buf.slice(off, off + 512);
+      const name = header
+        .slice(0, 100)
+        .toString("utf8")
+        .replace(/\0.*$/s, "");
+      off += 512;
+      if (!name) break;
+      const size =
+        parseInt(
+          header
+            .slice(124, 136)
+            .toString("utf8")
+            .replace(/[\0 ]+$/g, "")
+            .trim(),
+          8,
+        ) || 0;
+      if (name.split("/").pop() === "cloudflared" && size > 1000000) {
+        fs.writeFileSync(outBin, buf.slice(off, off + size));
+        try {
+          fs.chmodSync(outBin, 0o755);
+        } catch (_) {}
+        return true;
+      }
+      off += Math.ceil(size / 512) * 512;
+    }
+  } catch (_) {}
+  return false;
+}
+// 自带二进制缺失时按平台从 GitHub(+国内镜像) 拉取 cloudflared 到 ~/.dao/bin/
+async function _brgFetchCloudflared() {
+  if (_brgFetching) return "";
+  _brgFetching = true;
+  try {
+    _brgEnsureDir();
+    try {
+      fs.mkdirSync(_BRG_BIN_DIR, { recursive: true });
+    } catch (_) {}
+    const meta = _brgPlatformAsset();
+    const dst = path.join(_BRG_BIN_DIR, meta.out);
+    if (fs.existsSync(dst) && fs.statSync(dst).size > 1000000) return dst;
+    const proxy =
+      process.env.HTTPS_PROXY ||
+      process.env.https_proxy ||
+      process.env.HTTP_PROXY ||
+      process.env.http_proxy ||
+      "";
+    const dlTarget = meta.tgz ? path.join(_BRG_BIN_DIR, "cloudflared.tgz") : dst;
+    let ok = false;
+    for (const m of _brgMirrors(meta.asset)) {
+      log("[bridge] fetch cloudflared <- " + m);
+      ok = await _brgDownload(m, dlTarget, proxy);
+      if (ok) break;
+    }
+    if (ok && meta.tgz) {
+      ok = _brgExtractTgz(dlTarget, dst);
+      try {
+        fs.unlinkSync(dlTarget);
+      } catch (_) {}
+    }
+    if (ok) {
+      if (process.platform !== "win32") {
+        try {
+          fs.chmodSync(dst, 0o755);
+        } catch (_) {}
+      }
+      log("[bridge] cloudflared ready: " + dst);
+      return dst;
+    }
+    log("[bridge] cloudflared fetch FAILED (all mirrors)");
+    return "";
+  } finally {
+    _brgFetching = false;
+  }
+}
+// 暴露公网前确保反代已启用且有 key(loadConfig 无 key 会自动生成 dao-local-*),
+// 否则公网侧 /v1/* 会因 enabled=false 而 404/被本机免 key 误导。
+function _brgEnsureRevproxyReady() {
+  try {
+    const mod = _getRevproxy();
+    if (!mod || !mod.loadConfig || !mod.saveConfig) return;
+    const cfg = mod.loadConfig();
+    if (!cfg.enabled) {
+      cfg.enabled = true;
+      mod.saveConfig(cfg);
+      log("[bridge] revproxy auto-enabled for public tunnel");
+    }
+  } catch (_) {}
+}
+async function _brgStartTunnel(named) {
+  const { spawn } = require("child_process");
+  _brgEnsureDir();
+  _brgEnsureRevproxyReady();
+  const targetPort = _actualPort;
+  // 复用孤儿(善建者不拔): 上个宿主留下的 cloudflared 仍活·日志有可达 URL·绑的还是当前反代口 → 直接复用
+  if (!named) {
+    const pid = _brgPidAlive();
+    if (pid) {
+      const u = _brgReadUrlFromLog();
+      const bound = _brgReadBoundPort();
+      if (u && bound === targetPort) {
+        _brgProc = null;
+        _brgUrl = u;
+        try {
+          _writeEndpointDiscovery();
+        } catch (_) {}
+        return { ok: true, reused: true, url: u };
+      }
+      try {
+        process.kill(pid);
+      } catch (_) {}
+      try {
+        fs.unlinkSync(_BRG_PID);
+      } catch (_) {}
+      try {
+        fs.unlinkSync(_BRG_PORT);
+      } catch (_) {}
+    }
+  }
+  if (_brgProc) {
+    try {
+      _brgProc.kill();
+    } catch (_) {}
+    _brgProc = null;
+  }
+  const stale = _brgPidAlive();
+  if (stale) {
+    try {
+      process.kill(stale);
+    } catch (_) {}
+  }
+  let cfPath = _brgFindCloudflared();
+  if (!cfPath) cfPath = await _brgFetchCloudflared();
+  if (!cfPath) return { ok: false, reason: "cloudflared-not-found" };
+  const localUrl = "http://127.0.0.1:" + targetPort;
+  let args;
+  if (named) {
+    const tok = _brgReadNamedToken();
+    if (!tok) return { ok: false, reason: "no-named-token" };
+    args = ["tunnel", "run", "--token", tok];
+  } else {
+    // --protocol http2: QUIC(UDP 7844) 常被防火墙/NAT 拦死(实测 VM/企业网),
+    // 强制 http2 传输(走 443/TCP)让隧道在纯 TCP 环境亦能注册, 不再卡在 quic 重拨。
+    args = [
+      "tunnel",
+      "--url",
+      localUrl,
+      "--no-autoupdate",
+      "--protocol",
+      "http2",
+    ];
+  }
+  try {
+    fs.writeFileSync(_BRG_LOG, "");
+  } catch (_) {}
+  let out = "ignore";
+  try {
+    out = fs.openSync(_BRG_LOG, "a");
+  } catch (_) {}
+  try {
+    _brgProc = spawn(cfPath, args, {
+      stdio: ["ignore", out, out],
+      detached: true,
+    });
+  } catch (_) {
+    try {
+      _brgProc = spawn(cfPath, args, { stdio: "ignore", detached: true });
+    } catch (_2) {
+      _brgProc = null;
+    }
+  }
+  if (!_brgProc || !_brgProc.pid) return { ok: false, reason: "spawn-failed" };
+  try {
+    fs.writeFileSync(_BRG_PID, String(_brgProc.pid));
+  } catch (_) {}
+  _brgWriteBoundPort(targetPort);
+  _brgStartMs = Date.now();
+  _brgUrl = "";
+  try {
+    _brgProc.unref();
+  } catch (_) {}
+  _brgProc.on("error", () => {
+    _brgProc = null;
+  });
+  _brgProc.on("exit", () => {
+    _brgProc = null;
+  });
+  return { ok: true };
+}
+function _brgStopTunnel() {
+  if (_brgProc) {
+    try {
+      _brgProc.kill();
+    } catch (_) {}
+    _brgProc = null;
+  }
+  try {
+    const op = _brgPidAlive();
+    if (op) process.kill(op);
+  } catch (_) {}
+  try {
+    fs.unlinkSync(_BRG_PID);
+  } catch (_) {}
+  try {
+    fs.unlinkSync(_BRG_PORT);
+  } catch (_) {}
+  try {
+    fs.writeFileSync(_BRG_LOG, "");
+  } catch (_) {}
+  _brgUrl = "";
+  try {
+    _writeEndpointDiscovery();
+  } catch (_) {}
+}
+// 命名隧道(可选·固定域名): 校验 CF token / API 凭证并落盘。仅在用户主动登录时调用。
+function _brgCfLogin(email, key) {
+  const k = (key || "").trim();
+  if (!k) return { ok: false, reason: "empty-key" };
+  // 形如 eyJ...(命名隧道 token) 直接存; 否则视作 API Token/Global Key
+  const cred = { email: (email || "").trim(), savedAt: new Date().toISOString() };
+  if (/^ey[A-Za-z0-9_-]{20,}=*$/.test(k) && k.length > 60) {
+    cred.tunnelToken = k;
+    cred.source = "tunnel-token";
+    try {
+      _brgEnsureDir();
+      fs.writeFileSync(
+        _BRG_NAMED,
+        JSON.stringify(
+          { cfTunnelToken: k, email: cred.email, savedAt: cred.savedAt },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+    } catch (_) {}
+  } else {
+    cred.apiToken = k;
+    cred.source = "api-token";
+  }
+  _brgSaveCfCred(cred);
+  return { ok: true, source: cred.source };
+}
+function _brgResetAccount() {
+  try {
+    fs.unlinkSync(_BRG_CF_CRED);
+  } catch (_) {}
+  try {
+    fs.unlinkSync(_BRG_NAMED);
+  } catch (_) {}
+  return { ok: true };
+}
+function _brgStatus() {
+  const pid = _brgPidAlive();
+  const url = _brgReadUrlFromLog();
+  if (url) _brgUrl = url;
+  const cf = _brgCfState();
+  const running = !!(pid || _brgProc);
+  return {
+    ok: true,
+    running,
+    connecting: running && !url,
+    url: url || "",
+    named: cf.named,
+    localPort: _actualPort,
+    boundPort: _brgReadBoundPort() || (running ? _actualPort : 0),
+    bin: _brgFindCloudflared() || "",
+    pid: pid || 0,
+    startedMs: _brgStartMs || 0,
+    cfLoggedIn: cf.cfLoggedIn,
+    cfEmail: cf.cfEmail,
+    // 公网端点 (反代直调 · 任意 AI 工具凭此 + apiKey 在公网直连反带模型)
+    publicBase: url ? url + "/v1" : "",
+    publicChat: url ? url + "/v1/chat/completions" : "",
+    publicMessages: url ? url + "/v1/messages" : "",
+    publicModels: url ? url + "/v1/models" : "",
+    publicConsole: url ? url + "/origin/revproxy/console" : "",
+    publicStatus: url ? url + "/origin/revproxy/status" : "",
+  };
+}
+
 function _writeEndpointDiscovery() {
   try {
     const dir = _daoUserDir();
@@ -4677,6 +5213,24 @@ function _writeEndpointDiscovery() {
         status_url: base + "/origin/revproxy/status",
         key_hint:
           "GET /origin/revproxy/status (本机) 返回 apiKey; 或读 ~/.codeium/dao-byok/revproxy.json 之 apiKey",
+        // 内网穿透 · DAO Bridge: 隧道活时公网端点自省 (任意 AI 工具凭此 + apiKey 公网直调)
+        tunnel: (function () {
+          try {
+            const t = _brgStatus();
+            return {
+              running: t.running,
+              url: t.url || "",
+              public_base: t.publicBase || "",
+              public_chat: t.publicChat || "",
+              public_messages: t.publicMessages || "",
+              public_models: t.publicModels || "",
+              public_console: t.publicConsole || "",
+              status_url: base + "/origin/revproxy/tunnel",
+            };
+          } catch (_) {
+            return { running: false, status_url: base + "/origin/revproxy/tunnel" };
+          }
+        })(),
       },
       updatedAt: new Date().toISOString(),
     };
@@ -4991,6 +5545,49 @@ function _buildHandoffMd() {
         "'  # 全不反带",
     );
     L.push("```");
+    L.push("");
+    // 内网穿透 · DAO Bridge: 把上述反带端点直暴公网, 任意公网 AI 工具凭「公网Base + 同一 apiKey」直调
+    let _brg = null;
+    try {
+      _brg = _brgStatus();
+    } catch (_) {}
+    L.push("### 内网穿透 · DAO Bridge (反带端点公网直调 · 零账号去中心化)");
+    L.push(
+      "> 把上述反带端点经 cloudflared 快速隧道暴露公网。公网 AI 工具把 Base 换成**公网URL**、Header 仍带同一 `apiKey` 即可直调反带出来的免费/付费模型。用户若要固定域名可自登 Cloudflare(命名隧道·可选)。",
+    );
+    if (_brg && _brg.running && _brg.url) {
+      L.push("- 隧道状态: **已连通**" + (_brg.named ? " (命名隧道·固定域名)" : " (快速隧道)"));
+      L.push("- 公网 Base URL: `" + _brg.publicBase + "`");
+      L.push("- 公网对话补全: `" + _brg.publicChat + "`");
+      L.push("- 公网 Claude 端点: `" + _brg.publicMessages + "`");
+      L.push("- 公网模型列表: `" + _brg.publicModels + "`");
+      L.push("- 公网网页对话台(零鉴权·浏览器直开): `" + _brg.publicConsole + "`");
+      L.push("```bash");
+      L.push("# 公网任意环境 · OpenAI 兼容直调 (Base 换公网URL · key 不变)");
+      L.push("curl -X POST " + _brg.publicChat + " \\");
+      L.push(
+        "  -H 'Content-Type: application/json' -H 'Authorization: Bearer " +
+          (rpKey || "$REVPROXY_KEY") +
+          "' \\",
+      );
+      L.push(
+        "  -d '" +
+          JSON.stringify({
+            model: "swe-1-6",
+            messages: [{ role: "user", content: "你好" }],
+            stream: false,
+          }) +
+          "'",
+      );
+      L.push("```");
+    } else {
+      L.push(
+        "- 隧道状态: **未连通** — 在 ⑤ 内网穿透 面板点「启动隧道」, 或 `POST " +
+          rpBase +
+          "/origin/revproxy/tunnel {\"action\":\"start\"}` 即得公网URL。",
+      );
+    }
+    L.push("- 隧道管理: `GET/POST " + rpBase + "/origin/revproxy/tunnel` — `{action: start|stop|restart|startNamed|cfLogin|logout}`");
     L.push("");
   }
   L.push("---");
@@ -7126,6 +7723,53 @@ async function _maybeRevproxy(req, res) {
       }),
     );
     return true;
+  }
+  // 内网穿透 · DAO Bridge: 状态自省 + 启停控制 (把反代端点直暴公网)
+  if (u.pathname === "/origin/revproxy/tunnel") {
+    res.setHeader("Content-Type", "application/json");
+    if (req.method === "GET") {
+      res.end(JSON.stringify(_brgStatus()));
+      return true;
+    }
+    if (req.method === "POST") {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      await new Promise((rz) => req.on("end", rz));
+      let body = {};
+      try {
+        body = JSON.parse(raw || "{}");
+      } catch (_) {}
+      const action = body.action || "";
+      try {
+        if (action === "start") {
+          const r = await _brgStartTunnel(false);
+          res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
+        } else if (action === "startNamed") {
+          const r = await _brgStartTunnel(true);
+          res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
+        } else if (action === "restart") {
+          _brgStopTunnel();
+          const r = await _brgStartTunnel(false);
+          res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
+        } else if (action === "stop") {
+          _brgStopTunnel();
+          res.end(JSON.stringify(Object.assign({ ok: true }, _brgStatus())));
+        } else if (action === "cfLogin") {
+          const r = _brgCfLogin(body.email || "", body.key || "");
+          res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
+        } else if (action === "logout") {
+          const r = _brgResetAccount();
+          res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
+        } else {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ ok: false, error: "unknown action" }));
+        }
+      } catch (e) {
+        res.statusCode = 500;
+        res.end(JSON.stringify({ ok: false, error: String(e && e.message) }));
+      }
+      return true;
+    }
   }
   try {
     return await mod.handle(req, res, u, _revproxyDeps());
