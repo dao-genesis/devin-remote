@@ -14,6 +14,7 @@ const cp = require("child_process");
 const ENGINE = path.join(__dirname, "..", "app", "src", "main", "assets", "engine");
 const cloudSrc = fs.readFileSync(path.join(ENGINE, "devin-cloud.js"), "utf8");
 const switchSrc = fs.readFileSync(path.join(ENGINE, "switch.html"), "utf8");
+const autocleanSrc = fs.readFileSync(path.join(ENGINE, "autoclean.js"), "utf8"); // 备份/清理流水线已抽出为共用模块 (切号板+常驻引擎同源)
 const mainSrc = fs.readFileSync(path.join(__dirname, "..", "app", "src", "main", "java", "ai", "devin", "rtflow", "MainActivity.java"), "utf8");
 
 let failures = 0;
@@ -72,17 +73,17 @@ ok(!!DC && typeof DC.buildZipAsync === "function" && typeof DC.zipReadText === "
   ok(/zipReadText: zipReadText/.test(cloudSrc), "zipReadText 已导出 (整包内读)");
 
   // 源级护栏 · switch.html 备份写入端
-  const bk = switchSrc.slice(switchSrc.indexOf("async function backupSessionFull"), switchSrc.indexOf("async function fullBackupAccount"));
-  ok(/exportSessionZip\(a,sid\)/.test(bk), "backupSessionFull 单管线: 一次 exportSessionZip 取全 (不再 md 与 ZIP 各下一遍)");
-  ok(/if\(zipOk\)/.test(bk) && /vaultDeleteBackup\(folder,"conv-"\+sid\+"\.md"\)/.test(bk), "单包落地后清除旧散文件 conv-/指引- (归纳整理)");
-  ok(/if\(c&&c\.ok\)\{ evCnt=c\.events\|\|0; convOk=/.test(bk), "ZIP 失败回退老散文件写法 (绝不丢备份)");
+  const bk = autocleanSrc.slice(autocleanSrc.indexOf("async function backupSessionFull"), autocleanSrc.indexOf("async function fullBackupAccount"));
+  ok(/exportSessionZip\(a, ?sid\)/.test(bk), "backupSessionFull 单管线: 一次 exportSessionZip 取全 (不再 md 与 ZIP 各下一遍)");
+  ok(/if \(zipOk\)/.test(bk) && /vaultDeleteBackup\(folder, ?"conv-" ?\+ ?sid ?\+ ?"\.md"\)/.test(bk), "单包落地后清除旧散文件 conv-/指引- (归纳整理)");
+  ok(/if \(c && c\.ok\) \{ evCnt = c\.events \|\| 0; convOk =/.test(bk), "ZIP 失败回退老散文件写法 (绝不丢备份)");
 
   // 源级护栏 · switch.html 读取端 (单包兼容)
   ok(/zipReadText\(b64, ?"对话_人类可读\.md"\)/.test(switchSrc), "localConvMd 从单包内读对话MD (散文件缺失时)");
   ok(/ent && ent\.backedUpAt && \(ent\.md\|\|ent\.zip\)/.test(switchSrc), "_convSourceDecision 认可 zip-only 备份 (本地数据源无感回退不退化)");
   ok(/async function bkOpenMd\(folder, mdName, zipName\)/.test(switchSrc) && /zipReadText\(b64,"对话_人类可读\.md"\)/.test(switchSrc), "备份库「打开MD」兼容单包");
   ok(/\(s\.md\|\|s\.zip\)\?'<button class="bk-b"/.test(switchSrc), "备份库列表: zip-only 备份也有「打开MD」按钮");
-  ok(/\(!ent\.md && !ent\.zip\)/.test(switchSrc), "自动清理前置校验仍认 md 或 zip 任一 (双保险不变)");
+  ok(/\(!ent\.md && !ent\.zip\)/.test(autocleanSrc), "自动清理前置校验仍认 md 或 zip 任一 (双保险不变)");
 
   // 手动路径不受影响
   ok(/function bkSaveZip\(folder, zipName\)/.test(switchSrc) && /async function dvConvZip\(i,did\)/.test(switchSrc), "手动 下载ZIP/打包ZIP 路径原样保留");

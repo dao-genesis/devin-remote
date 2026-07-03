@@ -5,6 +5,7 @@
 <script src="relay-app.js"></script>
 <script src="devin-core.js"></script>
 <script src="devin-cloud.js"></script>
+<script src="autoclean.js"></script>
 <script src="p2p.js"></script>
 <script src="signal.js"></script>
 <script>
@@ -96,7 +97,7 @@
 
   // ── 账号存储 (localStorage) ──────────────────────────────────────────────
   function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
-  function saveAcc(a){ localStorage.setItem("rtflow.accounts", JSON.stringify(a||[])); }
+  function saveAcc(a){ var s=JSON.stringify(a||[]); localStorage.setItem("rtflow.accounts", s); try{ var N=window.Native||{}; if(N.vaultSave) N.vaultSave("accounts", s); }catch(e){} }
   function getActive(){ return localStorage.getItem("rtflow.active")||""; }
   function setActive(id){ localStorage.setItem("rtflow.active", id||""); }
   function findAcc(id){ var a=loadAcc(); for(var i=0;i<a.length;i++){ if(a[i].id===id||a[i].email===id) return a[i]; } return null; }
@@ -1343,6 +1344,38 @@
         _pushTabConvStatus(fresh, byEmail[String(a.email||"").toLowerCase()]);
       }
     }
+    // ── 常驻后台·归零账号 备份→清理→移出库 (与切号板共用 autoclean.js·同一套流水线) ──────
+    //   病灶: 该流水线过去只由切号板的可见性门控心跳驱动 → 用户不在切号板时从不触发(实测全失效)。
+    //   今由常驻引擎每轮对全池逐号走同一 autoCleanFor: 额度充足/未开自动清理/1h 内已清 皆廉价跳过,
+    //   低额号才真正 备份→清理→(归零且勾选时)移出库; 移出后同步撤下原生页签并系统通知告知。
+    var _bgClean = (typeof DaoAutoClean!=="undefined") ? DaoAutoClean.create({
+      N: N, DaoCloud: (typeof DaoCloud!=="undefined"?DaoCloud:{}),
+      cfg: function(k,d){ try{ var v=localStorage.getItem("rtflow.cfg."+k); return v===null?d:JSON.parse(v); }catch(e){ return d; } },
+      hasAuth: function(a){ return !!(a && a.auth1 && a.orgId); },
+      ovDollars: function(q){ return (q && typeof q.overageDollars==="number") ? q.overageDollars : 0; },
+      loadAcc: loadAcc, saveAcc: saveAcc,
+      autoDlBlocked: function(){
+        try{ var v=localStorage.getItem("rtflow.cfg.autoBackupWifiOnly"); if(v!==null && JSON.parse(v)===false) return false; }catch(e){}
+        try{ if(N.netInfo){ var j=JSON.parse(N.netInfo()||"{}"); return j.metered===true; } }catch(e){}
+        return false;
+      },
+      onRemoved: function(a){
+        try{ if(N.setTabStatus){ N.setTabStatus(a.id||"","",""); if(a.email) N.setTabStatus(a.email,"",""); } }catch(e){}
+        notify("clean-"+(a.id||a.email), "\u2713 \u5f52\u96f6\u8d26\u53f7\u5df2\u5907\u4efd\u5e76\u79fb\u51fa\u8d26\u53f7\u5e93", String(a.email||a.id||""));
+      }
+    }) : null;
+    var _bgCleanBusy = false;
+    async function bgAutoCleanTick(accs){
+      if(!_bgClean || _bgCleanBusy) return; _bgCleanBusy = true;
+      try{
+        for(var i=0;i<accs.length;i++){
+          var a=null; try{ a=DaoCore.findAcc(accs[i].id); }catch(e){}
+          a=a||accs[i];
+          try{ var r=await _bgClean.autoCleanFor(a); if(r && r.state==="removed") _pushTabQuota(a); }catch(e){}
+        }
+      }catch(e){}
+      _bgCleanBusy = false;
+    }
     async function tick(){
       if (!watchEnabled()) return;
       var accs = []; try { accs = loadAcc().filter(function(x){ return x.auth1 && x.orgId; }); } catch(e){}
@@ -1411,6 +1444,8 @@
       try { quotaLowWatch(accs, titleByAcct, now); } catch(e){}
       // 额度权威刷新(同拍同轮): 活跃号必刷 + 空闲号轮转, 刷毕直推原生页签 → 金额/状态不再依赖切号板在前台
       try { await bgQuotaTick(r.sessions, accs); } catch(e){}
+      // 归零移出库·常驻接管(同拍殿后): 全池逐号走共用清理流水线, 不再依赖切号板在前台
+      try { await bgAutoCleanTick(accs); } catch(e){}
     }
     setTimeout(function(){ tick(); setInterval(tick, POLL_MS); }, FIRST_DELAY);
     log("convwatch armed (对话追踪·全局通知, 轮询 " + (POLL_MS/1000) + "s)");
