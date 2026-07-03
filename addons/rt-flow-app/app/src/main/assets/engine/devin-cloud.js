@@ -263,10 +263,16 @@
     return { ok: true, title: title, md: lines.join("\n"), events: 0, fallback: true };
   }
 
+  // 平台无硬删 REST 路由 (DELETE /api/sessions/{id} 实测 404/405); v3 terminate+archive 作兜底,
+  // 未来若开放硬删则自动命中。archive 才是平台最强清除, 见 purgeSession。
   async function deleteSession(acc, sid) {
-    var cands = [APP + "/api/sessions/" + sid, APP + "/api/org-" + bare(acc.orgId) + "/sessions/" + sid];
+    var cands = [
+      APP + "/api/v3/organizations/" + acc.orgId + "/sessions/" + sid + "?archive=true",
+      APP + "/api/sessions/" + sid,
+      APP + "/api/org-" + bare(acc.orgId) + "/sessions/" + sid
+    ];
     var last = 0;
-    for (var i = 0; i < cands.length; i++) { var r = await reqRaw("DELETE", cands[i], acc); last = r.status; if (r.status === 200 || r.status === 204) return { ok: true, status: r.status }; }
+    for (var i = 0; i < cands.length; i++) { var r = await reqRaw("DELETE", cands[i], acc); last = r.status; if (r.status === 200 || r.status === 202 || r.status === 204) return { ok: true, status: r.status }; }
     return { ok: false, status: last };
   }
 
@@ -333,7 +339,10 @@
   async function purgeSession(acc, sid) {
     var arch = { ok: false }; try { arch = await archiveSession(acc, sid); } catch (e) {}
     var del = { ok: false }; try { del = await deleteSession(acc, sid); } catch (e) {}
-    return { ok: !!del.ok, archived: !!arch.ok, deleted: !!del.ok, status: del.status };
+    // 平台无硬删路由(DELETE 恒 404/405·桌面版 v4.9.11 实测确证) → archive 即平台最强清除:
+    //   对话移出活跃列表(is_archived=true)。故 archive 成功即视为已清理, 硬删成功为增强。
+    var ok = !!(del.ok || arch.ok);
+    return { ok: ok, archived: !!arch.ok, deleted: ok, hardDeleted: !!del.ok, status: del.ok ? del.status : (arch.status || del.status) };
   }
   async function stopSession(acc, sid) {
     var cands = ["/sessions/" + sid + "/archive", "/sessions/" + sid + "/stop", "/sessions/" + sid + "/pause", "/sessions/" + sid + "/sleep", "/sessions/" + sid + "/cancel"];

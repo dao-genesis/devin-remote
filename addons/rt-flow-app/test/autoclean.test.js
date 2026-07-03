@@ -156,6 +156,21 @@ function makeEnv(opts) {
     ok(r.state === "removed", "移出留底: 确已移出");
     ok(Object.keys(env.files).some((k) => k.indexOf("移出记录.json") >= 0), "移出留底: 金库落移出记录(含账号快照)");
   }
+  // ── 场景 11: 已归档对话 → 登记已清理·不重复归档·不阻移出 (平台无硬删·archive 即最强清除) ──
+  {
+    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [
+      { devin_id: "sArch", ts: now - 3 * DAY, is_archived: true }, { devin_id: "sOld", ts: now - 2 * DAY }] });
+    const r = await env.inst.autoCleanFor(env.getAccs()[0]);
+    ok(env.calls.purged.length === 1 && env.calls.purged[0] === "sOld", "已归档: 不重复归档 (只清理未归档陈旧对话)");
+    ok(r.state === "removed", "已归档: 不阻塞归零移出 (" + r.state + ")");
+  }
+  // ── 源级护栏: purgeSession 以 archive 为最强清除 (平台无硬删 REST 路由·DELETE 恒 404/405) ──
+  {
+    const cloudSrc = fs.readFileSync(path.join(APP, "assets", "engine", "devin-cloud.js"), "utf8");
+    ok(/var ok = !!\(del\.ok \|\| arch\.ok\);/.test(cloudSrc), "purgeSession: archive 成功即视为已清理 (硬删为增强)");
+    ok(/\/api\/v3\/organizations\/.*\?archive=true/.test(cloudSrc.replace(/"\s*\+\s*/g, "")) || /v3\/organizations\//.test(cloudSrc), "deleteSession: 带 v3 terminate+archive 兜底");
+    ok(/is_archived === true/.test(fs.readFileSync(path.join(APP, "assets", "engine", "autoclean.js"), "utf8")), "autoclean: 已归档对话登记已清理·不重复归档");
+  }
   // ── 源级护栏: 双端接入同一流水线 ──
   ok(/<script src="autoclean\.js">/.test(engineSrc), "engine.html 引入 autoclean.js");
   ok(/<script src="autoclean\.js">/.test(switchSrc), "switch.html 引入 autoclean.js");
