@@ -6114,6 +6114,7 @@ function getEaConfigHtml(port, nonce) {
     var html = '';
     var shownFams = 0;
     var shownModels = 0;
+    var rowIdx = 0;
     for (var i = 0; i < groups.length; i++) {
       var f = groups[i];
       var matched = [];
@@ -6125,7 +6126,8 @@ function getEaConfigHtml(port, nonce) {
       var multi = f.members.length > 1;
       var famExposed = f.members.some(function (mb) { return mb.exposed !== false; });
       var famIds = f.members.map(function (mb) { return mb.id; }).join(',');
-      var expBox = '<input type="checkbox" class="rp-exp" data-ids="' + _rpEsc(famIds) + '"' + (famExposed ? ' checked' : '') + ' title="是否外接此模型(取消后端点不列不接·默认全选)" style="flex:none;margin:0">';
+      var rowAttr = ' class="rp-row" data-idx="' + (rowIdx++) + '" data-ids="' + _rpEsc(famIds) + '"';
+      var expBox = '<input type="checkbox" class="rp-exp" data-ids="' + _rpEsc(famIds) + '"' + (famExposed ? ' checked' : '') + ' title="是否外接此模型(取消后端点不列不接·默认全选) · 点按/Shift 范围/按住拖拽批量" style="flex:none;margin:0">';
       var dimSt = famExposed ? '' : 'opacity:0.45;';
       if (multi) {
         var act = f.active;
@@ -6137,7 +6139,7 @@ function getEaConfigHtml(port, nonce) {
           opts += '<option value="' + _rpEsc(mb.id) + '"' + (mb === act ? ' selected' : '') + '>'
             + _rpDot(mb.color) + ' ' + _rpEsc(_rpTierName(mb)) + (mb.free ? ' · 免费' : '') + '</option>';
         }
-        html += '<div style="' + dimSt + 'display:flex;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
+        html += '<div' + rowAttr + ' style="' + dimSt + 'display:flex;align-items:center;gap:6px;padding:5px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
           + expBox
           + '<span title="' + _rpEsc(act.note || '') + '" style="flex:none;width:8px;height:8px;border-radius:50%;background:' + dot + '"></span>'
           + '<b style="font-size:11px">' + _rpEsc(f.familyLabel) + '</b>'
@@ -6150,7 +6152,7 @@ function getEaConfigHtml(port, nonce) {
         var via1 = m.dao_route ? ('→ ' + m.dao_route.provider + ' / ' + (m.dao_route.model || '')) : (m.reverse === 'official' ? '官方直通' : (m.owned_by || ''));
         var tier = m.costTier ? String(m.costTier).replace('MODEL_COST_TIER_', '') : '';
         var badge = m.free ? '<span style="font-size:9px;color:#3fb950;border:1px solid #3fb950;border-radius:3px;padding:0 3px;margin-left:4px">免费</span>' : (tier ? '<span style="font-size:9px;opacity:0.6;margin-left:4px">' + _rpEsc(tier) + '</span>' : '');
-        html += '<div style="' + dimSt + 'display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
+        html += '<div' + rowAttr + ' style="' + dimSt + 'display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid rgba(128,128,128,0.12)">'
           + expBox
           + '<span title="' + _rpEsc(m.note || '') + '" style="flex:none;width:8px;height:8px;border-radius:50%;background:' + d1 + '"></span>'
           + '<code style="font-weight:600">' + _rpEsc(m.id) + '</code>' + badge
@@ -6174,6 +6176,54 @@ function getEaConfigHtml(port, nonce) {
         });
       })(exps[x]);
     }
+  }
+  // 批量多选 (如切号板块): 点按=单切 · Shift+点=范围 · 按住拖拽=连片 · 松开一次性提交
+  var _rpLastSel = -1, _rpDragSel = false, _rpDragVal = true, _rpPend = null;
+  function _rpRowAt(idx) {
+    var list = _rpEl('rpModelList');
+    return list ? list.querySelector('.rp-row[data-idx="' + idx + '"]') : null;
+  }
+  function _rpMarkRow(row, v) {
+    if (!row) return;
+    var box = row.querySelector('.rp-exp');
+    if (box) box.checked = v;
+    row.style.opacity = v ? '1' : '0.45';
+    var ids = (row.getAttribute('data-ids') || '').split(',');
+    for (var i = 0; i < ids.length; i++) if (ids[i]) _rpPend[ids[i]] = 1;
+  }
+  function _rpApplyRange(a, b, v) {
+    var lo = Math.min(a, b), hi = Math.max(a, b);
+    for (var i = lo; i <= hi; i++) _rpMarkRow(_rpRowAt(i), v);
+  }
+  function _rpStartSel(e) {
+    if (e.button !== 0) return;
+    var row = e.target.closest ? e.target.closest('.rp-row') : null;
+    if (!row) return;
+    if (e.target.closest('select,button,a')) return;
+    var i = parseInt(row.getAttribute('data-idx'), 10);
+    var box = row.querySelector('.rp-exp');
+    if (!isFinite(i) || !box) return;
+    e.preventDefault();
+    var v = !box.checked;
+    _rpPend = {};
+    if (e.shiftKey && _rpLastSel >= 0) _rpApplyRange(_rpLastSel, i, v);
+    else { _rpMarkRow(row, v); _rpLastSel = i; }
+    _rpDragSel = true; _rpDragVal = v;
+    _rpSetText('rpStat', '已选 ' + Object.keys(_rpPend).length + ' 档 · 松开提交「' + (v ? '恢复外接' : '停止外接') + '」');
+  }
+  function _rpDragOver(e) {
+    if (!_rpDragSel) return;
+    var row = e.target.closest ? e.target.closest('.rp-row') : null;
+    if (!row) return;
+    _rpMarkRow(row, _rpDragVal);
+    _rpSetText('rpStat', '已选 ' + Object.keys(_rpPend).length + ' 档 · 松开提交「' + (_rpDragVal ? '恢复外接' : '停止外接') + '」');
+  }
+  function _rpEndSel() {
+    if (!_rpDragSel) return;
+    _rpDragSel = false;
+    var ids = Object.keys(_rpPend || {});
+    _rpPend = null;
+    if (ids.length) _rpSetExposed(ids, _rpDragVal);
   }
   // 模型外接选择: 热切某(些)模型是否对外反代 (setAll: 'on'|'off' 批量)
   function _rpSetExposed(ids, exposed, setAll) {
@@ -6242,6 +6292,15 @@ function getEaConfigHtml(port, nonce) {
       })(fbtns[i]);
     }
     var ff = _rpEl('rpFilter'); if (ff) ff.addEventListener('input', _rpRenderList);
+    var lst = _rpEl('rpModelList');
+    if (lst) {
+      lst.addEventListener('mousedown', _rpStartSel);
+      lst.addEventListener('mouseover', _rpDragOver);
+      lst.addEventListener('click', function (e) {
+        if (e.target.classList && e.target.classList.contains('rp-exp')) e.preventDefault();
+      }, true);
+      document.addEventListener('mouseup', _rpEndSel);
+    }
   })();
   function _rpClip(t) { try { navigator.clipboard.writeText(t); _rpSetText('rpStat', '已复制'); } catch (e) {} }
   function _rpTest() {
