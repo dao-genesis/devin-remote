@@ -11758,3 +11758,23 @@ every subprocess call in a perception verb is a hidden environment
 assumption, and each one converts a missing package into a wrong
 answer somewhere down the line. The floor should speak protocols,
 not shell out to strangers.
+
+## F380 — the development loop: editor, terminal, artifact — three floors, one act
+
+Project development as the user does it: write code in an editor,
+run it in a terminal, believe the output. KWrite took the source by
+`type_unicode` (46 lines/sec of exact text, no autocomplete races),
+the Save dialog was retargeted by typed path as in F367, and the
+title flip to `f380_build.py — KWrite` plus a byte-compare of the
+saved file receipted the *edit* half. Konsole took the *run* half:
+`konsole --workdir` spawns pre-aimed (one less `cd`), and a single
+typed line ran the program. The receipt chain is the lesson: the
+program itself wrote `f380_out.json`, so the assertion read *the
+program's own artifact* — `{'msg': 'built by the floor', 'n': 5050}`,
+where 5050 = sum(range(101)) proves the code *executed* rather than
+merely existed (a copy-paste of intended output could not know it).
+Development is the friendliest domain of all: every step already
+deposits text artifacts (source file, exit status, output file), so
+the whole loop runs at rung 1-2 prices, and the terminal's title
+(`~ : bash — Konsole`) even narrates the shell's cwd. The floor
+that took a screenshot here would be paying for theatre.
