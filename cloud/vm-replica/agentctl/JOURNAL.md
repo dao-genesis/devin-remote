@@ -11500,3 +11500,29 @@ the arc: climb the ladder from the cheap end, and let a rung's
 *failure* — not habit — be the only thing that promotes you to the
 next one. Screenshots are for humans and for genuinely opaque
 surfaces; agents should read titles, trees and files.
+
+## F368 — pricing the ladder in bytes: even meaning has a bill
+
+Put numbers on F367's ladder, measured live on this desktop (six
+windows up, a file dialog's worth of controls in the foreground):
+
+    window titles (list_windows)     175 B
+    screen_observe() as JSON      26,324 B
+    region PNG (KCalc display)       224 B
+    full-frame PNG (1600x1200)   349,223 B
+
+Two corrections to the intuition. First, the gap between the rungs is
+even bigger than assumed — titles to full frame is 1:2000 in bytes,
+and the vision channel multiplies the image side further since a full
+frame costs thousands of vision tokens to *read* while 175 bytes of
+titles cost a few dozen. Second — the surprise — rung 2 is not free:
+one `screen_observe` of a busy foreground window (a KDE file dialog
+enumerates every file as ListItem *and* DataItem) weighs 26 KB, a
+tenth of a screenshot. Meaning has a bill too. So the discipline
+gains a clause: don't dump the observation raw into the record —
+project it (titles + the few controls relevant to the act), or cap it
+at the source (`max_actions`). And a genuinely opaque surface read as
+a *region* (224 B for KCalc's whole display) is cheaper than an
+unpruned semantic scan — the ladder orders channels by typical cost,
+but the real rule is narrower: pay for exactly the pixels or nodes
+the act needs, on whichever channel sells them cheapest.
