@@ -11587,3 +11587,24 @@ relevance model, check whether the toolkit already told you — absence
 of geometry *is* the signal, the same way an empty title or a missing
 a11y tree were signals in earlier arcs. The floor's job is to listen,
 not to guess.
+
+## F372 — LibreCAD: engineering software speaks a command language — use it
+
+First CAD arc (installed via apt mid-arc). Three findings. One:
+`wait_title='LibreCAD'` never matched — the first window is a
+`Welcome` unit-picker dialog; the F363 title law generalises from
+"programs rename themselves" to "programs may not be the first
+window they show". The brief identified it and its OK button in one
+text read; `uia_invoke` cleared it. Two — the big one: CAD tools
+carry a *command language* under the GUI. Instead of aiming a mouse
+at a snap grid (pixel-precision work at vision prices), typing into
+LibreCAD's command widget — `line` ⏎ `0,0` ⏎ `100,50` ⏎ — placed the
+line with *exact* coordinates, keyboard-only. Engineering software is
+the friendliest territory on the desktop for an agent because
+precision input is a first-class citizen: AutoCAD dialects, FreeCAD's
+Python console, KiCad's scripting — always look for the text-command
+floor before driving the canvas. Three: the receipt is a *parseable
+artifact* — DXF is text; the saved file yields `AcDbLine 10=0 20=0
+11=100 21=50`, the drawn geometry byte-exact, no pixel ever read.
+The whole arc — install, first-run dialog, draw, save, verify —
+ran on brief checkpoints and artifact receipts alone.
