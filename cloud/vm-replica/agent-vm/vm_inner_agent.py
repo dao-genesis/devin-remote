@@ -518,37 +518,66 @@ def _proc_of_hwnd(hwnd):
 _SHELL_FLYOUT_HOSTS = {'startmenuexperiencehost.exe', 'searchhost.exe',
                        'searchapp.exe', 'shellexperiencehost.exe'}
 
-def ensure_desktop(max_iter=5):
+def ensure_desktop(max_iter=5, settle_polls=8, poll_gap=0.5):
     """Close a lingering Start / search flyout so the session lands on a clean
     desktop. Win11's Start does NOT close on Esc (Esc only clears its search
     box); the reliable toggle is the Win key. We tap Win only while a shell
     flyout host is *actually* the foreground window, so we never accidentally
     *open* Start when the desktop is already clear. Language/edition-neutral
-    (matches process image names, not UI strings)."""
+    (matches process image names, not UI strings).
+
+    Fresh-login timing: on a just-landed desktop the Start button holds focus,
+    so a stray Enter (e.g. the OOBE advance) opens Start a beat *later* than any
+    single check. So we don't bail on the first clean reading -- we keep polling
+    for ~`settle_polls * poll_gap` seconds and dismiss Start whenever it shows
+    up, only finishing once the desktop has stayed clean across a couple of
+    consecutive polls."""
     closed = 0
-    for _ in range(max_iter):
+    clean_streak = 0
+    for _ in range(max_iter + settle_polls):
         proc = _proc_of_hwnd(user32.GetForegroundWindow()).lower()
         if proc in _SHELL_FLYOUT_HOSTS:
-            press_key('win'); closed += 1; time.sleep(0.6)
+            press_key('win'); closed += 1; clean_streak = 0; time.sleep(0.6)
         else:
-            break
+            clean_streak += 1
+            if clean_streak >= 2:
+                break
+            time.sleep(poll_gap)
     return {'closed': closed, 'foreground': foreground_info()}
 
-def find_window(title=None, hwnd=None):
+def find_window(title=None, hwnd=None, process=None):
+    """Resolve a target top-level window. Priority: explicit hwnd > process/title
+    scan. `process` matches the owning process image base name (e.g. 'notepad.exe')
+    and is *language-neutral* -- unlike titles, which are localized and often keep an
+    English app suffix (Win11 Notepad is '无标题 - Notepad', never '记事本'), so
+    title-only matching silently fails on non-English installs. When both are given
+    they must both match. Among candidates we keep the largest non-cloaked window
+    (the real main window, not a tooltip/splash)."""
     if hwnd:
         return int(hwnd)
-    if not title:
+    if not title and not process:
         return 0
-    title_l = title.lower()
-    match = [0]
+    title_l = title.lower() if title else None
+    proc_l = process.lower() if process else None
+    if proc_l and not proc_l.endswith('.exe'):
+        proc_l += '.exe'
+    best = [0, -1]  # hwnd, area
     def cb(h, _):
-        if user32.IsWindowVisible(h):
+        if not user32.IsWindowVisible(h):
+            return 1
+        if title_l is not None:
             t = _win_title(h)
-            if t and title_l in t.lower():
-                match[0] = int(h); return 0
+            if not t or title_l not in t.lower():
+                return 1
+        if proc_l is not None and _proc_of_hwnd(h).lower() != proc_l:
+            return 1
+        r = _wt.RECT(); user32.GetWindowRect(h, ctypes.byref(r))
+        area = (r.right - r.left) * (r.bottom - r.top)
+        if area > best[1]:
+            best[0], best[1] = int(h), area
         return 1
     user32.EnumWindows(WNDENUMPROC(cb), 0)
-    return match[0]
+    return best[0]
 
 def activate_window(hwnd):
     """Bring hwnd to the foreground reliably by attaching to the current foreground
@@ -575,9 +604,11 @@ def activate_window(hwnd):
     return int(user32.GetForegroundWindow() or 0) == int(hwnd)
 
 def _maybe_focus(body):
-    """If a target window is named in the request, focus it before input."""
-    if body.get('hwnd') or body.get('title'):
-        h = find_window(body.get('title'), body.get('hwnd'))
+    """If a target window is named in the request (by hwnd, process image name, or
+    title substring), focus it before input so keystrokes never leak to whatever
+    happens to hold the foreground (Start flyout, a security tray, our own console)."""
+    if body.get('hwnd') or body.get('title') or body.get('process'):
+        h = find_window(body.get('title'), body.get('hwnd'), body.get('process'))
         if h:
             activate_window(h)
             return h
@@ -689,10 +720,11 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             _maybe_focus(body)
             hold_key(body.get('key', ''), body.get('duration', 0.5)); return {'ok': True}
         elif action == 'activate':
-            h = find_window(body.get('title'), body.get('hwnd'))
+            h = find_window(body.get('title'), body.get('hwnd'), body.get('process'))
             if not h:
                 return {'ok': False, 'error': 'window not found',
-                        'title': body.get('title'), 'hwnd': body.get('hwnd')}
+                        'title': body.get('title'), 'hwnd': body.get('hwnd'),
+                        'process': body.get('process')}
             ok = activate_window(h)
             return {'ok': ok, 'hwnd': h, 'title': _win_title(h),
                     'foreground': foreground_info()}
@@ -703,8 +735,9 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
         elif action == 'ui_info':
             return {'windows': list_windows()}
         elif action == 'ui_tree':
-            h = (find_window(body.get('title'), body.get('hwnd'))
-                 if (body.get('title') or body.get('hwnd')) else user32.GetForegroundWindow())
+            h = (find_window(body.get('title'), body.get('hwnd'), body.get('process'))
+                 if (body.get('title') or body.get('hwnd') or body.get('process'))
+                 else user32.GetForegroundWindow())
             if not h:
                 return {'ok': False, 'error': 'no root window'}
             return {'ok': True, 'root': ui_tree(h, int(body.get('max_depth', 6)))}
@@ -746,21 +779,30 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                     'user': os.environ.get('USERNAME', '?'), 'port': PORT}
         return {'error': f'unknown action: {action}'}
 
-def list_windows():
+def list_windows(min_area=2000):
+    """Observe primitive: visible top-level windows with owning process image name
+    (language-neutral, the reliable target key), title, and rect. Includes sizable
+    untitled windows too (e.g. security trays like HipsTray that grab the foreground)
+    so callers can see everything competing for focus. Sorted largest-first."""
     windows = []
     WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
     def cb(hwnd, _):
         if user32.IsWindowVisible(hwnd):
+            rect = ctypes.wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            area = (rect.right - rect.left) * (rect.bottom - rect.top)
             n = user32.GetWindowTextLengthW(hwnd)
+            title = ''
             if n > 0:
                 buf = ctypes.create_unicode_buffer(n + 1)
-                user32.GetWindowTextW(hwnd, buf, n + 1)
-                rect = ctypes.wintypes.RECT()
-                user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                windows.append({'hwnd': int(hwnd), 'title': buf.value,
+                user32.GetWindowTextW(hwnd, buf, n + 1); title = buf.value
+            if title or area >= min_area:
+                windows.append({'hwnd': int(hwnd), 'title': title,
+                                'process': _proc_of_hwnd(hwnd), 'area': area,
                                 'rect': [rect.left, rect.top, rect.right, rect.bottom]})
         return True
     user32.EnumWindows(WNDENUMPROC(cb), 0)
+    windows.sort(key=lambda w: w['area'], reverse=True)
     return windows
 
 # ====== UIA-ish control tree (pure ctypes; direct-child walk, no deps) ======
@@ -1169,8 +1211,10 @@ def _crop_png(l, t, r, b):
 def _root_hwnd(body):
     if body.get('hwnd') or body.get('root_hwnd'):
         return int(body.get('hwnd') or body.get('root_hwnd'))
-    if body.get('title') or body.get('root_title'):
-        return find_window(body.get('title') or body.get('root_title'))
+    title = body.get('title') or body.get('root_title')
+    process = body.get('process') or body.get('root_process')
+    if title or process:
+        return find_window(title, None, process)
     return int(user32.GetForegroundWindow() or 0)
 
 def _match_node(n, q):
