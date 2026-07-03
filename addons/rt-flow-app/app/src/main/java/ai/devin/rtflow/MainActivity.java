@@ -111,6 +111,8 @@ public class MainActivity extends AppCompatActivity {
     private int pageZoom = 100;           // 整页缩放百分比 (滑块控制, 解决长页点不到按钮)
     private TextView zoomLabel;
     private ValueCallback<Uri[]> filePathCallback;
+    private View fsCustomView = null;                        // 视频全屏承接 (onShowCustomView)
+    private WebChromeClient.CustomViewCallback fsCallback = null;
     private Uri cameraOutputUri;          // 网页上传时相机拍照的落地 Uri (FileProvider)
     private androidx.activity.result.ActivityResultLauncher<Intent> fileChooser;
     private androidx.activity.result.ActivityResultLauncher<Intent> shareImportPicker;  // 选「整机分享包」zip
@@ -184,6 +186,31 @@ public class MainActivity extends AppCompatActivity {
         long loadedAt = 0;           // 最近一次整页加载(onPageStarted)时刻 → V8 堆龄代理; SPA 客户路由不重置堆故不更新
         long lastHeapReclaimAt = 0;  // 最近一次活动标签堆回收重载时刻 → 防抖限频
         androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe; // 下拉刷新容器
+        String auth1 = "";          // 该标签绑定账号的 auth1 token (原生层媒体代取鉴权用)
+        String orgId = "";          // 该标签绑定账号的 org id
+    }
+
+    // 退格根治(原生 InputConnection 层): 部分输入法(三星键盘等)按一次退格会调
+    //   deleteSurroundingText(before>0, after>0) —— 同时删除光标左右两侧字符。这类删除由 IME
+    //   直改编辑缓冲, 不经可取消的 JS beforeinput 事件 → JS 护栏(installBackspaceGuard)拦不到。
+    //   此处在原生层夹断: 左右同删的调用一律只保留左删(after 归 0)。纯前向删除(before=0)不受影响,
+    //   拼音/组合输入的 setComposingText 路径亦不经此方法, 均不受干扰。
+    static class GuardedWebView extends WebView {
+        GuardedWebView(Context c) { super(c); }
+        @Override public android.view.inputmethod.InputConnection onCreateInputConnection(EditorInfo outAttrs) {
+            android.view.inputmethod.InputConnection ic = super.onCreateInputConnection(outAttrs);
+            if (ic == null) return null;
+            return new android.view.inputmethod.InputConnectionWrapper(ic, true) {
+                @Override public boolean deleteSurroundingText(int beforeLength, int afterLength) {
+                    if (beforeLength > 0 && afterLength > 0) afterLength = 0;
+                    return super.deleteSurroundingText(beforeLength, afterLength);
+                }
+                @Override public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
+                    if (beforeLength > 0 && afterLength > 0) afterLength = 0;
+                    return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
+                }
+            };
+        }
     }
     private boolean adBlock = true;    // 广告/弹窗拦截: 默认内置开启 (无需用户操作·无开关)
 
@@ -1033,7 +1060,7 @@ public class MainActivity extends AppCompatActivity {
         tab.vid = sVidSeq++;          // 稳定唯一 id (随创建递增)
         tab.accountJson = accountJson;
         tab.internal = internal;
-        WebView web = new WebView(this);
+        WebView web = new GuardedWebView(this);
         tab.web = web;
         WebSettings st = web.getSettings();
         st.setJavaScriptEnabled(true);
@@ -1083,6 +1110,7 @@ public class MainActivity extends AppCompatActivity {
             String token = "", org = "", uid = "", orgName = "";
             try { JSONObject a = new JSONObject(accountJson); token = a.optString("auth1", ""); org = a.optString("orgId", "");
                 uid = a.optString("userId", ""); orgName = a.optString("orgName", ""); } catch (Exception ignored) {}
+            tab.auth1 = token; tab.orgId = org;
             String script = TabActivity.buildInjection(token, uid, org, orgName);
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 try { WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton("https://app.devin.ai")); } catch (Exception ignored) {}
@@ -1134,6 +1162,8 @@ public class MainActivity extends AppCompatActivity {
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
                 if (adBlock && req != null && req.getUrl() != null && isAdHost(req.getUrl().getHost()))
                     return new WebResourceResponse("text/plain", "utf-8", new java.io.ByteArrayInputStream(new byte[0]));
+                WebResourceResponse am = authMediaResponse(tab, req);
+                if (am != null) return am;
                 return super.shouldInterceptRequest(v, req);
             }
             // 渲染进程被系统在内存压力下回收(WebView 变白/无响应需手动刷新)→ 自动重建该标签并重载, 用户无感恢复。
@@ -1169,6 +1199,9 @@ public class MainActivity extends AppCompatActivity {
                 }
                 return true;
             }
+            // 视频全屏: <video> 的全屏按钮需此回调承接, 缺失则点全屏无反应/播放异常
+            @Override public void onShowCustomView(View view, CustomViewCallback callback) { showFsCustomView(view, callback); }
+            @Override public void onHideCustomView() { hideFsCustomView(); }
             // 文件/附件上传: 让网页 <input type=file> 拉起系统选择器 (修复 Devin Cloud 上传附件)
             @Override public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams params) {
                 if (filePathCallback != null) { try { filePathCallback.onReceiveValue(null); } catch (Exception ignored) {} }
@@ -1838,7 +1871,30 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
     }
 
+    // 视频全屏承接: WebView 播放器点全屏 → onShowCustomView 交出一个 View, 宿主必须把它挂到
+    //   窗口顶层并沉浸显示, 否则「点全屏毫无反应」。退出经 onHideCustomView / 返回键。
+    private void showFsCustomView(View view, WebChromeClient.CustomViewCallback callback) {
+        if (view == null) return;
+        if (fsCustomView != null) { try { if (callback != null) callback.onCustomViewHidden(); } catch (Exception ignored) {} return; }
+        fsCustomView = view; fsCallback = callback;
+        try {
+            ViewGroup decor = (ViewGroup) getWindow().getDecorView();
+            view.setBackgroundColor(0xFF000000);
+            decor.addView(view, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+        } catch (Exception ignored) {}
+    }
+    private void hideFsCustomView() {
+        if (fsCustomView == null) return;
+        try { ((ViewGroup) getWindow().getDecorView()).removeView(fsCustomView); } catch (Exception ignored) {}
+        fsCustomView = null;
+        try { if (fsCallback != null) fsCallback.onCustomViewHidden(); } catch (Exception ignored) {}
+        fsCallback = null;
+        try { getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE); } catch (Exception ignored) {}
+    }
+
     @Override public void onBackPressed() {
+        if (fsCustomView != null) { hideFsCustomView(); return; }   // 全屏视频中: 返回键先退全屏
         if (daoOpen) { hideDaoPanel(); return; }                // 返回键先关全服通悬浮窗 (保活, 再开秒显)
         if (dlPanel != null) { closeDownloadPanel(); return; }
         if (active >= 0 && tabs.get(active).web.canGoBack()) { tabs.get(active).web.goBack(); return; }
@@ -1993,6 +2049,84 @@ public class MainActivity extends AppCompatActivity {
     // ── 浏览器功能 ────────────────────────────────────────────────────────
     private static final String DESKTOP_UA =
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+    // 媒体鉴权代取: Devin 附件(截图/录屏视频等)在 app.devin.ai/attachments/ 下, 必须带
+    //   Authorization 头(无鉴权 401)。页面 fetch/XHR 已注入 Bearer 头, 但 <img>/<video>/<audio>
+    //   等媒体元素的加载由渲染器原生发起、不经 JS → 无鉴权 → 图片时有时无、视频完全无法播放。
+    //   此处在原生层代取: 补 Authorization 转发(含 Range 头, 视频拖动/分段加载可用),
+    //   30x 手动跟随且仅对 app.devin.ai 发凭据(token 不外泄给对象存储), 响应原样回灌(状态/头/流)。
+    private WebResourceResponse authMediaResponse(Tab tab, WebResourceRequest req) {
+        try {
+            if (tab == null || tab.auth1 == null || tab.auth1.isEmpty() || req == null) return null;
+            Uri u = req.getUrl();
+            if (u == null || !"GET".equalsIgnoreCase(req.getMethod())) return null;
+            String host = u.getHost(), path = u.getPath();
+            if (host == null || path == null || !host.equalsIgnoreCase("app.devin.ai")) return null;
+            if (!path.startsWith("/attachments/")) return null;
+            java.util.Map<String, String> rh = req.getRequestHeaders();
+            if (rh != null) for (String k : rh.keySet())
+                if (k != null && k.equalsIgnoreCase("Authorization")) return null;   // fetch/XHR 已带鉴权 → 不重复代取
+            String url = u.toString();
+            java.net.HttpURLConnection c = null;
+            for (int hop = 0; hop < 5; hop++) {
+                c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                c.setInstanceFollowRedirects(false);
+                c.setConnectTimeout(15000);
+                c.setReadTimeout(30000);
+                if (rh != null) for (java.util.Map.Entry<String, String> e : rh.entrySet()) {
+                    String k = e.getKey();
+                    if (k == null) continue;
+                    String lk = k.toLowerCase(java.util.Locale.US);
+                    // Accept-Encoding 不转发: 交由底层透明 gzip (自动解压并剥 Content-Encoding/Length, 免回灌压缩体)
+                    if (lk.equals("authorization") || lk.equals("host") || lk.equals("accept-encoding")) continue;
+                    try { c.setRequestProperty(k, e.getValue()); } catch (Exception ignored) {}
+                }
+                if ("app.devin.ai".equalsIgnoreCase(new java.net.URL(url).getHost())) {
+                    c.setRequestProperty("Authorization", "Bearer " + tab.auth1);
+                    if (tab.orgId != null && !tab.orgId.isEmpty()) c.setRequestProperty("x-cog-org-id", tab.orgId);
+                }
+                int code = c.getResponseCode();
+                if (code >= 300 && code < 400) {
+                    String loc = c.getHeaderField("Location");
+                    if (loc == null) return null;
+                    url = new java.net.URL(new java.net.URL(url), loc).toString();
+                    try { c.disconnect(); } catch (Exception ignored) {}
+                    c = null;
+                    continue;
+                }
+                break;
+            }
+            if (c == null) return null;
+            int code = c.getResponseCode();
+            if (code < 200 || (code >= 300 && code < 400)) return null;
+            String ctype = c.getContentType();
+            String mime = "application/octet-stream", enc = null;
+            if (ctype != null && !ctype.isEmpty()) {
+                int sc = ctype.indexOf(';');
+                mime = (sc >= 0 ? ctype.substring(0, sc) : ctype).trim();
+                if (sc >= 0) {
+                    int ci = ctype.toLowerCase(java.util.Locale.US).indexOf("charset=");
+                    if (ci >= 0) { enc = ctype.substring(ci + 8).trim(); int semi = enc.indexOf(';'); if (semi >= 0) enc = enc.substring(0, semi).trim(); }
+                }
+            }
+            java.util.Map<String, String> hdrs = new java.util.HashMap<>();
+            for (int i = 0; ; i++) {
+                String k = c.getHeaderFieldKey(i), vl = c.getHeaderField(i);
+                if (k == null && vl == null) break;
+                if (k == null) continue;
+                String lk = k.toLowerCase(java.util.Locale.US);
+                if (lk.equals("transfer-encoding") || lk.equals("connection") || lk.equals("content-encoding")) continue;
+                hdrs.put(k, vl);
+            }
+            java.io.InputStream in = (code >= 400) ? c.getErrorStream() : c.getInputStream();
+            if (in == null) in = new java.io.ByteArrayInputStream(new byte[0]);
+            String reason = c.getResponseMessage();
+            if (reason == null || reason.isEmpty()) reason = "OK";
+            WebResourceResponse resp = new WebResourceResponse(mime, enc, in);
+            resp.setStatusCodeAndReasonPhrase(code, reason);
+            resp.setResponseHeaders(hdrs);
+            return resp;
+        } catch (Exception e) { return null; }
+    }
     /** 广告/追踪域名命中 (内置精简黑名单)。 */
     private boolean isAdHost(String host) {
         if (host == null) return false;
