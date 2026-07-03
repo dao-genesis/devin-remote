@@ -14,7 +14,7 @@ Design goals vs v1:
 """
 import http.server, json, subprocess, os, sys, base64, ctypes, ctypes.wintypes
 import struct, threading, time, traceback, zlib, socketserver
-import socket, urllib.request, urllib.parse, re
+import socket, urllib.request, urllib.parse, re, shlex as _shlex
 
 PORT  = int(os.environ.get('VM_AGENT_PORT', '9001'))
 TOKEN = os.environ.get('VM_AGENT_TOKEN', '')          # '' => no auth (loopback only)
@@ -518,6 +518,61 @@ def _proc_of_hwnd(hwnd):
 _SHELL_FLYOUT_HOSTS = {'startmenuexperiencehost.exe', 'searchhost.exe',
                        'searchapp.exe', 'shellexperiencehost.exe'}
 
+# Shell metacharacters => the request is a cmd one-liner (redirect/pipe/chain/env),
+# not a plain app launch, so it must go through cmd.exe rather than ShellExecute.
+_SHELLY = ('>', '<', '|', '&', '\n', '%', '^')
+
+def launch_app(body):
+    """Launch an app the way a *user* does -- via the shell (ShellExecuteW 'open'),
+    NOT raw CreateProcess. This is the language-neutral, universal launch path:
+
+      * Win11 ships many built-in apps (notepad, calc, ...) as **App Execution Alias**
+        0-byte stubs under System32 (and packaged Store apps). Raw/`cmd /c <exe>`
+        launches the *stub*, which hands off and exits -- the real app never appears
+        (empirically: notepad/winver/calc died <0.5s). ShellExecute performs proper
+        app-model / alias / file-association activation exactly like Start menu / Run,
+        so the app actually comes up.
+      * Fire-and-forget: no stdio pipes to inherit (a captured run would hang on a
+        long-lived GUI child), returns immediately.
+
+    Accepts `path` (preferred) or `command`/`cmd` (a bare exe/alias, optionally with
+    args) plus optional `args`/`params` and `cwd`. A command containing shell
+    metacharacters is treated as a cmd one-liner and run detached through cmd.exe."""
+    path = body.get('path')
+    params = body.get('args') if body.get('args') is not None else body.get('params')
+    if params is not None and not isinstance(params, str):
+        params = ' '.join(str(a) for a in params)
+    raw = body.get('command', body.get('cmd', '')) or ''
+    if not path and raw and not any(c in raw for c in _SHELLY):
+        try:
+            parts = _shlex.split(raw, posix=False)
+        except ValueError:
+            parts = raw.split()
+        if parts:
+            path = parts[0].strip('"')
+            if params is None and len(parts) > 1:
+                params = ' '.join(parts[1:])
+    if path:
+        SW_SHOWNORMAL = 1
+        shell32 = ctypes.windll.shell32
+        shell32.ShellExecuteW.restype = ctypes.c_void_p
+        shell32.ShellExecuteW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p,
+                                          ctypes.c_wchar_p, ctypes.c_wchar_p,
+                                          ctypes.c_wchar_p, ctypes.c_int]
+        hinst = shell32.ShellExecuteW(None, 'open', path, params,
+                                      body.get('cwd') or body.get('workdir'),
+                                      SW_SHOWNORMAL)
+        code = int(hinst) if hinst else 0
+        return {'ok': code > 32, 'launched': path, 'params': params,
+                'shell_result': code, 'via': 'ShellExecuteW'}
+    # shell one-liner (redirect/pipe/chain) -> detached cmd, as before.
+    DETACHED_PROCESS = 0x00000008
+    CREATE_NEW_PROCESS_GROUP = 0x00000200
+    p = subprocess.Popen(raw, shell=True, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+    return {'ok': True, 'detached': True, 'pid': p.pid, 'via': 'detached-shell'}
+
 def ensure_desktop(max_iter=5, settle_polls=8, poll_gap=0.5):
     """Close a lingering Start / search flyout so the session lands on a clean
     desktop. Win11's Start does NOT close on Esc (Esc only clears its search
@@ -658,12 +713,7 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             # waiting on / inheriting the stdio pipes (which makes a captured run
             # hang on long-lived GUI children like notepad/chrome).
             if action == 'launch' or body.get('detach'):
-                DETACHED_PROCESS = 0x00000008
-                CREATE_NEW_PROCESS_GROUP = 0x00000200
-                p = subprocess.Popen(cmd, shell=True, stdin=subprocess.DEVNULL,
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                     creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
-                return {'ok': True, 'detached': True, 'pid': p.pid}
+                return launch_app(body)
             try:
                 r = subprocess.run(cmd, shell=True, capture_output=True, timeout=timeout,
                                    encoding='utf-8', errors='replace')
