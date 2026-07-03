@@ -11651,3 +11651,25 @@ the arc cleaned up after itself: Night Color *tints every pixel on
 the screen*, which would quietly poison every later pixel-rung arc —
 a state change whose blast radius crosses arc boundaries must be
 reverted (receipt: Active back to unset).
+
+## F375 — KMines: a painted board narrates through its status bar
+
+Second game arc, first board game. KMines splits cleanly along the
+F201 line: chrome is semantic (menus, New, difficulty combo all named
+in the brief) but the minefield is one painted QWidget — rung-4
+territory. Two working mistakes taught the geometry lessons. First,
+`capture_patch` takes *inclusive corners* `(minx,miny,maxx,maxy)`,
+not `(x,y,w,h)` — passing width/height silently produced a 1-pixel
+patch and a `region_diff` of `0/1`, a diagnosis that looked like "the
+click did nothing" when actually the *camera* was wrong; when a diff
+says nothing changed, first check what the patch actually framed
+(`total` tells you). Second, the board does not fill the window — the
+grid floats centered with a wide margin, so window-relative guesses
+landed on wallpaper; one region capture of the window calibrated the
+cell grid (36px cells, origin at +165,+88) and every later click
+landed. The receipt rung is the discovery: KMines *narrates through
+its status bar* — `Mines: 0/10` → `Mines: 1/10` around a right-click
+flag, read by a 200x25 OCR strip for a few hundred bytes. Painted
+games usually keep a text ledger somewhere on their own surface;
+find the ledger and you get artifact-floor-grade receipts without
+ever diffing the canvas.
