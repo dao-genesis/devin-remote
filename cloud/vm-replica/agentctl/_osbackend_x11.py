@@ -1172,10 +1172,51 @@ def get_clipboard_files() -> list:
     return []
 
 
+def _sel_read(selection: str = "CLIPBOARD", timeout: float = 1.5) -> "bytes | None":
+    """Native X selection read (F379): XConvertSelection asks the current owner
+    to write the text into a property on our own scratch window, then we poll
+    that property. No external binary — the read the floor's zero-dependency
+    rule always implied. None when there is no owner or the owner never
+    replies (INCR transfers beyond 1MB are not chased; the xclip fallback in
+    get_clipboard still covers those when available)."""
+    _x.XCreateSimpleWindow.restype = ctypes.c_ulong
+    _x.XCreateSimpleWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                                       ctypes.c_int, ctypes.c_uint, ctypes.c_uint,
+                                       ctypes.c_uint, ctypes.c_ulong, ctypes.c_ulong]
+    _x.XConvertSelection.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
+                                     ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+    _x.XDeleteProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong]
+    _x.XDestroyWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    sel = _atom(selection)
+    utf8 = _atom("UTF8_STRING")
+    prop_atom = _atom("OSCTL_SEL")
+    win = _x.XCreateSimpleWindow(_dpy, _root, 0, 0, 1, 1, 0, 0, 0)
+    try:
+        for target in (utf8, 31):  # UTF8_STRING first, XA_STRING second
+            _x.XDeleteProperty(_dpy, win, prop_atom)
+            _x.XConvertSelection(_dpy, sel, target, prop_atom, win, 0)
+            _x.XFlush(_dpy)
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                raw = _prop(win, prop_atom, 0)  # AnyPropertyType
+                if raw is not None:
+                    return raw
+                time.sleep(0.02)
+        return None
+    finally:
+        _x.XDestroyWindow(_dpy, win)
+        _x.XFlush(_dpy)
+
+
 def get_clipboard() -> str:
     # F226: query the real X CLIPBOARD, not just the local cache.
     # If another app (KWrite, gedit, etc.) did Ctrl+C, _clip_text is stale.
-    # Use xclip to read the current CLIPBOARD selection from whoever owns it.
+    # F379: read natively via XConvertSelection — on a fresh VM without xclip
+    # the old subprocess path silently fell back to the stale local cache and
+    # *lied* (a phantom "empty clipboard" indistinguishable from a real one).
+    raw = _sel_read("CLIPBOARD")
+    if raw is not None:
+        return raw.decode("utf-8", errors="replace")
     try:
         r = subprocess.run(
             ["xclip", "-o", "-selection", "clipboard"],

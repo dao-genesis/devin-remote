@@ -11736,3 +11736,25 @@ tag the answer as cached. Also bagged: Chrome never grants PRIMARY
 (drag-select reads empty there), so on browsers only CLIPBOARD via
 Ctrl+C is real; and page text via select-all is itself a rung-2-
 priced read of an otherwise canvas-priced surface.
+
+## F379 — the clipboard read goes native: honor the zero-dependency oath
+
+F378's indictment condensed into code the same day, the F369 pattern
+(measure → discipline → verb) applied to a defect instead of a cost.
+`get_clipboard` no longer needs xclip: `_sel_read` speaks the X
+selection protocol itself — XConvertSelection asks the current owner
+to write the text into a property on a scratch window, a short poll
+reads it back, UTF8_STRING tried before XA_STRING. This is the read
+the floor's own header always promised ("no third-party deps on
+either ground") — the *serve* side (`_clip_serve`) was already
+native, only the read side had quietly leaned on an external binary,
+and that lean is exactly where F378's silent lie lived: the
+fallback-to-cache now triggers only when the native path *and* xclip
+both fail, i.e. approximately never, instead of whenever a fresh VM
+lacked a package. Verified against both owners in play: KWrite's
+copy and Chrome's copy both arrive through the native read
+byte-identical to the xclip route. Dependency lesson, stated once:
+every subprocess call in a perception verb is a hidden environment
+assumption, and each one converts a missing package into a wrong
+answer somewhere down the line. The floor should speak protocols,
+not shell out to strangers.
