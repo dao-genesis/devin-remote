@@ -1440,6 +1440,20 @@ public class RelayService extends Service {
         @JavascriptInterface public void setTabStatus(String accountId, String convName, String status) {
             MainActivity m = MainActivity.sInstance; if (m != null) m.ipcSetTabStatus(accountId, convName, status);
         }
+        // 备份库读写 (常驻引擎的 归零账号 备份→清理→移出库 流水线用; 与 MainActivity 落同一 Documents/DevinCloud/backups)。
+        @JavascriptInterface public String vaultReadBackup(String folder, String name) { return bkRead(folder, name); }
+        @JavascriptInterface public boolean vaultSaveBackup(String folder, String name, String content) { return bkSave(folder, name, content); }
+        @JavascriptInterface public boolean vaultSaveBackupB64(String folder, String name, String base64) { return bkSaveB64(folder, name, base64); }
+        @JavascriptInterface public boolean vaultDeleteBackup(String folder, String name) { return bkDelete(folder, name); }
+        /** 当前网络计费/在线态 (自动备份「仅 WiFi」门控)。识别失败 → 保守 metered=false 放行。 */
+        @JavascriptInterface public String netInfo() {
+            boolean metered = false, online = false;
+            try {
+                android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                if (cm != null) { metered = cm.isActiveNetworkMetered(); online = cm.getActiveNetworkInfo() != null && cm.getActiveNetworkInfo().isConnected(); }
+            } catch (Exception ignored) {}
+            return "{\"metered\":" + metered + ",\"online\":" + online + "}";
+        }
         @JavascriptInterface public void log(String s) { android.util.Log.i("RTFlowEngine", s == null ? "" : s); }
         /** 对话追踪·全局系统通知 (引擎后台检测到会话卡住/待处理/结束时调用; 软件被切后台/锁屏亦可弹)。 */
         @JavascriptInterface public void notifyGlobal(String tag, String title, String text) {

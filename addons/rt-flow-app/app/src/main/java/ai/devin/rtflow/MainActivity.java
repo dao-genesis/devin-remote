@@ -1115,6 +1115,7 @@ public class MainActivity extends AppCompatActivity {
                     autoFillLogin(v, u);        // 有保存的账密 → 自动填充 (无感)
                     installLoginCapture(v);     // 监听登录提交 → 自动弹「保存登录？」
                     installKbHelper(v);         // 键盘弹出时输入框上滚到可见区中部 (不被遮挡)
+                    installBackspaceGuard(v);   // 退格护栏: 拦下输入法误发的左右两侧同删
                     if (tab.translated) applyTranslate(v); // 翻译态跨页保持
                     injectUserScripts(v, u, "end");       // 油猴 @run-at document-end/idle
                 }
@@ -1127,7 +1128,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); }
+                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -3078,6 +3079,34 @@ public class MainActivity extends AppCompatActivity {
             + "document.addEventListener('focusin',function(e){if(isF(e.target))sif(e.target);},true);"
             + "if(window.visualViewport){window.visualViewport.addEventListener('resize',function(){var a=document.activeElement;if(isF(a))sif(a);});}"
             + "})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    // 退格护栏: 部分输入法(三星键盘等)在富文本编辑器(contenteditable)里按一次退格, 会把光标
+    //   左右两侧的字符同时删掉 —— 表现为 IME 在 deleteContentBackward 之外额外发出一个
+    //   deleteContentForward, 或单个退格的目标区间越过光标吞掉右侧字符。此护栏在 document
+    //   捕获阶段兜底: ① 紧跟退格(<150ms)的 IME 向前删除一律拦下(手机键盘本无 Del 键, 该事件
+    //   必为输入法误发); ② 单个退格的目标区间越过光标 → 拦下改为只删左侧。仅处理系统真实事件
+    //   (isTrusted) 且不干预拼音/组合输入中(isComposing)。幂等(window.__rtBsGuard 守卫)。
+    private void installBackspaceGuard(WebView w) {
+        if (w == null) return;
+        String js = "(function(){if(window.__rtBsGuard)return;window.__rtBsGuard=1;"
+            + "var lastBk=0;"
+            + "document.addEventListener('beforeinput',function(e){"
+            + "if(!e.isTrusted||e.isComposing)return;"
+            + "var t=e.target;if(!t)return;"
+            + "var ce=!!t.isContentEditable;"
+            + "if(!ce&&!/^(input|textarea)$/i.test(t.tagName||''))return;"
+            + "var now=Date.now();"
+            + "if(e.inputType==='deleteContentBackward'){lastBk=now;"
+            + "if(!ce||!e.getTargetRanges)return;"
+            + "try{var sel=window.getSelection();"
+            + "if(sel&&sel.isCollapsed&&sel.anchorNode){var r=e.getTargetRanges()[0];"
+            + "if(r&&r.endContainer===sel.anchorNode&&r.endOffset>sel.anchorOffset){"
+            + "e.preventDefault();e.stopImmediatePropagation();document.execCommand('delete');return;}}}catch(_){}"
+            + "return;}"
+            + "if(e.inputType==='deleteContentForward'&&(now-lastBk)<150){"
+            + "e.preventDefault();e.stopImmediatePropagation();}"
+            + "},true);})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // DownloadListener 收到 blob: → 让当前页 JS 取出内容回传

@@ -67,7 +67,9 @@ ok(_autoDlBlocked() === false, "metered 缺失(非明确计费) → 放行");
 // ── 源级护栏: 自动路径有门控 ──
 ok(/async function autoBackupTick\(\)\{[\s\S]{0,400}?_autoDlBlocked\(\)\)\s*return/.test(switchSrc),
    "源级: 自动备份心跳 autoBackupTick 前置 _autoDlBlocked 门控");
-ok(/if\(!force && _autoDlBlocked\(\)\) return/.test(switchSrc),
+// autoCleanFor 已抽出为共用模块 autoclean.js (切号板+常驻引擎同源) → 门控护栏在模块源上
+const autocleanSrc = fs.readFileSync(path.join(ENGINE, "autoclean.js"), "utf8");
+ok(/if \(!force && autoDlBlocked\(\)\) return/.test(autocleanSrc),
    "源级: autoCleanFor 仅在**自动**(!force)时门控 (手动 force=true 不受限)");
 ok(/return _netInfo\(\)\.metered===true/.test(switchSrc),
    "源级: 仅在**明确**计费网络(metered===true)拦; 非计费/未知放行");
