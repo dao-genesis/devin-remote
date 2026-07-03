@@ -11673,3 +11673,22 @@ flag, read by a 200x25 OCR strip for a few hundred bytes. Painted
 games usually keep a text ledger somewhere on their own surface;
 find the ledger and you get artifact-floor-grade receipts without
 ever diffing the canvas.
+
+## F376 — print to PDF: the print pipeline is an artifact factory
+
+The printing workflow, end to end: KWrite, Ctrl+P, Qt's print dialog
+— which arrived *already* aimed at "Print to File (PDF)" on a
+printerless machine, a sensible default worth knowing (no printer ==
+file output preselected, nothing to switch). The dialog is honest
+QWidget territory: the brief named the Output file edit, Print and
+Cancel; `uia_find` gave the edit's rect, one click + Ctrl+A + retype
+retargeted it, semantic Print fired it. The receipt is the arc's
+point: a printed PDF is not an opaque blob — `pdftotext` recovered
+the document body byte-comparably (`economy of perception: text
+first, pixels last` on line 7, after KWrite's date/filename header
+furniture), so print-to-file turns *any* app's rendered view into a
+parseable artifact. That generalises: when an app has no Save As and
+no scriptable export, the print pipeline is a universal artifact
+factory — every GUI toolkit ships one, it always writes a file, and
+PDF yields to text tools. (Corollary bagged en route: `pdftotext`
+lives in poppler-utils, not installed by default.)
