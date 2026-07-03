@@ -806,6 +806,46 @@ function test(name, fn) {
     assert.ok(/_store\.removeBatch\(idx\)/.test(src), "出库须走 removeBatch (单次IO+持久化)");
     assert.ok(/removeEmails\.push\(acc\.email\)/.test(src), "归零账号先入 removeEmails, 循环外再删");
   });
+  test("extension.js: 24h冷却锚点不得每周期重置 (v4.10.1 修复归零清理从不触发)", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
+    // 旧病灶: `if (backupOk) devinCloud.setCleanupState(acc.email, { backupCompletedAt: Date.now() });`
+    //   每周期把锚点刷成 now → cooldown 门永不满足 → 归零清理从不触发。修复后禁止此无条件重置。
+    assert.ok(!/if \(backupOk\) devinCloud\.setCleanupState\(acc\.email, \{ backupCompletedAt: Date\.now\(\) \}\);/.test(src),
+      "禁止每周期无条件重置 backupCompletedAt (会令 24h 冷却永不满足)");
+    // 修复后: 落锚点前必先读旧态, 且仅在「无锚点」或「上轮已清理(cleanedAt>=旧锚点)」时才落新锚点。
+    assert.ok(/const _cs = devinCloud\.getCleanupState\(acc\.email\);/.test(src), "落锚点前须先读既有冷却态");
+    assert.ok(/if \(!_cs \|\| !_cs\.backupCompletedAt \|\| \(_cs\.cleanedAt && _cs\.cleanedAt >= _cs\.backupCompletedAt\)\)/.test(src),
+      "仅在无锚点或需开启新一轮时才落 backupCompletedAt");
+  });
+  test("devin_cloud.isCleanupReady: cooldown/recent_update/already_cleaned 三门语义", () => {
+    const now = Date.now(), H = 3600000, cd = 24 * H;
+    const em = "cleanupready.test." + now + "@example.invalid";
+    try {
+      // 无锚点 → no_backup
+      assert.strictEqual(cloud.isCleanupReady(em, cd).reason, "no_backup");
+      // 锚点在 now → cooldown 未满
+      cloud.setCleanupState(em, { backupCompletedAt: now });
+      assert.strictEqual(cloud.isCleanupReady(em, cd).ready, false);
+      assert.strictEqual(cloud.isCleanupReady(em, cd).reason, "cooldown");
+      // 锚点 >24h 前 + 无近更新 → ready
+      cloud.setCleanupState(em, { backupCompletedAt: now - 25 * H });
+      assert.strictEqual(cloud.isCleanupReady(em, cd).ready, true);
+      // 近 24h 有对话更新 → recent_update 挡住
+      cloud.setCleanupState(em, { lastConvUpdateAt: now - 1 * H });
+      assert.strictEqual(cloud.isCleanupReady(em, cd).reason, "recent_update");
+      // 上轮清理(cleanedAt>=锚点)且无新备份 → already_cleaned
+      cloud.setCleanupState(em, { lastConvUpdateAt: now - 25 * H, cleanedAt: now - 24 * H });
+      assert.strictEqual(cloud.isCleanupReady(em, cd).reason, "already_cleaned");
+    } finally {
+      // 清理测试残留, 不污染真库
+      try {
+        const p = require("path").join(require("os").homedir(), ".wam", "devin_cloud", "cleanup_state.json");
+        const fs = require("fs");
+        if (fs.existsSync(p)) { const all = JSON.parse(fs.readFileSync(p, "utf8")); delete all[em.toLowerCase()]; fs.writeFileSync(p, JSON.stringify(all, null, 2)); }
+      } catch (e) {}
+    }
+  });
   test("package.json: 自动清理默认开; 归零移除默认开(v4.9.12 闭环)", () => {
     const fs = require("fs");
     const pkg = JSON.parse(fs.readFileSync(require("path").join(__dirname, "..", "package.json"), "utf8"));

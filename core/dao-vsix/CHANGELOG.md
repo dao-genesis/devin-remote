@@ -2,6 +2,11 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.66
+- **正本清源根治「额度归零→全量备份→清理→出库」闭环从系统构建至今一次都没触发过**。云端经 dao-bridge 直连桌面实测 `~/.wam/devin_cloud/cleanup_state.json`：数十个低额度账号的 `backupCompletedAt` 全被刷成近 1~2 小时内的同一批时戳 —— 病灶在 `_dvAutoBackupRun`：每个备份周期都无条件 `setCleanupState(email,{backupCompletedAt: Date.now()})` 把 24h 冷却锚点重置为 now，而备份定时器远比 24h 频繁 → `isCleanupReady` 的 `now-backupCompletedAt < 24h` 恒成立 → cooldown 门永不满足 → 归零清理/出库永不发生（全库仅 4 个账号带 `evicted:true`，皆来自数月前旧运行）。
+  - **修法**：冷却锚点「本源起算」——落 `backupCompletedAt` 前先 `getCleanupState`，仅当①尚无锚点 或 ②上轮已清理（`cleanedAt >= 旧锚点`·需为新一轮重新起算）时才落新锚点；低额度周期内每轮照常全量备份刷新数据、但锚点保持不动 → 24h 冷却真正能走完。账号充值再用则由 `lastConvUpdateAt` 的 `recent_update` 门守住近 24h 活跃、不会误清。
+  - 回归护栏：`test/unit.test.js` 新增「24h冷却锚点不得每周期重置」源级断言 + 「isCleanupReady cooldown/recent_update/already_cleaned 三门语义」行为测试。rt-flow 单测 134/35 全绿、dao-vsix/dao-one 构建 + render_check + vendor 自检全绿。
+
 ## 3.50.65
 - **根治 route-C(ntfy mesh)兜底通道在「多实例·工作区私牌」场景下仍 401 —— 3.50.51 未竟之修的正本清源**。云端经路线C 实测发现:除免鉴权 `/api/health`·`/shell` 外, `/api/exec`·`/api/workspace`·`/api/next` 等需鉴权整机端点经 mesh **一律 `unauthorized`** —— 兜底通道在本机无公网隧道(cloudflared `publicUrl=null`)时形同半残, 云端连得上却操作不了机器。
   - **真因(正本清源)**: `sigServeFrame` 解封成功后向 fakeReq 强置 `authorization = bridgeAuthoritativeToken()`(机器级恒稳权威令牌·公网隧道/知识库反注入皆用它), 但 `checkAuth` **旧法仅认 `ws.token`/`bridgeToken`**。带工作区的窗口实例 `ws.token` 是其自身工作区私牌, 与机器级权威令牌**脱钩** → 该实例经 mesh/公网被访问时, 注入的权威令牌反被它自己判 401。`bridgeAuthoritativeToken` 注释(本文件对应源 5234-5242)自述「两令牌 checkAuth 皆放行」, 但该不变式**从未真正成立**(仅当 `ws.token===机器令牌` 偶合时才成立)。
