@@ -1069,9 +1069,20 @@ function checkAuth(req: any): boolean {
     if (auth === `Bearer ${ws.token}`) return true;
     // 内穿令牌(可刷新)也放行 — 刷新时旧 ws.token 仍有效, 故换牌不断链(帛书「夫唯不争·故无尤」)
     if (bridgeToken && auth === `Bearer ${bridgeToken}`) return true;
+    // v3.50.65 · 机器级权威令牌(dao-conn-current.json / ~/.dao/api-token)亦放行 —— 正本清源。
+    //   本源认知: 公网隧道发布的、路线C mesh 注入的(sigServeFrame 强置 authorization=bridgeAuthoritativeToken)、
+    //   反向注入进知识库供云端读取的, 恒为「机器级恒稳」权威令牌 bridgeAuthoritativeToken()(见其注释 5234-5242
+    //   自述「两令牌 checkAuth 皆放行」)。但带工作区的窗口实例 ws.token 是其自身工作区私牌, 与机器级权威令牌脱钩,
+    //   而 checkAuth 旧法仅认 ws.token/bridgeToken → 该实例经 mesh/公网被访问时, 注入的权威令牌反被自己判 401
+    //   (实测 3.50.64: route-C /api/exec·/api/workspace 全 unauthorized, 仅免鉴权 /api/health·/shell 可达,
+    //    正是 3.50.51 声称已修的「兜底通道操作不了机器」缺口在多实例·私牌场景下的残留)。故此处补上权威令牌放行,
+    //   令代码自身注释的不变式真正成立: 机器级权威令牌与本窗口 ws.token 皆放行, 换牌/多实例不断链。
+    const machineTok = bridgeAuthoritativeToken();
+    if (machineTok && auth === `Bearer ${machineTok}`) return true;
     const url = new URL(req.url || '/', `http://localhost:${ws.port}`);
     if (url.searchParams.get('master_token') === ws.token) return true;
     if (bridgeToken && url.searchParams.get('master_token') === bridgeToken) return true;
+    if (machineTok && url.searchParams.get('master_token') === machineTok) return true;
     // Local loopback exempt for read-only endpoints; relay/public must carry token
     const remoteAddr = req.socket?.remoteAddress || '';
     if (remoteAddr === '127.0.0.1' || remoteAddr === '::1' || remoteAddr === '::ffff:127.0.0.1') {

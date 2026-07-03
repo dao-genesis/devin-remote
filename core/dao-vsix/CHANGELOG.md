@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.65
+- **根治 route-C(ntfy mesh)兜底通道在「多实例·工作区私牌」场景下仍 401 —— 3.50.51 未竟之修的正本清源**。云端经路线C 实测发现:除免鉴权 `/api/health`·`/shell` 外, `/api/exec`·`/api/workspace`·`/api/next` 等需鉴权整机端点经 mesh **一律 `unauthorized`** —— 兜底通道在本机无公网隧道(cloudflared `publicUrl=null`)时形同半残, 云端连得上却操作不了机器。
+  - **真因(正本清源)**: `sigServeFrame` 解封成功后向 fakeReq 强置 `authorization = bridgeAuthoritativeToken()`(机器级恒稳权威令牌·公网隧道/知识库反注入皆用它), 但 `checkAuth` **旧法仅认 `ws.token`/`bridgeToken`**。带工作区的窗口实例 `ws.token` 是其自身工作区私牌, 与机器级权威令牌**脱钩** → 该实例经 mesh/公网被访问时, 注入的权威令牌反被它自己判 401。`bridgeAuthoritativeToken` 注释(本文件对应源 5234-5242)自述「两令牌 checkAuth 皆放行」, 但该不变式**从未真正成立**(仅当 `ws.token===机器令牌` 偶合时才成立)。
+  - **修法**: `checkAuth` 补上 `bridgeAuthoritativeToken()`(机器级权威令牌)与其 `master_token` query 放行分支, 令代码自身注释的不变式真正成立 —— 机器级权威令牌与本窗口 `ws.token` 皆放行, 换牌/多实例/mesh 兜底均不断链。仅当前两条 `ws.token`/`bridgeToken` 快路未命中时才读盘取机器令牌, 合法请求零额外开销。
+  - 自检: `node build.js`(转译+桥JS语法 OK)、rt-flow 35 单测全绿、`render_check` OK、vendor rtflow 与本源一致。仅改 `core/dao-vsix/src/extension.ts`。
+
 ## 3.50.58
 - **内穿自愈纳入常驻桥(dao-bridge)已发布连接 — 根治冷启动机「自有 quick-tunnel 抖动→注入死址/(未连接)」**。冷启动机上 dao-vsix 自起的 cloudflare quick-tunnel 常在注册主机名后 ~30-60s 即 DNS 失活(NXDOMAIN)抖动;旧 `bridgeResolveLiveConn()` 仅含「进程内 `bridgeUrl`」单一候选 → 抖动时探活全死 → 落入「鸡犬相闻」自重启隧道死循环, 永远收敛不到稳定地址。
   - `bridgeResolveLiveConn()` 新增候选: 常驻桥 `bridgeReadPublishedConn()` 的新鲜(`<BRIDGE_CONN_FRESH_MS`)已发布连接(经其代理直达本机 `dao-vsix:port`), 探活/签名一律配机器级权威令牌 `bridgeAuthoritativeToken()`。死探时即「无缝切换」到该活址并反注入, 免去自重启抖动。
