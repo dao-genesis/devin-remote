@@ -47,9 +47,9 @@ function makeEnv(opts) {
   };
   const DaoCloud = {
     sessTs: (s) => s.ts || 0,
-    listSessions: async () => { calls.listSessions++; return { ok: true, sessions: sessions }; },
-    exportSessionZip: async () => opts.backupFail ? { ok: false } : { ok: true, b64: "eg==", events: 3, fileCount: 1 },
-    exportSession: async () => ({ ok: true, md: "# conv", events: 3 }),
+    listSessions: async () => { calls.listSessions++; return opts.listFail ? { ok: false } : { ok: true, sessions: sessions }; },
+    exportSessionZip: async (a, sid) => (opts.backupFail || (opts.failSids || []).indexOf(sid) >= 0) ? { ok: false } : { ok: true, b64: "eg==", events: 3, fileCount: 1 },
+    exportSession: async (a, sid) => (opts.failSids || []).indexOf(sid) >= 0 ? { ok: false } : ({ ok: true, md: "# conv", events: 3 }),
     buildAccessGuide: () => "guide",
     listIntegrations: async () => ({ ok: false }),
     purgeSession: async (a, sid) => { calls.purged.push(sid); return { deleted: true }; },
@@ -124,6 +124,38 @@ function makeEnv(opts) {
     const r = await env.inst.autoCleanFor(env.getAccs()[0]);
     ok(r.state === "skip" && /WiFi/.test(r.reason), "计费网络: 自动清理暂缓");
   }
+  // ── 场景 7: 对话列表获取失败 → 绝不清理/移出 (列表失败≠无对话·旧病灶: 近期活跃号未备份即被移出) ──
+  {
+    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, listFail: true, sessions: [{ devin_id: "s1", ts: now - 2 * DAY }] });
+    const r = await env.inst.autoCleanFor(env.getAccs()[0]);
+    ok(r.state === "backup-fail" && /列表/.test(r.reason), "列表失败: state=backup-fail 不清理不移出 (" + r.state + ")");
+    ok(env.calls.purged.length === 0, "列表失败: 未清理任何对话");
+    ok(env.getAccs().length === 1, "列表失败: 账号保留在库");
+  }
+  // ── 场景 8: 部分对话备份失败 → 备份未齐全·不移出 (全量备份后才移除) ──
+  {
+    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, failSids: ["s2"], sessions: [
+      { devin_id: "s1", ts: now - 2 * DAY }, { devin_id: "s2", ts: now - 3 * DAY }] });
+    const r = await env.inst.autoCleanFor(env.getAccs()[0]);
+    ok(r.state === "cleaned" && /不移出/.test(r.reason), "部分备份失败: 不移出 (" + r.reason + ")");
+    ok(env.calls.purged.indexOf("s2") < 0, "部分备份失败: 未备份的对话绝不清理");
+    ok(env.getAccs().length === 1, "部分备份失败: 账号保留在库");
+  }
+  // ── 场景 9: 刚重新添加的号 (addedAt 24h 内) → 免自动移出保护 (消除「重加即被再移出」幽灵循环) ──
+  {
+    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [{ devin_id: "s1", ts: now - 2 * DAY }],
+      accs: [{ id: "a1", email: "z@x.com", auth1: "t", orgId: "o", quota: { dPct: 0, overageDollars: 0 }, addedAt: now - H }] });
+    const r = await env.inst.autoCleanFor(env.getAccs()[0]);
+    ok(r.state === "cleaned" && /24h 保护/.test(r.reason), "新加号 24h 保护: 不移出 (" + r.reason + ")");
+    ok(env.getAccs().length === 1, "新加号 24h 保护: 账号保留在库");
+  }
+  // ── 场景 10: 移出时落「移出记录」留底 (可追溯可恢复) ──
+  {
+    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [{ devin_id: "s1", ts: now - 2 * DAY }] });
+    const r = await env.inst.autoCleanFor(env.getAccs()[0]);
+    ok(r.state === "removed", "移出留底: 确已移出");
+    ok(Object.keys(env.files).some((k) => k.indexOf("移出记录.json") >= 0), "移出留底: 金库落移出记录(含账号快照)");
+  }
   // ── 源级护栏: 双端接入同一流水线 ──
   ok(/<script src="autoclean\.js">/.test(engineSrc), "engine.html 引入 autoclean.js");
   ok(/<script src="autoclean\.js">/.test(switchSrc), "switch.html 引入 autoclean.js");
@@ -142,6 +174,9 @@ function makeEnv(opts) {
   ok(/deleteContentForward'&&\(now-lastBk\)<150/.test(mainSrc), "退格护栏: 拦截紧跟退格的 IME 向前删除");
   ok(/r\.endOffset>sel\.anchorOffset/.test(mainSrc), "退格护栏: 拦截越过光标吞右侧的退格区间");
   ok(/e\.isComposing\)return/.test(mainSrc), "退格护栏: 组合输入(拼音)中不干预");
+  // ── 源级护栏: 重加号消幽灵 (doAdd 落 addedAt + 立即镜像金库·不被回拉覆盖) ──
+  ok(/addedAt:Date\.now\(\)/.test(switchSrc), "doAdd 落 addedAt (重加号 24h 免移出保护)");
+  ok(/saveAcc\(accs\); try\{ mirrorAccountsToVault\(\); \}catch\(e\)\{\}/.test(switchSrc), "doAdd 后立即镜像金库 (重加号不被金库回拉抓回幽灵态)");
   ok(/window\.__rtBsGuard\)return/.test(mainSrc), "退格护栏: 幂等守卫");
 
   if (failures) { console.error("\n" + failures + " failure(s)"); process.exit(1); }

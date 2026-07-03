@@ -1236,14 +1236,14 @@ function doAdd(){
   function _touch(id){ if(id && touched.indexOf(id)<0) touched.push(id); }
   try{ var j=JSON.parse(raw.trim()); var arr=Array.isArray(j)?j:(j&&typeof j==="object"?[j]:null);
     if(arr&&arr.length&&arr.some(function(o){return o&&(o.auth1||o.email);})){
-      arr.forEach(function(o){ if(!o||(!o.email&&!o.auth1))return; o.id=o.id||o.email||("acc"+Math.random().toString(36).slice(2,8)); var k=accs.findIndex(function(x){return x.id===o.id||(o.email&&x.email===o.email);}); if(k>=0){accs[k]=Object.assign(accs[k],o);updated++;_touch(accs[k].id);}else{accs.push(o);added++;_touch(o.id);} });
+      arr.forEach(function(o){ if(!o||(!o.email&&!o.auth1))return; o.id=o.id||o.email||("acc"+Math.random().toString(36).slice(2,8)); o.addedAt=Date.now(); var k=accs.findIndex(function(x){return x.id===o.id||(o.email&&x.email===o.email);}); if(k>=0){accs[k]=Object.assign(accs[k],o);updated++;_touch(accs[k].id);}else{accs.push(o);added++;_touch(o.id);} });
       jsonOk=true; }
   }catch(e){}
   if(!jsonOk){ var r=window.parseAccountText?window.parseAccountText(raw):{accounts:[],tokens:[]};
-    (r.accounts||[]).forEach(function(p){ var id=p.email; var k=accs.findIndex(function(x){return x.id===id||x.email===id;}); var rec={id:id,email:p.email,password:p.password}; if(k>=0){accs[k]=Object.assign(accs[k],rec);updated++;_touch(id);}else{accs.push(rec);added++;_touch(id);} });
-    (r.tokens||[]).forEach(function(t){ var id="tok-"+t.slice(-8); var k=accs.findIndex(function(x){return x.id===id||x.auth1===t;}); var rec={id:id,email:id,auth1:t}; if(k>=0){accs[k]=Object.assign(accs[k],rec);updated++;_touch(id);}else{accs.push(rec);added++;_touch(id);} });
+    (r.accounts||[]).forEach(function(p){ var id=p.email; var k=accs.findIndex(function(x){return x.id===id||x.email===id;}); var rec={id:id,email:p.email,password:p.password,addedAt:Date.now()}; if(k>=0){accs[k]=Object.assign(accs[k],rec);updated++;_touch(id);}else{accs.push(rec);added++;_touch(id);} });
+    (r.tokens||[]).forEach(function(t){ var id="tok-"+t.slice(-8); var k=accs.findIndex(function(x){return x.id===id||x.auth1===t;}); var rec={id:id,email:id,auth1:t,addedAt:Date.now()}; if(k>=0){accs[k]=Object.assign(accs[k],rec);updated++;_touch(id);}else{accs.push(rec);added++;_touch(id);} });
   }
-  saveAcc(accs); _orderIds=null; render();   // 解冻顺序: 重加曾被移除的账号必立即可见(消除幽灵态)
+  saveAcc(accs); try{ mirrorAccountsToVault(); }catch(e){} _orderIds=null; render();   // 解冻顺序+立即镜像金库: 重加曾被移除的账号必立即可见且不被金库回拉覆盖(消除幽灵态); addedAt 为重加号提供 24h 免自动移出保护
   document.getElementById("addInput").value="";
   toast("识号完成 · 新增 "+added+" · 更新 "+updated);
   // 添加即自动登录(无论 JSON / token / 邮箱密码) → 用户无需再点 🔑, 行直接翻为可注入态并显示美金额度。

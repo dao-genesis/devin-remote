@@ -76,7 +76,8 @@
       if (!N.vaultSaveBackup && !N.saveTextFile) return { ok: false };
       var man = loadBackupManifest(a);
       var ls = null; try { ls = await DaoCloud.listSessions(a, 200); } catch (e) {}
-      var sessions = (ls && ls.ok && ls.sessions) || [];
+      var listOk = !!(ls && ls.ok && Array.isArray(ls.sessions));   // 列表取失败≠无对话: 下游绝不可据空列表清理/移出
+      var sessions = listOk ? ls.sessions : [];
       var nNew = 0, nFail = 0;
       for (var i = 0; i < sessions.length; i++) { var r = await backupSessionFull(a, sessions[i], man); if (r.backedUp) nNew++; else if (r.failed) nFail++; }
       var bundle = { savedAt: new Date().toISOString(), version: (function(){ try { return localStorage.getItem("rtflow.ver") || ""; } catch (e) { return ""; } })(),
@@ -96,7 +97,7 @@
       ].join("\n"); N.vaultSaveBackup(_acctFolder(a), "_说明.md", rd); } } catch (e) {}
       var saved = saveBackupManifest(a, man);
       var total = Object.keys(man.sessions).length;
-      return { ok: saved || total > 0, count: nNew, total: total, fails: nFail, manifest: man, sessions: sessions };
+      return { ok: saved || total > 0, listOk: listOk, count: nNew, total: total, fails: nFail, manifest: man, sessions: sessions };
     }
     // 自动清理单号 (force=手动触发: 跳过 1h 节流)。
     // 返回 {state:"skip|backup-fail|cleaned|removed", reason, bal, cleaned, kept}。
@@ -113,6 +114,9 @@
       if (!force && Date.now() - (_cleanTs[a.id] || 0) < 3600000) return { state: "skip", reason: "1h 内已清", bal: bal };
       var bk = await fullBackupAccount(a);
       if (!bk.ok) return { state: "backup-fail", reason: "备份失败·不清理", bal: bal };
+      // 对话列表取失败 → 无从判断「24h 内是否活跃」与「是否已全量备份」→ 绝不清理、绝不移出。
+      //   (旧病灶: 列表失败被当成「0 条对话·皆陈旧」→ 近期活跃号未备份即被移出库)
+      if (!bk.listOk) return { state: "backup-fail", reason: "对话列表获取失败·不清理不移出", bal: bal };
       _cleanTs[a.id] = Date.now();
       var man = bk.manifest, now = Date.now(), cleaned = 0, kept = 0, fresh = 0;
       for (var i = 0; i < bk.sessions.length; i++) {
@@ -124,8 +128,22 @@
         try { var r = await DaoCloud.purgeSession(a, sid); if (r && r.deleted) { cleaned++; ent.deleted = true; ent.cleanedAt = now; } else kept++; } catch (e) { kept++; }
       }
       if (cleaned > 0) saveBackupManifest(a, man);
-      // 归零 + 勾选「归零移出库」+ 全部对话皆 24h 无更新 → 备份后移出账号库
+      // 归零 + 勾选「归零移出库」+ 全部对话皆 24h 无更新 → 备份后移出账号库。
+      // 移出前置(缺一不可·道法自然·全量备份后才移除):
+      //   ① fresh===0: 全部对话 24h 无更新;  ② 全部对话备份齐全(逐条验 manifest 有 md/zip);
+      //   ③ 本轮无备份失败;  ④ 非刚重新添加的号(addedAt 24h 保护·重加号不会秒被再移出)。
       if (zero && cfg("autoRemove", false) && fresh === 0) {
+        if (bk.fails > 0) return { state: "cleaned", reason: "归零但有 " + bk.fails + " 条备份失败·不移出", bal: bal, cleaned: cleaned, kept: kept, backup: bk.count || 0, fresh: fresh };
+        var allBacked = true;
+        for (var m2 = 0; m2 < bk.sessions.length; m2++) {
+          var s2 = bk.sessions[m2]; var sid2 = s2.devin_id || s2.session_id || s2.id; if (!sid2) continue;
+          var e2 = man.sessions[sid2];
+          if (!e2 || !e2.backedUpAt || (!e2.md && !e2.zip)) { allBacked = false; break; }
+        }
+        if (!allBacked) return { state: "cleaned", reason: "归零但备份未齐全·不移出", bal: bal, cleaned: cleaned, kept: kept, backup: bk.count || 0, fresh: fresh };
+        if (a.addedAt && now - a.addedAt < CLEAN_STALE_MS) return { state: "cleaned", reason: "新加号 24h 保护·不移出", bal: bal, cleaned: cleaned, kept: kept, backup: bk.count || 0, fresh: fresh };
+        // 移出留底(可追溯可恢复): 金库落「移出记录」含完整账号快照 → 重加号直接从 account.json/此文件找回
+        try { if (N.vaultSaveBackup) N.vaultSaveBackup(_acctFolder(a), "移出记录.json", JSON.stringify({ removedAt: now, account: { id: a.id, email: a.email || "", password: a.password || "", auth1: a.auth1 || "", orgId: a.orgId || "" }, sessions: bk.sessions.length, cleaned: cleaned })); } catch (e) {}
         var accs = loadAcc(); var k = -1; for (var j = 0; j < accs.length; j++) { if (accs[j].id === a.id) { k = j; break; } }
         if (k >= 0) { accs.splice(k, 1); saveAcc(accs); }
         try { onRemoved(a); } catch (e) {}

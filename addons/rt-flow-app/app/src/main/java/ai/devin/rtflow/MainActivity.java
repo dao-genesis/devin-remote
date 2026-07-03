@@ -1144,6 +1144,7 @@ public class MainActivity extends AppCompatActivity {
                     installLoginCapture(v);     // 监听登录提交 → 自动弹「保存登录？」
                     installKbHelper(v);         // 键盘弹出时输入框上滚到可见区中部 (不被遮挡)
                     installBackspaceGuard(v);   // 退格护栏: 拦下输入法误发的左右两侧同删
+                    warmAttachmentCookie(tab.auth1, tab.orgId, u);   // 预铸附件 Cookie → 首次图片/视频即已授权
                     if (tab.translated) applyTranslate(v); // 翻译态跨页保持
                     injectUserScripts(v, u, "end");       // 油猴 @run-at document-end/idle
                 }
@@ -1156,7 +1157,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); }
+                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -2054,9 +2055,16 @@ public class MainActivity extends AppCompatActivity {
     //   等媒体元素的加载由渲染器原生发起、不经 JS → 无鉴权 → 图片时有时无、视频完全无法播放。
     //   此处在原生层代取: 补 Authorization 转发(含 Range 头, 视频拖动/分段加载可用),
     //   30x 手动跟随且仅对 app.devin.ai 发凭据(token 不外泄给对象存储), 响应原样回灌(状态/头/流)。
+    //   /attachments/ 的真鉴权是 httpOnly Cookie attachments_token(由 POST /api/users/set-attachment-cookie
+    //   铸造·Bearer 对该路径无效) → 代取必须转发 CookieManager 里 WebView 存的 Cookie;
+    //   401 时先铸造 Cookie 再重试一次(自愈), Cookie 同样只发 app.devin.ai。
     private WebResourceResponse authMediaResponse(Tab tab, WebResourceRequest req) {
+        if (tab == null) return null;
+        return authMediaResponseFor(tab.auth1, tab.orgId, req);
+    }
+    static WebResourceResponse authMediaResponseFor(String auth1, String orgId, WebResourceRequest req) {
         try {
-            if (tab == null || tab.auth1 == null || tab.auth1.isEmpty() || req == null) return null;
+            if (auth1 == null || auth1.isEmpty() || req == null) return null;
             Uri u = req.getUrl();
             if (u == null || !"GET".equalsIgnoreCase(req.getMethod())) return null;
             String host = u.getHost(), path = u.getPath();
@@ -2065,35 +2073,12 @@ public class MainActivity extends AppCompatActivity {
             java.util.Map<String, String> rh = req.getRequestHeaders();
             if (rh != null) for (String k : rh.keySet())
                 if (k != null && k.equalsIgnoreCase("Authorization")) return null;   // fetch/XHR 已带鉴权 → 不重复代取
-            String url = u.toString();
-            java.net.HttpURLConnection c = null;
-            for (int hop = 0; hop < 5; hop++) {
-                c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
-                c.setInstanceFollowRedirects(false);
-                c.setConnectTimeout(15000);
-                c.setReadTimeout(30000);
-                if (rh != null) for (java.util.Map.Entry<String, String> e : rh.entrySet()) {
-                    String k = e.getKey();
-                    if (k == null) continue;
-                    String lk = k.toLowerCase(java.util.Locale.US);
-                    // Accept-Encoding 不转发: 交由底层透明 gzip (自动解压并剥 Content-Encoding/Length, 免回灌压缩体)
-                    if (lk.equals("authorization") || lk.equals("host") || lk.equals("accept-encoding")) continue;
-                    try { c.setRequestProperty(k, e.getValue()); } catch (Exception ignored) {}
-                }
-                if ("app.devin.ai".equalsIgnoreCase(new java.net.URL(url).getHost())) {
-                    c.setRequestProperty("Authorization", "Bearer " + tab.auth1);
-                    if (tab.orgId != null && !tab.orgId.isEmpty()) c.setRequestProperty("x-cog-org-id", tab.orgId);
-                }
-                int code = c.getResponseCode();
-                if (code >= 300 && code < 400) {
-                    String loc = c.getHeaderField("Location");
-                    if (loc == null) return null;
-                    url = new java.net.URL(new java.net.URL(url), loc).toString();
-                    try { c.disconnect(); } catch (Exception ignored) {}
-                    c = null;
-                    continue;
-                }
-                break;
+            java.net.HttpURLConnection c = fetchAttachment(auth1, orgId, u.toString(), rh);
+            if (c != null && c.getResponseCode() == 401) {
+                // Cookie 缺失/过期 → 铸造 attachments_token 后重试一次 (自愈)
+                try { c.disconnect(); } catch (Exception ignored) {}
+                if (mintAttachmentCookie(auth1, orgId)) c = fetchAttachment(auth1, orgId, u.toString(), rh);
+                else c = null;
             }
             if (c == null) return null;
             int code = c.getResponseCode();
@@ -2126,6 +2111,81 @@ public class MainActivity extends AppCompatActivity {
             resp.setResponseHeaders(hdrs);
             return resp;
         } catch (Exception e) { return null; }
+    }
+    /** 附件代取一次 (30x 手动跟随·凭据与 Cookie 只发 app.devin.ai)。 */
+    private static java.net.HttpURLConnection fetchAttachment(String auth1, String orgId, String url, java.util.Map<String, String> rh) throws Exception {
+        java.net.HttpURLConnection c = null;
+        for (int hop = 0; hop < 5; hop++) {
+            c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            c.setInstanceFollowRedirects(false);
+            c.setConnectTimeout(15000);
+            c.setReadTimeout(30000);
+            if (rh != null) for (java.util.Map.Entry<String, String> e : rh.entrySet()) {
+                String k = e.getKey();
+                if (k == null) continue;
+                String lk = k.toLowerCase(java.util.Locale.US);
+                // Accept-Encoding 不转发: 交由底层透明 gzip (自动解压并剥 Content-Encoding/Length, 免回灌压缩体)
+                // Cookie 不盲转发: 下方仅对 app.devin.ai 由 CookieManager 补 (30x 后不外泄给对象存储)
+                if (lk.equals("authorization") || lk.equals("host") || lk.equals("accept-encoding") || lk.equals("cookie")) continue;
+                try { c.setRequestProperty(k, e.getValue()); } catch (Exception ignored) {}
+            }
+            if ("app.devin.ai".equalsIgnoreCase(new java.net.URL(url).getHost())) {
+                c.setRequestProperty("Authorization", "Bearer " + auth1);
+                if (orgId != null && !orgId.isEmpty()) c.setRequestProperty("x-cog-org-id", orgId);
+                try {
+                    String ck = android.webkit.CookieManager.getInstance().getCookie("https://app.devin.ai/");
+                    if (ck != null && !ck.isEmpty()) c.setRequestProperty("Cookie", ck);   // attachments_token → /attachments 真鉴权
+                } catch (Exception ignored) {}
+            }
+            int code = c.getResponseCode();
+            if (code >= 300 && code < 400) {
+                String loc = c.getHeaderField("Location");
+                if (loc == null) return null;
+                url = new java.net.URL(new java.net.URL(url), loc).toString();
+                try { c.disconnect(); } catch (Exception ignored) {}
+                c = null;
+                continue;
+            }
+            break;
+        }
+        return c;
+    }
+    /** 铸造 attachments_token Cookie: POST set-attachment-cookie(Bearer 有效) → Set-Cookie 落入 CookieManager。 */
+    static boolean mintAttachmentCookie(String auth1, String orgId) {
+        try {
+            if (auth1 == null || auth1.isEmpty()) return false;
+            java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL("https://app.devin.ai/api/users/set-attachment-cookie").openConnection();
+            c.setInstanceFollowRedirects(false);
+            c.setConnectTimeout(15000);
+            c.setReadTimeout(15000);
+            c.setRequestMethod("POST");
+            c.setRequestProperty("Authorization", "Bearer " + auth1);
+            if (orgId != null && !orgId.isEmpty()) c.setRequestProperty("x-cog-org-id", orgId);
+            c.setRequestProperty("Content-Type", "application/json");
+            c.setDoOutput(true);
+            java.io.OutputStream os = c.getOutputStream(); os.write("{}".getBytes("UTF-8")); os.close();
+            int code = c.getResponseCode();
+            boolean got = false;
+            java.util.Map<String, java.util.List<String>> hf = c.getHeaderFields();
+            if (hf != null) for (java.util.Map.Entry<String, java.util.List<String>> e : hf.entrySet()) {
+                if (e.getKey() == null || !e.getKey().equalsIgnoreCase("Set-Cookie") || e.getValue() == null) continue;
+                android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+                for (String v : e.getValue()) if (v != null && !v.isEmpty()) { cm.setCookie("https://app.devin.ai/", v); got = true; }
+                if (got) try { cm.flush(); } catch (Exception ignored) {}
+            }
+            try { c.disconnect(); } catch (Exception ignored) {}
+            return got && code >= 200 && code < 300;
+        } catch (Exception e) { return false; }
+    }
+    /** 页面加载完成即预铸附件 Cookie (后台线程·幂等), 首次媒体加载即已授权。 */
+    static void warmAttachmentCookie(final String auth1, final String orgId, final String pageUrl) {
+        try {
+            if (auth1 == null || auth1.isEmpty() || pageUrl == null || !pageUrl.contains("app.devin.ai")) return;
+            String ck = null;
+            try { ck = android.webkit.CookieManager.getInstance().getCookie("https://app.devin.ai/"); } catch (Exception ignored) {}
+            if (ck != null && ck.contains("attachments_token=")) return;   // 已有 → 不重复铸造
+            new Thread(() -> mintAttachmentCookie(auth1, orgId)).start();
+        } catch (Exception ignored) {}
     }
     /** 广告/追踪域名命中 (内置精简黑名单)。 */
     private boolean isAdHost(String host) {

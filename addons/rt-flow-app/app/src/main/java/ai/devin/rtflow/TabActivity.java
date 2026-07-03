@@ -48,13 +48,30 @@ public class TabActivity extends AppCompatActivity {
         TABS.put(tabId, label);
         setTitle("Devin Cloud · " + label);
 
-        web = new WebView(this);
+        web = new MainActivity.GuardedWebView(this);   // 退格护栏(IME 左右同删夹断)与主壳同源
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
         s.setUserAgentString(s.getUserAgentString().replace("; wv", "")); // 去 WebView 标记, 贴近真浏览器
+
+        final String script = buildInjection(token, uid, org, orgName);
+        final boolean docStart = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT);
+        if (docStart) WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton("https://app.devin.ai"));
+        final String fToken = token, fOrg = org;
         web.setWebViewClient(new WebViewClient() {
+            @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) {
+                if (!docStart) v.evaluateJavascript(script, null);
+            }
+            @Override public void onPageFinished(WebView v, String u) {
+                MainActivity.warmAttachmentCookie(fToken, fOrg, u);   // 预铸附件 Cookie → 图片/视频首次即授权
+            }
+            // 媒体鉴权代取: /attachments/ 图片视频与主壳同源同一套 (Cookie 转发 + 401 铸造自愈)
+            @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView v, android.webkit.WebResourceRequest req) {
+                android.webkit.WebResourceResponse am = MainActivity.authMediaResponseFor(fToken, fOrg, req);
+                if (am != null) return am;
+                return super.shouldInterceptRequest(v, req);
+            }
             // 渲染进程被系统回收时若不接管, Android 默认连带杀整个 App(= 闪退)。接管 → 重建本页(无感恢复)。
             @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail d) {
                 try { v.destroy(); } catch (Exception ignored) {}
@@ -62,20 +79,6 @@ public class TabActivity extends AppCompatActivity {
                 return true;
             }
         });
-
-        final String script = buildInjection(token, uid, org, orgName);
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-            WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton("https://app.devin.ai"));
-        } else {
-            web.setWebViewClient(new WebViewClient() {
-                @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) { v.evaluateJavascript(script, null); }
-                @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail d) {
-                    try { v.destroy(); } catch (Exception ignored) {}
-                    recreate();
-                    return true;
-                }
-            });
-        }
 
         setContentView(web);
         web.loadUrl(url);
