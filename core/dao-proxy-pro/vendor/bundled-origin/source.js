@@ -6373,6 +6373,14 @@ function _signalPremiumQuota(state) {
 //   反者道之动·闭环自举: 捕最近一帧真 GetChatMessage 请求, 换入新 user turn 后
 //   真转云端官方推理链, 解码回包文本。免费档(swe-1-6 等)即便付费配额耗尽仍可出包。
 let _lastChatFrame = null; // { body:Buffer, url, method, headers, at }
+// ── 免费档专用槽 (反者道之动·没身不殆·活水恒足) ──────────────────────────
+//   病灶(实证·2026-07): Cascade 每轮对话后另发一次「标题/摘要」后台请求, 其档恒为
+//     付费 Gemini 2.5 Flash → 覆盖刚捕的免费帧 → warm 恒 premium。账号付费周配额一耗尽,
+//     官方直通末跳(_officialChatReplay)即恒 internal error, 原汤化原食回环随之断。
+//   正法: 捕帧时按帧内 modelUid 判免费档者「另存」此槽(付费摘要帧覆盖不了它·各安其位),
+//     回放时若「调用方要免费档」或「付费配额已耗尽」即优先取此槽 → 免费上游恒可出包,
+//     回环不因付费配额死。与主槽同样落盘, 跨重启/宿主重载常驻。
+let _lastFreeChatFrame = null; // { body:Buffer, url, method, headers, at }
 // ── 预热帧跨重启常驻 (反者道之动·没身不殆) ────────────────────────────────
 //   病灶: 帧仅存内存 → 插件每次重启即丢 → /warm 恒 has:false、外接反代官方档 502。
 //     此为 /v1 本源「供所有环境使用」重启后即断的最后一处断点。
@@ -6383,30 +6391,30 @@ function _frameCacheDir() {
     os.homedir() || process.env.HOME || process.env.USERPROFILE || "";
   return home ? path.join(home, ".codeium", "dao-byok") : null;
 }
-function _frameBodyPath() {
+function _frameBodyPath(free) {
   const d = _frameCacheDir();
-  return d ? path.join(d, "chatframe.bin") : null;
+  return d ? path.join(d, free ? "chatframe.free.bin" : "chatframe.bin") : null;
 }
-function _frameMetaPath() {
+function _frameMetaPath(free) {
   const d = _frameCacheDir();
-  return d ? path.join(d, "chatframe.json") : null;
+  return d ? path.join(d, free ? "chatframe.free.json" : "chatframe.json") : null;
 }
-function _persistChatFrame() {
+function _persistChatFrame(free) {
   try {
+    const fr = free ? _lastFreeChatFrame : _lastChatFrame;
     const d = _frameCacheDir();
-    const bp = _frameBodyPath();
-    const mp = _frameMetaPath();
-    if (!d || !bp || !mp || !_lastChatFrame || !_lastChatFrame.body)
-      return false;
+    const bp = _frameBodyPath(free);
+    const mp = _frameMetaPath(free);
+    if (!d || !bp || !mp || !fr || !fr.body) return false;
     if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
     const tmpB = bp + ".tmp";
-    fs.writeFileSync(tmpB, _lastChatFrame.body);
+    fs.writeFileSync(tmpB, fr.body);
     fs.renameSync(tmpB, bp);
     const meta = {
-      url: _lastChatFrame.url,
-      method: _lastChatFrame.method,
-      headers: _lastChatFrame.headers,
-      at: _lastChatFrame.at,
+      url: fr.url,
+      method: fr.method,
+      headers: fr.headers,
+      at: fr.at,
     };
     const tmpM = mp + ".tmp";
     fs.writeFileSync(tmpM, JSON.stringify(meta), { mode: 0o600 });
@@ -6417,11 +6425,13 @@ function _persistChatFrame() {
   }
 }
 // 内存无帧时从盘复现; 已有则不动。返回是否复现成功。
-function _restoreChatFrame() {
-  if (_lastChatFrame && _lastChatFrame.body) return false;
+function _restoreChatFrame(free) {
+  if (free) {
+    if (_lastFreeChatFrame && _lastFreeChatFrame.body) return false;
+  } else if (_lastChatFrame && _lastChatFrame.body) return false;
   try {
-    const bp = _frameBodyPath();
-    const mp = _frameMetaPath();
+    const bp = _frameBodyPath(free);
+    const mp = _frameMetaPath(free);
     if (!bp || !mp || !fs.existsSync(bp) || !fs.existsSync(mp)) return false;
     const body = fs.readFileSync(bp);
     if (!body || !body.length) return false;
@@ -6431,7 +6441,7 @@ function _restoreChatFrame() {
     } catch (_) {
       return false;
     }
-    _lastChatFrame = {
+    const fr = {
       body,
       url: meta.url,
       method: meta.method || "POST",
@@ -6439,7 +6449,45 @@ function _restoreChatFrame() {
       at: meta.at || 0,
       restored: true,
     };
+    if (free) _lastFreeChatFrame = fr;
+    else _lastChatFrame = fr;
     return true;
+  } catch (_) {
+    return false;
+  }
+}
+// 某 modelUid 是否官方免费档 —— 与 revproxy.js 之 _isFreeTier 同源同判(名实相符):
+//   costTier=FREE 或 creditMultiplier ∈ {0, null, undefined} 即免费(swe-1-6/kimi 等·不耗付费周配额)。
+//   目录外者(如后台摘要 Gemini 2.5 Flash·不在 catalog) → 未知即保守判非免费, 不污活水槽。
+//   modelUid 归一比对(兼容 alias 形 MODEL_SWE_1_6 与 swe-1-6)。
+function _catalogFreeTier(costTier, mult) {
+  return (
+    costTier === "MODEL_COST_TIER_FREE" ||
+    mult === 0 ||
+    mult === null ||
+    mult === undefined
+  );
+}
+function _modelUidIsFree(uid) {
+  if (!uid) return false;
+  try {
+    const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const want = norm(uid);
+    if (!want) return false;
+    const cat = _fullModelCatalog || _loadFullModelCatalog() || [];
+    for (const m of cat) {
+      const ids = [m.modelUid, m.modelOrAlias && m.modelOrAlias.model];
+      if (ids.some((x) => norm(x) === want))
+        return _catalogFreeTier(m.modelCostTier, m.creditMultiplier);
+    }
+  } catch (_) {}
+  return false;
+}
+// 捕获帧所携档是否免费 (读顶层 modelUid → _modelUidIsFree)
+function _frameIsFreeModel(body) {
+  try {
+    const info = _frameModelInfo(body);
+    return !!(info && _modelUidIsFree(info.modelUid));
   } catch (_) {
     return false;
   }
@@ -6450,17 +6498,44 @@ function _captureChatFrame(req, body) {
     for (const [k, v] of Object.entries(req.headers || {}))
       if (!k.startsWith(":")) hdr[k] = v;
   } catch (_) {}
-  _lastChatFrame = {
+  const frame = {
     body: Buffer.isBuffer(body) ? Buffer.from(body) : Buffer.from(body),
     url: req.url,
     method: req.method || "POST",
     headers: hdr,
     at: Date.now(),
   };
-  _persistChatFrame(); // 跨重启常驻·best-effort
+  _lastChatFrame = frame;
+  _persistChatFrame(false); // 跨重启常驻·best-effort
+  // 免费档帧另存活水槽: 付费摘要帧覆盖不了它 → premium 配额耗尽仍可回放 (没身不殆)
+  try {
+    if (_frameIsFreeModel(frame.body)) {
+      _lastFreeChatFrame = frame;
+      _persistChatFrame(true);
+    }
+  } catch (_) {}
 }
-// 模块加载即尝试自盘复现预热帧 (插件重启后官方直通即通)
-_restoreChatFrame();
+// 官方直通回放取帧: 调用方要免费档 或 付费配额已耗尽 → 优先免费槽(原汤化原食·活水恒足),
+//   否则用主槽(最近一帧)。两槽皆按需自盘复现。
+function _pickReplayFrame(target) {
+  let wantFree = !!(target && target.free);
+  if (!wantFree) {
+    try {
+      const m = _getRevproxy();
+      if (m && m.getPremiumQuota && m.getPremiumQuota() === "exhausted")
+        wantFree = true;
+    } catch (_) {}
+  }
+  if (wantFree) {
+    if (!_lastFreeChatFrame || !_lastFreeChatFrame.body) _restoreChatFrame(true);
+    if (_lastFreeChatFrame && _lastFreeChatFrame.body) return _lastFreeChatFrame;
+  }
+  if (!_lastChatFrame || !_lastChatFrame.body) _restoreChatFrame(false);
+  return _lastChatFrame;
+}
+// 模块加载即尝试自盘复现预热帧 (插件重启后官方直通即通) · 主槽 + 免费槽
+_restoreChatFrame(false);
+_restoreChatFrame(true);
 
 // 取捕获帧最末一条消息正文 → 换成 newText → 返回新 Connect 帧 Buffer。
 // 道·schema 自适应: 消息数组随 cascade_wire 演化(老 V2=field2/content2,
@@ -6657,8 +6732,9 @@ function _isolateChatFrameSP(frameBody) {
 // 官方直通: revproxy 经此真转云端、解码回包。sink: {onText,onEnd,onError}。
 function _officialChatReplay(target, norm, sink) {
   return new Promise((resolve) => {
-    if (!_lastChatFrame || !_lastChatFrame.body) _restoreChatFrame();
-    if (!_lastChatFrame || !_lastChatFrame.body) {
+    // 取帧: target.free 或付费配额耗尽 → 优先免费活水槽(原汤化原食·没身不殆), 否则主槽。
+    const _frame = _pickReplayFrame(target);
+    if (!_frame || !_frame.body) {
       sink.onError &&
         sink.onError(
           "官方直通需预热: 请在 Cascade 内先与任一官方模型对话一次(以捕获请求帧), 再经反代调用",
@@ -6677,7 +6753,7 @@ function _officialChatReplay(target, norm, sink) {
       }
     } catch (_) {}
     if (!userText) userText = "你好";
-    let newBody = _swapLastUserMsg(_lastChatFrame.body, userText);
+    let newBody = _swapLastUserMsg(_frame.body, userText);
     if (newBody) newBody = _trimFrameHistory(newBody); // 去污染: 裁掉预热历史·单轮干净
     // 提示词隔离(回归模型本源): 默认开 · revproxy.json isolatePrompt=false 可关(旧行为)
     let _isolate = true;
@@ -6694,13 +6770,13 @@ function _officialChatReplay(target, norm, sink) {
     }
     let route;
     try {
-      route = routeUpstream(_lastChatFrame.url);
+      route = routeUpstream(_frame.url);
     } catch (e) {
       sink.onError && sink.onError("官方直通路由失败: " + e.message);
       return resolve({ ok: false });
     }
     const headers = {};
-    for (const [k, v] of Object.entries(_lastChatFrame.headers || {}))
+    for (const [k, v] of Object.entries(_frame.headers || {}))
       if (!H1_CONN_HEADERS.has(k)) headers[k] = v;
     delete headers["content-length"];
     headers["content-length"] = String(newBody.length);
@@ -6899,9 +6975,12 @@ async function _maybeRevproxy(req, res) {
   }
   // 诊断: 当前预热帧所携模型(官方直通实际将路由之档) · 只读 · 供面板/自检显预热档
   if (u.pathname === "/origin/revproxy/warm" && req.method === "GET") {
-    if (!_lastChatFrame || !_lastChatFrame.body) _restoreChatFrame();
+    if (!_lastChatFrame || !_lastChatFrame.body) _restoreChatFrame(false);
+    if (!_lastFreeChatFrame || !_lastFreeChatFrame.body) _restoreChatFrame(true);
     const has = !!(_lastChatFrame && _lastChatFrame.body);
     const frame = has ? _frameModelInfo(_lastChatFrame.body) : null;
+    const hasFree = !!(_lastFreeChatFrame && _lastFreeChatFrame.body);
+    const freeFrame = hasFree ? _frameModelInfo(_lastFreeChatFrame.body) : null;
     res.setHeader("Content-Type", "application/json");
     res.end(
       JSON.stringify({
@@ -6910,6 +6989,11 @@ async function _maybeRevproxy(req, res) {
         warm: frame,
         at: (_lastChatFrame && _lastChatFrame.at) || 0,
         restored: !!(_lastChatFrame && _lastChatFrame.restored),
+        // 免费活水槽 (付费摘要帧覆盖不了它·premium 配额耗尽仍可回放)
+        hasFree,
+        warmFree: freeFrame,
+        atFree: (_lastFreeChatFrame && _lastFreeChatFrame.at) || 0,
+        restoredFree: !!(_lastFreeChatFrame && _lastFreeChatFrame.restored),
       }),
     );
     return true;
