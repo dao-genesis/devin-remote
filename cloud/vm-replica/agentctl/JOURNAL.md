@@ -11526,3 +11526,24 @@ a *region* (224 B for KCalc's whole display) is cheaper than an
 unpruned semantic scan — the ladder orders channels by typical cost,
 but the real rule is narrower: pay for exactly the pixels or nodes
 the act needs, on whichever channel sells them cheapest.
+
+## F369 — screen_brief: the projection becomes a primitive
+
+F368 priced the flaw; this arc grew the fix. The discipline said
+"project the observation, don't dump it raw" — but a discipline that
+lives only in prose gets forgotten, so the floor now sells the
+projection as its own verb. `screen_brief()` renders one compact text
+block: every window title with geometry (`*` active, `!` opaque), then
+the foreground window's actionable controls deduplicated by
+(name,type), command-like types ranked before row types (a KDE file
+dialog lists every file as ListItem *and* DataItem; Save/Cancel/File
+name must not drown under them), unnamed controls dropped, capped at
+`max_controls`. Verified live against the same Save File dialog that
+cost 26 KB raw in F368: the brief is 474 bytes — titles-rung cost
+carrying rung-2 knowledge — and its control line put Save, Cancel and
+the filename Edit first, exactly the three things the act needed. The
+full `screen_observe` dict stays one call away for row-level work;
+the brief is the default checkpoint read. Pattern note for the
+series: an arc that only *measures* a flaw is half done — the lesson
+should condense into a primitive the next arc can lean on (measure →
+discipline → verb), with a regression pinning the projection rules.

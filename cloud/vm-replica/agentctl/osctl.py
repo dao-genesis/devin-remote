@@ -529,6 +529,57 @@ def screen_observe(deep: bool = False, max_actions: int = 400,
     return obs
 
 
+def screen_brief(max_controls: int = 12, deep: bool = False,
+                 max_scan: int = 4000) -> str:
+    """F368: the *projected* observation — what the agent should actually put in
+    its record, priced in bytes.
+
+    ``screen_observe`` is decision-ready but unpruned: a busy KDE file dialog
+    enumerates every file twice (ListItem *and* DataItem) and one scan weighed
+    26 KB against 175 B of window titles — a tenth of a full screenshot, spent
+    mostly on rows no act will ever touch. Meaning has a bill too (F368), so
+    the floor sells the projection as its own read: one compact text block —
+
+        WIN* f367_economy.txt — KWrite (950,500 600x450)
+        WIN  dndsrc — Dolphin (100,300 700x550)
+          [Button] Save | [Button] Cancel | [Edit] Name: ...
+
+    — every window title with geometry (``*`` marks the active one, ``!`` an
+    opaque one), then the foreground window's actionable controls *deduplicated
+    by (name,type)*, command-like types first (Button, MenuItem, Edit, ComboBox,
+    CheckBox, RadioButton, TabItem before List/Tree rows), capped at
+    ``max_controls``. Typical weight: a few hundred bytes — titles-rung cost
+    with rung-2 knowledge in it. The full dict remains one call away when an
+    act genuinely needs row-level data; this is the default checkpoint read."""
+    _PRIORITY = {"button": 0, "menuitem": 1, "edit": 2, "text": 2,
+                 "combobox": 3, "checkbox": 4, "radiobutton": 4, "tabitem": 5,
+                 "listitem": 8, "dataitem": 9, "treeitem": 9}
+    obs = screen_observe(deep=deep, max_scan=max_scan)
+    lines = []
+    controls = []
+    for w in obs["windows"]:
+        mark = "*" if w["active"] else ("!" if w["opaque"] else " ")
+        r = w["rect"]
+        geo = " (%d,%d %dx%d)" % (r[0], r[1], r[2], r[3]) if r else ""
+        lines.append("WIN%s %s%s" % (mark, w["title"], geo))
+        if w["active"]:
+            controls = w["actions"]
+    seen = set()
+    picked = []
+    for a in sorted(controls, key=lambda a: _PRIORITY.get(
+            str(a.get("type", "")).lower(), 7)):
+        key = (a.get("name") or "", str(a.get("type", "")).lower())
+        if not key[0] or key in seen:
+            continue
+        seen.add(key)
+        picked.append("[%s] %s" % (a.get("type"), a.get("name")))
+        if len(picked) >= max_controls:
+            break
+    if picked:
+        lines.append("  " + " | ".join(picked))
+    return "\n".join(lines)
+
+
 def uia_menu(win: int, *path: str, pause: float = 0.45) -> bool:
     """Invoke a menu path by **meaning** — ``uia_menu(win, "Edit", "Preferences")``.
 
