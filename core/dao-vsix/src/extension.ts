@@ -2670,18 +2670,26 @@ async function daoCdpEnsureChrome() {
     throw new Error('chrome-cdp-not-ready');
 }
 
+// 归一 · Playwright/Chrome-MCP 式「当前页」跟踪: browser_navigate/tabs(select|new)/activate 记下活动标签;
+//   无 targetId 的 browser_* 默认作用于它(仍存活), 否则才回落首个页面。
+//   旧病灶: 无跟踪时 daoCdpPickPage 恒返 pages[0](常是遗留 about:blank), 与 navigate 新建的标签分叉 →
+//   snapshot/get_text/click 全落到空白标签("element not found"·空 DOM)。见 CHANGELOG dao-vsix。
+let daoCdpActiveTarget = null;
 async function daoCdpPickPage(targetId) {
     await daoCdpEnsureChrome();
     let list = await daoCdpHttpGet('/json/list') || [];
     let pages = list.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl);
-    if (targetId) { const t = pages.find((x) => x.id === targetId) || list.find((x) => x.id === targetId); if (!t || !t.webSocketDebuggerUrl) throw new Error('target-not-found: ' + targetId); return t; }
-    if (pages.length > 0) return pages[0];
+    if (targetId) { const t = pages.find((x) => x.id === targetId) || list.find((x) => x.id === targetId); if (!t || !t.webSocketDebuggerUrl) throw new Error('target-not-found: ' + targetId); daoCdpActiveTarget = t.id; return t; }
+    // 无 targetId → 当前页语义: 优先上次导航/选中的活动标签(仍存活), 否则回落首个页面。
+    if (daoCdpActiveTarget) { const act = pages.find((x) => x.id === daoCdpActiveTarget); if (act) return act; daoCdpActiveTarget = null; }
+    if (pages.length > 0) { daoCdpActiveTarget = pages[0].id; return pages[0]; }
     const ver = await daoCdpHttpGet('/json/version');
     await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.createTarget', params: { url: 'about:blank' } }]);
     await daoMcpSleep(300);
     list = await daoCdpHttpGet('/json/list') || [];
     pages = list.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl);
     if (pages.length === 0) throw new Error('no-page-target');
+    daoCdpActiveTarget = pages[0].id;
     return pages[0];
 }
 
@@ -2775,7 +2783,8 @@ function daoMcpToolDefs() {
         // browser_* · Chrome CDP (隔离实例)
         { name: 'browser_launch', description: '拉起/确认 browser_* 专用隔离 Chrome(CDP)并返回版本', inputSchema: S({}) },
         { name: 'browser_targets', description: '列出 CDP 全部 target(页面/标签)', inputSchema: S({}) },
-        { name: 'browser_navigate', description: '导航: 给 targetId 则原标签导航, 否则新建标签', inputSchema: S({ url: { type: 'string' }, targetId: { type: 'string' } }, ['url']) },
+        { name: 'browser_navigate', description: '导航: 给 targetId 则原标签导航, 否则新建标签; 导航后该标签即成「当前页」(后续无 targetId 的 browser_* 默认作用于它)', inputSchema: S({ url: { type: 'string' }, targetId: { type: 'string' } }, ['url']) },
+        { name: 'browser_activate', description: '设为「当前页」: 后续无 targetId 的 browser_* 默认作用于此标签(Playwright 当前页语义)', inputSchema: S({ targetId: { type: 'string' } }, ['targetId']) },
         { name: 'browser_eval', description: '在页面上下文执行 JS 并返回值(Runtime.evaluate·await Promise)', inputSchema: S({ code: { type: 'string' }, targetId: { type: 'string' } }, ['code']) },
         { name: 'browser_screenshot', description: '页面截图(CDP·jpeg/png)', inputSchema: S({ targetId: { type: 'string' }, format: { type: 'string', enum: ['jpeg', 'png'] }, quality: { type: 'number' } }) },
         // plugin_* · 插件本体/工作区
@@ -2905,11 +2914,17 @@ async function daoMcpCallTool(name, a) {
         case 'vscode_symbols': return daoMcpText(await daoMcpInvoke('/api/symbols', { query: a.query }));
         // ── browser_* (Chrome CDP) ──
         case 'browser_launch': return daoMcpText(await daoCdpEnsureChrome());
-        case 'browser_targets': { await daoCdpEnsureChrome(); const list = await daoCdpHttpGet('/json/list') || []; return daoMcpText(list.map((t) => ({ id: t.id, type: t.type, title: t.title, url: t.url }))); }
+        case 'browser_targets': { await daoCdpEnsureChrome(); const list = await daoCdpHttpGet('/json/list') || []; return daoMcpText(list.map((t) => ({ id: t.id, type: t.type, title: t.title, url: t.url, active: t.id === daoCdpActiveTarget }))); }
+        case 'browser_activate': {
+            if (!a.targetId) return daoMcpErr('targetId required');
+            const t = await daoCdpPickPage(a.targetId); // 校验存在 + 记为当前页
+            try { const ver = await daoCdpHttpGet('/json/version'); await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.activateTarget', params: { targetId: a.targetId } }]); } catch (e) { /* 前台化失败不阻断·当前页已记 */ }
+            return daoMcpText({ active: t.id, url: t.url });
+        }
         case 'browser_navigate': {
             if (!a.url) return daoMcpErr('url required');
-            if (a.targetId) { const t = await daoCdpPickPage(a.targetId); await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Page.enable' }, { method: 'Page.navigate', params: { url: a.url } }]); return daoMcpText({ targetId: a.targetId, url: a.url }); }
-            const ver = await daoCdpEnsureChrome(); const r = await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.createTarget', params: { url: a.url } }]); return daoMcpText({ targetId: r && r.targetId, url: a.url });
+            if (a.targetId) { const t = await daoCdpPickPage(a.targetId); await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Page.enable' }, { method: 'Page.navigate', params: { url: a.url } }]); daoCdpActiveTarget = a.targetId; return daoMcpText({ targetId: a.targetId, url: a.url }); }
+            const ver = await daoCdpEnsureChrome(); const r = await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.createTarget', params: { url: a.url } }]); if (r && r.targetId) daoCdpActiveTarget = r.targetId; return daoMcpText({ targetId: r && r.targetId, url: a.url });
         }
         case 'browser_eval': {
             if (!a.code) return daoMcpErr('code required');
@@ -2963,12 +2978,12 @@ async function daoMcpCallTool(name, a) {
         case 'browser_network': { const t = await daoCdpPickPage(a.targetId); const net = await daoCdpEvalT(t, daoBExpr('(window.__daoB.net||[]).slice(-' + daoClamp(a.limit, 1, 300, 80) + ')')); if (a.clear) await daoCdpEvalT(t, daoBExpr('(window.__daoB.net.length=0),"ok"')); return daoMcpText(net); }
         case 'browser_tabs': {
             const act = a.action || 'list';
-            if (act === 'list') { await daoCdpEnsureChrome(); const list = await daoCdpHttpGet('/json/list') || []; return daoMcpText(list.filter((x) => x.type === 'page').map((x) => ({ id: x.id, title: x.title, url: x.url }))); }
+            if (act === 'list') { await daoCdpEnsureChrome(); const list = await daoCdpHttpGet('/json/list') || []; return daoMcpText(list.filter((x) => x.type === 'page').map((x) => ({ id: x.id, title: x.title, url: x.url, active: x.id === daoCdpActiveTarget }))); }
             const ver = await daoCdpEnsureChrome();
-            if (act === 'new') { const r = await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.createTarget', params: { url: a.url || 'about:blank' } }]); return daoMcpText({ targetId: r && r.targetId }); }
+            if (act === 'new') { const r = await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.createTarget', params: { url: a.url || 'about:blank' } }]); if (r && r.targetId) daoCdpActiveTarget = r.targetId; return daoMcpText({ targetId: r && r.targetId }); }
             if (!a.targetId) return daoMcpErr('targetId required for ' + act);
-            if (act === 'select') { await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.activateTarget', params: { targetId: a.targetId } }]); return daoMcpText('ok'); }
-            if (act === 'close') { await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.closeTarget', params: { targetId: a.targetId } }]); return daoMcpText('ok'); }
+            if (act === 'select') { await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.activateTarget', params: { targetId: a.targetId } }]); daoCdpActiveTarget = a.targetId; return daoMcpText('ok'); }
+            if (act === 'close') { await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.closeTarget', params: { targetId: a.targetId } }]); if (daoCdpActiveTarget === a.targetId) daoCdpActiveTarget = null; return daoMcpText('ok'); }
             return daoMcpErr('unknown action: ' + act);
         }
         case 'browser_upload': {
