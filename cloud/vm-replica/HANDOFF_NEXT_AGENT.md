@@ -210,4 +210,33 @@ python clients/pull141.py 'C:\dao_vm\<file>' <local>
 
 ---
 
+## 14. v3 上机实测结果(141 · Win11 教育版 26200 · 本会话已跑通)
+> DAO Bridge 已恢复(公网URL `capital-eagles-neck-verified`,token `dao-vsix-5ed8…`);
+> v3 全套已部署至 `C:\dao_vm\` 并编译通过。以下为真机验证结论:
+
+1. **开机静默(无为)**:守护进程 `main()` 已去掉启动即 `ensure_multisession()`;
+   实测启动日志零 termsrv 补丁。多会话补丁改为 `vm.create`/`host.wake` 时惰性施加。
+2. **零足迹休眠**:`host.hibernate` → `termsrv` 还原原生(`applied=False`,
+   `bServerSku 1→0`,`cdefpolicy_jne 0xEB→0x75`)+ 清残留计划任务(`agent_tasks=[]`)
+   + 杀本系统 mstsc + 删 `C:\dao_vm\start_*.bat`;`host.stealth_status` 回
+   `mode=hibernating, footprint=zero`。**administrator console(会话#1)全程 Active 不受影响**。
+3. **唤醒往返**:`host.wake` → 多会话补丁复原(`bServerSku 0→1, jne 0x75→0xEB, applied=True`)。
+4. **端到端 vm.create**:`vm.create vm01` → RDP 会话#2(`rdp-tcp#0`)Active 上线;
+   `vm.exec whoami`=`desktop-master\vm01`;`vm.desktop_info`=1280×800;
+   `vm.screenshot` BitBlt 截屏成功(179KB PNG,真机桌面首登 OOBE 画面)。
+   随后 `host.hibernate` → `destroyed=['vm01']`、mstsc killed=1、footprint 归零。
+5. **通用性缺陷已修(真机验证)**:`_os_edition()` 旧代码只按**英文** caption 子串判版本,
+   本机为**中文 Win11 教育版**→ 全 flag=false。已改为**语言中立**的数字 `OperatingSystemSKU`+
+   `ProductType` 判定:实测 `sku=121 → is_education=true, is_enterprise=true, product_type=1`。
+   caption 仅作显示、不再参与分类;SKU 为 None 时才回落 caption(含中文「教育/企业/家庭/专业」子串)兜底。
+6. **build 号澄清(非缺陷)**:`os_info` 的 build `26200` 是**系统版本号**;
+   `termsrv.dll` 二进制版本是 `26100.8521`,恰在 `ts_multifix` OFFSETS 内置表中
+   (`source=builtin, sig_ok=True, applied=True`)。两者是不同维度,偏移表按 dll 版本命中,正确。
+
+**下一步(未做,留给后续)**:§13 第 6 项闲时自动休眠计时验证;第 7 项 GUI 预测层
+(`vm.observe/find/act`)对齐 agentctl F381/F382 在 vm01 内跑归档/存 docx;首登 OOBE
+弹窗自动消除(新账号首次 RDP 落在「同意个人数据跨境传输」页,需 inner agent 自动跳过)。
+
+---
+
 — 推进到底,道法自然,无为而无不为。

@@ -372,26 +372,50 @@ if ($s) {{ $id = ($s -replace '\\s+',' ').Trim().Split(' ')[2]; logoff $id 2>$nu
 #   ready for vm.create. The daemon itself stays running (lightweight, invisible)
 #   to accept the wake command.
 
+# Language-neutral edition classification by numeric OperatingSystemSKU
+# (Win32_OperatingSystem.OperatingSystemSKU == PRODUCT_* from GetProductInfo).
+# Caption is localized (e.g. Chinese "教育版"), so NEVER classify by caption text.
+_SKU_HOME = {98, 99, 100, 101}                       # Core / CoreN / CoreCountrySpecific / CoreSingleLanguage
+_SKU_PRO  = {48, 49, 69, 103, 161, 162}              # Professional / N / SNGL / WMC / ForWorkstations(+N)
+_SKU_EDU  = {121, 122}                                # Education / EducationN
+_SKU_ENT  = {4, 27, 70, 72, 84, 135, 175, 191, 407, 408, 409, 410}  # Enterprise family + multi-session(135)
+_SKU_LTSC = {125, 126, 133, 134, 175, 183, 184}      # Enterprise LTSB/LTSC (S) + IoT Enterprise LTSC
+
 def _os_edition():
-    """Detect Windows edition (Home/Pro/Enterprise/Server/LTSC) and build.
-    Returns dict with edition, version, build, is_server, is_home, is_ltsc."""
+    """Detect Windows edition language-neutrally via OperatingSystemSKU + ProductType.
+    Returns edition (caption, display-only), version, build, sku, and boolean class flags.
+    Robust across localized (non-English) Windows where the caption is translated."""
     try:
         out, _, _ = ps_run(
             "$os = Get-CimInstance Win32_OperatingSystem; "
-            "$ed = $os.Caption; $ver = $os.Version; $build = $os.BuildNumber; "
-            "[pscustomobject]@{edition=$ed;version=$ver;build=$build} | ConvertTo-Json -Compress",
+            "[pscustomobject]@{edition=$os.Caption;version=$os.Version;build=$os.BuildNumber;"
+            "sku=[int]$os.OperatingSystemSKU;ptype=[int]$os.ProductType} | ConvertTo-Json -Compress",
             timeout=15)
         d = json.loads(out.strip().splitlines()[-1])
-        cap = d.get('edition', '')
+        cap = d.get('edition', '') or ''
+        sku = d.get('sku')
+        ptype = d.get('ptype')            # 1=Workstation, 2=DomainController, 3=Server
+        capl = cap.lower()
+        is_server = (ptype in (2, 3)) or ('server' in capl)
+        is_home = (sku in _SKU_HOME)
+        is_edu = (sku in _SKU_EDU)
+        is_pro = (sku in _SKU_PRO)
+        is_ent = (sku in _SKU_ENT) or is_edu   # Education is Enterprise-class for RDP/multi-session
+        is_ltsc = (sku in _SKU_LTSC)
+        # Fallback to caption substrings only if SKU is unknown/None (keeps old behavior working)
+        if sku is None or not (is_home or is_pro or is_ent or is_server):
+            is_server = is_server or ('server' in capl)
+            is_home = is_home or ('home' in capl)
+            is_pro = is_pro or ('pro' in capl and 'home' not in capl)
+            is_ent = is_ent or ('enterprise' in capl) or ('education' in capl) or ('教育' in cap) or ('企业' in cap)
+            is_ltsc = is_ltsc or ('ltsc' in capl) or ('ltsb' in capl)
+            is_home = is_home or ('家庭' in cap)
+            is_pro = is_pro or ('专业' in cap)
         return {
-            'edition': cap,
-            'version': d.get('version', ''),
-            'build': d.get('build', ''),
-            'is_server': 'server' in cap.lower(),
-            'is_home': 'home' in cap.lower(),
-            'is_pro': 'pro' in cap.lower() and 'home' not in cap.lower(),
-            'is_enterprise': 'enterprise' in cap.lower() or 'education' in cap.lower(),
-            'is_ltsc': 'ltsc' in cap.lower() or 'ltsb' in cap.lower(),
+            'edition': cap, 'version': d.get('version', ''), 'build': d.get('build', ''),
+            'sku': sku, 'product_type': ptype,
+            'is_server': is_server, 'is_home': is_home, 'is_pro': is_pro,
+            'is_enterprise': is_ent, 'is_education': is_edu, 'is_ltsc': is_ltsc,
         }
     except Exception as e:
         return {'edition': 'unknown', 'error': str(e)}
@@ -761,7 +785,10 @@ def ensure_multisession():
 
 
 def main():
-    ensure_multisession()
+    # Wu Wei: boot DORMANT. Do NOT patch termsrv at startup — that would leave a
+    # non-zero footprint while idle. Multi-session is enabled lazily on the first
+    # vm.create / host.wake (both call ensure_multisession). The control plane
+    # itself is invisible (127.0.0.1 socket, no window, no tray).
     # Auto-attach any inner agents already alive on base_port..+10
     for i in range(10):
         port = BASE_PORT + i
