@@ -839,6 +839,24 @@ let KEY = "";
     revproxy.saveConfig(cz17);
   }
 
+  // [19] 内网穿透鉴权护栏: cloudflared 转发到 127.0.0.1 的公网请求不得享「本机免 key」
+  {
+    console.log("[19] 内网穿透鉴权护栏: 转发头判公网 · 越权口子闭合");
+    const mk = (headers) => ({ socket: { remoteAddress: "127.0.0.1" }, headers: headers || {} });
+    ok("裸本机(无转发头) → 判本机", revproxy._isLocal(mk({})) === true);
+    ok("带 cf-connecting-ip → 判公网", revproxy._isLocal(mk({ "cf-connecting-ip": "1.2.3.4" })) === false);
+    ok("带 cf-ray → 判公网", revproxy._isLocal(mk({ "cf-ray": "abc-EWR" })) === false);
+    ok("带 x-forwarded-for → 判公网", revproxy._isLocal(mk({ "x-forwarded-for": "1.2.3.4" })) === false);
+    ok("_isForwarded 命中 via", revproxy._isForwarded(mk({ via: "1.1 cloudflare" })) === true);
+    // 无 key 时: 公网转发请求必被拒(否则整个反代裸奔公网)
+    ok("无key·公网转发 → 拒", revproxy._authOk(mk({ "cf-ray": "x" }), { apiKey: "" }) === false);
+    ok("无key·裸本机 → 放行", revproxy._authOk(mk({}), { apiKey: "" }) === true);
+    // 有 key 时: 无论来源, 必须携正确 key
+    ok("有key·公网带对 key → 放行", revproxy._authOk(mk({ "cf-ray": "x", authorization: "Bearer K1" }), { apiKey: "K1" }) === true);
+    ok("有key·公网无 key → 拒", revproxy._authOk(mk({ "cf-ray": "x" }), { apiKey: "K1" }) === false);
+    ok("有key·公网错 key → 拒", revproxy._authOk(mk({ "cf-ray": "x", authorization: "Bearer BAD" }), { apiKey: "K1" }) === false);
+  }
+
   revproxy.setPremiumQuota("unknown");
   mock.close();
   console.log(failures === 0 ? "\nALL PASS" : "\n" + failures + " FAIL");

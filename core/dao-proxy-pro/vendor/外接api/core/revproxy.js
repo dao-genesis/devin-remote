@@ -109,7 +109,25 @@ function saveConfig(cfg) {
 }
 
 // ── 鉴权 ────────────────────────────────────────────────────────────────
+// cloudflared/反代隧道在本机把公网流量转发到 127.0.0.1, 若仅凭 socket 地址判本机,
+// 公网请求会被误判为本机而绕过鉴权 —— 内网穿透之下这是致命的越权口子。
+// 故: 一旦携带 Cloudflare 边缘/转发头(cf-*, x-forwarded-*, forwarded, via),
+// 即视为来自公网, 不再享「本机免 key」待遇。
+function _isForwarded(req) {
+  const h = req.headers || {};
+  return !!(
+    h["cf-connecting-ip"] ||
+    h["cf-ray"] ||
+    h["cf-ipcountry"] ||
+    h["cf-visitor"] ||
+    h["x-forwarded-for"] ||
+    h["x-forwarded-host"] ||
+    h["forwarded"] ||
+    h["via"]
+  );
+}
 function _isLocal(req) {
+  if (_isForwarded(req)) return false;
   const a = (req.socket && req.socket.remoteAddress) || "";
   return a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1";
 }
@@ -1533,6 +1551,9 @@ module.exports = {
   _familyActiveUid,
   _resolveFamilyAlias,
   _cfgPath,
+  _isLocal,
+  _isForwarded,
+  _authOk,
   consoleHtml,
   _classifyUpstreamError,
   _emitOpenAIStream,
