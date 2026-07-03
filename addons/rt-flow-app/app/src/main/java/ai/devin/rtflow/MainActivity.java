@@ -3436,12 +3436,16 @@ public class MainActivity extends AppCompatActivity {
         return notes.trim();
     }
     /** 拉取在线版本清单并与本机比对。多镜像轮询 (去中心化, 任一可达即可)。后台线程调用。返回 JSON 串。 */
+    // CDN 镜像(jsdelivr/statically 等)会缓存旧 latest.json 数小时 → 「取首个可达镜像」会
+    // 命中旧版而检查不到新版。故: ① 每镜像 URL 加时间戳防缓存; ② 遍历全部镜像取最大 versionCode。
     String fetchUpdateInfo() {
         String lastErr = "无可用镜像";
+        JSONObject best = null; String bestSrc = null;
         for (String murl : UPDATE_MIRRORS) {
             HttpURLConnection c = null;
             try {
-                c = (HttpURLConnection) new URL(murl).openConnection();
+                String bust = murl + (murl.indexOf('?') >= 0 ? "&" : "?") + "dao=" + (System.currentTimeMillis() / 60000L);
+                c = (HttpURLConnection) new URL(bust).openConnection();
                 c.setConnectTimeout(8000); c.setReadTimeout(8000);
                 c.setInstanceFollowRedirects(true);
                 c.setRequestProperty("Cache-Control", "no-cache");
@@ -3454,23 +3458,28 @@ public class MainActivity extends AppCompatActivity {
                 while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
                 is.close();
                 JSONObject m = new JSONObject(new String(bos.toByteArray(), StandardCharsets.UTF_8));
-                int latest = m.optInt("versionCode", 0);
+                if (best == null || m.optInt("versionCode", 0) > best.optInt("versionCode", 0)) { best = m; bestSrc = murl; }
+            } catch (Exception e) {
+                lastErr = String.valueOf(e.getMessage()) + " @ " + murl;
+            } finally { if (c != null) c.disconnect(); }
+        }
+        if (best != null) {
+            try {
+                int latest = best.optInt("versionCode", 0);
                 int cur = currentVersionCode();
-                String url = m.optString("url", "");
+                String url = best.optString("url", "");
                 JSONObject out = new JSONObject();
                 out.put("ok", true);
                 out.put("current", cur);
                 out.put("latest", latest);
-                out.put("latestName", m.optString("versionName", ""));
+                out.put("latestName", best.optString("versionName", ""));
                 out.put("hasUpdate", latest > cur);
                 out.put("url", url);
                 out.put("urls", apkMirrors(url));
-                out.put("notes", trimNotesLatest(m.optString("notes", "")));
-                out.put("source", murl);
+                out.put("notes", trimNotesLatest(best.optString("notes", "")));
+                out.put("source", bestSrc);
                 return out.toString();
-            } catch (Exception e) {
-                lastErr = String.valueOf(e.getMessage()) + " @ " + murl;
-            } finally { if (c != null) c.disconnect(); }
+            } catch (Exception e) { lastErr = String.valueOf(e.getMessage()); }
         }
         return "{\"ok\":false,\"error\":" + JSONObject.quote(lastErr) + "}";
     }
