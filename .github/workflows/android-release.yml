@@ -79,7 +79,10 @@ jobs:
               j.versionCode=parseInt(nvc,10); j.versionName=nvn;
               j.url=`https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${ntag}/${nasset}`;
               const head=`v${nvn} · 自动发版(代码已更新, 版本号自动递增)`;
-              j.notes=(j.notes && j.notes.indexOf("v"+nvn)===0)?j.notes:(head+"\n"+(j.notes||""));
+              // 极简更新说明: 只保留最新版一条 (历史版本号列表对用户是负担·GitHub Releases 各 tag 已留档)
+              let n=(j.notes && j.notes.indexOf("v"+nvn)===0)?j.notes:head;
+              const cut=n.slice(1).search(/\nv\d+\./); if(cut>=0) n=n.slice(0,cut+1);
+              j.notes=n.trim();
               fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n");
             ' "$LATEST" "$NVC" "$NVN" "$NTAG" "$NASSET"
             git config user.name "rtflow-release-bot"
@@ -121,7 +124,11 @@ jobs:
             if(j.versionName!==vn){ j.versionName=vn; changed=true; }
             if(j.url!==url){ j.url=url; changed=true; }
             const head=`v${vn} · 自动发版`;
-            if(!(j.notes||"").startsWith("v"+vn)){ j.notes=head+"\n"+(j.notes||""); changed=true; }
+            // 极简更新说明: 只保留最新版一条 (历史留在 GitHub Releases 各 tag)
+            let n=(j.notes||"").startsWith("v"+vn)?j.notes:head;
+            const cut=n.slice(1).search(/\nv\d+\./); if(cut>=0) n=n.slice(0,cut+1);
+            n=n.trim();
+            if(j.notes!==n){ j.notes=n; changed=true; }
             if(changed){ fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n"); console.log("latest.json synced → v"+vn+" (code "+vc+")"); }
             else { console.log("latest.json already at v"+vn+" → no change"); }
           ' "$LATEST" "$VC" "$VN" "$TAG" "$ASSET"
