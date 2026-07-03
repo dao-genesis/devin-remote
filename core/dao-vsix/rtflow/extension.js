@@ -9200,6 +9200,11 @@ async function injectViaBing(token) {
 //       内置扩展下次读取 context.secrets 时自动获取新 session · 无需重启
 async function _injectViaDing(sessionToken, apiServerUrl) {
   try {
+    // v3.50.65 · 路丁(vscdb直写)依赖 Windows DPAPI(CryptUnprotectData) 解密 Local State,
+    //   非 Windows 平台(Linux/macOS Devin Desktop)本无此 API → 早退返清晰原因,
+    //   免去 spawn 一个注定失败的 python helper 及其误导性的 "AppData/Roaming 路径不存在" 报错。
+    if (process.platform !== "win32")
+      return { ok: false, reason: "ding-windows-only(platform=" + process.platform + ")" };
     const pyExe = _findPythonExt();
     if (!pyExe) return { ok: false, reason: "no-python-for-ding" };
     const helperPy = path.join(__dirname, "_vscdb_inject_helper.py");
@@ -9409,10 +9414,24 @@ async function loginAccount(store, idx) {
     log("  registerUser 预验 err: " + (e.message || e));
   }
   const inj = await injectToken(pa.sessionToken);
+  // v3.50.65 · 注入降级激活 (道法自然·不因末技废本源) — 决策见 devinCloud.resolveSwitchActivation
+  //   registerUser 预验成功(_regApiKey 存在) ⟺ auth1 token 有效 ⟺ 账号在 /shell·API·
+  //   多实例反代·反向注入层面完全可用。IDE 原生注入(路丙/丁)在 headless/Linux 本不可用,
+  //   不应因此判 switch 失败而让 _tick 永久空转。token 有效则仍激活(路径记 'none' 降级)。
+  const _sw = devinCloud.resolveSwitchActivation(!!inj.ok, !!_regApiKey);
+  let _injPath = inj.path;
   if (!inj.ok) {
-    log("  inject ✗ 路" + inj.path + " " + inj.note);
-    _bumpFailure(store, acc.email, "inject: " + (inj.note || ""));
-    return { ok: false, stage: "inject", error: inj.note };
+    if (_sw.activate) {
+      _injPath = "none";
+      log(
+        "  inject ✗ 路" + inj.path + " " + (inj.note || "") +
+          " · token 有效 → 逻辑激活(注入降级 none · /shell·API·多实例仍可用)",
+      );
+    } else {
+      log("  inject ✗ 路" + inj.path + " " + inj.note);
+      _bumpFailure(store, acc.email, "inject: " + (inj.note || ""));
+      return { ok: false, stage: "inject", error: inj.note };
+    }
   }
   store.setActive(
     idx,
@@ -9420,7 +9439,7 @@ async function loginAccount(store, idx) {
     pa.sessionToken,
     _regApiKey,
     _regApiServerUrl,
-    inj.path,
+    _injPath,
   );
   if (_regApiKey) {
     store.activeApiKey = _regApiKey;
@@ -9507,7 +9526,7 @@ async function loginAccount(store, idx) {
   }
   const ms = Date.now() - t0;
   _lastSwitchMs = ms;
-  log("login: ✓ " + tag + " · 路" + inj.path + " · " + ms + "ms");
+  log("login: ✓ " + tag + " · 路" + _injPath + (_injPath === "none" ? "(注入降级)" : "") + " · " + ms + "ms");
   // v2.4.13 · 切号反馈 toast · 3s 绿条高亮"✓ 已切→xxx"
   _lastRotateToastAt = Date.now();
   _lastRotateToastEmail = acc.email;
@@ -9520,7 +9539,7 @@ async function loginAccount(store, idx) {
       } catch {}
     }, 3100);
   } catch {}
-  return { ok: true, path: inj.path, ms };
+  return { ok: true, path: _injPath, ms, degraded: _injPath === "none" ? (inj.note || "inject-unavailable") : undefined };
 }
 
 // ═══ § 4 · 万法之眼 (StatusBar + Webview) ═══

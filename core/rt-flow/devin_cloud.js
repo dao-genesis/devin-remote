@@ -2615,9 +2615,28 @@ class ZipWriter {
   }
 }
 
+// v3.50.65 · 切号激活决策 (纯函数 · 供 extension.loginAccount 复用 + 单测护栏)
+//   道法自然·不因末技废本源: IDE 原生认证注入(路丙命令 / 路丁 vscdb 直写) 在
+//   headless / Linux Devin Desktop 上本就不可用(无对应认证命令注册·无 Windows DPAPI),
+//   但 auth1 token 经 registerUser 预验有效时, 账号在 /shell · 本地API · 多实例反代 ·
+//   反向注入层面完全可用(这些路径皆直用 auth1, 不经 IDE 原生登录态)。
+//   旧病灶: 注入失败即判 switch 失败 → 不 setActive → _tick 因"无活跃号"永久空转重试
+//           (每轮 3×~17s 注入超时), active 号永不落定 · CPU/日志空耗。
+//   治法(本函数):
+//     · 注入成功            → 激活 (path 保留 injected 真路径)
+//     · 注入失败但 token 有效 → 仍激活 (降级 · path='none')
+//     · 注入失败且 token 无效 → 不激活 (真失败)
+//   Windows 上注入成功则恒走第一支, 行为与旧版完全一致 (无回归)。
+function resolveSwitchActivation(injectOk, tokenVerified) {
+  if (injectOk) return { activate: true, degraded: false };
+  if (tokenVerified) return { activate: true, degraded: true };
+  return { activate: false, degraded: false };
+}
+
 module.exports = {
   CFG,
   configure,
+  resolveSwitchActivation,
   paths: { WAM_DIR, DC_DIR, DC_AUTH_CACHE, DC_TAGS_FILE, DC_BACKUP_STATE, DC_CLEANUP_STATE, DC_BACKUP_DEFAULT, DC_HOME_BACKUP, DC_BACKUP_ROOT_STATE },
   // 数据盘自动择优 + 迁移 (备份不压系统盘)
   getOptimalBackupRoot,
