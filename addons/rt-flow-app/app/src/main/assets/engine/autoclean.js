@@ -121,9 +121,11 @@
       var man = bk.manifest, now = Date.now(), cleaned = 0, kept = 0, fresh = 0;
       for (var i = 0; i < bk.sessions.length; i++) {
         var s = bk.sessions[i]; var sid = s.devin_id || s.session_id || s.id; if (!sid) continue;
+        var ent = man.sessions[sid];
+        // 已归档(平台无硬删·archive 即最强清除) → 登记已清理, 不重复归档不计 kept
+        if (s.is_archived === true || s.is_archived === "true") { if (ent && !ent.deleted) { ent.deleted = true; ent.cleanedAt = now; cleaned++; } continue; }
         var ts = DaoCloud.sessTs(s) || 0;
         if (now - ts < CLEAN_STALE_MS) { kept++; fresh++; continue; }   // 24h 内有更新 → 保留(只备份不清理)
-        var ent = man.sessions[sid];
         if (!ent || !ent.backedUpAt || (!ent.md && !ent.zip)) { kept++; continue; }
         try { var r = await DaoCloud.purgeSession(a, sid); if (r && r.deleted) { cleaned++; ent.deleted = true; ent.cleanedAt = now; } else kept++; } catch (e) { kept++; }
       }
