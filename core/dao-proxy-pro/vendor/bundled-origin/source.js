@@ -3103,6 +3103,15 @@ function handleControl(req, res) {
           last_available: _unlockStats.last_available,
           schema: _unlockStats.schema,
         },
+        // 万模归一 retarget 观测: rewrites>0 证官方直通复用帧确被改档(field21→本次真档)
+        retarget: {
+          calls: _retargetStats.calls,
+          rewrites: _retargetStats.rewrites,
+          skipped: _retargetStats.skipped,
+          last_from: _retargetStats.last_from,
+          last_to: _retargetStats.last_to,
+          last_at: _retargetStats.last_at,
+        },
         // v9.9.21 · 唯变所适 · 让位标志 · ext-host 见 quitted=true 不再 require 起
         quitted: _quitSignaled,
         // v7.2 · 用户实时编辑提示词状态 (人法地, 地法天, 天法道, 道法自然)
@@ -5738,6 +5747,8 @@ function _isModelUnlockEnabled() {
 // ═══════════════════════════════════════════════════════════
 const _PRO_BADGE = Buffer.from("Upgrade to Pro");
 const _unlockStats = { calls: 0, dropped_total: 0, last_dropped: 0, unlock4_total: 0, last_unlock4: 0, last_at: 0, last_bytes: "", last_total: 0, last_available: 0, schema: "" };
+// 万模归一 retarget 计数(观测·证 field21 复用前确被改档): rewrites=真改档次数, skipped=已同档跳过
+const _retargetStats = { calls: 0, rewrites: 0, skipped: 0, last_from: "", last_to: "", last_at: 0 };
 function _pbReadVarint(buf, i) {
   let shift = 0,
     result = 0;
@@ -7351,6 +7362,40 @@ function _swapLastUserMsg(capturedBody, newText) {
   return buildFrame(0, swapped);
 }
 
+// 帧档 retarget(万模归一·原汤化原食): 捕获帧顶层 field21=modelUid / field14=modelName
+//   恒钉预热那一档(如付费 glm-5-2)。免费档请求在缺免费帧时回退复用付费帧, 若不改档,
+//   上游按帧内付费档跑 → 配额耗尽 / internal error(实证 kimi-k2-7 回退 glm-5-2 恒败之真因)。
+//   正法: 复用前把 field21 retarget 成本次请求真档 → 任一捕获帧即成「万模通用模板」
+//   (换正文 + 换档 = 任意模型可复用)。field14 展示名一并同档, 免上游据旧名二次判档。
+//   仅当帧内档与目标档不同才改; 解析/序列化失败回退原帧(宁稳勿崩)。
+function _retargetFrameModel(frameBody, modelUid) {
+  if (!modelUid) return frameBody;
+  try {
+    _retargetStats.calls++;
+    const frames = parseFrames(frameBody);
+    if (!frames.length) return frameBody;
+    const payload = frames[0].payload;
+    const top = parseProto(payload);
+    const cur =
+      top[21] && top[21][0] && top[21][0].w === 2 && top[21][0].b
+        ? Buffer.from(top[21][0].b).toString("utf8")
+        : null;
+    if (cur === modelUid) { _retargetStats.skipped++; return frameBody; } // 已同档·无需改
+    const uidBuf = Buffer.from(String(modelUid), "utf8");
+    top[21] = [{ w: 2, b: uidBuf }];
+    if (top[14] && top[14][0] && top[14][0].w === 2) top[14] = [{ w: 2, b: uidBuf }];
+    const reser = serializeProto(top);
+    if (reser && reser.length && _pbParseOk(reser)) {
+      _retargetStats.rewrites++;
+      _retargetStats.last_from = cur || "";
+      _retargetStats.last_to = String(modelUid);
+      _retargetStats.last_at = Date.now();
+      return buildFrame(0, reser);
+    }
+  } catch (_) {}
+  return frameBody;
+}
+
 // 去污染(实证·2026-07): 预热帧本携「预热对话整段历史」(field3 repeated, msgCount 可达十数条),
 //   官方直通复用时若原样带上, 云端把每次反代请求当作预热会话的续轮 → 回包被预热旧轮次串染,
 //   甚至可被 "复述上文" 类提问套出整段预热历史(隔离/隐私缺陷)。故复用前把消息数组裁成仅留末条
@@ -7456,10 +7501,19 @@ function _isolateChatFrameSP(frameBody) {
 }
 
 // 官方直通: revproxy 经此真转云端、解码回包。sink: {onText,onEnd,onError}。
-function _officialChatReplay(target, norm, sink) {
+function _officialChatReplay(target, norm, sink, _forceMain) {
   return new Promise((resolve) => {
     // 取帧: target.free 或付费配额耗尽 → 优先免费活水槽(原汤化原食·没身不殆), 否则主槽。
-    const _frame = _pickReplayFrame(target);
+    //   _forceMain: 免费槽帧上游报错(非配额)后的兜底重试 —— 强制改用主槽(万模通用模板·retarget 改档)。
+    //   实证(2026-07): 免费活水槽帧可能本身损坏/机型专属 → 上游 internal error(连其本档 swe-1-6 亦败);
+    //   主槽帧经 retarget 改档 field21→本次真档即任意(免费)档通用且配额安全, 故坏免费帧不再拖垮免费档。
+    let _frame;
+    if (_forceMain) {
+      if (!_lastChatFrame || !_lastChatFrame.body) _restoreChatFrame(false);
+      _frame = _lastChatFrame;
+    } else {
+      _frame = _pickReplayFrame(target);
+    }
     if (!_frame || !_frame.body) {
       sink.onError &&
         sink.onError(
@@ -7489,6 +7543,13 @@ function _officialChatReplay(target, norm, sink) {
       if (_rc && _rc.isolatePrompt === false) _isolate = false;
     } catch (_) {}
     if (newBody && _isolate) newBody = _isolateChatFrameSP(newBody);
+    // 万模归一: 把复用帧的模型档 retarget 成本次请求真档(免费帧缺失回退付费帧时尤要),
+    //   令付费捕获帧成为任意(免费)模型通用模板, 不再冒付费档跑致 internal error。
+    try {
+      const wantUid =
+        target && (target.upstreamModel || target.modelUid || target.model);
+      if (newBody && wantUid) newBody = _retargetFrameModel(newBody, wantUid);
+    } catch (_) {}
     if (!newBody) {
       sink.onError &&
         sink.onError("官方直通: 捕获帧解析失败, 请重新预热一次官方对话");
@@ -7543,6 +7604,15 @@ function _officialChatReplay(target, norm, sink) {
           const txt = buf.toString("utf8").slice(0, 300);
           const exhausted = /quota|exhaust|governor|precondition|Authentication Fails/i.test(txt);
           if (exhausted) _signalPremiumQuota("exhausted");
+          // 非配额错误 → 换主槽(万模通用模板)兜底重试一次(尚未吐正文·可安全重发)
+          if (
+            !exhausted &&
+            !_forceMain &&
+            _lastChatFrame &&
+            _lastChatFrame.body &&
+            _frame !== _lastChatFrame
+          )
+            return resolve(_officialChatReplay(target, norm, sink, true));
           sink.onError &&
             sink.onError("官方上游 " + status + ": " + txt);
           return resolve({
@@ -7589,6 +7659,15 @@ function _officialChatReplay(target, norm, sink) {
           const blob = (streamErr.code || "") + " " + (streamErr.message || "");
           const exhausted = /quota|exhaust|governor|precondition|Authentication Fails/i.test(blob);
           if (exhausted) _signalPremiumQuota("exhausted");
+          // 非配额错误 → 换主槽(万模通用模板)兜底重试一次(尚未吐正文·可安全重发)
+          if (
+            !exhausted &&
+            !_forceMain &&
+            _lastChatFrame &&
+            _lastChatFrame.body &&
+            _frame !== _lastChatFrame
+          )
+            return resolve(_officialChatReplay(target, norm, sink, true));
           sink.onError &&
             sink.onError("官方上游错误: " + (streamErr.message || streamErr.code || blob));
           return resolve({ ok: false, quota: exhausted ? "exhausted" : undefined });
@@ -8628,6 +8707,8 @@ module.exports = {
     _pbRebuildField,
     _swapLastUserMsg,
     _trimFrameHistory,
+    _retargetFrameModel,
+    _frameModelInfo,
     _pbKeepLastRepeated,
     _isolateChatFrameSP,
     _findMsgsArray,
