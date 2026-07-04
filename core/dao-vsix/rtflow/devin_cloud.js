@@ -2445,6 +2445,15 @@ function setCleanupState(email, patch) {
   writeJson(DC_CLEANUP_STATE, all);
   return all[k];
 }
+// 出库/重加时清残留冷却态 — 防幽灵: 旧 backupCompletedAt/cleanedAt 不再影响重加后的新一轮判定 (对照手机 APK purgeAccountState)
+function clearCleanupState(email) {
+  const all = readJson(DC_CLEANUP_STATE, {});
+  const k = String(email).toLowerCase();
+  if (k in all) {
+    delete all[k];
+    writeJson(DC_CLEANUP_STATE, all);
+  }
+}
 function isCleanupReady(email, cooldownMs) {
   const st = getCleanupState(email);
   if (!st || !st.backupCompletedAt) return { ready: false, reason: "no_backup" };
@@ -2524,6 +2533,42 @@ function buildAgentMd(ctx) {
   L.push("- `wam.devinWipeAccount` 水过无痕清理指定账号");
   L.push("- `wam.devinExportMd` 导出本文档");
   L.push("");
+  L.push("_生成时间: " + new Date().toISOString() + "_");
+  return L.join("\n");
+}
+
+// 取数指引 MD (对照手机 APK buildAccessGuide): 账号(邮箱/密码/org)+ Session ID + 提取流程 —
+//   与「对话_人类可读.md」配套的第二份文档, 据此任意 Agent 可随时整体重新取回该对话全部文件。
+function buildAccessGuide(acc, sid, title) {
+  acc = acc || {};
+  const full = String(sid || "").indexOf("devin-") === 0 ? sid : "devin-" + sid;
+  const bare = String(sid || "").indexOf("devin-") === 0 ? String(sid).slice(6) : sid;
+  const email = acc.email || "", pwd = acc.password || "", org = acc.orgName || "", orgId = acc.orgId || "";
+  const emailRef = email || "<email>";
+  const L = [];
+  L.push("# 查看该对话的全部文件 · 取数指引\n");
+  L.push("> 本文件与配套的 `对话_人类可读.md`(该对话全量文本) 成对, 仅针对**这一条对话**。\n");
+  L.push("## 0、给读到本文的 Agent · 一句话执行\n");
+  L.push("你拿到的是 **账号 `" + emailRef + "`** 的对话 **`" + full + "`**(在线查看 https://app.devin.ai/sessions/" + bare + ")。");
+  L.push("要**完整取回这条对话的全部内容与产出文件**(只读历史·**不耗额度**), 按下述坐标+鉴权提取即可。\n");
+  L.push("## 一、对话坐标\n");
+  L.push("| 项 | 值 |\n|----|----|");
+  L.push("| 标题 | " + String(title || sid).replace(/\|/g, "\\|") + " |");
+  L.push("| Session ID | `" + full + "` |");
+  L.push("| 在线查看 | https://app.devin.ai/sessions/" + bare + " |");
+  if (org || orgId) L.push("| 组织 | " + String(org).replace(/\|/g, "\\|") + (orgId ? " (`" + orgId + "`)" : "") + " |");
+  L.push("\n## 二、该对话所属账号 (额度耗尽也可登录读历史)\n");
+  L.push("| 项 | 值 |\n|----|----|");
+  L.push("| 邮箱 | " + (email ? "`" + email + "`" : "(未知)") + " |");
+  L.push("| 密码 | " + (pwd ? "`" + pwd + "`" : "(未知)") + " |");
+  L.push("\n> 提取只读历史数据, **不消耗额度**。\n");
+  L.push("## 三、提取流程 (REST · 与本插件备份引擎同源)\n");
+  L.push("- 登录: `POST " + CFG.loginUrl + "` body `{email,password}` → `token`(=auth1)");
+  L.push("- 组织: `POST " + CFG.apiBase + "/users/post-auth` (Bearer auth1) → `org_id` (bare=去 `org-` 前缀)");
+  L.push("- 事件流: `GET /api/events/" + full + "/stream` (兜底 `/api/events/first-load/" + full + "`)");
+  L.push("- 详情: `GET /api/sessions/" + full + "`");
+  L.push("- 产出文件: `POST /api/presigned-url/batch/" + full + "` body `{s3_key_list:[...]}` → 逐个 GET 预签 URL");
+  L.push("\n> 桌面切号面板对话行的 📦「全部文件」按钮等价于整包 ZIP(对话md+取数指引+工作产物 files/)一键落盘。\n");
   L.push("_生成时间: " + new Date().toISOString() + "_");
   return L.join("\n");
 }
@@ -2668,6 +2713,8 @@ module.exports = {
   accountOverview,
   classifySession,
   listRunningSessions,
+  buildAccessGuide,
+  readBackupState: () => readJson(DC_BACKUP_STATE, {}),
   stopSession,
   // deletes / wipe
   deleteKnowledge,
@@ -2700,6 +2747,7 @@ module.exports = {
   // cleanup state (24h 冷却期)
   getCleanupState,
   setCleanupState,
+  clearCleanupState,
   isCleanupReady,
   // export md
   buildAgentMd,

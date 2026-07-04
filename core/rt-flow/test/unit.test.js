@@ -801,7 +801,7 @@ function test(name, fn) {
   test("extension.js: 归零移除仅在权威归零+清理无残留时触发, 且循环外统一 removeBatch", () => {
     const fs = require("fs");
     const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
-    assert.ok(/if \(autoRemoveZero && wipeClean && totalCredits <= removeThreshold\)/.test(src), "移除须 autoRemoveZero+wipeClean+归零阈值三重闸");
+    assert.ok(/if \(autoRemoveZero && wipeClean && !_addedRecently && totalCredits <= removeThreshold\)/.test(src), "移除须 autoRemoveZero+wipeClean+addedAt冷却+归零阈值四重闸");
     assert.ok(/const wipeClean = .*rep\.sessions\.failed === 0 && rep\.knowledge\.failed === 0 && rep\.playbooks\.failed === 0 && rep\.secrets\.failed === 0/.test(src), "wipeClean 须确认四类痕迹全清无失败");
     assert.ok(/_store\.removeBatch\(idx\)/.test(src), "出库须走 removeBatch (单次IO+持久化)");
     assert.ok(/removeEmails\.push\(acc\.email\)/.test(src), "归零账号先入 removeEmails, 循环外再删");

@@ -583,7 +583,7 @@ async function handleRequest(req, res, auth, opts, _log) {
   // 拖拽上传桥 (同源直服本反代端口 → 对齐 /i/ 同源页·根治 IDE 内拖拽无反应)。
   if (_bridgeServe) {
     const bp = reqUrl.pathname;
-    if (bp === "/__daobridge.js" || bp === "/__dlfile" || bp === "/__convmd") {
+    if (bp === "/__daobridge.js" || bp === "/__dlfile" || bp === "/__convmd" || bp === "/__convguide" || bp === "/__convinfo" || bp === "/__convzip") {
       try {
         const out = await _bridgeServe(bp, reqUrl);
         if (out) {
