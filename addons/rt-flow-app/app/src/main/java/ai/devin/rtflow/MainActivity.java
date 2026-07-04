@@ -2235,7 +2235,9 @@ public class MainActivity extends AppCompatActivity {
             if (ck == null) return false;
             int i = ck.indexOf("attachments_token=");
             if (i < 0) return false;
-            if (orgId != null && !orgId.isEmpty() && sCookieOrg != null && !orgId.equals(sCookieOrg)) return false;
+            // 组织归属未知(重启后/非本层铸造)也视为不新鲜 —— 残留 Cookie 可能属他组织/已过期,
+            //   误判新鲜即整站附件 Unauthorized 直到手动刷新; 重铸一次即归位(单飞+防抖, 代价极小)。
+            if (orgId != null && !orgId.isEmpty() && !orgId.equals(cookieOrg())) return false;
             String v = ck.substring(i + 18);
             int sc = v.indexOf(';'); if (sc >= 0) v = v.substring(0, sc);
             String[] parts = v.split("\\.");
@@ -2247,14 +2249,54 @@ public class MainActivity extends AppCompatActivity {
                     if (exp > 0) return System.currentTimeMillis() / 1000 < exp - 60;
                 } catch (Exception ignored) {}
             }
-            return true;
+            // 不透明 token 无 exp 可解, 服务端过期对客户端不可见 —— 这正是「用着用着失效,
+            //   重启才好」的病灶。按铸造时间保守判活(10 分钟), 超时即重铸(单飞+防抖·代价极小)。
+            long mintAt = cookieMintAt();
+            return mintAt > 0 && System.currentTimeMillis() - mintAt < 600000;
         } catch (Exception e) { return false; }
     }
     private static final Object MINT_LOCK = new Object();
     private static volatile long sLastMintAt = 0;
     private static volatile String sLastMintOrg = null;
-    /** 最近一次成功铸造 attachments_token 的组织 (Cookie 作用域归属)。 */
-    static volatile String sCookieOrg = null;
+    /** 最近一次成功铸造 attachments_token 的组织 (Cookie 作用域归属)。
+     *  CookieManager 里的 Cookie 跨进程重启持久, 归属记忆也必须持久(SharedPreferences),
+     *  否则重启后残留他组织 Cookie 被误判新鲜 → 附件全线 Unauthorized 直到手动刷新。 */
+    private static volatile String sCookieOrg = null;
+    private static volatile boolean sCookieOrgLoaded = false;
+    static String cookieOrg() {
+        if (!sCookieOrgLoaded) {
+            try {
+                android.content.Context ctx = HttpBridge.appCtx;
+                if (ctx != null) {
+                    String v = ctx.getSharedPreferences("rtflow", MODE_PRIVATE).getString("att_cookie_org", "");
+                    sCookieOrg = v.isEmpty() ? null : v;
+                    sCookieOrgLoaded = true;
+                }
+            } catch (Exception ignored) {}
+        }
+        return sCookieOrg;
+    }
+    static void setCookieOrg(String org) {
+        sCookieOrg = (org == null || org.isEmpty()) ? null : org;
+        sCookieOrgLoaded = true;
+        sCookieMintAt = System.currentTimeMillis();
+        try {
+            android.content.Context ctx = HttpBridge.appCtx;
+            if (ctx != null) ctx.getSharedPreferences("rtflow", MODE_PRIVATE).edit()
+                    .putString("att_cookie_org", sCookieOrg == null ? "" : sCookieOrg)
+                    .putLong("att_cookie_mint_at", sCookieMintAt).apply();
+        } catch (Exception ignored) {}
+    }
+    private static volatile long sCookieMintAt = -1;
+    static long cookieMintAt() {
+        if (sCookieMintAt < 0) {
+            try {
+                android.content.Context ctx = HttpBridge.appCtx;
+                if (ctx != null) sCookieMintAt = ctx.getSharedPreferences("rtflow", MODE_PRIVATE).getLong("att_cookie_mint_at", 0);
+            } catch (Exception ignored) {}
+        }
+        return Math.max(sCookieMintAt, 0);
+    }
     /** 确保目标组织的 attachments_token 就绪 (单飞铸造·同组织 3s 防抖, 防并发媒体请求触发铸造风暴)。 */
     static boolean ensureAttachmentCookie(String auth1, String orgId, String url) {
         if (attachmentCookieFresh(url, orgId)) return true;
@@ -2303,7 +2345,7 @@ public class MainActivity extends AppCompatActivity {
             }
             try { c.disconnect(); } catch (Exception ignored) {}
             boolean ok = got && code >= 200 && code < 300;
-            if (ok) sCookieOrg = (orgId == null || orgId.isEmpty()) ? null : orgId;
+            if (ok) setCookieOrg(orgId);
             return ok;
         }
     }
