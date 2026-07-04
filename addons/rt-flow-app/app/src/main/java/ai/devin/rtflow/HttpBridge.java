@@ -29,6 +29,55 @@ public final class HttpBridge {
 
     public interface Cb { void done(String reqId, String resultJson); }
 
+    // 道法自然·网络不强依赖 VPN: 默认路由(可能经系统 VPN)失败时, 自动改走底层非 VPN 网络
+    //   (Wi-Fi/蜂窝)重试一次 —— VPN 额度耗尽/节点死亡时, 登录/额度/备份/更新等原生请求不再僵死。
+    //   反之无 VPN 时本就直连, 有 VPN 且健康时照常走 VPN —— 顺其自然, 不强制也不禁用。
+    //   (锁定模式 Always-on VPN 下系统禁止绕行, 此时回退无效, 维持原错误 —— 尊重用户强制设定。)
+    static volatile android.content.Context appCtx = null;
+
+    /** 当前是否有系统 VPN 在跑。 */
+    static boolean vpnActive() {
+        try {
+            android.content.Context ctx = appCtx; if (ctx == null) return false;
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) ctx.getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            for (android.net.Network n : cm.getAllNetworks()) {
+                android.net.NetworkCapabilities cap = cm.getNetworkCapabilities(n);
+                if (cap != null && cap.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /** 底层非 VPN 网络 (Wi-Fi/蜂窝·有 INTERNET 能力); 无则 null。 */
+    static android.net.Network directNetwork() {
+        try {
+            android.content.Context ctx = appCtx; if (ctx == null) return null;
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) ctx.getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return null;
+            for (android.net.Network n : cm.getAllNetworks()) {
+                android.net.NetworkCapabilities cap = cm.getNetworkCapabilities(n);
+                if (cap == null) continue;
+                if (cap.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) continue;
+                if (!cap.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue;
+                if (cap.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+                        || cap.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)
+                        || cap.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)) return n;
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    /** 开连接: direct=false 走默认路由; direct=true 绑底层非 VPN 网络(绕开死 VPN)。 */
+    static HttpURLConnection openConn(String urlStr, boolean direct) throws Exception {
+        URL url = new URL(urlStr);
+        if (direct) {
+            android.net.Network n = directNetwork();
+            if (n != null) return (HttpURLConnection) n.openConnection(url);
+        }
+        return (HttpURLConnection) url.openConnection();
+    }
+
     private static ThreadFactory namedFactory(final String prefix, final int osPriority) {
         final AtomicInteger n = new AtomicInteger(1);
         return r -> {
@@ -54,8 +103,14 @@ public final class HttpBridge {
                             final String headersJson, final String body, final Cb cb) {
         INTERACTIVE.submit(() -> {
             String result;
-            try { result = doHttp(method, url, headersJson, body); }
-            catch (Exception e) { result = "{\"status\":0,\"error\":" + jsonStr(String.valueOf(e.getMessage())) + "}"; }
+            try { result = doHttp(method, url, headersJson, body, false); }
+            catch (Exception e) {
+                // 默认路由(可能经已死 VPN)失败 → 有 VPN 在跑且有底层网络 → 绕 VPN 直连重试一次
+                if (vpnActive() && directNetwork() != null) {
+                    try { result = doHttp(method, url, headersJson, body, true); }
+                    catch (Exception e2) { result = "{\"status\":0,\"error\":" + jsonStr(String.valueOf(e2.getMessage())) + "}"; }
+                } else result = "{\"status\":0,\"error\":" + jsonStr(String.valueOf(e.getMessage())) + "}";
+            }
             cb.done(reqId, result);
         });
     }
@@ -67,16 +122,20 @@ public final class HttpBridge {
                                final String headersJson, final String body, final Cb cb) {
         BULK.submit(() -> {
             String result;
-            try { result = doHttpB64(method, url, headersJson, body); }
-            catch (Exception e) { result = "{\"status\":0,\"error\":" + jsonStr(String.valueOf(e.getMessage())) + "}"; }
+            try { result = doHttpB64(method, url, headersJson, body, false); }
+            catch (Exception e) {
+                if (vpnActive() && directNetwork() != null) {
+                    try { result = doHttpB64(method, url, headersJson, body, true); }
+                    catch (Exception e2) { result = "{\"status\":0,\"error\":" + jsonStr(String.valueOf(e2.getMessage())) + "}"; }
+                } else result = "{\"status\":0,\"error\":" + jsonStr(String.valueOf(e.getMessage())) + "}";
+            }
             cb.done(reqId, result);
         });
     }
 
-    private static String doHttp(String method, String urlStr, String headersJson, String body) throws Exception {
+    private static String doHttp(String method, String urlStr, String headersJson, String body, boolean direct) throws Exception {
         String m = (method == null || method.isEmpty()) ? "GET" : method.toUpperCase();
-        URL url = new URL(urlStr);
-        HttpURLConnection c = (HttpURLConnection) url.openConnection();
+        HttpURLConnection c = openConn(urlStr, direct);
         c.setInstanceFollowRedirects(true);
         c.setConnectTimeout(20000);
         c.setReadTimeout(35000);
@@ -108,10 +167,9 @@ public final class HttpBridge {
         return "{\"status\":" + code + ",\"ctype\":" + jsonStr(ctype == null ? "" : ctype) + ",\"text\":" + jsonStr(text) + "}";
     }
 
-    private static String doHttpB64(String method, String urlStr, String headersJson, String body) throws Exception {
+    private static String doHttpB64(String method, String urlStr, String headersJson, String body, boolean direct) throws Exception {
         String m = (method == null || method.isEmpty()) ? "GET" : method.toUpperCase();
-        URL url = new URL(urlStr);
-        HttpURLConnection c = (HttpURLConnection) url.openConnection();
+        HttpURLConnection c = openConn(urlStr, direct);
         c.setInstanceFollowRedirects(true);
         c.setConnectTimeout(20000);
         c.setReadTimeout(60000);

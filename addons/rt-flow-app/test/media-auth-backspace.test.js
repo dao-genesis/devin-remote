@@ -53,6 +53,30 @@ ok(String(clamp(1, 1)) === "1,0", "夹断: (1,1) → (1,0) 一次退格只删左
 ok(String(clamp(1, 0)) === "1,0", "夹断: (1,0) 原样 (正常退格)");
 ok(String(clamp(0, 1)) === "0,1", "夹断: (0,1) 原样 (纯前向删除不受影响)");
 
+// ②b 退格时间窗加固 (IME 拆单: 退格后紧跟前向删除 → 吞掉)
+ok(/beforeLength == 0 && afterLength > 0 && \(now - lastBkAt\) < 250\) return true;/.test(main), "时间窗: 紧跟退格的纯前向删除被吞 (deleteSurroundingText 拆单)");
+ok(/KEYCODE_FORWARD_DEL && \(now - lastBkAt\) < 250\) return true;/.test(main), "时间窗: 紧跟退格的 FORWARD_DEL 键事件被吞 (sendKeyEvent 拆单)");
+ok(/KEYCODE_DEL\) \{ lastBkAt = now; \}/.test(main), "时间窗: 退格键事件登记时刻");
+
+// ②c JS 护栏跨节点区间 (contenteditable 富文本: 删除区间终点不在光标同节点也能判越光标)
+ok(/tr\.comparePoint\(sel\.anchorNode,sel\.anchorOffset\)/.test(main), "JS 护栏: 跨节点删除区间用 comparePoint 判越光标");
+
+// ②d 媒体鉴权本源补齐: 非账号标签从页面登录态采收 auth
+ok(/private void harvestPageAuth\(WebView v, Tab tab, String pageUrl\)/.test(main), "harvestPageAuth 存在");
+ok(/harvestPageAuth\(v, tab, u\); \/\/[^\n]*\n\s*warmAttachmentCookie/.test(main) || /harvestPageAuth\(v, tab, u\);/.test(main), "onPageFinished 采收页面登录态");
+ok(/installBackspaceGuard\(v\); harvestPageAuth\(v, tab, u\); warmAttachmentCookie/.test(main), "SPA 路由后重采 (doUpdateVisitedHistory)");
+ok(/auth1_session/.test(main), "采收源 = 页面 auth1_session 登录态");
+
+// ②e VPN 自然回退 (有则走、死则直连·不强依赖)
+const bridge = fs.readFileSync(path.join(ROOT, "app/src/main/java/ai/devin/rtflow/HttpBridge.java"), "utf8");
+ok(/static boolean vpnActive\(\)/.test(bridge), "HttpBridge.vpnActive 存在");
+ok(/static android\.net\.Network directNetwork\(\)/.test(bridge), "HttpBridge.directNetwork 存在 (非 VPN 底层网络)");
+ok(/static HttpURLConnection openConn\(String urlStr, boolean direct\)/.test(bridge), "HttpBridge.openConn 支持绑直连网络");
+ok(/HttpBridge\.appCtx = getApplicationContext\(\)/.test(main), "MainActivity 注入 appCtx (网络服务可用)");
+ok(/HttpBridge\.vpnActive\(\) && HttpBridge\.directNetwork\(\) != null/.test(main), "媒体代取/铸 Cookie 失败 → 直连重试 (自然回退)");
+ok(/private static boolean proxyHealthy\(String hp\)/.test(main), "代理真健康检查 (真经代理发请求·非只探端口)");
+ok(/clearWebViewProxy\(\)\) \{ toast\("代理已失效, 已自动转直连"\)/.test(main), "页面加载失败+代理死 → 自动清代理转直连重载");
+
 // ③ 视频全屏承接
 ok(/public void onShowCustomView\(View view, CustomViewCallback callback\)/.test(main), "onShowCustomView 承接");
 ok(/public void onHideCustomView\(\)/.test(main), "onHideCustomView 承接");

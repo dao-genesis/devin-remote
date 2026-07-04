@@ -197,17 +197,34 @@ public class MainActivity extends AppCompatActivity {
     //   拼音/组合输入的 setComposingText 路径亦不经此方法, 均不受干扰。
     static class GuardedWebView extends WebView {
         GuardedWebView(Context c) { super(c); }
+        long lastBkAt = 0;   // 最近一次退格(左删/DEL 键)的时刻 —— 紧跟其后的前向删除判为 IME 误发
         @Override public android.view.inputmethod.InputConnection onCreateInputConnection(EditorInfo outAttrs) {
             android.view.inputmethod.InputConnection ic = super.onCreateInputConnection(outAttrs);
             if (ic == null) return null;
             return new android.view.inputmethod.InputConnectionWrapper(ic, true) {
                 @Override public boolean deleteSurroundingText(int beforeLength, int afterLength) {
+                    long now = android.os.SystemClock.uptimeMillis();
+                    if (beforeLength > 0) lastBkAt = now;
                     if (beforeLength > 0 && afterLength > 0) afterLength = 0;
+                    // 纯前向删除紧跟退格(<250ms): 手机键盘无 Del 键, 必为输入法拆单误发 → 吞掉
+                    if (beforeLength == 0 && afterLength > 0 && (now - lastBkAt) < 250) return true;
                     return super.deleteSurroundingText(beforeLength, afterLength);
                 }
                 @Override public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
+                    long now = android.os.SystemClock.uptimeMillis();
+                    if (beforeLength > 0) lastBkAt = now;
                     if (beforeLength > 0 && afterLength > 0) afterLength = 0;
+                    if (beforeLength == 0 && afterLength > 0 && (now - lastBkAt) < 250) return true;
                     return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
+                }
+                @Override public boolean sendKeyEvent(android.view.KeyEvent event) {
+                    if (event != null) {
+                        long now = android.os.SystemClock.uptimeMillis();
+                        int kc = event.getKeyCode();
+                        if (kc == android.view.KeyEvent.KEYCODE_DEL) { lastBkAt = now; }
+                        else if (kc == android.view.KeyEvent.KEYCODE_FORWARD_DEL && (now - lastBkAt) < 250) return true;
+                    }
+                    return super.sendKeyEvent(event);
                 }
             };
         }
@@ -415,6 +432,7 @@ public class MainActivity extends AppCompatActivity {
             if (result.getResultCode() != RESULT_OK || result.getData() == null || result.getData().getData() == null) return;
             importShareBundle(result.getData().getData());
         });
+        HttpBridge.appCtx = getApplicationContext();   // 原生 HTTP 的 VPN 自然回退(死 VPN → 底层直连)需要网络服务
         ensureRelayIdentity();   // 去中心化: 设备唯一 session(防卸载) + 每冷启动轮换 token → relay-config.json
         startRelay();
         restoreWebProxy();       // 恢复上次选定的本地代理路由(若代理仍在线), 重启沿用
@@ -1016,13 +1034,26 @@ public class MainActivity extends AppCompatActivity {
     }
     private void applyWebViewProxyIfReachable(String hp) {
         try {
-            String[] parts = hp.split(":");
-            if (parts.length != 2) return;
-            try (java.net.Socket s = new java.net.Socket()) {
-                s.connect(new java.net.InetSocketAddress(parts[0], Integer.parseInt(parts[1])), 400);
-            } catch (Exception e) { return; }   // 代理已不在 → 不强行套用, 保持直连
+            if (!proxyHealthy(hp)) return;   // 端口不在或上游已死(额度耗尽/节点失效) → 不强行套用, 保持直连
             main.post(() -> applyWebViewProxy(hp));
         } catch (Exception ignored) {}
+    }
+    /** 代理真健康检查: 不止看端口能连(死 VPN 的本地端口往往还在听), 而是真经代理发一次
+     *  HTTPS 请求 —— 任何 HTTP 状态码都算通(证明上游链路活着), 异常/超时即判死。 */
+    private static boolean proxyHealthy(String hp) {
+        try {
+            String[] parts = hp.trim().split(":");
+            if (parts.length != 2) return false;
+            java.net.Proxy px = new java.net.Proxy(java.net.Proxy.Type.HTTP,
+                    new java.net.InetSocketAddress(parts[0], Integer.parseInt(parts[1])));
+            java.net.HttpURLConnection c = (java.net.HttpURLConnection)
+                    new java.net.URL("https://app.devin.ai/").openConnection(px);
+            c.setConnectTimeout(4000); c.setReadTimeout(6000);
+            c.setRequestMethod("HEAD");
+            int code = c.getResponseCode();
+            try { c.disconnect(); } catch (Exception ignored) {}
+            return code > 0;
+        } catch (Exception e) { return false; }
     }
     private String searchUrl(String q) {
         String enc = android.net.Uri.encode(q);
@@ -1144,6 +1175,7 @@ public class MainActivity extends AppCompatActivity {
                     installLoginCapture(v);     // 监听登录提交 → 自动弹「保存登录？」
                     installKbHelper(v);         // 键盘弹出时输入框上滚到可见区中部 (不被遮挡)
                     installBackspaceGuard(v);   // 退格护栏: 拦下输入法误发的左右两侧同删
+                    harvestPageAuth(v, tab, u); // 非账号标签从页面登录态采收 auth → 媒体代取可用
                     warmAttachmentCookie(tab.auth1, tab.orgId, u);   // 预铸附件 Cookie → 首次图片/视频即已授权
                     if (tab.translated) applyTranslate(v); // 翻译态跨页保持
                     injectUserScripts(v, u, "end");       // 油猴 @run-at document-end/idle
@@ -1157,7 +1189,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
+                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -1166,6 +1198,18 @@ public class MainActivity extends AppCompatActivity {
                 WebResourceResponse am = authMediaResponse(tab, req);
                 if (am != null) return am;
                 return super.shouldInterceptRequest(v, req);
+            }
+            // 代理自愈: 套着本地代理时整页加载失败 → 后台真检代理健康, 已死(VPN 额度耗尽/节点失效)
+            //   即自动清代理转直连并重载 —— 有 VPN 走 VPN, VPN 死了自然回退直连, 不再僵死报「网络错误」。
+            @Override public void onReceivedError(WebView v, WebResourceRequest req, android.webkit.WebResourceError err) {
+                try {
+                    if (curProxy == null || req == null || !req.isForMainFrame()) return;
+                    final String hp = curProxy;
+                    new Thread(() -> {
+                        if (proxyHealthy(hp)) return;
+                        main.post(() -> { if (clearWebViewProxy()) { toast("代理已失效, 已自动转直连"); try { v.reload(); } catch (Exception ignored) {} } });
+                    }).start();
+                } catch (Exception ignored) {}
             }
             // 渲染进程被系统在内存压力下回收(WebView 变白/无响应需手动刷新)→ 自动重建该标签并重载, 用户无感恢复。
             @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail detail) {
@@ -2073,11 +2117,18 @@ public class MainActivity extends AppCompatActivity {
             java.util.Map<String, String> rh = req.getRequestHeaders();
             if (rh != null) for (String k : rh.keySet())
                 if (k != null && k.equalsIgnoreCase("Authorization")) return null;   // fetch/XHR 已带鉴权 → 不重复代取
-            java.net.HttpURLConnection c = fetchAttachment(auth1, orgId, u.toString(), rh);
+            java.net.HttpURLConnection c;
+            try { c = fetchAttachment(auth1, orgId, u.toString(), rh, false); }
+            catch (Exception e1) {
+                // 默认路由(可能经已死 VPN)失败 → 绑底层非 VPN 网络重试一次 (自然回退)
+                if (HttpBridge.vpnActive() && HttpBridge.directNetwork() != null)
+                    c = fetchAttachment(auth1, orgId, u.toString(), rh, true);
+                else throw e1;
+            }
             if (c != null && c.getResponseCode() == 401) {
                 // Cookie 缺失/过期 → 铸造 attachments_token 后重试一次 (自愈)
                 try { c.disconnect(); } catch (Exception ignored) {}
-                if (mintAttachmentCookie(auth1, orgId)) c = fetchAttachment(auth1, orgId, u.toString(), rh);
+                if (mintAttachmentCookie(auth1, orgId)) c = fetchAttachment(auth1, orgId, u.toString(), rh, false);
                 else c = null;
             }
             if (c == null) return null;
@@ -2113,10 +2164,10 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) { return null; }
     }
     /** 附件代取一次 (30x 手动跟随·凭据与 Cookie 只发 app.devin.ai)。 */
-    private static java.net.HttpURLConnection fetchAttachment(String auth1, String orgId, String url, java.util.Map<String, String> rh) throws Exception {
+    private static java.net.HttpURLConnection fetchAttachment(String auth1, String orgId, String url, java.util.Map<String, String> rh, boolean direct) throws Exception {
         java.net.HttpURLConnection c = null;
         for (int hop = 0; hop < 5; hop++) {
-            c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            c = HttpBridge.openConn(url, direct);
             c.setInstanceFollowRedirects(false);
             c.setConnectTimeout(15000);
             c.setReadTimeout(30000);
@@ -2152,9 +2203,19 @@ public class MainActivity extends AppCompatActivity {
     }
     /** 铸造 attachments_token Cookie: POST set-attachment-cookie(Bearer 有效) → Set-Cookie 落入 CookieManager。 */
     static boolean mintAttachmentCookie(String auth1, String orgId) {
-        try {
-            if (auth1 == null || auth1.isEmpty()) return false;
-            java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL("https://app.devin.ai/api/users/set-attachment-cookie").openConnection();
+        if (auth1 == null || auth1.isEmpty()) return false;
+        try { return mintAttachmentCookieVia(auth1, orgId, false); }
+        catch (Exception e) {
+            // 默认路由(可能经已死 VPN)失败 → 绑底层非 VPN 网络重试一次 (自然回退)
+            if (HttpBridge.vpnActive() && HttpBridge.directNetwork() != null) {
+                try { return mintAttachmentCookieVia(auth1, orgId, true); } catch (Exception ignored) {}
+            }
+            return false;
+        }
+    }
+    private static boolean mintAttachmentCookieVia(String auth1, String orgId, boolean direct) throws Exception {
+        {
+            java.net.HttpURLConnection c = HttpBridge.openConn("https://app.devin.ai/api/users/set-attachment-cookie", direct);
             c.setInstanceFollowRedirects(false);
             c.setConnectTimeout(15000);
             c.setReadTimeout(15000);
@@ -2175,7 +2236,36 @@ public class MainActivity extends AppCompatActivity {
             }
             try { c.disconnect(); } catch (Exception ignored) {}
             return got && code >= 200 && code < 300;
-        } catch (Exception e) { return false; }
+        }
+    }
+    // 媒体鉴权本源补齐: 只有「账号标签」(accountJson 开页)才有 tab.auth1 —— 用户自己登录/链接打开的
+    //   Devin 页 auth1 恒空 → 铸不了 attachments_token Cookie → 图片/视频全部 401(纯浏览器正常因
+    //   它自己走过 SPA 的 set-attachment-cookie 流程)。此处从页面登录态(localStorage/sessionStorage
+    //   的 auth1_session)采收 token/org 回灌 tab → 任何方式打开的 Devin 页媒体代取都能工作。幂等。
+    private void harvestPageAuth(WebView v, Tab tab, String pageUrl) {
+        try {
+            if (v == null || tab == null || tab.auth1 != null && !tab.auth1.isEmpty()) return;
+            if (pageUrl == null || !pageUrl.contains("app.devin.ai")) return;
+            String js = "(function(){try{"
+                + "var raw=sessionStorage.getItem('auth1_session')||localStorage.getItem('auth1_session');"
+                + "var a=raw?JSON.parse(raw):null;if(!a||!a.token)return '';"
+                + "var uid=a.userId||'';var org='';"
+                + "try{var ko=JSON.parse(sessionStorage.getItem('known-org-ids-'+uid)||localStorage.getItem('known-org-ids-'+uid)||'[]');org=ko[0]||''}catch(_){}"
+                + "if(!org)org=sessionStorage.getItem('last-internal-org-for-external-org-v1-null')||localStorage.getItem('last-internal-org-for-external-org-v1-null')||'';"
+                + "return JSON.stringify({t:a.token,o:org});}catch(e){return ''}})()";
+            v.evaluateJavascript(js, val -> {
+                try {
+                    if (val == null || val.length() < 4 || "null".equals(val)) return;
+                    String json = new org.json.JSONTokener(val).nextValue().toString();
+                    if (json == null || json.isEmpty()) return;
+                    org.json.JSONObject o = new org.json.JSONObject(json);
+                    String t = o.optString("t", "");
+                    if (t.isEmpty()) return;
+                    tab.auth1 = t; tab.orgId = o.optString("o", "");
+                    warmAttachmentCookie(tab.auth1, tab.orgId, tab.url);
+                } catch (Exception ignored) {}
+            });
+        } catch (Exception ignored) {}
     }
     /** 页面加载完成即预铸附件 Cookie (后台线程·幂等), 首次媒体加载即已授权。 */
     static void warmAttachmentCookie(final String auth1, final String orgId, final String pageUrl) {
@@ -3295,8 +3385,11 @@ public class MainActivity extends AppCompatActivity {
             + "if(!ce||!e.getTargetRanges)return;"
             + "try{var sel=window.getSelection();"
             + "if(sel&&sel.isCollapsed&&sel.anchorNode){var r=e.getTargetRanges()[0];"
-            + "if(r&&r.endContainer===sel.anchorNode&&r.endOffset>sel.anchorOffset){"
-            + "e.preventDefault();e.stopImmediatePropagation();document.execCommand('delete');return;}}}catch(_){}"
+            + "if(r){var over=false;"
+            + "if(r.endContainer===sel.anchorNode){over=r.endOffset>sel.anchorOffset;}"
+            + "else{var tr=document.createRange();tr.setStart(r.startContainer,r.startOffset);tr.setEnd(r.endContainer,r.endOffset);"
+            + "try{over=tr.comparePoint(sel.anchorNode,sel.anchorOffset)===0&&!(r.endContainer===sel.anchorNode&&r.endOffset===sel.anchorOffset);}catch(__){}}"
+            + "if(over){e.preventDefault();e.stopImmediatePropagation();document.execCommand('delete');return;}}}}catch(_){}"
             + "return;}"
             + "if(e.inputType==='deleteContentForward'&&(now-lastBk)<150){"
             + "e.preventDefault();e.stopImmediatePropagation();}"

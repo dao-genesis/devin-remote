@@ -1364,6 +1364,25 @@
         notify("clean-"+(a.id||a.email), "\u2713 \u5f52\u96f6\u8d26\u53f7\u5df2\u5907\u4efd\u5e76\u79fb\u51fa\u8d26\u53f7\u5e93", String(a.email||a.id||""));
       }
     }) : null;
+    // ── 常驻后台·增量备份心跳 (与额度/清理解耦·ZIP 时刻跟随最新对话) ────────────────
+    //   病灶: 增量备份(autoBackupTick)过去只活在切号板 → 用户不在切号板时 ZIP 停在首次备份的
+    //   旧内容, 对话后续新增的消息/文件永不入包。今由常驻引擎接管: 每轮轮转一个账号做
+    //   fullBackupAccount(内部按对话 updated_at 增量, 未变者廉价跳过) → 备份恒与云端最新同步。
+    var _bgBkBusy = false, _bgBkCursor = 0;
+    function _bgCfg(k,d){ try{ var v=localStorage.getItem("rtflow.cfg."+k); return v===null?d:JSON.parse(v); }catch(e){ return d; } }
+    async function bgBackupTick(accs){
+      if(!_bgClean || _bgBkBusy || !accs.length) return;
+      if(!_bgCfg("autoBackup", true)) return;
+      try{ var v=localStorage.getItem("rtflow.cfg.autoBackupWifiOnly"); var wifiOnly=(v===null)||JSON.parse(v)!==false;
+           if(wifiOnly && N.netInfo){ var j=JSON.parse(N.netInfo()||"{}"); if(j.metered===true) return; } }catch(e){}
+      _bgBkBusy = true;
+      try{
+        var a=null; try{ a=DaoCore.findAcc(accs[_bgBkCursor%accs.length].id); }catch(e){}
+        a=a||accs[_bgBkCursor%accs.length]; _bgBkCursor++;
+        if(a) await _bgClean.fullBackupAccount(a);
+      }catch(e){}
+      _bgBkBusy = false;
+    }
     var _bgCleanBusy = false;
     async function bgAutoCleanTick(accs){
       if(!_bgClean || _bgCleanBusy) return; _bgCleanBusy = true;
@@ -1446,6 +1465,8 @@
       try { await bgQuotaTick(r.sessions, accs); } catch(e){}
       // 归零移出库·常驻接管(同拍殿后): 全池逐号走共用清理流水线, 不再依赖切号板在前台
       try { await bgAutoCleanTick(accs); } catch(e){}
+      // 增量备份·常驻接管(每轮轮转一号): ZIP 备份时刻跟随最新对话内容, 不依赖切号板在前台
+      try { await bgBackupTick(accs); } catch(e){}
     }
     setTimeout(function(){ tick(); setInterval(tick, POLL_MS); }, FIRST_DELAY);
     log("convwatch armed (对话追踪·全局通知, 轮询 " + (POLL_MS/1000) + "s)");
