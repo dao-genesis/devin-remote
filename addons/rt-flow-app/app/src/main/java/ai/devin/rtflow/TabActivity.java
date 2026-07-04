@@ -121,6 +121,13 @@ public class TabActivity extends AppCompatActivity {
         if (docStart) WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton("https://app.devin.ai"));
         final String fToken = token, fOrg = org;
         web.setWebViewClient(new WebViewClient() {
+            // 顶层导航落在附件/S3 预签名直链 → 拦下转真下载, 留在会话页 (不再整页跳空白)
+            @Override public boolean shouldOverrideUrlLoading(WebView v, android.webkit.WebResourceRequest req) {
+                String u = req.getUrl() == null ? null : req.getUrl().toString();
+                return req.isForMainFrame() && interceptAttachmentNav(u);
+            }
+            @SuppressWarnings("deprecation")
+            @Override public boolean shouldOverrideUrlLoading(WebView v, String u) { return interceptAttachmentNav(u); }
             @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) {
                 if (!docStart) v.evaluateJavascript(script, null);
             }
@@ -185,7 +192,10 @@ public class TabActivity extends AppCompatActivity {
                     probe.setWebViewClient(new WebViewClient() {
                         private void openInNewTab(String u) {
                             try {
-                                if (u != null && !u.isEmpty()) startActivity(new Intent(TabActivity.this, TabActivity.class)
+                                // 附件/S3 直链的 target=_blank: 开新页只会空白 → 直接转真下载
+                                if (MainActivity.isAttachmentDownloadUrl(u))
+                                    startDownload(u, web.getSettings().getUserAgentString(), MainActivity.dispositionFromUrl(u), null);
+                                else if (u != null && !u.isEmpty()) startActivity(new Intent(TabActivity.this, TabActivity.class)
                                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK | Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
                                         .putExtra("url", u).putExtra("account", accJson));
                             } catch (Exception ignored) {}
@@ -221,6 +231,15 @@ public class TabActivity extends AppCompatActivity {
     }
 
     private void toast(String msg) { try { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show(); } catch (Exception ignored) {} }
+
+    /** 顶层导航拦截: 附件下载型 URL 转交 startDownload, 返 true 阻断导航。 */
+    private boolean interceptAttachmentNav(String u) {
+        if (!MainActivity.isAttachmentDownloadUrl(u)) return false;
+        String ua = null;
+        try { ua = web.getSettings().getUserAgentString(); } catch (Exception ignored) {}
+        startDownload(u, ua, MainActivity.dispositionFromUrl(u), null);
+        return true;
+    }
 
     private void startDownload(String url, String ua, String contentDisposition, String mime) {
         // blob: 无法走系统 DownloadManager → 由页面 JS 取内容经 RTDL 桥回传
