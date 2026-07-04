@@ -3350,7 +3350,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // 页面内 <a download> / blob: / data: 下载捕获脚本 (每个页面加载完安装一次)
-    private void installDownloadHook(WebView w) {
+    static void installDownloadHook(WebView w) {
         if (w == null) return;
         String js = "(function(){if(window.__rtdl)return;window.__rtdl=1;"
             + "function send(n,m,b){try{RTDL.saveBase64(n||'download',m||'',b||'');}catch(e){}}"
@@ -3366,7 +3366,7 @@ public class MainActivity extends AppCompatActivity {
     }
     // 键盘弹出时把聚焦的输入框滚到可见区中部 (配合 windowSoftInputMode=adjustResize):
     //   消除"输入框被键盘遮住 / 弹来弹去", 体感对齐真浏览器。幂等(window.__rtkb 守卫), SPA 路由后可重装。
-    private void installKbHelper(WebView w) {
+    static void installKbHelper(WebView w) {
         if (w == null) return;
         String js = "(function(){if(window.__rtkb)return;window.__rtkb=1;"
             + "var T=null;function sif(el){if(!el)return;clearTimeout(T);T=setTimeout(function(){try{el.scrollIntoView({block:'center',inline:'nearest',behavior:'smooth'});}catch(e){try{el.scrollIntoView();}catch(_){}}},220);}"
@@ -3382,7 +3382,7 @@ public class MainActivity extends AppCompatActivity {
     //   捕获阶段兜底: ① 紧跟退格(<150ms)的 IME 向前删除一律拦下(手机键盘本无 Del 键, 该事件
     //   必为输入法误发); ② 单个退格的目标区间越过光标 → 拦下改为只删左侧。仅处理系统真实事件
     //   (isTrusted) 且不干预拼音/组合输入中(isComposing)。幂等(window.__rtBsGuard 守卫)。
-    private void installBackspaceGuard(WebView w) {
+    static void installBackspaceGuard(WebView w) {
         if (w == null) return;
         String js = "(function(){if(window.__rtBsGuard)return;window.__rtBsGuard=1;"
             + "var lastBk=0;"
