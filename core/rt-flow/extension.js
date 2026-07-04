@@ -9703,6 +9703,7 @@ function updateStatusBar() {
 //   结构未变时只增量刷新对话追踪区 (_broadcastConvSection 自带签名去抖) → 永不整页闪。
 let _panelStructSig = null;
 let _wamRebuildThrottleTs = 0;
+let _broadcastForce = false; // 结构性用户动作(删号等) → 绕过重挂节流·立即回显
 function _computePanelStructSig() {
   if (!_store) return "init";
   const store = _store;
@@ -9744,7 +9745,8 @@ function _computePanelStructSig() {
   }
   return parts.join("\u0002");
 }
-function _broadcastUI() {
+function _broadcastUI(force) {
+  if (force) _broadcastForce = true;
   // v3.0.6 · 防抖 · 合并高频调用 · 根治验证/切号期多次全量重建卡顿
   //   verify N个新账号 → N次 broadcastUI → 合并为1次 · 用户无感 · 系统无不为
   // v3.11.3 · 软编码 · 60→200ms (wam.broadcastDebounceMs) · 多选操作时用户手速<200ms·不触发中途重建
@@ -9752,9 +9754,11 @@ function _broadcastUI() {
   const _debMs = Math.max(30, +_cfg("broadcastDebounceMs", 200) || 200);
   _broadcastUITimer = setTimeout(() => {
     _broadcastUITimer = null;
+    const _force = _broadcastForce;
+    _broadcastForce = false;
     // v4.9.10 · 结构签名门: 结构未变 → 不整页重建 (只增量刷对话区) → 杜绝每几秒整页闪
     const sig = _computePanelStructSig();
-    if (sig === _panelStructSig) {
+    if (sig === _panelStructSig && !_force) {
       _broadcastConvSection();
       updateStatusBar();
       return;
@@ -9771,9 +9775,9 @@ function _broadcastUI() {
     // 归一 · 内嵌「切号」: 结构性变化 → 整页重渲推回宿主 → 六板 iframe 重挂 (__wamRebuild)
     // v4.26.4 · 节流 15s: 大批量验号期间结构签名高频变化, 不至于每几秒重挂 iframe(滚动跳顶·无法操作)
     if (_hostPost) {
-      if (Date.now() - _wamRebuildThrottleTs >= 15000) {
+      if (_force || Date.now() - _wamRebuildThrottleTs >= 15000) {
         _wamRebuildThrottleTs = Date.now();
-        try { _hostPost({ type: "__wamRebuild", html: _rebuilt || buildHtml() }); } catch {}
+        try { _hostPost({ type: "__wamRebuild", html: _rebuilt || buildHtml(), force: !!_force }); } catch {}
       }
     }
     updateStatusBar();
@@ -12093,7 +12097,7 @@ async function _dvAutoBackupRun() {
     if (idx.length) {
       _store.removeBatch(idx);
       log("auto-remove: 归零账号出库 " + idx.length + " 个 · " + removeEmails.join(", "));
-      try { _broadcastUI(); } catch {}
+      try { _broadcastUI(true); } catch {}
     }
   }
 }
@@ -12931,7 +12935,7 @@ async function handleWebviewMessage(msg) {
       case "remove":
         _store.remove(msg.index);
         _toast("已删除");
-        _broadcastUI();
+        _broadcastUI(true);
         break;
       case "removeBatch": {
         const r = _store.removeBatch(msg.indices || []);
@@ -12949,7 +12953,7 @@ async function handleWebviewMessage(msg) {
             "⚠️ 已删 " + r.count + " 但写盘失败 · 见 Output (重启可能恢复)",
           );
         }
-        _broadcastUI();
+        _broadcastUI(true);
         break;
       }
       case "addBatch": {
@@ -14189,7 +14193,7 @@ async function handleWebviewMessage(msg) {
             log("[wp-evict] 移出账号库 " + _ix.length + " 个 · " + _wpEvictEmails.join(", "));
           }
         }
-        _broadcastUI();
+        _broadcastUI(true);
         break;
       }
       // 道法自然 · 一气呵成清理额度归零账号: 全量备份 → 全量清理 → 移出账号库 (供切号面板/Agent 调用)
@@ -14254,7 +14258,7 @@ async function handleWebviewMessage(msg) {
           }
         }
         _toast("\u2713 归零清理完成 · 出库 " + evictEmails.length + "/" + zero.length + " (一气呵成)");
-        _broadcastUI();
+        _broadcastUI(true);
         break;
       }
       // 道法自然 · 立即清理(参手机版「立即清理」按钮): 无模态·一气呵成 — 对指定(无选→全部)账号 先全量备份(严格校验)→ 整体归零(对话/知识/剧本/密钥/Git)→ 出库.
@@ -14312,7 +14316,7 @@ async function handleWebviewMessage(msg) {
           }
         }
         _toast("\u2713 立即清理完成 · 出库 " + evictEmails.length + "/" + done + " (先备份再归零·一气呵成)");
-        _broadcastUI();
+        _broadcastUI(true);
         break;
       }
       // 道法自然 · 迁移备份到数据盘: 把现有(C 盘/home)备份整体搬到自动择优的数据盘(非系统盘·剩余最大), 之后默认落该盘 — 不再压系统盘.
