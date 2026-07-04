@@ -6113,10 +6113,12 @@ var _wamKickN=0,_wamKickT=null;
 function wamKick(){cmd('wamInit');if(_wamKickT)clearTimeout(_wamKickT);_wamKickT=setTimeout(function(){_wamKickT=null;if(!S._wamReady&&S.tab==='switch'&&_wamKickN<8){_wamKickN++;wamKick();}},4000);}
 function rWamMount(html,warn){
   var v=document.getElementById('v-switch'); if(!v||!html) return;
-  var SHIM='<scr'+'ipt>(function(){var _s={};window.acquireVsCodeApi=function(){return{postMessage:function(m){try{parent.postMessage({__wamRelay:m},"*")}catch(e){}},getState:function(){return _s},setState:function(s){_s=s;return s}}};})();</scr'+'ipt>';
+  var SHIM='<scr'+'ipt>(function(){var _s={};window.acquireVsCodeApi=function(){return{postMessage:function(m){try{parent.postMessage({__wamRelay:m},"*")}catch(e){}},getState:function(){try{if(parent.__wamSt)return parent.__wamSt}catch(e){}return _s},setState:function(s){_s=s;try{parent.__wamSt=s}catch(e){}return s}}};})();</scr'+'ipt>';
   var doc=/<head[^>]*>/i.test(html)?html.replace(/<head([^>]*)>/i,'<head$1>'+SHIM):SHIM+html;
   var f=document.getElementById('wamFrame');
   if(!f){ v.innerHTML=''; f=document.createElement('iframe'); f.id='wamFrame'; f.style.cssText='width:100%;height:100%;border:none;background:#1e1e1e;flex:1'; v.appendChild(f); }
+  // 重挂前留住滚动位(blob 同源可读) — 根治「删除/结构变化→面板回弹到顶」
+  try{var _cw=f.contentWindow;if(_cw&&_cw.document&&_cw.document.scrollingElement){var _sy=_cw.document.scrollingElement.scrollTop||0;if(_sy>0){window.__wamSt=Object.assign({},window.__wamSt||{},{__scrollY:_sy});}}}catch(e){}
   try{var blob=new Blob([doc],{type:'text/html'});var url=URL.createObjectURL(blob);f.removeAttribute('srcdoc');f.src=url;if(_wamFrameUrl){try{URL.revokeObjectURL(_wamFrameUrl)}catch(e){}}_wamFrameUrl=url;}catch(e){ f.srcdoc=doc; }
   if(warn) return; // 引擎未就绪提示页: 不置 ready, 保持 wamKick 节拍重发直至真面板抵达
   S._wamReady=true;
