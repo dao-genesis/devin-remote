@@ -824,7 +824,7 @@ function setActive(id){
     if(on)applyZoom(tabs[k]);}
   if(SBAR){if(split){SBAR.style.left=(splitRatio*100)+'%';SBAR.className='on';}else SBAR.className='';}
   if(tabs[active]){ADDR.value=tabs[active].url;ZL.textContent=Math.round((tabs[active].zoom||1)*100)+'%';}
-  spin(!!(tabs[active]&&tabs[active].loading));hideOverlay();syncStar();schedLazyLoad();}
+  spin(!!(tabs[active]&&tabs[active].loading));hideOverlay();syncStar();schedLazyLoad();_syncDocTitle();}
 function markStar(on){var sb=document.getElementById('bStar');if(sb){sb.textContent=on?'★':'☆';sb.classList.toggle('faved',!!on);}}
 // 收藏键 = 账号/对话标签 → 与宿主 favAdd 完全同构的 key, 保证「亮金↔取消」前后端一致命中。
 function _acctFavKey(id){var p=String(id||'').split('|');var email=(p[0]||'').toLowerCase();var tail=p[1]||'home';var did=(tail!=='home'&&tail.indexOf('page')!==0)?tail:'';return email+'|'+(did||'home');}
@@ -892,16 +892,22 @@ function _dotCls(s){s=String(s==null?'':s).toLowerCase().trim();if(!s)return '';
   return ' running';}
 // 归一 · 状态 → 中文提醒文案(对照手机 APK sessStatus 六态): exhausted 额度耗尽 / blocked 卡住·待处理 / awaiting 待输入。
 function _statusZh(s){s=String(s||'').toLowerCase();if(s==='exhausted')return '额度耗尽';if(s==='blocked')return '卡住·待处理';if(s==='awaiting')return '待输入';if(s==='finished')return '完成';if(s==='running')return '运行中';return s;}
+// 归一 · 状态 → 指示灯图标(对齐手机 APK 标签指示灯): 浏览器/IDE 外层标签页标题同步活跃对话名+状态灯。
+function _statusIcon(s){s=String(s||'').toLowerCase();if(s==='running')return '🟢';if(s==='awaiting')return '🟡';if(s==='blocked')return '🔴';if(s==='exhausted')return '💳';if(s==='finished')return '⚪';return '';}
+function _syncDocTitle(){try{var t=tabs[active];var name='',ic='';
+  if(t){var le=t._lbl||(t.btn&&t.btn.querySelector('.lbl'));name=(le&&le.textContent)||'';var mt=t.meta||{};ic=_statusIcon(mt.statusClass||mt.status);}
+  document.title=(ic?ic+' ':'')+(name?name+' · ':'')+'Devin Cloud';}catch(e){}}
 // 归一 · 标签状态实时刷新(对齐手机端): 宿主轮询会话状态 → 更新状态点/对话名/额度, 并在转入「卡住/待输入」时提示。
 function updateTab(m){var t=tabs[m.id];if(!t)return;var mt=t.meta||(t.meta={});
   if(m.statusClass!=null){var prev=mt.statusClass||'';mt.statusClass=m.statusClass;if(t._dot)t._dot.className='dot'+_dotCls(m.statusClass);
     var _sc=m.statusClass;if(_sc!==prev&&(_sc==='blocked'||_sc==='awaiting'||_sc==='exhausted')){try{var _ic=(_sc==='exhausted'?'💳 ':(_sc==='blocked'?'⚠ ':'⏳ '));daoToast(_ic+_statusZh(_sc)+' · '+(mt.label||'Devin'),_sc!=='awaiting');}catch(e){}}}
   if(m.label){mt.label=m.label;if(t._lbl)t._lbl.textContent=m.label;}
-  if(m.dollars!=null){mt.dollars=m.dollars;if(t._amt){t._amt.textContent=m.dollars?('$'+m.dollars):'';t._amt.style.display=m.dollars?'':'none';}}}
+  if(m.dollars!=null){mt.dollars=m.dollars;if(t._amt){t._amt.textContent=m.dollars?('$'+m.dollars):'';t._amt.style.display=m.dollars?'':'none';}}
+  if(m.id===active)_syncDocTitle();}
 // 归一 · /shell 标签状态实时轮询(补 shell 侧此前缺失·对照手机端): 收集打开中的账号标签(email+devinId) →
 //   宿主按号 listRunningSessions 判六态 → 回推 tabUpdate 上色/回填对话名/额度。web/board 标签不参与。
 var _shStatT=null;
-function shellStatusTick(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];if(id.indexOf('board:')===0||id.indexOf('web:')===0)continue;var t=tabs[id];var mt=(t&&t.meta)||{};if(mt.email&&mt.devinId)arr.push({id:id,email:mt.email,devinId:mt.devinId});}if(arr.length)vscode.postMessage({type:'shellStatus',tabs:arr});}catch(e){}}
+function shellStatusTick(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];if(id.indexOf('board:')===0||id.indexOf('web:')===0)continue;var t=tabs[id];var mt=(t&&t.meta)||{};if(mt.email)arr.push({id:id,email:mt.email,devinId:mt.devinId||''});}if(arr.length)vscode.postMessage({type:'shellStatus',tabs:arr});}catch(e){}}
 function schedStatusSoon(){clearTimeout(_shStatT);_shStatT=setTimeout(shellStatusTick,2500);}
 try{setInterval(shellStatusTick,12000);}catch(e){}
 // 归一 · 状态续接(对齐手机端会话保持): 持久化当前打开的标签集 → 宿主 globalState;
@@ -1823,8 +1829,9 @@ async function shellHandleMessage(sid, m) {
             try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
             for (const t of tl) {
               const sid = String(t.devinId || '').replace(/^devin-/, '');
-              const hit = amap.get(sid);
-              let cls = hit ? (hit.statusClass || 'running') : 'finished';
+              // 账号首页标签(无具体对话·对齐手机 APK): 以该号最新活跃会话回填对话名+状态灯; 无活跃 → idle 灰。
+              const hit = sid ? amap.get(sid) : ((act && act.length) ? act[0] : null);
+              let cls = hit ? (hit.statusClass || 'running') : (sid ? 'finished' : 'idle');
               try {
                 if (hit && cls === 'blocked' && QRE.test(JSON.stringify(hit.latest_status_contents || '') + ' ' + String(hit.status || ''))) {
                   const live = !!(h && (((typeof h.dPct === 'number') && h.dPct > 0) || ((typeof h.wPct === 'number') && h.wPct > 0) || ((typeof h.overageDollars === 'number') && h.overageDollars > 0)));
