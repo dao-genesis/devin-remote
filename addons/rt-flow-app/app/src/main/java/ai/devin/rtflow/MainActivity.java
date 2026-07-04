@@ -1155,10 +1155,15 @@ public class MainActivity extends AppCompatActivity {
 
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
-                return handleExternalScheme(req.getUrl() == null ? null : req.getUrl().toString());
+                String u = req.getUrl() == null ? null : req.getUrl().toString();
+                if (req.isForMainFrame() && interceptAttachmentNav(v, u)) return true;
+                return handleExternalScheme(u);
             }
             @SuppressWarnings("deprecation")
-            @Override public boolean shouldOverrideUrlLoading(WebView v, String u) { return handleExternalScheme(u); }
+            @Override public boolean shouldOverrideUrlLoading(WebView v, String u) {
+                if (interceptAttachmentNav(v, u)) return true;
+                return handleExternalScheme(u);
+            }
             @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) {
                 tab.url = u; if (tabOf(v) == active) setAddr(u);
                 if (u != null && u.startsWith("http")) tab.loadedAt = System.currentTimeMillis();   // 整页加载 → V8 堆归零, 重计堆龄
@@ -3425,6 +3430,46 @@ public class MainActivity extends AppCompatActivity {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
         } catch (Exception e) { toast("无法打开: " + u); }
+        return true;
+    }
+
+    /** 附件下载型 URL: 顶层导航到它只会渲成空白页 —— 应转交下载而非导航。
+     *  覆盖 ① app.devin.ai/attachments/…(SPA 下载按钮/附件卡片的 target=_blank 落点)
+     *  ② 其 302 落点 S3 预签名直链(带 X-Amz-Signature 且处置明示 attachment)。 */
+    static boolean isAttachmentDownloadUrl(String u) {
+        if (u == null) return false;
+        String low = u.toLowerCase(java.util.Locale.US);
+        if (!low.startsWith("http://") && !low.startsWith("https://")) return false;
+        try {
+            Uri x = Uri.parse(u);
+            String host = x.getHost() == null ? "" : x.getHost().toLowerCase(java.util.Locale.US);
+            String path = x.getPath() == null ? "" : x.getPath();
+            if (host.equals("app.devin.ai") && path.startsWith("/attachments/")) return true;
+            if (low.contains("x-amz-signature=") && low.contains("response-content-disposition=attachment")) return true;
+        } catch (Exception ignored) {}
+        return false;
+    }
+    /** S3 预签名 URL 的 response-content-disposition(含真实文件名), 无则 null。 */
+    static String dispositionFromUrl(String u) {
+        try {
+            String d = Uri.parse(u).getQueryParameter("response-content-disposition");
+            return (d == null || d.isEmpty()) ? null : d;
+        } catch (Exception e) { return null; }
+    }
+    /** 顶层导航落在附件/S3 预签名直链 → 拦下转真下载(留在原页); onCreateWindow 刚开出的空标签顺手关闭。 */
+    private boolean interceptAttachmentNav(WebView v, String u) {
+        if (!isAttachmentDownloadUrl(u)) return false;
+        String ua = null;
+        try { ua = v.getSettings().getUserAgentString(); } catch (Exception ignored) {}
+        startDownload(u, ua, dispositionFromUrl(u), null);
+        int idx = tabOf(v);
+        if (idx >= 0) {
+            try {
+                Tab t = tabs.get(idx);
+                if (v.copyBackForwardList().getSize() == 0 && (t.url == null || !t.url.startsWith("http")))
+                    closeTab(idx);
+            } catch (Exception ignored) {}
+        }
         return true;
     }
 
