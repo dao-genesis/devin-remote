@@ -2,6 +2,20 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.334 · 守真突破(活鉴权信封 · 脱「首次须用户发对话」之依赖 · 无为而无不为)
+: v9.9.333 的会话鉴权保鲜仍以「最新捕获帧 `_lastChatFrame`」为唯一鉴权源, 而该帧只由
+  CHAT_PROTO(GetChatMessage)捕获 → 持久帧 token 随会话轮换失活时, 仍须「用户再发一条
+  Cascade 对话」铸新活 token(守真)。此即「首次/每次都要用户发消息」之限的根。
+  正法(道法自然): 会话鉴权信封(顶层 field1·内含 `devin-session-token`)并非 chat 独有——
+  IDE 一活跃(打开文件即触发的自动补全/上下文等 inference 请求)就向本 origin 发出携同一
+  鉴权信封的请求。故新增 `_harvestAuthEnvelope(body)`: 从任一 inference 请求
+  (CHAT_PROTO/CHAT_RAW/INFER_STRIP)采顶层 field1[+field16 cascadeId], 内容自证含会话标记
+  (`session-token`/`devin-team$`/`devin-session`)才采信, 存 `_lastAuthEnvelope`(内存·随宿主生死·
+  不落盘免持陈)。`_graftFreshSession` 改为在「活鉴权信封」与「最新捕获帧」间按 `at` 取更鲜者
+  作鉴权源, 配合磁盘常驻骨架帧(形)嫁接 → 用户只需打开 Devin Desktop 正常用, 系统即自然
+  采得活鉴权出包, 不待守真。`/origin/ping` 的 `authgraft.last_src` 标注本次嫁接鉴权源
+  (`envelope`|`chatframe`)。宁稳勿崩: 非鉴权信封不动、全 try 兜底、序列化失败回退原体。
+
 v9.9.333 · 会话鉴权保鲜(治「初始帧」失活 · 跨会话回放不再 unauthenticated)
 : 用户实测反代免费模型恒返回「官方上游错误: an internal error occurred」。经把捕获帧原字节
   直发上游(server.codeium.com)复现, 得真错码 = `unauthenticated`(被上游掩码为

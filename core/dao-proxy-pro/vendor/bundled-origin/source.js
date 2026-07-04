@@ -307,7 +307,7 @@ function _originGetProxyAgent(isHttps) {
 const PORT = parseInt(process.env.ORIGIN_PORT || "8889", 10);
 // v9.6.1 · 反者道之动 · 远曰反 · 回归 v9.1.2 之全前端按钮 (七按钮: 道/官/实/原/编/复/卸 + dots/customBadge)
 // 以 v9.1.2 本源哲学为锚 · 守大常不动 · 五细节皆成: isAlreadyInverted · _rawTape+all_fields · 部署不 kill · 前端按钮回归
-const ORIGIN_VERSION_BASE = "v9.9.94"; // v9.9.94 · 会话鉴权保鲜(_graftFreshSession·跨会话回放不再 unauthenticated) · v9.9.93 · 本源观照内嵌外接API面板 + 已见模型追踪 + 热路由连线 · 五十七章「我无为也 而民自化」
+const ORIGIN_VERSION_BASE = "v9.9.334"; // v9.9.334 · 守真突破(活鉴权信封·任一 inference 请求采信封→回放嫁接不待用户对话·脱守真依赖) · v9.9.333 · 会话鉴权保鲜(_graftFreshSession·跨会话回放不再 unauthenticated) · 五十七章「我无为也 而民自化」
 // 印 153 · 唯变所适 · 软编码归宗 · 二十五章「逝曰远 远曰反」· 七十六章「兵强则不胜」
 // 病: 多 ext-host 共端口 :8937 · 旧版 in-process proxy 持续 listen · self_file 锁死旧版目录
 //     → 即便装毕新版 vsix · /ping 仍返 v9.9.19/v9.9.20 之 self_file · canon_name 走旧映射
@@ -3120,6 +3120,11 @@ function handleControl(req, res) {
           skipped: _authGraftStats.skipped,
           last_at: _authGraftStats.last_at,
           last_age_ms: _authGraftStats.last_age_ms,
+          last_src: _authGraftStats.last_src || null,
+          // 守真突破: 活鉴权信封(任一 inference 请求采得·脱守真依赖)。has=true 即无需用户发对话亦有活鉴权。
+          envelope: _lastAuthEnvelope
+            ? { has: true, at: _lastAuthEnvelope.at, age_ms: Date.now() - (_lastAuthEnvelope.at || 0), has_cid: !!_lastAuthEnvelope.cid }
+            : { has: false },
         },
         // v9.9.21 · 唯变所适 · 让位标志 · ext-host 见 quitted=true 不再 require 起
         quitted: _quitSignaled,
@@ -7269,6 +7274,45 @@ function _captureChatFrame(req, body) {
     }
   } catch (_) {}
 }
+// ── 守真突破 · 活鉴权信封 (v9.9.334 · 上善若水·利万物而不争) ────────────────
+//   病灶(守真依赖): _lastChatFrame 仅由 CHAT_PROTO(GetChatMessage) 捕获 →
+//     持久帧的会话 token 会随会话轮换失活; 传统上须「用户再发一条 Cascade 对话」
+//     才能铸出新活 token(守真)。此即「首次/每次都要用户发消息」之限的根。
+//   正法(道法自然·无为而无不为): 会话鉴权信封(顶层 field1·内含 devin-session-token)
+//     并非 chat 独有 —— IDE 一活跃(打开文件即触发的自动补全/上下文等 inference 请求)
+//     就向本 origin 发出携同一鉴权信封的请求。故「从任一 inference 请求采信封」即可在
+//     「用户不发对话」的前提下持续拿到活鉴权; 配合磁盘常驻的骨架帧(形)嫁接 →
+//     合成一枚全鉴权回放帧。用户只需打开 Devin Desktop 正常用, 系统自然采信, 不待守真。
+//   宁稳勿崩: 仅当原始 field1 字节含会话标记(名实相符)才采信, 否则不动; 全 try 兜底。
+let _lastAuthEnvelope = null; // { f1:Buffer, cid:Buffer|null, at:number }
+function _looksLikeAuthEnvelope(f1) {
+  if (!f1 || !f1.length) return false;
+  try {
+    const s = f1.toString("latin1");
+    return (
+      s.indexOf("session-token") >= 0 ||
+      s.indexOf("devin-team$") >= 0 ||
+      s.indexOf("devin-session") >= 0
+    );
+  } catch (_) {
+    return false;
+  }
+}
+// 从任一请求体采鉴权信封(顶层 field1[+field16 cascadeId]) → 更鲜即留存(内存·随宿主生死)。
+//   道义: 上善若水; 任一请求皆可为鉴权之源, 不独 chat → 脱守真依赖。
+//   不落盘: 会话 token 仅当前 IDE 会话有效, 重启后由新启动流量自然重采(免持陈)。
+function _harvestAuthEnvelope(body) {
+  try {
+    if (!body || !body.length) return false;
+    const f1 = _topFieldRaw(body, 1);
+    if (!_looksLikeAuthEnvelope(f1)) return false;
+    const cid = _topFieldRaw(body, 16);
+    _lastAuthEnvelope = { f1, cid: cid || null, at: Date.now() };
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 // 官方直通回放取帧: 调用方要免费档 或 付费配额已耗尽 → 优先免费槽(原汤化原食·活水恒足),
 //   否则用主槽(最近一帧)。两槽皆按需自盘复现。
 function _pickReplayFrame(target) {
@@ -7433,13 +7477,19 @@ function _topFieldRaw(body, fieldNum) {
 function _graftFreshSession(newBody, usedFrame) {
   try {
     _authGraftStats.calls++;
-    const src = _lastChatFrame; // 主槽每轮皆被最新捕获帧覆盖 → 恒最鲜活会话
-    if (!src || !src.body) { _authGraftStats.skipped++; return newBody; }
-    if (usedFrame && src === usedFrame) { _authGraftStats.skipped++; return newBody; }
-    if (usedFrame && (usedFrame.at || 0) >= (src.at || 0)) { _authGraftStats.skipped++; return newBody; }
-    const auth1 = _topFieldRaw(src.body, 1);
+    // 鉴权源(取更鲜者·守真突破): 活鉴权信封(任一 inference 请求采得·不待对话) 与
+    //   最新捕获帧主槽。两者按 at 取最鲜 → 全新/久未对话会话只要 IDE 活跃即有活鉴权。
+    let auth1 = null, cid = null, srcAt = -1;
+    const env = _lastAuthEnvelope;
+    if (env && env.f1) { auth1 = env.f1; cid = env.cid; srcAt = env.at || 0; }
+    const src = _lastChatFrame; // 主槽每轮皆被最新捕获帧覆盖 → 携当前活会话
+    if (src && src.body && (src.at || 0) > srcAt) {
+      const a = _topFieldRaw(src.body, 1);
+      if (a) { auth1 = a; cid = _topFieldRaw(src.body, 16); srcAt = src.at || 0; }
+    }
     if (!auth1) { _authGraftStats.skipped++; return newBody; }
-    const cid = _topFieldRaw(src.body, 16);
+    // 本次回放所用帧的鉴权已≥最鲜源 → 无需嫁接(宁稳勿动·如 _forceMain 且无更鲜信封)。
+    if (usedFrame && (usedFrame.at || 0) >= srcAt) { _authGraftStats.skipped++; return newBody; }
     const frames = parseFrames(newBody);
     if (!frames.length) { _authGraftStats.skipped++; return newBody; }
     const top = parseProto(frames[0].payload);
@@ -7449,7 +7499,8 @@ function _graftFreshSession(newBody, usedFrame) {
     if (reser && reser.length && _pbParseOk(reser)) {
       _authGraftStats.rewrites++;
       _authGraftStats.last_at = Date.now();
-      _authGraftStats.last_age_ms = src.at ? Date.now() - src.at : 0;
+      _authGraftStats.last_age_ms = srcAt > 0 ? Date.now() - srcAt : 0;
+      _authGraftStats.last_src = env && srcAt === (env.at || 0) ? "envelope" : "chatframe";
       return buildFrame(0, reser);
     }
     _authGraftStats.skipped++;
@@ -8248,6 +8299,17 @@ const _mainHandler = async (req, res) => {
         _captureChatFrame(req, body);
       } catch (_) {}
     }
+    // 守真突破: 从任一 inference 请求(chat/补全/上下文)采活鉴权信封 → 回放嫁接恒有活鉴权,
+    //   不待用户发对话(IDE 一活跃即有源)。仅内容自证为鉴权信封者采信, 否则不动。
+    if (
+      (kind === "CHAT_PROTO" || kind === "CHAT_RAW" || kind === "INFER_STRIP") &&
+      body &&
+      body.length > 0
+    ) {
+      try {
+        _harvestAuthEnvelope(body);
+      } catch (_) {}
+    }
 
     // 5+6. v9.9.30 印 162 · 观察记录后置 setImmediate · 请求转发先行
     // 道义: step 5 (observeAllSPInBody) + step 6 (_recordInject/_recordRawTape)
@@ -8778,6 +8840,12 @@ module.exports = {
     _retargetFrameModel,
     _topFieldRaw,
     _graftFreshSession,
+    _harvestAuthEnvelope,
+    _looksLikeAuthEnvelope,
+    _authGraftStats,
+    _setLastAuthEnvelopeForTest: (env) => { _lastAuthEnvelope = env; },
+    _getLastAuthEnvelopeForTest: () => _lastAuthEnvelope,
+    _setLastChatFrameForTest: (fr) => { _lastChatFrame = fr; },
     _frameModelInfo,
     _pbKeepLastRepeated,
     _isolateChatFrameSP,
