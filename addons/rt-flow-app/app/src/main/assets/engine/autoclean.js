@@ -43,11 +43,13 @@
       return false;
     }
     // 增量备份单条对话: 名称/更新时间未变且已备份 → 跳过; 否则备份「单文件整包 sess-<sid>.zip」并更新清单。
+    //   增量同步本源: 能跳过的前提是列表真的带了更新时间(ts>0) —— 无时间字段的会话无从判新旧,
+    //   一律重新备份(宁多备不漏备), 否则 ZIP 永远停在首次备份的旧内容。
     async function backupSessionFull(a, s, man) {
       var sid = s.devin_id || s.session_id || s.id; if (!sid) return { skipped: true };
       var title = s.title || s.name || s.prompt || sid; var ts = DaoCloud.sessTs(s) || 0;
       var prev = man.sessions[sid];
-      if (prev && prev.backedUpAt && !prev.deleted && prev.ts === ts && prev.title === title && prev.complete !== false) {
+      if (prev && prev.backedUpAt && !prev.deleted && ts > 0 && prev.ts === ts && prev.title === title && prev.complete !== false) {
         if (!prev.guide && !prev.zip) { try { var g0 = DaoCloud.buildAccessGuide(a, sid, title); if (g0 && N.vaultSaveBackup && N.vaultSaveBackup(_acctFolder(a), "指引-" + sid + ".md", g0)) prev.guide = "指引-" + sid + ".md"; } catch (e) {} }
         return { skipped: true, sid: sid };
       }

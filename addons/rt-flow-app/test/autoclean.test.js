@@ -194,6 +194,34 @@ function makeEnv(opts) {
   ok(/saveAcc\(accs\); try\{ mirrorAccountsToVault\(\); \}catch\(e\)\{\}/.test(switchSrc), "doAdd 后立即镜像金库 (重加号不被金库回拉抓回幽灵态)");
   ok(/window\.__rtBsGuard\)return/.test(mainSrc), "退格护栏: 幂等守卫");
 
+  // ── 源级护栏: ZIP 备份增量同步 (对话有新内容 → 备份自动跟进) ──
+  {
+    const acSrc = fs.readFileSync(path.join(APP, "assets", "engine", "autoclean.js"), "utf8");
+    ok(/ts > 0 && prev\.ts === ts/.test(acSrc), "增量备份: 无更新时间(ts=0)的会话不跳过·一律重备 (宁多备不漏备)");
+    ok(/async function bgBackupTick\(accs\)/.test(engineSrc), "engine.html 常驻增量备份心跳 bgBackupTick");
+    ok(/await bgBackupTick\(accs\)/.test(engineSrc), "engine tick 每轮调 bgBackupTick (不依赖切号板在前台)");
+    ok(/_bgClean\.fullBackupAccount\(a\)/.test(engineSrc), "bgBackupTick 走共用 fullBackupAccount (内部按 updated_at 增量)");
+  }
+  // ── 增量备份行为: 对话更新时间变化 → 重新备份 ZIP (与最新内容同步) ──
+  {
+    const sess = [{ devin_id: "sInc", ts: now - 2 * DAY, title: "t" }];
+    const env = makeEnv({ quota: { dPct: 50, overageDollars: 42 }, sessions: sess });
+    const a = env.getAccs()[0];
+    const bk1 = await env.inst.fullBackupAccount(a);
+    ok(bk1.ok && bk1.count === 1, "增量: 首次备份落 ZIP");
+    const bk2 = await env.inst.fullBackupAccount(a);
+    ok(bk2.ok && bk2.count === 0, "增量: 未变更 → 廉价跳过不重备");
+    sess[0].ts = now - 2 * DAY + 60000;   // 对话有新内容 → updated_at 前移
+    const bk3 = await env.inst.fullBackupAccount(a);
+    ok(bk3.ok && bk3.count === 1, "增量: 对话更新时间变化 → 重新备份 ZIP (跟随最新)");
+    const sess2 = [{ devin_id: "sNoTs", title: "t" }];   // 列表不带任何时间字段
+    const env2 = makeEnv({ quota: { dPct: 50, overageDollars: 42 }, sessions: sess2 });
+    const a2 = env2.getAccs()[0];
+    await env2.inst.fullBackupAccount(a2);
+    const bkA = await env2.inst.fullBackupAccount(a2);
+    ok(bkA.ok && bkA.count === 1, "增量: 无更新时间(ts=0) → 不跳过·每轮重备 (宁多备不漏备)");
+  }
+
   if (failures) { console.error("\n" + failures + " failure(s)"); process.exit(1); }
   console.log("\nautoclean: all tests passed");
 })().catch((e) => { console.error(e); process.exit(1); });
