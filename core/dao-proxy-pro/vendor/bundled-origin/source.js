@@ -307,7 +307,7 @@ function _originGetProxyAgent(isHttps) {
 const PORT = parseInt(process.env.ORIGIN_PORT || "8889", 10);
 // v9.6.1 · 反者道之动 · 远曰反 · 回归 v9.1.2 之全前端按钮 (七按钮: 道/官/实/原/编/复/卸 + dots/customBadge)
 // 以 v9.1.2 本源哲学为锚 · 守大常不动 · 五细节皆成: isAlreadyInverted · _rawTape+all_fields · 部署不 kill · 前端按钮回归
-const ORIGIN_VERSION_BASE = "v9.9.334"; // v9.9.334 · 守真突破(活鉴权信封·任一 inference 请求采信封→回放嫁接不待用户对话·脱守真依赖) · v9.9.333 · 会话鉴权保鲜(_graftFreshSession·跨会话回放不再 unauthenticated) · 五十七章「我无为也 而民自化」
+const ORIGIN_VERSION_BASE = "v9.9.335"; // v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增·彻底脱用户Cascade对话依赖) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
 // 印 153 · 唯变所适 · 软编码归宗 · 二十五章「逝曰远 远曰反」· 七十六章「兵强则不胜」
 // 病: 多 ext-host 共端口 :8937 · 旧版 in-process proxy 持续 listen · self_file 锁死旧版目录
 //     → 即便装毕新版 vsix · /ping 仍返 v9.9.19/v9.9.20 之 self_file · canon_name 走旧映射
@@ -3121,7 +3121,8 @@ function handleControl(req, res) {
           last_at: _authGraftStats.last_at,
           last_age_ms: _authGraftStats.last_age_ms,
           last_src: _authGraftStats.last_src || null,
-          // 守真突破: 活鉴权信封(任一 inference 请求采得·脱守真依赖)。has=true 即无需用户发对话亦有活鉴权。
+          synths: _authGraftStats.synths || 0,
+          // 守真突破+自主保鲜: 活鉴权信封采得即合成全鉴权回放帧·rewrites自然自增·脱用户Cascade对话依赖。
           envelope: _lastAuthEnvelope
             ? { has: true, at: _lastAuthEnvelope.at, age_ms: Date.now() - (_lastAuthEnvelope.at || 0), has_cid: !!_lastAuthEnvelope.cid }
             : { has: false },
@@ -5770,7 +5771,7 @@ const _retargetStats = { calls: 0, rewrites: 0, skipped: 0, last_from: "", last_
 //   (掩码为 "an internal error occurred") = 上个对话遗留「初始帧」病之真因。
 //   正法(原汤化原食·活水恒足): 回放前把「最新捕获帧(_lastChatFrame·恒最鲜)」的 field1+field16
 //   整体嫁接到本次回放体上 → 任一槽的历史帧皆借最新活会话的鉴权出包, 跨会话不再失活。
-const _authGraftStats = { calls: 0, rewrites: 0, skipped: 0, last_at: 0, last_age_ms: 0 };
+const _authGraftStats = { calls: 0, rewrites: 0, skipped: 0, last_at: 0, last_age_ms: 0, synths: 0 };
 function _pbReadVarint(buf, i) {
   let shift = 0,
     result = 0;
@@ -7285,6 +7286,7 @@ function _captureChatFrame(req, body) {
 //     合成一枚全鉴权回放帧。用户只需打开 Devin Desktop 正常用, 系统自然采信, 不待守真。
 //   宁稳勿崩: 仅当原始 field1 字节含会话标记(名实相符)才采信, 否则不动; 全 try 兜底。
 let _lastAuthEnvelope = null; // { f1:Buffer, cid:Buffer|null, at:number }
+let _lastSynthAt = 0; // 自主保鲜节流: 最近一次合成时间
 function _looksLikeAuthEnvelope(f1) {
   if (!f1 || !f1.length) return false;
   try {
@@ -7308,10 +7310,32 @@ function _harvestAuthEnvelope(body) {
     if (!_looksLikeAuthEnvelope(f1)) return false;
     const cid = _topFieldRaw(body, 16);
     _lastAuthEnvelope = { f1, cid: cid || null, at: Date.now() };
+    _synthesizeFreshReplayFrame();
     return true;
   } catch (_) {
     return false;
   }
+}
+// 自主保鲜合成(道法自然·无为而无不为): 活鉴权信封采得后, 自动嫁接到盘存骨架帧 →
+//   合成全鉴权回放帧(rewrites 自然自增), 彻底脱离"必须有用户 Cascade 对话"之限。
+//   IDE 一活跃(补全/上下文等 inference 即有), 系统自主闭环保鲜, 用户无为而系统无不为。
+//   节流: 每 5 秒至多合成一次(IDE 活跃期间持续保鲜, 不致风暴)。
+function _synthesizeFreshReplayFrame() {
+  try {
+    const env = _lastAuthEnvelope;
+    if (!env || !env.f1) return;
+    const now = Date.now();
+    if (now - _lastSynthAt < 5000) return;
+    if (!_lastChatFrame || !_lastChatFrame.body) _restoreChatFrame(false);
+    const skel = _lastChatFrame;
+    if (!skel || !skel.body) return;
+    if ((skel.at || 0) >= (env.at || 0)) return;
+    const grafted = _graftFreshSession(skel.body, skel);
+    if (grafted && grafted !== skel.body) {
+      _lastSynthAt = now;
+      _authGraftStats.synths = (_authGraftStats.synths || 0) + 1;
+    }
+  } catch (_) {}
 }
 // 官方直通回放取帧: 调用方要免费档 或 付费配额已耗尽 → 优先免费槽(原汤化原食·活水恒足),
 //   否则用主槽(最近一帧)。两槽皆按需自盘复现。

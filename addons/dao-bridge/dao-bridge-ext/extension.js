@@ -571,18 +571,22 @@ Write-Host "[dao] 已接入中枢 as $aid  (Ctrl+C 退出)" -ForegroundColor Gre
 while($true){
   try{
     $poll = Dao-Post '/api/poll' @{id=$aid;token=$tok;timeout=25}
-    foreach($c in @($poll.commands)){
-      if(-not $c){ continue }
+    foreach($__daoCmd in @($poll.commands)){
+      if(-not $__daoCmd){ continue }
+      # 归一·被控端隔离: 命令元数据先固化到独名变量,用户命令经 Invoke-Expression 在
+      # 子作用域(& {})内执行 → 即便用户脚本重定义 $c/$out/$err/$aid 等亦不污染回传闭环
+      # (曾致 $c 被覆写后 cmd_id 变 null,结果永不回传·操控端超时)。
+      $__daoCid = $__daoCmd.cmd_id; $__daoType = $__daoCmd.type; $__daoPayloadCmd = $__daoCmd.payload.command
       $out=''; $err=''; $code=0
       $sw=[Diagnostics.Stopwatch]::StartNew()
       $global:LASTEXITCODE=0
       try{
-        switch($c.type){
+        switch($__daoType){
           'sysinfo' { $out = (Get-ComputerInfo | Out-String) }
           default {
             $Error.Clear()
             $ErrorActionPreference='Continue'
-            $raw = Invoke-Expression $c.payload.command 2>&1
+            $raw = & { Invoke-Expression $args[0] } $__daoPayloadCmd 2>&1
             $ErrorActionPreference='SilentlyContinue'
             $out = ($raw | Out-String)
             if($Error.Count -gt 0){
@@ -596,7 +600,7 @@ while($true){
       }catch{ $err=$_.Exception.Message; $code=1 }
       $sw.Stop()
       $res=@{ stdout=$out; stderr=$err; exit_code=$code; execution_time_ms=$sw.ElapsedMilliseconds }
-      try{ Dao-Post '/api/result' @{agent_id=$aid;token=$tok;cmd_id=$c.cmd_id;result=$res} | Out-Null }catch{}
+      try{ Dao-Post '/api/result' @{agent_id=$aid;token=$tok;cmd_id=$__daoCid;result=$res} | Out-Null }catch{}
     }
   }catch{
     try{ $reg = Dao-Post '/api/connect' @{sysinfo=$sys}; $aid=$reg.agent_id; $tok=$reg.token }catch{ Start-Sleep 3 }
