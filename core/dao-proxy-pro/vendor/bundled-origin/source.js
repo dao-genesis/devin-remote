@@ -307,7 +307,7 @@ function _originGetProxyAgent(isHttps) {
 const PORT = parseInt(process.env.ORIGIN_PORT || "8889", 10);
 // v9.6.1 · 反者道之动 · 远曰反 · 回归 v9.1.2 之全前端按钮 (七按钮: 道/官/实/原/编/复/卸 + dots/customBadge)
 // 以 v9.1.2 本源哲学为锚 · 守大常不动 · 五细节皆成: isAlreadyInverted · _rawTape+all_fields · 部署不 kill · 前端按钮回归
-const ORIGIN_VERSION_BASE = "v9.9.93"; // v9.9.93 · 本源观照内嵌外接API面板 + 已见模型追踪 + 热路由连线 · 五十七章「我无为也 而民自化」
+const ORIGIN_VERSION_BASE = "v9.9.94"; // v9.9.94 · 会话鉴权保鲜(_graftFreshSession·跨会话回放不再 unauthenticated) · v9.9.93 · 本源观照内嵌外接API面板 + 已见模型追踪 + 热路由连线 · 五十七章「我无为也 而民自化」
 // 印 153 · 唯变所适 · 软编码归宗 · 二十五章「逝曰远 远曰反」· 七十六章「兵强则不胜」
 // 病: 多 ext-host 共端口 :8937 · 旧版 in-process proxy 持续 listen · self_file 锁死旧版目录
 //     → 即便装毕新版 vsix · /ping 仍返 v9.9.19/v9.9.20 之 self_file · canon_name 走旧映射
@@ -3112,6 +3112,15 @@ function handleControl(req, res) {
           last_to: _retargetStats.last_to,
           last_at: _retargetStats.last_at,
         },
+        // 会话鉴权保鲜观测: rewrites>0 证回放前确用最新捕获帧的 field1(鉴权)嫁接旧槽帧
+        //   → 跨会话回放不再 unauthenticated; last_age_ms=嫁接所用最新帧的新鲜度。
+        authgraft: {
+          calls: _authGraftStats.calls,
+          rewrites: _authGraftStats.rewrites,
+          skipped: _authGraftStats.skipped,
+          last_at: _authGraftStats.last_at,
+          last_age_ms: _authGraftStats.last_age_ms,
+        },
         // v9.9.21 · 唯变所适 · 让位标志 · ext-host 见 quitted=true 不再 require 起
         quitted: _quitSignaled,
         // v7.2 · 用户实时编辑提示词状态 (人法地, 地法天, 天法道, 道法自然)
@@ -5749,6 +5758,14 @@ const _PRO_BADGE = Buffer.from("Upgrade to Pro");
 const _unlockStats = { calls: 0, dropped_total: 0, last_dropped: 0, unlock4_total: 0, last_unlock4: 0, last_at: 0, last_bytes: "", last_total: 0, last_available: 0, schema: "" };
 // 万模归一 retarget 计数(观测·证 field21 复用前确被改档): rewrites=真改档次数, skipped=已同档跳过
 const _retargetStats = { calls: 0, rewrites: 0, skipped: 0, last_from: "", last_to: "", last_at: 0 };
+// 会话鉴权保鲜(实证·2026-07): 捕获帧顶层 field1(鉴权/元数据子消息·内含 field1.3
+//   "devin-session-token$<JWT{session_id}>") 与 field16(cascadeId) 是「会话钉定」的一对。
+//   病灶: 免费活水槽帧可能捕于「上一会话」(其 token 已随会话轮换失效), 而主槽每轮皆被最新
+//   捕获帧覆盖(携当前活会话 token)。免费档回放取免费槽→带旧会话 token→上游恒 "unauthenticated"
+//   (掩码为 "an internal error occurred") = 上个对话遗留「初始帧」病之真因。
+//   正法(原汤化原食·活水恒足): 回放前把「最新捕获帧(_lastChatFrame·恒最鲜)」的 field1+field16
+//   整体嫁接到本次回放体上 → 任一槽的历史帧皆借最新活会话的鉴权出包, 跨会话不再失活。
+const _authGraftStats = { calls: 0, rewrites: 0, skipped: 0, last_at: 0, last_age_ms: 0 };
 function _pbReadVarint(buf, i) {
   let shift = 0,
     result = 0;
@@ -7396,6 +7413,52 @@ function _retargetFrameModel(frameBody, modelUid) {
   return frameBody;
 }
 
+// 读捕获帧顶层某字段(wire-type=2)原始字节。无则 null。
+function _topFieldRaw(body, fieldNum) {
+  try {
+    const frames = parseFrames(body);
+    if (!frames.length) return null;
+    const top = parseProto(frames[0].payload);
+    const e = top[fieldNum] && top[fieldNum][0];
+    return e && e.w === 2 && e.b ? Buffer.from(e.b) : null;
+  } catch (_) {
+    return null;
+  }
+}
+// 会话鉴权保鲜: 把「最新捕获帧」的 field1(鉴权子消息)+field16(cascadeId) 嫁接到 newBody。
+//   src = 最新捕获帧(_lastChatFrame 恒最鲜·每轮皆被覆盖·携当前活会话 token)。
+//   usedFrame = 本次回放实际取用的帧(可能是旧免费活水槽·带失活 token)。
+//   src===usedFrame(即本就用最新帧·如 _forceMain) → 无需嫁接。
+//   仅当 src 更鲜(at 更大)才嫁接; 缺 field1 或序列化失败则回退原体(宁稳勿崩)。
+function _graftFreshSession(newBody, usedFrame) {
+  try {
+    _authGraftStats.calls++;
+    const src = _lastChatFrame; // 主槽每轮皆被最新捕获帧覆盖 → 恒最鲜活会话
+    if (!src || !src.body) { _authGraftStats.skipped++; return newBody; }
+    if (usedFrame && src === usedFrame) { _authGraftStats.skipped++; return newBody; }
+    if (usedFrame && (usedFrame.at || 0) >= (src.at || 0)) { _authGraftStats.skipped++; return newBody; }
+    const auth1 = _topFieldRaw(src.body, 1);
+    if (!auth1) { _authGraftStats.skipped++; return newBody; }
+    const cid = _topFieldRaw(src.body, 16);
+    const frames = parseFrames(newBody);
+    if (!frames.length) { _authGraftStats.skipped++; return newBody; }
+    const top = parseProto(frames[0].payload);
+    top[1] = [{ w: 2, b: auth1 }];
+    if (cid) top[16] = [{ w: 2, b: cid }];
+    const reser = serializeProto(top);
+    if (reser && reser.length && _pbParseOk(reser)) {
+      _authGraftStats.rewrites++;
+      _authGraftStats.last_at = Date.now();
+      _authGraftStats.last_age_ms = src.at ? Date.now() - src.at : 0;
+      return buildFrame(0, reser);
+    }
+    _authGraftStats.skipped++;
+  } catch (_) {
+    _authGraftStats.skipped++;
+  }
+  return newBody;
+}
+
 // 去污染(实证·2026-07): 预热帧本携「预热对话整段历史」(field3 repeated, msgCount 可达十数条),
 //   官方直通复用时若原样带上, 云端把每次反代请求当作预热会话的续轮 → 回包被预热旧轮次串染,
 //   甚至可被 "复述上文" 类提问套出整段预热历史(隔离/隐私缺陷)。故复用前把消息数组裁成仅留末条
@@ -7549,6 +7612,11 @@ function _officialChatReplay(target, norm, sink, _forceMain) {
       const wantUid =
         target && (target.upstreamModel || target.modelUid || target.model);
       if (newBody && wantUid) newBody = _retargetFrameModel(newBody, wantUid);
+    } catch (_) {}
+    // 会话鉴权保鲜(原汤化原食·活水恒足): 取用的帧若非最新捕获帧(如旧免费活水槽·带失活会话
+    //   token), 借最新捕获帧的 field1(鉴权)+field16(cascadeId)嫁接 → 跨会话回放不再 unauthenticated。
+    try {
+      if (newBody) newBody = _graftFreshSession(newBody, _frame);
     } catch (_) {}
     if (!newBody) {
       sink.onError &&
@@ -8708,6 +8776,8 @@ module.exports = {
     _swapLastUserMsg,
     _trimFrameHistory,
     _retargetFrameModel,
+    _topFieldRaw,
+    _graftFreshSession,
     _frameModelInfo,
     _pbKeepLastRepeated,
     _isolateChatFrameSP,

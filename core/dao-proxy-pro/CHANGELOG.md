@@ -2,6 +2,21 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.333 · 会话鉴权保鲜(治「初始帧」失活 · 跨会话回放不再 unauthenticated)
+: 用户实测反代免费模型恒返回「官方上游错误: an internal error occurred」。经把捕获帧原字节
+  直发上游(server.codeium.com)复现, 得真错码 = `unauthenticated`(被上游掩码为
+  "an internal error occurred")。根因: 鉴权令牌 `devin-session-token$<JWT{session_id}>`
+  嵌于帧体顶层 field1(子消息 field1.3), 与 field16(cascadeId)为「会话钉定」的一对;
+  捕获帧仅存该令牌、从不刷新。免费活水槽帧常捕于「上一会话」→其 token 随会话轮换失活,
+  而主槽每轮皆被最新捕获帧覆盖(携当前活会话 token)。免费档回放取免费槽 → 带失活 token →
+  上游 `unauthenticated`。此即上个对话遗留「初始帧」病之真因(非配额、非路由)。
+- `source.js` 新增 `_graftFreshSession`(+ `_topFieldRaw`): 回放前, 若取用帧非最新捕获帧
+  (如旧免费活水槽), 借「最新捕获帧」(`_lastChatFrame`·恒最鲜·携当前活会话)的 field1(鉴权
+  子消息)+field16(cascadeId)整体嫁接到回放体 → 任一历史槽帧皆借最新活会话鉴权出包,
+  跨会话回放不再失活。缺 field1 / 序列化失败则回退原体(宁稳勿崩)。
+- 于 `_officialChatReplay` retarget 后、发包前施加; `/origin` 诊断新增 `authgraft`
+  计数(rewrites>0 证嫁接生效·last_age_ms=所借最新帧新鲜度)。原汤化原食·活水恒足。
+
 v9.9.332 · 反代提示词隔离(回归模型本源) + 模型外接选择
 : 用户反馈反代端点回包错乱——上游模型自认 Cascade、回包混入插件语境。根因: 官方直通
   复用捕获帧时, 帧内仍携 Cascade 全量系统提示词(捕帧于注入前=原始官方 SP)。
