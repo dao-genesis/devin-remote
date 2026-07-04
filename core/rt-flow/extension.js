@@ -907,9 +907,13 @@ function updateTab(m){var t=tabs[m.id];if(!t)return;var mt=t.meta||(t.meta={});
 // 归一 · /shell 标签状态实时轮询(补 shell 侧此前缺失·对照手机端): 收集打开中的账号标签(email+devinId) →
 //   宿主按号 listRunningSessions 判六态 → 回推 tabUpdate 上色/回填对话名/额度。web/board 标签不参与。
 var _shStatT=null;
-function shellStatusTick(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];if(id.indexOf('board:')===0||id.indexOf('web:')===0)continue;var t=tabs[id];var mt=(t&&t.meta)||{};if(mt.email)arr.push({id:id,email:mt.email,devinId:mt.devinId||''});}if(arr.length)vscode.postMessage({type:'shellStatus',tabs:arr});}catch(e){}}
-function schedStatusSoon(){clearTimeout(_shStatT);_shStatT=setTimeout(shellStatusTick,2500);}
-try{setInterval(shellStatusTick,12000);}catch(e){}
+// 归一 · iframe 内导航感知(同源反代可读 pathname · 对照手机 APK): 用户在号首页/新建标签里点进某对话 →
+//   捕获 /sessions/<id> 回填 meta.devinId, 后续轮询即按该对话回填对话名+状态灯(而非只显额度/账号名)。
+function _captureTabConv(t,mt){try{var loc=t&&t.frame&&t.frame.contentWindow&&t.frame.contentWindow.location;var pth=(loc&&loc.pathname)||'';var mm=pth.match(/\\/sessions\\/(?:devin-)?([A-Za-z0-9_-]+)/);if(mm&&mm[1]&&mt.devinId!==mm[1]){mt.devinId=mm[1];schedPersist();}}catch(e){}}
+function shellStatusTick(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];if(id.indexOf('board:')===0||id.indexOf('web:')===0)continue;var t=tabs[id];var mt=(t&&t.meta)||{};if(!mt.email)continue;_captureTabConv(t,mt);arr.push({id:id,email:mt.email,devinId:mt.devinId||''});}if(arr.length)vscode.postMessage({type:'shellStatus',tabs:arr});}catch(e){}}
+function schedStatusSoon(){clearTimeout(_shStatT);_shStatT=setTimeout(shellStatusTick,1200);}
+// 对齐手机端刷新手感: 12s→5s (活跃对话额度/状态/卡住提示更新提速 · 每账号一次轻量 listSessions)
+try{setInterval(shellStatusTick,5000);}catch(e){}
 // 归一 · 状态续接(对齐手机端会话保持): 持久化当前打开的标签集 → 宿主 globalState;
 //   重开 /shell 时宿主在 ready 回推 restoreTabs, 逐个还原(老用户停在原网页·新用户落主页)。
 var _persistT=null;
@@ -1719,6 +1723,64 @@ async function resolveConvMd(email, sid) {
     return { name: safe + '.md', text: md };
   } catch (e) { return null; }
 }
+// 取数指引 MD (对照手机 APK · 与对话 MD 配套的第二份文档): 账号坐标+Session ID+提取流程。
+async function resolveConvGuide(email, sid) {
+  email = String(email || '').trim();
+  sid = String(sid || '').trim().replace(/^devin-/, '');
+  if (!email || !sid) return null;
+  try {
+    const acc = ((_store && _store.accounts) || []).find((a) => String(a.email || '').toLowerCase() === email.toLowerCase()) || { email };
+    let orgName = '', orgId = '';
+    try { const auth = await _resolveAuthForEmail(email); if (auth) { orgName = auth.orgName || ''; orgId = auth.orgId || ''; } } catch (e) {}
+    let title = sid;
+    try { const auth2 = await _resolveAuthForEmail(email); if (auth2 && auth2.auth1) { const d = await devinCloud.getSessionDetail({ auth1: auth2.auth1, userId: auth2.userId, orgId: auth2.orgId, orgBare: auth2.orgBare, email }, sid); if (d && (d.title || d.name)) title = d.title || d.name; } } catch (e) {}
+    const text = devinCloud.buildAccessGuide({ email: acc.email, password: acc.password || '', orgName, orgId }, sid, title);
+    const safe = String(title || sid).replace(/[\\/:*?"<>|\r\n]/g, '_').slice(0, 70) || sid;
+    return { name: safe + '_取数指引.md', text };
+  } catch (e) { return null; }
+}
+// 会话是否仍在进行(活跃) — 拖拽上传择路: 进行中=两份 MD(对话+取数指引) / 已结束=整包 ZIP。
+async function resolveConvActive(email, sid) {
+  email = String(email || '').trim();
+  sid = String(sid || '').trim().replace(/^devin-/, '');
+  if (!email || !sid) return { ok: false, active: false };
+  try {
+    const auth = await _resolveAuthForEmail(email);
+    if (!auth || !auth.auth1) return { ok: false, active: false };
+    const authObj = { auth1: auth.auth1, userId: auth.userId, orgId: auth.orgId, orgBare: auth.orgBare, email };
+    let active = [];
+    try { active = await devinCloud.listRunningSessions(authObj); } catch (e) { active = []; }
+    const hit = (active || []).some((s) => String(s.devinId || '').replace(/^devin-/, '') === sid);
+    return { ok: true, active: hit };
+  } catch (e) { return { ok: false, active: false }; }
+}
+// 会话整包 ZIP (已结束对话·全量备份): 复用备份引擎 backupOneConversation(增量语义 —
+//   事件未增长直接复用既有 zip; 有更新则重备覆盖 → ZIP 数据覆盖型增量更新为最新)。
+async function resolveConvZip(email, sid) {
+  email = String(email || '').trim();
+  sid = String(sid || '').trim().replace(/^devin-/, '');
+  if (!email || !sid) return null;
+  try {
+    const auth = await _resolveAuthForEmail(email);
+    if (!auth || !auth.auth1) return null;
+    const authObj = { auth1: auth.auth1, userId: auth.userId, orgId: auth.orgId, orgBare: auth.orgBare, orgName: auth.orgName, email };
+    let title = sid;
+    try { const d = await devinCloud.getSessionDetail(authObj, sid); if (d && (d.title || d.name)) title = d.title || d.name; } catch (e) {}
+    const accountDir = _dvAccountBackupDir(email);
+    const one = await devinCloud.backupOneConversation(authObj, { devin_id: sid, title }, accountDir, { incremental: true, turbo: true });
+    let zipPath = one && one.zip;
+    if (one && one.skipped) { // 无新事件 → 复用既有 zip
+      try {
+        const st = devinCloud.readBackupState ? devinCloud.readBackupState() : null;
+        const nm = st && st[authObj.orgBare + ':' + sid] && st[authObj.orgBare + ':' + sid].zip;
+        if (nm) zipPath = path.join(accountDir, nm);
+      } catch (e) {}
+      if (!zipPath) { const one2 = await devinCloud.backupOneConversation(authObj, { devin_id: sid, title }, accountDir, { incremental: false, turbo: true }); zipPath = one2 && one2.zip; }
+    }
+    if (!zipPath || !fs.existsSync(zipPath)) return null;
+    return { name: path.basename(zipPath), buf: fs.readFileSync(zipPath) };
+  } catch (e) { return null; }
+}
 // 解析「开一个账号标签」的元数据 (同 openMultiInstance 的反代解析, 但不创建 webview —
 // 独立页自身经 mkTab 以 iframe 开标签)。返回与 webview 'open' 消息同形的对象。
 //   归一: url 改为同源相对 `/i/<accKey>/…` → IDE 内置浏览器(localhost:9920)与公网隧道两端皆可达。
@@ -2408,7 +2470,7 @@ function _ensureMultiPanel() {
   );
   panel.webview.html = _multiShellHtml();
   _wireMultiPanel(panel);
-  if (!_multiStatusTimer) _multiStatusTimer = setInterval(() => { _multiTabStatusTick().catch(() => {}); }, 20000);
+  if (!_multiStatusTimer) _multiStatusTimer = setInterval(() => { _multiTabStatusTick().catch(() => {}); }, 8000); // 20s→8s · 对齐手机端状态/额度刷新手感
   return panel;
 }
 async function _resolveAuthForEmail(email, password) {
@@ -7761,11 +7823,20 @@ class Store {
         password: a.password,
         addedAt: Date.now(),
       });
+      this._purgeAccountResiduals(a.email); // 重加即新生: 旧冷却/清理残态不随号还魂 (addedAt 另予 24h 免自动出库保护)
       addedEmails.push(a.email);
       added++;
     }
     if (added > 0 || updated > 0) this._persistAccountsToMd();
     return { added, duplicate, updated, tokens, addedEmails, updatedEmails };
+  }
+  // 彻底清账号残留态(防幽灵·对照手机 APK purgeAccountState): 出库后不留任何按 email 索引的残留态,
+  //   重加必可见且按全新账号对待 (24h 冷却锚/概览缓存不再污染新一轮判定)。
+  _purgeAccountResiduals(email) {
+    const k = String(email || "").toLowerCase();
+    if (!k) return;
+    try { devinCloud.clearCleanupState(k); } catch {}
+    try { _dvOverviewCache.delete(k); } catch {}
   }
   remove(idx) {
     if (idx < 0 || idx >= this.accounts.length) return false;
@@ -7774,6 +7845,7 @@ class Store {
       delete this.health[r.email.toLowerCase()];
       delete this.blacklist[r.email.toLowerCase()];
       delete this.inUseUntil[r.email.toLowerCase()]; // v2.3.0
+      this._purgeAccountResiduals(r.email);
       this._persistAccountsToMd();
       if (this.activeEmail === r.email) {
         this.activeIdx = -1;
@@ -7799,6 +7871,7 @@ class Store {
       delete this.health[r.email.toLowerCase()];
       delete this.blacklist[r.email.toLowerCase()];
       delete this.inUseUntil[r.email.toLowerCase()]; // v2.3.0
+      this._purgeAccountResiduals(r.email);
       if (this.activeEmail === r.email) {
         this.activeIdx = -1;
         this.activeEmail = null;
@@ -7827,6 +7900,19 @@ class Store {
     try {
       const lines = this.accounts.map((a) => a.email + " " + a.password);
       atomicWrite(target, lines.join("\n") + "\n");
+      // 防幽灵 · 同步镜像候选末位 accounts-backup.json (对照手机 APK mirrorAccountsToVault):
+      //   出库后金库不再回拉已移除账号 — 否则 accounts.md 清空后 loadAccountsFromFs 回落
+      //   陈旧 backup.json 会让移除的账号死而复生(重加又显「已在库中」的终结态)。
+      try {
+        atomicWrite(
+          path.join(WAM_DIR, "accounts-backup.json"),
+          JSON.stringify(
+            { accounts: this.accounts.map((a) => ({ email: a.email, password: a.password })) },
+            null,
+            2,
+          ),
+        );
+      } catch {}
       log("persistAccountsToMd: " + this.accounts.length + " → " + target);
       return true;
     } catch (e) {
@@ -9703,6 +9789,17 @@ function updateStatusBar() {
 //   结构未变时只增量刷新对话追踪区 (_broadcastConvSection 自带签名去抖) → 永不整页闪。
 let _panelStructSig = null;
 let _wamRebuildThrottleTs = 0;
+// 全池耗尽提醒去抖 (episode 语义) — 根治左下角「全部账号额度已耗尽」删不掉/反复弹:
+//   旧病: _tick(5~10s)+硬耗尽看门狗(2s) 每轮都 _notify → 用户点 × 后几秒内又弹, 强干扰。
+//   治法: 同一耗尽事件(episode)只提醒一次且限时自动消失; 切号成功/有可用号即重置 episode。
+let _exhaustNotifyTs = 0;
+function _resetExhaustEpisode() { _exhaustNotifyTs = 0; }
+function _notifyExhaustOnce(msg) {
+  const gapMs = Math.max(1, +_cfg("exhaustNotifyIntervalMin", 360) || 360) * 60000;
+  if (Date.now() - _exhaustNotifyTs < gapMs) return;
+  _exhaustNotifyTs = Date.now();
+  _notifyTimed("warn", msg, 600000); // 10min 自动淡去 · 可手动关 · 不再重弹
+}
 let _broadcastForce = false; // 结构性用户动作(删号等) → 绕过重挂节流·立即回显
 function _computePanelStructSig() {
   if (!_store) return "init";
@@ -9947,6 +10044,7 @@ function _maybeTrigger(reason, hint) {
         const sr = await loginAccount(_store, bestI);
         if (sr.ok) {
           _lastSwitchTime = Date.now();
+          _resetExhaustEpisode(); // 切号成功 = 新 episode · 下次全池耗尽可再提醒一次
           _predictiveCandidate = _store.getBestIndex(bestI);
           _notify("verbose", "WAM 直觉: → " + (_store.activeEmail || "?"));
         } else {
@@ -12049,10 +12147,27 @@ async function _dvAutoBackupRun() {
         // v4.9.11: 24h 冷却期门控 — 备份完成且 24h 无对话更新才允许清理
         const cooldownMs = Math.max(0, +_cfg("devinCloudCleanupCooldownHours", 24) || 24) * 3600000;
         const cleanupCheck = devinCloud.isCleanupReady(acc.email, cooldownMs);
+        // addedAt 24h 免出库保护 (对照手机 APK): 重加/新加的账号在冷却期内绝不自动移出库
+        const _addedRecently = acc.addedAt && Date.now() - acc.addedAt < cooldownMs;
         if (autoCleanup && backupOk && totalCredits <= cleanupThreshold) {
           if (!cleanupCheck.ready) {
-            const hrs = cleanupCheck.remaining ? Math.ceil(cleanupCheck.remaining / 3600000) : "?";
-            log("auto-cleanup: " + acc.email + " 冷却期未满(" + cleanupCheck.reason + ", 剩余~" + hrs + "h) → 跳过清理");
+            // 补出库: 上一轮已清理但未出库(旧版无出库/中途断) 的归零账号 —— 备份已校验、
+            //   痕迹已清、24h 无新对话 → 直接出库, 不再卡死在 already_cleaned 永久滞留态。
+            const _cs2 = devinCloud.getCleanupState(acc.email);
+            const _staleConv = !_cs2 || !_cs2.lastConvUpdateAt || Date.now() - _cs2.lastConvUpdateAt >= cooldownMs;
+            if (
+              cleanupCheck.reason === "already_cleaned" &&
+              autoRemoveZero &&
+              !_addedRecently &&
+              _staleConv &&
+              totalCredits <= removeThreshold
+            ) {
+              removeEmails.push(acc.email);
+              _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零·痕迹已清(上轮) → 补出库");
+            } else {
+              const hrs = cleanupCheck.remaining ? Math.ceil(cleanupCheck.remaining / 3600000) : "?";
+              log("auto-cleanup: " + acc.email + " 冷却期未满(" + cleanupCheck.reason + ", 剩余~" + hrs + "h) → 跳过清理");
+            }
           } else {
             log("auto-cleanup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " ≤ $" + cleanupThreshold + " 且全量备份已校验+24h冷却期已满 → 自动清理");
             try {
@@ -12062,7 +12177,7 @@ async function _dvAutoBackupRun() {
               _dvOverviewCache.delete(acc.email.toLowerCase());
               devinCloud.setCleanupState(acc.email, { cleanedAt: Date.now() });
               const wipeClean = !!rep && rep.sessions.failed === 0 && rep.knowledge.failed === 0 && rep.playbooks.failed === 0 && rep.secrets.failed === 0;
-              if (autoRemoveZero && wipeClean && totalCredits <= removeThreshold) {
+              if (autoRemoveZero && wipeClean && !_addedRecently && totalCredits <= removeThreshold) {
                 removeEmails.push(acc.email);
                 _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零 · 已全量备份+清理 → 从账号库移除");
               } else {
@@ -14950,7 +15065,7 @@ class Engine {
         await this._doAutoSwitch(bestI, activeI, "hard-exhaust");
       } else {
         log("硬耗尽: " + reason + ", 无可用账号");
-        _notify("warn", "WAM: ⚠️ " + reason + "，全部账号额度已耗尽");
+        _notifyExhaustOnce("WAM: ⚠️ " + reason + "，全部账号额度已耗尽");
       }
       // ─── 软耗尽: 仍有余量 · 感知 reset 时间 · 尊重冷却 · 尊重用户锁 ───
       //   1%-100% 范围内 skipAutoSwitch 守卫保留 (用户主动消耗权 · 道法自然)
@@ -15094,6 +15209,7 @@ class Engine {
         const sr = await loginAccount(this.store, bestI);
         if (sr.ok) {
           _lastSwitchTime = Date.now();
+          _resetExhaustEpisode(); // 切号成功 = 新 episode · 下次全池耗尽可再提醒一次
           _predictiveCandidate = this.store.getBestIndex(bestI);
           if (_predictiveCandidate >= 0)
             log(
@@ -16018,6 +16134,7 @@ async function activate(context) {
             const sr = await loginAccount(_store, bestI);
             if (sr.ok) {
               _lastSwitchTime = Date.now();
+          _resetExhaustEpisode(); // 切号成功 = 新 episode · 下次全池耗尽可再提醒一次
               _predictiveCandidate = _store.getBestIndex(bestI);
               _notify(
                 "verbose",
@@ -16221,6 +16338,9 @@ module.exports = {
     shellHandleMessage, // POST /api/shell/msg → 页面→宿主消息处理
     shellAccountProxy, // GET/POST /i/<accKey>/* → dao 自渲染账号页 (公网手机/电脑无感·含多实例)
     resolveConvMd, // GET /__convmd?email=&sid= → 会话最新 MD (拖拽对话上传桥数据源)
+    resolveConvGuide, // GET /__convguide?email=&sid= → 取数指引 MD (与对话 MD 配套 · 对照手机 APK)
+    resolveConvActive, // GET /__convinfo?email=&sid= → {active} 拖拽上传择路(进行中=两MD/结束=ZIP)
+    resolveConvZip, // GET /__convzip?email=&sid= → 整包 ZIP (备份引擎增量 · 覆盖型更新)
     // 归一 · 把 dao-vsix out 层的拖拽上传桥路由服务函数注入 IDE 内多实例反代 (devin_proxy),
     //   使 /__daobridge.js·/__dlfile·/__convmd 就地同源服务于各账号反代端口 → 拖拽落点页可直取。
     setDevinProxyBridgeServe(fn) { try { devinProxy.setBridgeServe(fn); } catch (e) { /* 守柔 */ } },

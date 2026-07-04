@@ -3287,7 +3287,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     // ── 归一 · 拖拽上传桥数据源 (对齐手机 APK: 拖文件=上传该文件 / 拖会话=上传该会话 MD) ──
     //   网页内注入的 drop 桥与外壳同源, 落点后经此同源端点取字节 → 合成 File 喂入页面上传框。
     //   同一服务函数 daoServeBridgeRoute 亦注入 IDE 内多实例反代(devin_proxy)就地同源服务。
-    if (route === '/__dlfile' || route === '/__convmd' || route === '/__daobridge.js') {
+    if (route === '/__dlfile' || route === '/__convmd' || route === '/__convguide' || route === '/__convinfo' || route === '/__convzip' || route === '/__daobridge.js') {
         const br = await daoServeBridgeRoute(route, url);
         if (br) return br;
     }
@@ -12843,6 +12843,35 @@ async function daoServeBridgeRoute(routePath: string, urlObj: URL): Promise<any>
         if (!md || !md.text) return { _proxy: true, status: 404, contentType: 'text/plain; charset=utf-8', body: '无法导出该会话 MD', headers: { ...CORS } };
         return { _proxy: true, status: 200, contentType: 'text/markdown; charset=utf-8', body: md.text, headers: { 'Content-Disposition': cdispo(md.name || 'conversation.md'), ...CORS } };
     }
+    // 取数指引 MD (与对话 MD 配套的第二份文档 · 对照手机 APK): 进行中对话拖拽上传 = 两份 MD。
+    if (routePath === '/__convguide') {
+        const rtintG = _rtflowModule && (_rtflowModule._internals as any);
+        const email = urlObj.searchParams.get('email') || '';
+        const sid = urlObj.searchParams.get('sid') || '';
+        let g: { name?: string; text?: string } | null = null;
+        try { if (rtintG && typeof rtintG.resolveConvGuide === 'function') g = await rtintG.resolveConvGuide(email, sid); } catch (e) { g = null; }
+        if (!g || !g.text) return { _proxy: true, status: 404, contentType: 'text/plain; charset=utf-8', body: '无法生成取数指引', headers: { ...CORS } };
+        return { _proxy: true, status: 200, contentType: 'text/markdown; charset=utf-8', body: g.text, headers: { 'Content-Disposition': cdispo(g.name || 'access-guide.md'), ...CORS } };
+    }
+    // 会话活跃判定 JSON: 拖拽上传择路(进行中=两MD / 已结束=整包 ZIP · 对照手机 APK)。
+    if (routePath === '/__convinfo') {
+        const rtintI = _rtflowModule && (_rtflowModule._internals as any);
+        const email = urlObj.searchParams.get('email') || '';
+        const sid = urlObj.searchParams.get('sid') || '';
+        let info: { ok?: boolean; active?: boolean } = { ok: false, active: false };
+        try { if (rtintI && typeof rtintI.resolveConvActive === 'function') info = await rtintI.resolveConvActive(email, sid); } catch (e) { /* 守柔 */ }
+        return { _proxy: true, status: 200, contentType: 'application/json; charset=utf-8', body: JSON.stringify(info || { ok: false, active: false }), headers: { ...CORS } };
+    }
+    // 已结束对话整包 ZIP (备份引擎增量 · 有新事件则覆盖型更新为最新 ZIP)。
+    if (routePath === '/__convzip') {
+        const rtintZ = _rtflowModule && (_rtflowModule._internals as any);
+        const email = urlObj.searchParams.get('email') || '';
+        const sid = urlObj.searchParams.get('sid') || '';
+        let z: { name?: string; buf?: Buffer } | null = null;
+        try { if (rtintZ && typeof rtintZ.resolveConvZip === 'function') z = await rtintZ.resolveConvZip(email, sid); } catch (e) { z = null; }
+        if (!z || !z.buf) return { _proxy: true, status: 404, contentType: 'text/plain; charset=utf-8', body: '无法打包该会话 ZIP', headers: { ...CORS } };
+        return { _proxy: true, status: 200, contentType: 'application/zip', binary: true, body: z.buf.toString('base64'), headers: { 'Content-Disposition': cdispo(z.name || 'conversation.zip'), ...CORS } };
+    }
     return null;
 }
 
@@ -12883,11 +12912,13 @@ function daoDropBridgeJs() {
         "function mkFile(buf,ct,nm){try{return new File([buf],nm,{type:ct||'application/octet-stream'});}catch(e){var b=new Blob([buf],{type:ct||'application/octet-stream'});try{b.name=nm;}catch(e2){}return b;}}",
         "async function fetchFile(u,nm){var r=await fetch(u,{credentials:'same-origin'});if(!r.ok)throw new Error('HTTP '+r.status);var ct=r.headers.get('content-type')||'application/octet-stream';var buf=await r.arrayBuffer();return mkFile(buf,ct,nm);}",
         "function deepCollect(sel){var out=[];function w(root){var es;try{es=root.querySelectorAll(sel);}catch(e){return;}for(var i=0;i<es.length;i++)out.push(es[i]);var all;try{all=root.querySelectorAll('*');}catch(e2){return;}for(var j=0;j<all.length;j++){if(all[j].shadowRoot)w(all[j].shadowRoot);}}w(document);return out;}",
-        "function feed(target,file){try{var dt=new DataTransfer();dt.items.add(file);var inps=deepCollect('input[type=file]');if(inps.length){for(var k=0;k<inps.length;k++){try{inps[k].files=dt.files;inps[k].dispatchEvent(new Event('input',{bubbles:true}));inps[k].dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}}return true;}var eds=deepCollect('textarea,[contenteditable=true]');var t=eds[0]||target||document.body;function mk(tp){var ev;try{ev=new DragEvent(tp,{bubbles:true,cancelable:true});Object.defineProperty(ev,'dataTransfer',{value:dt});}catch(e2){ev=new Event(tp,{bubbles:true,cancelable:true});ev.dataTransfer=dt;}return ev;}try{t.dispatchEvent(mk('dragenter'));t.dispatchEvent(mk('dragover'));var consumed=(t.dispatchEvent(mk('drop'))===false);return consumed;}catch(e3){return false;}}catch(e0){return false;}}",
+        // 对话拖拽择路(对照手机 APK): 进行中=两份 MD(对话+取数指引) / 已结束=整包 ZIP(增量覆盖最新)。
+        "async function convFiles(c){var em=encodeURIComponent(c.email||''),si=encodeURIComponent(c.sid||''),base=String(c.title||c.sid||'conversation');var act=false;try{var r=await fetch(ORIGIN+'/__convinfo?email='+em+'&sid='+si,{credentials:'same-origin'});var j=await r.json();act=!!(j&&j.active);}catch(e){}var out=[];if(act){out.push(await fetchFile(ORIGIN+'/__convmd?email='+em+'&sid='+si,base+'.md'));try{out.push(await fetchFile(ORIGIN+'/__convguide?email='+em+'&sid='+si,base+'_\u53d6\u6570\u6307\u5f15.md'));}catch(e2){}}else{try{out.push(await fetchFile(ORIGIN+'/__convzip?email='+em+'&sid='+si,base+'.zip'));}catch(e3){out.push(await fetchFile(ORIGIN+'/__convmd?email='+em+'&sid='+si,base+'.md'));}}return out;}",
+        "function feed(target,file){try{var files=[].concat(file);var dt=new DataTransfer();for(var fi=0;fi<files.length;fi++)dt.items.add(files[fi]);var inps=deepCollect('input[type=file]');if(inps.length){for(var k=0;k<inps.length;k++){try{inps[k].files=dt.files;inps[k].dispatchEvent(new Event('input',{bubbles:true}));inps[k].dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}}return true;}var eds=deepCollect('textarea,[contenteditable=true]');var t=eds[0]||target||document.body;function mk(tp){var ev;try{ev=new DragEvent(tp,{bubbles:true,cancelable:true});Object.defineProperty(ev,'dataTransfer',{value:dt});}catch(e2){ev=new Event(tp,{bubbles:true,cancelable:true});ev.dataTransfer=dt;}return ev;}try{t.dispatchEvent(mk('dragenter'));t.dispatchEvent(mk('dragover'));var consumed=(t.dispatchEvent(mk('drop'))===false);return consumed;}catch(e3){return false;}}catch(e0){return false;}}",
         "document.addEventListener('dragover',function(e){try{var ts=(e.dataTransfer&&e.dataTransfer.types)||[];var has=false;for(var i=0;i<ts.length;i++){if(ts[i]==='application/x-dao-file'||ts[i]==='application/x-dao-conv')has=true;}if(has){e.preventDefault();try{e.dataTransfer.dropEffect='copy';}catch(x){}}}catch(x){}},true);",
-        "document.addEventListener('drop',function(e){try{var dtt=e.dataTransfer;if(!dtt)return;var fp='',cv='';try{fp=dtt.getData('application/x-dao-file');}catch(x){}try{cv=dtt.getData('application/x-dao-conv');}catch(x){}if(!fp&&!cv)return;e.preventDefault();e.stopPropagation();var tgt=e.target||document.body;toast('\\u23f3 \\u6b63\\u5728\\u4e0a\\u4f20\\u2026');(async function(){try{var f;if(fp){var o=JSON.parse(fp);f=await fetchFile(ORIGIN+'/__dlfile?p='+encodeURIComponent(o.path||''),(o.name||'file'));}else{var c=JSON.parse(cv);f=await fetchFile(ORIGIN+'/__convmd?email='+encodeURIComponent(c.email||'')+'&sid='+encodeURIComponent(c.sid||''),((c.title||c.sid||'conversation')+'.md'));}var ok=feed(tgt,f);toast(ok?('\\u2705 \\u5df2\\u6295\\u9012\\u4e0a\\u4f20 '+f.name):('\\u26a0 \\u672a\\u627e\\u5230\\u4e0a\\u4f20\\u6846 '+f.name));}catch(err){toast('\\u2715 \\u4e0a\\u4f20\\u5931\\u8d25: '+((err&&err.message)||err));}})();}catch(x){}},true);",
+        "document.addEventListener('drop',function(e){try{var dtt=e.dataTransfer;if(!dtt)return;var fp='',cv='';try{fp=dtt.getData('application/x-dao-file');}catch(x){}try{cv=dtt.getData('application/x-dao-conv');}catch(x){}if(!fp&&!cv)return;e.preventDefault();e.stopPropagation();var tgt=e.target||document.body;toast('\\u23f3 \\u6b63\\u5728\\u4e0a\\u4f20\\u2026');(async function(){try{var fs;if(fp){var o=JSON.parse(fp);fs=[await fetchFile(ORIGIN+'/__dlfile?p='+encodeURIComponent(o.path||''),(o.name||'file'))];}else{fs=await convFiles(JSON.parse(cv));}var nm=fs.map(function(x){return x.name;}).join(' + ');var ok=feed(tgt,fs);toast(ok?('\\u2705 \\u5df2\\u6295\\u9012\\u4e0a\\u4f20 '+nm):('\\u26a0 \\u672a\\u627e\\u5230\\u4e0a\\u4f20\\u6846 '+nm));}catch(err){toast('\\u2715 \\u4e0a\\u4f20\\u5931\\u8d25: '+((err&&err.message)||err));}})();}catch(x){}},true);",
         // 归一·根治拖拽上传: 外壳(父文档)同源可靠接住 drop → postMessage 命令本桥执行上传(不依赖跨源 iframe 原生 DnD)。
-        "window.addEventListener('message',function(e){try{var d=e&&e.data;if(!d||!d.__daoUpload)return;var u=d.__daoUpload;(async function(){try{var f;if(u.kind==='file'){f=await fetchFile(ORIGIN+'/__dlfile?p='+encodeURIComponent(u.path||''),(u.name||'file'));}else{f=await fetchFile(ORIGIN+'/__convmd?email='+encodeURIComponent(u.email||'')+'&sid='+encodeURIComponent(u.sid||''),((u.title||u.sid||'conversation')+'.md'));}toast('\\u23f3 \\u6b63\\u5728\\u4e0a\\u4f20\\u2026');var ok=feed(document.body,f);toast(ok?('\\u2705 \\u5df2\\u6295\\u9012\\u4e0a\\u4f20 '+f.name):('\\u26a0 \\u672a\\u627e\\u5230\\u4e0a\\u4f20\\u6846 '+f.name));}catch(err){toast('\\u2715 \\u4e0a\\u4f20\\u5931\\u8d25: '+((err&&err.message)||err));}})();}catch(x){}},false);",
+        "window.addEventListener('message',function(e){try{var d=e&&e.data;if(!d||!d.__daoUpload)return;var u=d.__daoUpload;(async function(){try{var fs;if(u.kind==='file'){fs=[await fetchFile(ORIGIN+'/__dlfile?p='+encodeURIComponent(u.path||''),(u.name||'file'))];}else{fs=await convFiles(u);}toast('\\u23f3 \\u6b63\\u5728\\u4e0a\\u4f20\\u2026');var nm=fs.map(function(x){return x.name;}).join(' + ');var ok=feed(document.body,fs);toast(ok?('\\u2705 \\u5df2\\u6295\\u9012\\u4e0a\\u4f20 '+nm):('\\u26a0 \\u672a\\u627e\\u5230\\u4e0a\\u4f20\\u6846 '+nm));}catch(err){toast('\\u2715 \\u4e0a\\u4f20\\u5931\\u8d25: '+((err&&err.message)||err));}})();}catch(x){}},false);",
         "}catch(e){}})();"
     ].join("");
 }
