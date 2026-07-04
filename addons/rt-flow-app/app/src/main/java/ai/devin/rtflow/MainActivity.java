@@ -2124,6 +2124,21 @@ public class MainActivity extends AppCompatActivity {
             if (host == null || path == null || !host.equalsIgnoreCase("app.devin.ai")) return null;
             if (!path.startsWith("/attachments/")) return null;
             java.util.Map<String, String> rh = req.getRequestHeaders();
+            // 视频/音频流(带 Range 头)不可经 shouldInterceptRequest 代取字节: WebView 把代取响应当成
+            //   不可 seek 的流, 而 <video> 的 FFmpegDemuxer 需随机 seek(如 MP4 moov 在尾部)→ 立即
+            //   "PIPELINE_ERROR_READ: FFmpegDemuxer: data source error", 且并发分段请求会 ERR_ABORTED
+            //   无限重试。修正: 确保 attachments_token Cookie 就绪后返回 null, 交由 WebView 原生网络栈直取
+            //   (同源自动带 httpOnly Cookie, 原生正确处理 206/Range/seek; 图片是单次 200 无 seek 故代取无碍)。
+            boolean isRange = false;
+            if (rh != null) for (String k : rh.keySet())
+                if (k != null && k.equalsIgnoreCase("Range")) { isRange = true; break; }
+            if (isRange) {
+                try {
+                    String ck = android.webkit.CookieManager.getInstance().getCookie(u.toString());
+                    if (ck == null || !ck.contains("attachments_token")) mintAttachmentCookie(auth1, orgId);
+                } catch (Exception ignored) {}
+                return null;   // 交由 WebView 原生栈流式播放(带 Cookie, 支持 seek)
+            }
             if (rh != null) for (String k : rh.keySet())
                 if (k != null && k.equalsIgnoreCase("Authorization")) return null;   // fetch/XHR 已带鉴权 → 不重复代取
             java.net.HttpURLConnection c;
