@@ -1189,6 +1189,7 @@ public class MainActivity extends AppCompatActivity {
                     installLoginCapture(v);     // 监听登录提交 → 自动弹「保存登录？」
                     installKbHelper(v);         // 键盘弹出时输入框上滚到可见区中部 (不被遮挡)
                     installBackspaceGuard(v);   // 退格护栏: 拦下输入法误发的左右两侧同删
+                    installVideoFit(v);         // 录像播放器窄屏适配: 视频区与步骤栏纵向堆叠同屏
                     harvestPageAuth(v, tab, u); // 非账号标签从页面登录态采收 auth → 媒体代取可用
                     warmAttachmentCookie(tab.auth1, tab.orgId, u);   // 预铸附件 Cookie → 首次图片/视频即已授权
                     if (tab.translated) applyTranslate(v); // 翻译态跨页保持
@@ -1203,7 +1204,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
+                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -3514,6 +3515,34 @@ public class MainActivity extends AppCompatActivity {
             + "if(href.indexOf('blob:')===0){ev.preventDefault();ev.stopPropagation();fetch(href).then(function(r){return r.blob();}).then(function(b){blobB64(b,name);}).catch(function(){});}"
             + "else if(href.indexOf('data:')===0){ev.preventDefault();ev.stopPropagation();var m=(href.match(/^data:([^;,]*)/)||[])[1]||'';var c=href.indexOf(',');var p=href.slice(c+1);var b64=/;base64/i.test(href.slice(0,c))?p:btoa(unescape(encodeURIComponent(decodeURIComponent(p))));send(name,m,b64);}"
             + "}catch(e){}} ,true);})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    // 录像/视频播放器窄屏适配: 官网测试录像播放器为「视频区(flex-1) + 步骤侧栏(w-[26rem]·416px 固定宽)」
+    //   的 flex 行布局; 手机宽(≈384px)不足以容下侧栏 → 视频列被挤到 0 宽, 只见步骤列表看不见视频。
+    //   通用修法(不依赖具体类名): 发现 <video> 所处的 0 宽列且父容器是 flex 行 → 改父容器为纵向堆叠,
+    //   视频区在上(55%)、侧栏/进度步骤在下, 两者同屏互不覆盖。幂等 + MutationObserver 覆盖 SPA 动态开窗。
+    static void installVideoFit(WebView w) {
+        if (w == null) return;
+        String js = "(function(){try{if(window.__rtVidFit)return;window.__rtVidFit=1;"
+            + "function fixOne(v){try{if(window.innerWidth>700)return;"
+            + "var col=null,row=null;"
+            + "for(var e=v;e&&e!==document.body;e=e.parentElement){"
+            + "var wd=e.getBoundingClientRect().width;var p=e.parentElement;"
+            + "if(wd<2&&p&&p.getBoundingClientRect().width>100){col=e;row=p;break;}}"
+            + "if(!col||col.__rtFit)return;"
+            + "var cs=getComputedStyle(row);"
+            + "if(cs.display.indexOf('flex')<0||cs.flexDirection!=='row')return;"
+            + "col.__rtFit=1;row.style.flexDirection='column';"
+            + "col.style.width='100%';col.style.minWidth='100%';col.style.flex='0 0 55%';col.style.minHeight='200px';"
+            + "for(var i=0;i<row.children.length;i++){var c=row.children[i];if(c!==col){"
+            + "c.style.width='100%';c.style.maxWidth='100%';c.style.flex='1 1 auto';"
+            + "c.style.borderLeft='0';c.style.borderTop='1px solid rgba(127,127,127,.35)';c.style.minHeight='0';}}"
+            + "}catch(e){}}"
+            + "function fit(){try{document.querySelectorAll('video').forEach(fixOne);}catch(e){}}"
+            + "var t=null;function deb(){if(t)clearTimeout(t);t=setTimeout(fit,300);}"
+            + "new MutationObserver(deb).observe(document.body,{childList:true,subtree:true});"
+            + "window.addEventListener('resize',deb);fit();"
+            + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // 键盘弹出时把聚焦的输入框滚到可见区中部 (配合 windowSoftInputMode=adjustResize):
