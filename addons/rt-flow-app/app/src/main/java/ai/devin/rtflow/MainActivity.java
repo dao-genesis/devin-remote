@@ -1137,16 +1137,21 @@ public class MainActivity extends AppCompatActivity {
         web.setOnDragListener(downloadDropListener(web));
 
         // 账号标签: document_start 注入鉴权头 + sessionStorage 隔离 (多实例核心)
+        final boolean docStartSupported = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT);
+        String injectScript0 = null;
         if (accountJson != null) {
             String token = "", org = "", uid = "", orgName = "";
             try { JSONObject a = new JSONObject(accountJson); token = a.optString("auth1", ""); org = a.optString("orgId", "");
                 uid = a.optString("userId", ""); orgName = a.optString("orgName", ""); } catch (Exception ignored) {}
             tab.auth1 = token; tab.orgId = org;
-            String script = TabActivity.buildInjection(token, uid, org, orgName);
-            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                try { WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton("https://app.devin.ai")); } catch (Exception ignored) {}
+            injectScript0 = TabActivity.buildInjection(token, uid, org, orgName);
+            if (docStartSupported) {
+                try { WebViewCompat.addDocumentStartJavaScript(web, injectScript0, Collections.singleton("https://app.devin.ai")); } catch (Exception ignored) {}
             }
         }
+        // 老 WebView(无 androidx.webkit DOCUMENT_START_SCRIPT 支持)兜底: onPageStarted 尽早 evaluateJavascript 注入,
+        // 与 TabActivity 全屏号页一致 —— 否则旧机型多实例账号标签拿不到鉴权注入, 官网登录态种不进 → 号加了却「登不进/功能≈0」。
+        final String injectScript = injectScript0;
 
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
@@ -1157,6 +1162,10 @@ public class MainActivity extends AppCompatActivity {
             @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) {
                 tab.url = u; if (tabOf(v) == active) setAddr(u);
                 if (u != null && u.startsWith("http")) tab.loadedAt = System.currentTimeMillis();   // 整页加载 → V8 堆归零, 重计堆龄
+                // 老 WebView 兜底: 无 DOCUMENT_START_SCRIPT 时, 此处尽早种入多实例鉴权(与 TabActivity 一致) → 旧机型账号可登。
+                if (!docStartSupported && injectScript != null && u != null && u.contains("app.devin.ai")) {
+                    try { v.evaluateJavascript(injectScript, null); } catch (Exception ignored) {}
+                }
                 if (u != null && u.startsWith("http")) {
                     // document-start 即挂麦克风/语音探针 → 早于页面脚本调用 getUserMedia, 确保语音一开始就被识别为「交互中」。
                     try { v.evaluateJavascript(MIC_AND_EDIT_PROBE_JS, null); } catch (Exception ignored) {}
