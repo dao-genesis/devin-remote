@@ -44,6 +44,7 @@ public class TabActivity extends AppCompatActivity {
     private int tabId;
     private WebView web;
     private String accJson = "{}";
+    private String accAuth1 = "", accOrgId = "";
 
     // 网页 <input type=file> 上传 (缺 onShowFileChooser 时点击无任何反应 — 与真浏览器不一致)
     private ValueCallback<Uri[]> filePathCallback;
@@ -83,6 +84,7 @@ public class TabActivity extends AppCompatActivity {
             label = a.optString("email", a.optString("id", "")); }
         catch (Exception ignored) {}
 
+        accAuth1 = token; accOrgId = org;
         tabId = SEQ.getAndIncrement();
         TABS.put(tabId, label);
         setTitle("Devin Cloud · " + label);
@@ -236,18 +238,25 @@ public class TabActivity extends AppCompatActivity {
             } catch (Exception e) { toast("下载失败"); }
             return;
         }
-        try {
-            String name = android.webkit.URLUtil.guessFileName(url, contentDisposition, mime);
-            DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
-            if (mime != null) req.setMimeType(mime);
-            if (ua != null) req.addRequestHeader("User-Agent", ua);
-            String cookie = CookieManager.getInstance().getCookie(url);   // 附件下载鉴权: 路径匹配 Cookie 随行
-            if (cookie != null) req.addRequestHeader("Cookie", cookie);
-            req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            req.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, name);
-            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-            if (dm != null) { dm.enqueue(req); toast("开始下载: " + name); }
-        } catch (Exception e) { toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage())); }
+        // 附件下载首点即成: 入队前确保 attachments_token 就绪 (铸造是网络操作 → 后台线程)
+        final String fUrl = url, fUa = ua, fCd = contentDisposition, fMime = mime;
+        new Thread(() -> {
+            try {
+                if (accAuth1 != null && !accAuth1.isEmpty()
+                        && fUrl != null && fUrl.contains("app.devin.ai/attachments/"))
+                    MainActivity.ensureAttachmentCookie(accAuth1, accOrgId, fUrl);
+                String name = android.webkit.URLUtil.guessFileName(fUrl, fCd, fMime);
+                DownloadManager.Request req = new DownloadManager.Request(Uri.parse(fUrl));
+                if (fMime != null) req.setMimeType(fMime);
+                if (fUa != null) req.addRequestHeader("User-Agent", fUa);
+                String cookie = CookieManager.getInstance().getCookie(fUrl);   // 附件下载鉴权: 路径匹配 Cookie 随行
+                if (cookie != null) req.addRequestHeader("Cookie", cookie);
+                req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                req.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, name);
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm != null) { dm.enqueue(req); runOnUiThread(() -> toast("开始下载: " + name)); }
+            } catch (Exception e) { runOnUiThread(() -> toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage()))); }
+        }).start();
     }
 
     // RTDL 桥: 页面把 blob:/data: 下载内容(base64)回传 → 落地系统「下载」

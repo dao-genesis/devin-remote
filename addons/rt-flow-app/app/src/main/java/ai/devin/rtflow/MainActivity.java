@@ -2126,6 +2126,17 @@ public class MainActivity extends AppCompatActivity {
             java.util.Map<String, String> rh = req.getRequestHeaders();
             if (rh != null) for (String k : rh.keySet())
                 if (k != null && k.equalsIgnoreCase("Authorization")) return null;   // fetch/XHR 已带鉴权 → 不重复代取
+            // 本源: /attachments/ 的真鉴权是 httpOnly Cookie attachments_token。Cookie 就绪时应
+            //   一律交还 WebView 原生网络栈(返回 null): 原生并发加载/HTTP 缓存/Range·206·seek 全部
+            //   与真浏览器一致 —— 代取字节流会 ① 把 <video> 的响应变成不可 seek 流 → FFmpegDemuxer
+            //   "data source error" 无限重试; ② 每个图片/文档都占用 WebView 有限的拦截线程做 15-30s
+            //   超时的同步网络 IO, 并发图片一多即互相饿死 → 图片时载时不载、整页请求(含点链接)僵死。
+            //   Cookie 按 JWT exp 判新鲜(过期自动重铸), 铸不出时才回退代取(下方旧路径)。
+            boolean isRange = false;
+            if (rh != null) for (String k : rh.keySet())
+                if (k != null && k.equalsIgnoreCase("Range")) { isRange = true; break; }
+            if (ensureAttachmentCookie(auth1, orgId, u.toString())) return null;   // 原生直取(带 Cookie)
+            if (isRange) return null;   // Cookie 铸造失败的流媒体: 代取必坏 seek, 交原生(至多 401)不更差
             java.net.HttpURLConnection c;
             try { c = fetchAttachment(auth1, orgId, u.toString(), rh, false); }
             catch (Exception e1) {
@@ -2212,6 +2223,41 @@ public class MainActivity extends AppCompatActivity {
         }
         return c;
     }
+    /** attachments_token Cookie 是否存在且未过期 (JWT 则解 exp, 留 60s 余量; 非 JWT 视为有效)。 */
+    static boolean attachmentCookieFresh(String url) {
+        try {
+            String ck = android.webkit.CookieManager.getInstance().getCookie(url);
+            if (ck == null) return false;
+            int i = ck.indexOf("attachments_token=");
+            if (i < 0) return false;
+            String v = ck.substring(i + 18);
+            int sc = v.indexOf(';'); if (sc >= 0) v = v.substring(0, sc);
+            String[] parts = v.split("\\.");
+            if (parts.length >= 2) {
+                try {
+                    String payload = new String(android.util.Base64.decode(parts[1],
+                            android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING | android.util.Base64.NO_WRAP), "UTF-8");
+                    long exp = new org.json.JSONObject(payload).optLong("exp", 0);
+                    if (exp > 0) return System.currentTimeMillis() / 1000 < exp - 60;
+                } catch (Exception ignored) {}
+            }
+            return true;
+        } catch (Exception e) { return false; }
+    }
+    private static final Object MINT_LOCK = new Object();
+    private static volatile long sLastMintAt = 0;
+    /** 确保 attachments_token 就绪 (单飞铸造·3s 防抖, 防并发媒体请求触发铸造风暴)。 */
+    static boolean ensureAttachmentCookie(String auth1, String orgId, String url) {
+        if (attachmentCookieFresh(url)) return true;
+        if (auth1 == null || auth1.isEmpty()) return false;
+        synchronized (MINT_LOCK) {
+            if (attachmentCookieFresh(url)) return true;
+            long now = System.currentTimeMillis();
+            if (now - sLastMintAt < 3000) return false;
+            sLastMintAt = now;
+            return mintAttachmentCookie(auth1, orgId) && attachmentCookieFresh(url);
+        }
+    }
     /** 铸造 attachments_token Cookie: POST set-attachment-cookie(Bearer 有效) → Set-Cookie 落入 CookieManager。 */
     static boolean mintAttachmentCookie(String auth1, String orgId) {
         if (auth1 == null || auth1.isEmpty()) return false;
@@ -2282,10 +2328,8 @@ public class MainActivity extends AppCompatActivity {
     static void warmAttachmentCookie(final String auth1, final String orgId, final String pageUrl) {
         try {
             if (auth1 == null || auth1.isEmpty() || pageUrl == null || !pageUrl.contains("app.devin.ai")) return;
-            String ck = null;
-            try { ck = android.webkit.CookieManager.getInstance().getCookie("https://app.devin.ai/attachments/"); } catch (Exception ignored) {}
-            if (ck != null && ck.contains("attachments_token=")) return;   // 已有 → 不重复铸造
-            new Thread(() -> mintAttachmentCookie(auth1, orgId)).start();
+            if (attachmentCookieFresh("https://app.devin.ai/attachments/")) return;   // 新鲜 → 不重复铸造 (过期则重铸)
+            new Thread(() -> ensureAttachmentCookie(auth1, orgId, "https://app.devin.ai/attachments/")).start();
         } catch (Exception ignored) {}
     }
     /** 广告/追踪域名命中 (内置精简黑名单)。 */
@@ -3334,19 +3378,28 @@ public class MainActivity extends AppCompatActivity {
         // blob:/data: 无法走系统 DownloadManager → 转 JS 取内容, 统一收进应用内下载列表
         if (url != null && url.startsWith("blob:")) { captureBlobDownload(url); return; }
         if (url != null && url.startsWith("data:")) { captureDataUrl(url, contentDisposition); return; }
-        try {
-            String name = android.webkit.URLUtil.guessFileName(url, contentDisposition, mime);
-            DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
-            if (mime != null) req.setMimeType(mime);
-            if (ua != null) req.addRequestHeader("User-Agent", ua);
-            String cookie = android.webkit.CookieManager.getInstance().getCookie(url);
-            if (cookie != null) req.addRequestHeader("Cookie", cookie);
-            req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            // 落到应用专属外部目录 → 由应用内下载管理器统一展示/打开/拖拽
-            req.setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, name);
-            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-            if (dm != null) { long id = dm.enqueue(req); dlPending.put(id, new String[]{ name, mime == null ? "" : mime }); toast("开始下载: " + name); }
-        } catch (Exception e) { toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage())); }
+        // 附件下载首点即成 (不再需重启+刷新): 入队前确保 attachments_token 就绪, 否则 DownloadManager
+        //   无鉴权 Cookie → 403 失败。铸造是网络操作 → 整个入队流程放后台线程 (回 UI 线程弹提示)。
+        final Tab dt = cur();
+        final String fUrl = url, fUa = ua, fCd = contentDisposition, fMime = mime;
+        new Thread(() -> {
+            try {
+                if (dt != null && dt.auth1 != null && !dt.auth1.isEmpty()
+                        && fUrl != null && fUrl.contains("app.devin.ai/attachments/"))
+                    ensureAttachmentCookie(dt.auth1, dt.orgId, fUrl);
+                String name = android.webkit.URLUtil.guessFileName(fUrl, fCd, fMime);
+                DownloadManager.Request req = new DownloadManager.Request(Uri.parse(fUrl));
+                if (fMime != null) req.setMimeType(fMime);
+                if (fUa != null) req.addRequestHeader("User-Agent", fUa);
+                String cookie = android.webkit.CookieManager.getInstance().getCookie(fUrl);
+                if (cookie != null) req.addRequestHeader("Cookie", cookie);
+                req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                // 落到应用专属外部目录 → 由应用内下载管理器统一展示/打开/拖拽
+                req.setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, name);
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm != null) { long id = dm.enqueue(req); dlPending.put(id, new String[]{ name, fMime == null ? "" : fMime }); runOnUiThread(() -> toast("开始下载: " + name)); }
+            } catch (Exception e) { runOnUiThread(() -> toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage()))); }
+        }).start();
     }
 
     // 页面内 <a download> / blob: / data: 下载捕获脚本 (每个页面加载完安装一次)
