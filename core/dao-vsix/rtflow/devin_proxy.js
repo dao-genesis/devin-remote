@@ -660,14 +660,21 @@ async function handleRequest(req, res, auth, opts, _log) {
     reqBody = await readBody(req);
   }
 
+  // 帛书·「无有入于无间」— 附件/媒体/下载须原生流式(对照手机 APK Range 修法): 附件路径或带 Range 的
+  //   媒体请求, 上游必以 identity 编码回字节(gzip+Range 语义相冲), 并把客户端 Range 透传上游, 换回
+  //   206 分段 → <video> 可 seek、大文件下载可断点/边下边存。非流式请求保持 gzip 省带宽。
+  const _clientRange = (req.headers && (req.headers["range"] || req.headers["Range"])) || "";
+  const _isAttachPath = /\/attachments\//i.test(targetPath);
+  const _wantStream = !!_clientRange || _isAttachPath;
   const fwdHeaders = {
     "User-Agent": DEVIN_UA,
     Accept: (req.headers && req.headers["accept"]) || "*/*",
     Host: u.hostname,
-    "Accept-Encoding": "gzip",
+    "Accept-Encoding": _wantStream ? "identity" : "gzip",
     Origin: up.base,
     Referer: up.base + "/",
   };
+  if (_clientRange) fwdHeaders["Range"] = _clientRange;
   if (req.headers && req.headers["content-type"] && reqBody.length) {
     fwdHeaders["Content-Type"] = req.headers["content-type"];
     fwdHeaders["Content-Length"] = Buffer.byteLength(reqBody).toString();
@@ -768,6 +775,41 @@ async function handleRequest(req, res, auth, opts, _log) {
         const endS = () => { try { res.end(); } catch {} };
         src.on("end", endS);
         src.on("error", endS);
+        res.on("close", () => { try { proxyReq.destroy(); } catch {} });
+        return;
+      }
+
+      // ═══ 原生流式直通 (附件/媒体/下载·对齐真浏览器) ═══════════════════════════════
+      // 帛书·「大成若缺·其用不敝」: 图片/视频/PDF/任意下载附件与 206 分段响应, 不缓冲整体亦不改写 —
+      //   直接把上游字节流管道给客户端, 完整保留 Content-Length / Content-Range / Accept-Ranges /
+      //   Content-Disposition。此前一律 chunks 缓冲 + 全量 Buffer.concat: 视频无 206→FFmpeg 无法 seek
+      //   (播不了), 大文件全灌内存 (下载/文档卡死或 OOM)。流式后与用户原生浏览器行为一致。
+      const _cd = String(proxyRes.headers["content-disposition"] || "");
+      const _clen = parseInt(proxyRes.headers["content-length"] || "0", 10) || 0;
+      const _isMediaCt = /^(video|audio|image)\//i.test(ct) || ct.includes("application/pdf") || ct.includes("application/octet-stream") || ct.includes("application/zip");
+      // 注: cacheable(哈希不可变 /assets 静态资源)不走流式 — 仍入 L1/L2 缓存提速多实例。
+      const _streamPass = !res.headersSent && !cacheable && (
+        status === 206 || !!_clientRange || _isAttachPath || /attachment/i.test(_cd) || _isMediaCt ||
+        (_clen > 4 * 1024 * 1024 && !ct.includes("text/") && !ct.includes("json") && !ct.includes("javascript"))
+      );
+      if (_streamPass) {
+        const ph = {};
+        for (const k of Object.keys(proxyRes.headers)) {
+          const kl = k.toLowerCase();
+          if (kl === "x-frame-options" || kl === "content-security-policy" || kl === "content-security-policy-report-only" ||
+              kl === "strict-transport-security" || kl === "connection" || kl === "keep-alive" || kl === "proxy-connection" ||
+              kl === "proxy-authenticate" || kl === "proxy-authorization" || kl === "te" || kl === "trailer" ||
+              kl === "transfer-encoding" || kl === "upgrade") continue;
+          ph[k] = proxyRes.headers[k];
+        }
+        if (!ph["Accept-Ranges"] && !ph["accept-ranges"]) ph["Accept-Ranges"] = "bytes";
+        ph["Connection"] = "keep-alive";
+        _forceKeepAlive(res);
+        try { proxyReq.setTimeout(0); } catch {}
+        res.writeHead(status, ph);
+        proxyRes.on("data", (c) => { try { res.write(c); } catch {} });
+        proxyRes.on("end", () => { try { res.end(); } catch {} });
+        proxyRes.on("error", () => { try { res.end(); } catch {} });
         res.on("close", () => { try { proxyReq.destroy(); } catch {} });
         return;
       }

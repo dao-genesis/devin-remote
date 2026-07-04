@@ -584,16 +584,16 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 #tabs{display:flex;align-items:stretch;height:30px;background:#11151b;border-bottom:1px solid #21262d;overflow-x:auto;overflow-y:hidden;white-space:nowrap;flex:0 0 auto;scrollbar-width:none;-ms-overflow-style:none}
 #tabs::-webkit-scrollbar{height:0;width:0;display:none;background:transparent}
 #daowin .cvtabs{scrollbar-width:none;-ms-overflow-style:none}#daowin .cvtabs::-webkit-scrollbar{height:0;width:0;display:none}
-.tab{display:inline-flex;align-items:center;gap:5px;padding:0 7px;max-width:160px;border-right:1px solid #21262d;cursor:pointer;color:#9aa4b2;font-size:12px;user-select:none;flex:0 0 auto}
+.tab{display:inline-flex;align-items:center;gap:4px;padding:0 6px;max-width:230px;border-right:1px solid #21262d;cursor:pointer;color:#9aa4b2;font-size:12px;user-select:none;flex:0 0 auto}
 .tab:hover{background:#1b212b}
 .tab.on{background:#0e1116;color:#e6edf3;box-shadow:inset 0 -2px 0 #1f6feb}
 .tab.on2{background:#0e1116;color:#e6edf3;box-shadow:inset 0 -2px 0 #3fb950}
-.tab .dot{width:7px;height:7px;border-radius:50%;background:#6e7681;flex:0 0 auto}
-.tab .dot.running{background:#3fb950;box-shadow:0 0 5px #3fb950}.tab .dot.finished{background:#58a6ff}.tab .dot.blocked{background:#f0883e}.tab .dot.expired{background:#f85149}.tab .dot.exhausted{background:#a371f7}.tab .dot.awaiting{background:#d29922}
+.tab .dot{width:10px;height:10px;border-radius:50%;background:#6e7681;flex:0 0 auto}
+.tab .dot.running{background:#3fb950;box-shadow:0 0 6px #3fb950}.tab .dot.finished{background:#58a6ff}.tab .dot.blocked{background:#f0883e}.tab .dot.expired{background:#f85149}.tab .dot.exhausted{background:#a371f7}.tab .dot.awaiting{background:#d29922}
 @keyframes dpul{0%,100%{opacity:1}50%{opacity:.35}}.tab .dot.running{animation:dpul 1.4s ease-in-out infinite}
-.tab .no{min-width:13px;height:13px;line-height:13px;text-align:center;font-size:8.5px;font-weight:700;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:3px;padding:0 2px;flex:0 0 auto;opacity:.9}
+.tab .no{min-width:10px;height:11px;line-height:11px;text-align:center;font-size:7px;font-weight:700;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:3px;padding:0 1px;flex:0 0 auto;opacity:.8}
 .tab .lbl{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tab .amt{color:#3fb950;font-weight:700;font-size:10px;flex:0 0 auto}
+.tab .amt{color:#3fb950;font-weight:700;font-size:9px;flex:0 0 auto}
 .tab .x{opacity:.5;font-size:14px;padding:0 2px;border-radius:3px;flex:0 0 auto}
 .tab .x:hover{opacity:1;background:#3a3a3a}
 #body{position:relative;flex:1;overflow:hidden}
@@ -969,7 +969,7 @@ function openBoard(tab){tab=tab||'overview';var id=boardId(tab);var b=BOARDS[tab
   if(!b.req){b.req=true;spin(true);b._initTO=setTimeout(function(){if(!b.mounted)spin(false);},15000);vscode.postMessage({type:'cloudInit',board:tab});}}
 function _boardHostAll(msg){for(var k in BOARDS){var b=BOARDS[k];if(b&&b.frame&&b.frame.contentWindow){try{b.frame.contentWindow.postMessage(msg,'*');}catch(e){}}}}
 function mountBoardSolo(html,tab,srcUrl){tab=tab||'overview';var id=boardId(tab);var b=BOARDS[tab]||(BOARDS[tab]={req:false,mounted:false,ready:false,frame:null,url:''});
-  var SHIM='<scr'+'ipt>(function(){var _s={};window.acquireVsCodeApi=function(){return{postMessage:function(m){try{parent.postMessage({__cwRelay:m,__board:"'+tab+'"},"*")}catch(e){}},getState:function(){return _s},setState:function(s){_s=s;return s}}};})();<\/scr'+'ipt>';
+  var SHIM='<scr'+'ipt>(function(){var _s={};window.acquireVsCodeApi=function(){return{postMessage:function(m){try{parent.postMessage({__cwRelay:m,__board:"'+tab+'"},"*")}catch(e){}},getState:function(){try{var st=parent.__wamSt&&parent.__wamSt["'+tab+'"];if(st)return st}catch(e){}return _s},setState:function(s){_s=s;try{parent.__wamSt=parent.__wamSt||{};parent.__wamSt["'+tab+'"]=s}catch(e){}return s}}};})();<\/scr'+'ipt>';
   var doc=/<head[^>]*>/i.test(html)?html.replace(/<head([^>]*)>/i,'<head$1>'+SHIM):SHIM+html;
   if(!tabs[id]){
     var meta=BOARD_META[tab]||['🎛',tab];
@@ -987,6 +987,8 @@ function mountBoardSolo(html,tab,srcUrl){tab=tab||'overview';var id=boardId(tab)
     tabs[id]={btn:btn,frame:fr,url:'',zoom:1,meta:{board:tab}};order.push(id);
   }
   b.ready=false;
+  // 重挂前留住滚动位 (blob iframe 同源可读) — 根治「删除/结构变化 → 面板回弹到顶」
+  try{var _cw=b.frame&&b.frame.contentWindow;if(_cw&&_cw.document&&_cw.document.scrollingElement){var _sy=_cw.document.scrollingElement.scrollTop||0;if(_sy>0){window.__wamSt=window.__wamSt||{};var _st0=window.__wamSt[tab]||{};_st0.__scrollY=_sy;window.__wamSt[tab]=_st0;}}}catch(e){}
   if(srcUrl){b.frame.removeAttribute('srcdoc');if(b.url&&b.url.indexOf('blob:')===0){try{URL.revokeObjectURL(b.url)}catch(e){}}b.frame.src=srcUrl;b.url=srcUrl;}
   else{try{var blob=new Blob([doc],{type:'text/html'});var url=URL.createObjectURL(blob);b.frame.removeAttribute('srcdoc');b.frame.src=url;if(b.url&&b.url.indexOf('blob:')===0){try{URL.revokeObjectURL(b.url)}catch(e){}}b.url=url;}catch(e){b.frame.srcdoc=doc;}}
   b.mounted=true;b.req=false;setActive(id);setLoading(id,true);sync();schedPersist();}
@@ -11048,6 +11050,9 @@ function _refreshSelClasses(){document.querySelectorAll('.row').forEach(r=>{cons
 // v3.11.2 · 多选持久化 — 反者道之动 · 全量重建不夺选择
 //   以 email(行 data-email) 为锚 · 重建后按 email 复位 checked + .sel
 //   根治 broadcastUI 全量 webview.html 重建导致的"刚选完几秒被弹回"
+function _persistScroll(){try{const st=vscode.getState()||{};const y=(document.scrollingElement||document.documentElement).scrollTop||0;vscode.setState({...st,__scrollY:y});}catch(e){}}
+let _scrT=null;window.addEventListener('scroll',()=>{if(_scrT)clearTimeout(_scrT);_scrT=setTimeout(_persistScroll,150);},{passive:true});
+(function(){try{const st=vscode.getState()||{};const y=+st.__scrollY||0;if(y>0)requestAnimationFrame(()=>{(document.scrollingElement||document.documentElement).scrollTop=y;});}catch(e){}})();
 function _persistSel(){try{const st=vscode.getState()||{};const emails=[...document.querySelectorAll('.chk:checked')].map(c=>{const r=c.closest('.row');return r&&r.dataset.email||'';}).filter(Boolean);vscode.setState({...st,selEmails:emails,selTs:Date.now()});}catch(e){}}
 function _restoreSel(){try{const st=vscode.getState()||{};const arr=Array.isArray(st.selEmails)?st.selEmails:[];if(!arr.length)return;const ttl=600000;if(st.selTs&&Date.now()-st.selTs>ttl){vscode.setState({...st,selEmails:[],selTs:0});return;}const set=new Set(arr);document.querySelectorAll('.row').forEach(r=>{const em=(r.dataset.email||'').toLowerCase();if(em&&set.has(em)){const c=r.querySelector('.chk');if(c){c.checked=true;r.classList.add('sel');}}});}catch(e){}}
 let _lastSel=-1,_dragSel=false,_dragVal=false;
@@ -11057,7 +11062,8 @@ function vf(i){_clickFb(event);send('verify',i);}
 function cp(i){_clickFb(event);const ix=_selectedFor(i);vscode.postMessage({type:ix.length>1?'copyAccounts':'copyAccount',index:i,indices:ix});}
 function rt(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1){showToast('\u23F3 \u6279\u91cf\u8def\u7531\u5b98\u7f51\u2192IDE \u00b7 '+ix.length+' \u4e2a\u2026');vscode.postMessage({type:'routeToIdeBatch',indices:ix});}else{showToast('\u23F3 \u5207\u6b64\u53f7\u00b7\u8def\u7531\u5b98\u7f51\u2192IDE\u2026');vscode.postMessage({type:'routeToIde',index:i});}}
 function sb(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1){showToast('\u23F3 \u6279\u91cf\u7cfb\u7edf\u6d4f\u89c8\u5668 \u00b7 '+ix.length+' \u4e2a\u2026');vscode.postMessage({type:'openSysBrowserBatch',indices:ix});}else{vscode.postMessage({type:'openSysBrowser',index:i});}}
-function rm(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1)vscode.postMessage({type:'removeBatch',indices:ix});else send('remove',i);}
+function _emailAt(i){const r=document.querySelector('.row[data-i="'+i+'"]');return (r&&r.dataset.email)||'';}
+function rm(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1)vscode.postMessage({type:'removeBatch',indices:ix,emails:ix.map(_emailAt)});else vscode.postMessage({type:'remove',index:i,email:_emailAt(i)});}
 function copyAll(){vscode.postMessage({type:'copyAllAccounts'});}
 function setMode(m){vscode.postMessage({type:'setMode',mode:m});}
 // ── 第五板块 · Devin Cloud 前端 (最小化) ──
@@ -11153,7 +11159,7 @@ function toggleAdd(){const b=document.getElementById('addBody');b.classList.togg
 function doAdd(){const ta=document.getElementById('addInput');const t=ta.value.trim();if(!t)return;vscode.postMessage({type:'addBatch',text:t});ta.value='';const s=vscode.getState()||{};vscode.setState({...s,addText:''});}
 function showToast(m,cls){const t=document.getElementById('toast');t.textContent=m;t.className='toast show'+(cls?' '+cls:'');setTimeout(()=>{t.className='toast';},2200);}
 function updateBatchBar(){_refreshSelClasses();const c=_checked();document.getElementById('batchCount').textContent=c.length;document.getElementById('batchBar').classList.toggle('visible',c.length>0);_persistSel();}
-function batchDelete(){const ix=_selIx();if(ix.length===0)return;vscode.postMessage({type:'removeBatch',indices:ix});}
+function batchDelete(){const ix=_selIx();if(ix.length===0)return;vscode.postMessage({type:'removeBatch',indices:ix,emails:ix.map(_emailAt)});}
 function clearSelection(){document.querySelectorAll('.chk:checked').forEach(c=>{c.checked=false;const r=c.closest('.row');if(r)r.classList.remove('sel');});updateBatchBar();}
 function _hitSel(e){return e&&e.target&&e.target.closest&&e.target.closest('.row');}
 function _startSelect(e){const row=_hitSel(e);if(!row||e.target.closest('.acts,.b,button,textarea,a'))return;if(e.target.matches('input:not(.chk),select'))return;const i=parseInt(row.dataset.i);const c=row.querySelector('.chk');if(!Number.isFinite(i)||!c)return;e.preventDefault();const v=!c.checked;if(e.shiftKey&&_lastSel>=0)_applyRange(_lastSel,i,v);else{_setRowSel(i,v);_lastSel=i;}_dragSel=true;_dragVal=v;updateBatchBar();}
@@ -12198,6 +12204,21 @@ async function _dvAutoBackupRun() {
         // addedAt 24h 免出库保护 (对照手机 APK): 重加/新加的账号在冷却期内绝不自动移出库
         const _addedRecently = acc.addedAt && Date.now() - acc.addedAt < cooldownMs;
         if (autoCleanup && backupOk && totalCredits <= cleanupThreshold) {
+          // 本源判老(对照手机 APK·根治「老旧归零号还要再等 24h」): 冷却锚点只是「我们何时首次备份」,
+          //   与账号真实活跃无关 — 陈年归零号锚点新落也得干等 24h。故锚点未满时再看远端本源:
+          //   该号最新对话 updated_at 已早于冷却窗(或全无对话) → 账号本就沉寂, 直接视为冷却已满。
+          if (!cleanupCheck.ready && cleanupCheck.reason === "cooldown" && !_addedRecently) {
+            try {
+              const _ls = await devinCloud.listSessions(auth);
+              const _ss = (_ls && _ls.sessions) || [];
+              let _mx = 0;
+              for (const _s of _ss) { const _t = Date.parse(_s.updated_at || _s.created_at || "") || 0; if (_t > _mx) _mx = _t; }
+              if (_mx === 0 || Date.now() - _mx >= cooldownMs) {
+                cleanupCheck.ready = true;
+                log("auto-cleanup: " + acc.email + " 冷却锚点未满但远端最新对话已沉寂" + (_mx ? "~" + Math.round((Date.now() - _mx) / 3600000) + "h" : "(无对话)") + " → 本源判老·视为冷却已满");
+              }
+            } catch {}
+          }
           if (!cleanupCheck.ready) {
             // 补出库: 上一轮已清理但未出库(旧版无出库/中途断) 的归零账号 —— 备份已校验、
             //   痕迹已清、24h 无新对话 → 直接出库, 不再卡死在 already_cleaned 永久滞留态。
@@ -12918,6 +12939,28 @@ function _broadcastMsg(msg) {
   }
 }
 
+// email 锚定索引解析: 前端行索引可能因渲染后库变动而错位, 有 email 时以 email 为准
+function _resolveAccIdx(index, email) {
+  const em = String(email || "").toLowerCase();
+  if (em) {
+    const i = _store.accounts.findIndex((a) => (a.email || "").toLowerCase() === em);
+    if (i >= 0) return i;
+    return -1;
+  }
+  const n = +index;
+  return Number.isInteger(n) && n >= 0 && n < _store.accounts.length ? n : -1;
+}
+function _resolveAccIdxBatch(indices, emails) {
+  const out = [];
+  const ix = Array.isArray(indices) ? indices : [];
+  const ems = Array.isArray(emails) ? emails : [];
+  for (let k = 0; k < Math.max(ix.length, ems.length); k++) {
+    const i = _resolveAccIdx(ix[k], ems[k]);
+    if (i >= 0) out.push(i);
+  }
+  return [...new Set(out)];
+}
+
 async function handleWebviewMessage(msg) {
   try {
     if (msg && /^(routeToIde|routeToIdeBatch|openSysBrowser|openSysBrowserBatch|convRouteToIde|convOpenSysBrowser)$/.test(msg.type)) {
@@ -13095,13 +13138,19 @@ async function handleWebviewMessage(msg) {
         _broadcastUI();
         break;
       }
-      case "remove":
-        _store.remove(msg.index);
-        _toast("已删除");
+      case "remove": {
+        // 按 email 锚定行(防前端渲染后库变动→索引错位误删/漏删)
+        const _ri = _resolveAccIdx(msg.index, msg.email);
+        if (_ri < 0) { _toast("✗ 删除失败: 账号已不在库 (" + String(msg.email || msg.index) + ")"); _broadcastUI(true); break; }
+        const _em = _store.accounts[_ri].email;
+        const _ok = _store.remove(_ri);
+        _toast(_ok ? "✓ 已删除 " + _em : "✗ 删除失败 " + _em);
         _broadcastUI(true);
         break;
+      }
       case "removeBatch": {
-        const r = _store.removeBatch(msg.indices || []);
+        const _ixs = _resolveAccIdxBatch(msg.indices || [], msg.emails || []);
+        const r = _store.removeBatch(_ixs);
         if (r.count === 0) {
           _toast("批量删除: 0 个 (索引无效)");
         } else if (r.persistOk) {
