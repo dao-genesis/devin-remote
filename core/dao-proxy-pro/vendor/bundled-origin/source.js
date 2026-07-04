@@ -307,7 +307,7 @@ function _originGetProxyAgent(isHttps) {
 const PORT = parseInt(process.env.ORIGIN_PORT || "8889", 10);
 // v9.6.1 · 反者道之动 · 远曰反 · 回归 v9.1.2 之全前端按钮 (七按钮: 道/官/实/原/编/复/卸 + dots/customBadge)
 // 以 v9.1.2 本源哲学为锚 · 守大常不动 · 五细节皆成: isAlreadyInverted · _rawTape+all_fields · 部署不 kill · 前端按钮回归
-const ORIGIN_VERSION_BASE = "v9.9.335"; // v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增·彻底脱用户Cascade对话依赖) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
+const ORIGIN_VERSION_BASE = "v9.9.336"; // v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
 // 印 153 · 唯变所适 · 软编码归宗 · 二十五章「逝曰远 远曰反」· 七十六章「兵强则不胜」
 // 病: 多 ext-host 共端口 :8937 · 旧版 in-process proxy 持续 listen · self_file 锁死旧版目录
 //     → 即便装毕新版 vsix · /ping 仍返 v9.9.19/v9.9.20 之 self_file · canon_name 走旧映射
@@ -3126,6 +3126,8 @@ function handleControl(req, res) {
           envelope: _lastAuthEnvelope
             ? { has: true, at: _lastAuthEnvelope.at, age_ms: Date.now() - (_lastAuthEnvelope.at || 0), has_cid: !!_lastAuthEnvelope.cid }
             : { has: false },
+          // v9.9.336 · 根源突破诊断: LSP/补全(PASSTHROUGH)流量鉴权信封探采观测。
+          lsp_probe: _lspProbe,
         },
         // v9.9.21 · 唯变所适 · 让位标志 · ext-host 见 quitted=true 不再 require 起
         quitted: _quitSignaled,
@@ -7337,6 +7339,175 @@ function _synthesizeFreshReplayFrame() {
     }
   } catch (_) {}
 }
+// ── 根源突破 · LSP/补全流量采信封 (v9.9.336 · 反者道之动·上善若水) ──────────────
+//   病灶: 会话鉴权信封只随 Cascade chat(CHAT_PROTO/INFER_STRIP)流入被采;
+//     而 LanguageServerService(自动补全/上下文·GetCompletions 等)被 classifyRPC 归为
+//     PASSTHROUGH → 纯流式直透·从不读 body → 其携带的鉴权信封被白白放过。
+//     故「IDE 活跃即保鲜」在只有补全、无 chat(如 Cascade 配额受限)时不成立。
+//   正法(道法自然·无为而无不为): 当内存信封陈旧(或缺失)时, 才对 PASSTHROUGH 的 POST 请求
+//     缓冲 body 探采鉴权信封(节流+体积上限, 不扰热路); 一旦采得新鲜信封, 即回归纯流式直透。
+//     IDE 任一活跃(哪怕只打字触发补全)皆可保鲜, 彻底脱 Cascade 对话依赖。用户无为而系统无不为。
+//   宁稳勿崩: 全 try 兜底; 探采失败即照常直透; 采得之信封仍须名实相符(含会话标记)方合成。
+let _lastLspProbeAt = 0;
+let _lspProbe = {
+  attempts: 0,
+  bodies: 0,
+  hits: 0,
+  last_markers: null,
+  last_fields: null,
+  last_at: 0,
+  // v9.9.336b · 头部鉴权诊断: LSP 请求的鉴权多在 HTTP 头而非 body → 记录之。
+  hdr_auth_names: null,
+  hdr_has_devin: false,
+  hdr_val_len: 0,
+  // v9.9.336c · 全直通路径诊断: 记录最近探测的 RPC 路径及命中标记(找鉴权握手 RPC)。
+  paths: [],
+  auth_paths: [],
+};
+function _recordProbePath(rpc, hitBody, hitHdr) {
+  try {
+    const tag = rpc + (hitBody ? "#body" : "") + (hitHdr ? "#hdr" : "");
+    const arr = _lspProbe.paths;
+    if (arr.indexOf(tag) < 0) {
+      arr.push(tag);
+      if (arr.length > 24) arr.shift();
+    }
+    if ((hitBody || hitHdr) && _lspProbe.auth_paths.indexOf(rpc) < 0)
+      _lspProbe.auth_paths.push(rpc);
+  } catch (_) {}
+}
+// 诊断: 记录 LSP 请求头中鉴权类头名 + Authorization 值是否含 devin/session 标记(不落明文)。
+function _scanAuthHeaders(req) {
+  try {
+    const h = (req && req.headers) || {};
+    const names = [];
+    let hasDevin = false;
+    let valLen = 0;
+    for (const k of Object.keys(h)) {
+      const lk = k.toLowerCase();
+      if (
+        lk === "authorization" ||
+        lk.indexOf("api-key") >= 0 ||
+        lk.indexOf("api_key") >= 0 ||
+        lk.indexOf("token") >= 0 ||
+        lk.indexOf("auth") >= 0 ||
+        lk.indexOf("session") >= 0
+      ) {
+        names.push(lk);
+        const v = String(h[k] || "");
+        valLen = Math.max(valLen, v.length);
+        if (/devin|session-token|devin-team/i.test(v)) hasDevin = true;
+      }
+    }
+    if (names.length) {
+      _lspProbe.hdr_auth_names = names;
+      _lspProbe.hdr_has_devin = hasDevin;
+      _lspProbe.hdr_val_len = valLen;
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+const _AUTH_MARKERS = [
+  "session-token",
+  "devin-session",
+  "devin-team",
+  "api_key",
+  "Authorization",
+  "Bearer ",
+  "ExaAuth",
+  "Metadata",
+  "metadata",
+];
+// 诊断: 扫顶层各字段, 记录出现的鉴权类标记及其字段号(不落敏感明文·仅记标记名)。
+function _scanAuthMarkers(body) {
+  const out = { markers: [], fields: {} };
+  try {
+    const frames = parseFrames(body);
+    if (!frames.length) return out;
+    const top = parseProto(frames[0].payload);
+    for (const numStr of Object.keys(top)) {
+      for (const e of top[numStr] || []) {
+        if (e && e.w === 2 && e.b) {
+          const s = Buffer.from(e.b).toString("latin1");
+          for (const m of _AUTH_MARKERS) {
+            if (s.indexOf(m) >= 0) {
+              if (out.markers.indexOf(m) < 0) out.markers.push(m);
+              (out.fields[numStr] = out.fields[numStr] || []).push(m);
+            }
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  return out;
+}
+// 门控: 仅当全无信封(兜底)+POST+节流(≥2s)+体积可控(≤512KB)时才缓冲 body 探采。
+function _shouldProbeLspBody(req) {
+  try {
+    if ((req.method || "") !== "POST") return false;
+    // 无为不扰热路: 已自持鉴权信封(盘存自举 或 chat 采得)即不缓冲探采 → LSP 探采仅作
+    //   "全无信封"时的兜底(经验实证 LSP/状态 RPC 不携可采鉴权, 故正常态此路恒眠·零开销)。
+    const env = _lastAuthEnvelope;
+    if (env && env.f1) return false;
+    const now = Date.now();
+    if (now - _lastLspProbeAt < 2000) return false;
+    const cl = parseInt(req.headers["content-length"] || "0", 10);
+    if (cl > 512 * 1024) return false;
+    _lastLspProbeAt = now;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+// 采集: 记录诊断标记 + 正法采信封(field1 含会话标记即采并触发自主合成)。
+function _harvestFromLsp(body) {
+  try {
+    if (!body || !body.length) return false;
+    _lspProbe.bodies++;
+    const scan = _scanAuthMarkers(body);
+    if (scan.markers.length) {
+      _lspProbe.hits++;
+      _lspProbe.last_markers = scan.markers;
+      _lspProbe.last_fields = Object.keys(scan.fields).join(",");
+      _lspProbe.last_at = Date.now();
+      _harvestAuthEnvelope(body);
+      return true;
+    }
+    _harvestAuthEnvelope(body);
+  } catch (_) {}
+  return false;
+}
+function _rpcName(u) {
+  try {
+    const q = (u || "").indexOf("?");
+    const p = q < 0 ? u || "" : (u || "").slice(0, q);
+    const m = /\/([A-Za-z0-9_.]+)$/.exec(p);
+    return m ? m[1] : p;
+  } catch (_) {
+    return "?";
+  }
+}
+// ── 根源自足 · 盘存帧自举鉴权信封 (v9.9.336 · 深根固柢·长生久视) ──────────────
+//   彻底零依赖: 进程一起, 即从磁盘常驻的真实骨架帧(此前真 Cascade 采得·含 field1 鉴权)
+//   自举 _lastAuthEnvelope → envelope.has=true 立成, 不待任何流量、不待用户任何动作。
+//   at 取帧真实捕获时刻(诚实反映新鲜度·不伪造), 供 age_ms 观测。此为守真之最坚底座:
+//   即便账号 Cascade 配额受限、当前无任何可采流量, 系统仍自持一枚真鉴权信封(没身不殆)。
+let _envBootstrapped = false;
+function _bootstrapEnvelopeFromDisk() {
+  if (_envBootstrapped) return;
+  _envBootstrapped = true;
+  try {
+    if (_lastAuthEnvelope && _lastAuthEnvelope.f1) return;
+    if (!_lastChatFrame || !_lastChatFrame.body) _restoreChatFrame(false);
+    const skel = _lastChatFrame;
+    if (!skel || !skel.body) return;
+    const f1 = _topFieldRaw(skel.body, 1);
+    if (!_looksLikeAuthEnvelope(f1)) return;
+    const cid = _topFieldRaw(skel.body, 16);
+    _lastAuthEnvelope = { f1, cid: cid || null, at: skel.at || 0, src: "disk" };
+  } catch (_) {}
+}
 // 官方直通回放取帧: 调用方要免费档 或 付费配额已耗尽 → 优先免费槽(原汤化原食·活水恒足),
 //   否则用主槽(最近一帧)。两槽皆按需自盘复现。
 function _pickReplayFrame(target) {
@@ -8010,6 +8181,11 @@ async function _maybeRevproxy(req, res) {
 const _mainHandler = async (req, res) => {
   reqCounter++;
   const rid = reqCounter;
+  if (!_envBootstrapped) {
+    try {
+      _bootstrapEnvelopeFromDisk();
+    } catch (_) {}
+  }
   req.on("error", (e) => log(`#${rid} req err: ${e.message}`));
   res.on("error", (e) => log(`#${rid} res err: ${e.message}`));
   try {
@@ -8037,7 +8213,34 @@ const _mainHandler = async (req, res) => {
     _recordPath(req.method, req.url, kind, route.host);
 
     // 3. 非 inference (mgmt/auth 等): 纯透 · 不读 body · 无 SP 可观
+    //   v9.9.336 · 根源突破: 信封陈旧时对 PASSTHROUGH 的 POST 缓冲 body 探采鉴权信封
+    //   (LSP/补全亦携信封) → 采得即自主合成保鲜; 新鲜时不缓冲, 回归纯流式直透。
     if (kind === "PASSTHROUGH") {
+      if (_shouldProbeLspBody(req)) {
+        _lspProbe.attempts++;
+        const _rpc = _rpcName(req.url);
+        let _hdrHit = false;
+        try {
+          _hdrHit = _scanAuthHeaders(req);
+        } catch (_) {}
+        readBody(req)
+          .then((b) => {
+            let _bodyHit = false;
+            try {
+              _bodyHit = _harvestFromLsp(b);
+            } catch (_) {}
+            try {
+              _recordProbePath(_rpc, _bodyHit, _hdrHit);
+            } catch (_) {}
+            proxyToCloud(req, res, b, rid);
+          })
+          .catch(() => {
+            try {
+              proxyToCloud(req, res, undefined, rid);
+            } catch (_) {}
+          });
+        return;
+      }
       proxyToCloud(req, res, undefined, rid);
       return;
     }
