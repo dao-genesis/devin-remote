@@ -2193,7 +2193,9 @@ public class MainActivity extends AppCompatActivity {
                 c.setRequestProperty("Authorization", "Bearer " + auth1);
                 if (orgId != null && !orgId.isEmpty()) c.setRequestProperty("x-cog-org-id", orgId);
                 try {
-                    String ck = android.webkit.CookieManager.getInstance().getCookie("https://app.devin.ai/");
+                    // attachments_token 铸造时服务端钉 Path=/attachments → 必须按附件真实路径取,
+                    // 按根路径 "/" 取永远拿不到该 Cookie (铸了也 401)。
+                    String ck = android.webkit.CookieManager.getInstance().getCookie(url);
                     if (ck != null && !ck.isEmpty()) c.setRequestProperty("Cookie", ck);   // attachments_token → /attachments 真鉴权
                 } catch (Exception ignored) {}
             }
@@ -2281,7 +2283,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             if (auth1 == null || auth1.isEmpty() || pageUrl == null || !pageUrl.contains("app.devin.ai")) return;
             String ck = null;
-            try { ck = android.webkit.CookieManager.getInstance().getCookie("https://app.devin.ai/"); } catch (Exception ignored) {}
+            try { ck = android.webkit.CookieManager.getInstance().getCookie("https://app.devin.ai/attachments/"); } catch (Exception ignored) {}
             if (ck != null && ck.contains("attachments_token=")) return;   // 已有 → 不重复铸造
             new Thread(() -> mintAttachmentCookie(auth1, orgId)).start();
         } catch (Exception ignored) {}
