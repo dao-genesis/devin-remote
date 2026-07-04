@@ -198,6 +198,9 @@ public class TabActivity extends AppCompatActivity {
             @Override public void onPermissionRequest(final android.webkit.PermissionRequest request) {
                 runOnUiThread(() -> { try { request.grant(request.getResources()); } catch (Exception ignored) {} });
             }
+            @Override public void onGeolocationPermissionsShowPrompt(String origin, android.webkit.GeolocationPermissions.Callback cb) {
+                if (cb != null) cb.invoke(origin, true, false);
+            }
         });
 
         // 下载 (附件/导出文件): http(s) 走系统 DownloadManager; blob:/data: 由页面 JS 经 RTDL 桥回传
