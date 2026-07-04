@@ -13528,6 +13528,31 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
       if (needAuthHdr(newUrl)) { try { this.setRequestHeader('Authorization', 'Bearer ${injA1}'); this.setRequestHeader('x-cog-org-id', '${pinOrg}'); } catch(e) {} }
       return result;
     };
+    // 3.5 对话导航/标题上报(对齐手机 APK 标签追踪): 跨域 iframe 父窗读不到 contentWindow.location,
+    //     SPA 路由/标题变化经 postMessage 上报父窗(__daoConvNav) → 外层页签得知当前打开的对话。
+    if (window.parent && window.parent !== window) {
+      (function(){
+        var __lastNav = '';
+        var __navRe = /\\/sessions\\/(?:devin-)?([A-Za-z0-9_-]+)/;
+        var __navRep = function(){
+          try {
+            var p = location.pathname || '';
+            var mm = p.match(__navRe);
+            var sid = (mm && mm[1]) || '';
+            var tt = String(document.title || '').replace(/\\s*[|·-]\\s*(Devin|Cognition).*$/i, '').trim();
+            var k = sid + '|' + p + '|' + tt;
+            if (k === __lastNav) return;
+            __lastNav = k;
+            window.parent.postMessage({ __daoConvNav: { sid: sid, path: p, title: tt } }, '*');
+          } catch (e) {}
+        };
+        try { var _ps2 = history.pushState; history.pushState = function(){ var r = _ps2.apply(history, arguments); setTimeout(__navRep, 50); return r; }; } catch (e) {}
+        try { var _rs2 = history.replaceState; history.replaceState = function(){ var r = _rs2.apply(history, arguments); setTimeout(__navRep, 50); return r; }; } catch (e) {}
+        try { window.addEventListener('popstate', function(){ setTimeout(__navRep, 50); }); } catch (e) {}
+        try { setInterval(__navRep, 2000); } catch (e) {}
+        setTimeout(__navRep, 300);
+      })();
+    }
     // 4. postMessage通信 — 与父窗口(IDE)同步状态
     if (window.parent !== window) {
       window.parent.postMessage({type:'dao-auth',auth1:'${injA1}',orgId:'${pinOrg}',email:'${pinEmail}'}, '*');
