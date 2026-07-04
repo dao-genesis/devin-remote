@@ -1414,6 +1414,8 @@ public class MainActivity extends AppCompatActivity {
         resumeWeb(t.web);   // 选中即把页面拉回「可见+计时器运行」, 防止 visibilityState 卡 hidden 致交互冻死
         // 切到账号标签 → 顺手命令切号引擎刷一次该号(状态+额度), 顶部标签金额即时显示·不等周期心跳。
         if (t.accountJson != null) pushOpenAcctsToSwitch();
+        // 附件 Cookie 是组织级共享状态 → 前台标签优先: 切标签即按其组织预铸 (他组织铸过则重铸)
+        if (t.auth1 != null && !t.auth1.isEmpty()) warmAttachmentCookie(t.auth1, t.orgId, "https://app.devin.ai/attachments/");
     }
 
     /** 把一个 WebView 强制拉回「页面可见 + 计时器运行」状态。
@@ -2223,13 +2225,17 @@ public class MainActivity extends AppCompatActivity {
         }
         return c;
     }
-    /** attachments_token Cookie 是否存在且未过期 (JWT 则解 exp, 留 60s 余量; 非 JWT 视为有效)。 */
-    static boolean attachmentCookieFresh(String url) {
+    /** attachments_token Cookie 是否存在、未过期、且属于目标组织。Token 是组织级作用域的不透明值，
+     *  多账号多标签共用同一 CookieManager —— 他组织铸的 Cookie 对本标签附件必 403，
+     *  故需记录铸造时的组织并按组织判新鲜 (JWT 则另解 exp, 留 60s 余量; 非 JWT 只判组织)。 */
+    static boolean attachmentCookieFresh(String url) { return attachmentCookieFresh(url, null); }
+    static boolean attachmentCookieFresh(String url, String orgId) {
         try {
             String ck = android.webkit.CookieManager.getInstance().getCookie(url);
             if (ck == null) return false;
             int i = ck.indexOf("attachments_token=");
             if (i < 0) return false;
+            if (orgId != null && !orgId.isEmpty() && sCookieOrg != null && !orgId.equals(sCookieOrg)) return false;
             String v = ck.substring(i + 18);
             int sc = v.indexOf(';'); if (sc >= 0) v = v.substring(0, sc);
             String[] parts = v.split("\\.");
@@ -2246,16 +2252,20 @@ public class MainActivity extends AppCompatActivity {
     }
     private static final Object MINT_LOCK = new Object();
     private static volatile long sLastMintAt = 0;
-    /** 确保 attachments_token 就绪 (单飞铸造·3s 防抖, 防并发媒体请求触发铸造风暴)。 */
+    private static volatile String sLastMintOrg = null;
+    /** 最近一次成功铸造 attachments_token 的组织 (Cookie 作用域归属)。 */
+    static volatile String sCookieOrg = null;
+    /** 确保目标组织的 attachments_token 就绪 (单飞铸造·同组织 3s 防抖, 防并发媒体请求触发铸造风暴)。 */
     static boolean ensureAttachmentCookie(String auth1, String orgId, String url) {
-        if (attachmentCookieFresh(url)) return true;
+        if (attachmentCookieFresh(url, orgId)) return true;
         if (auth1 == null || auth1.isEmpty()) return false;
         synchronized (MINT_LOCK) {
-            if (attachmentCookieFresh(url)) return true;
+            if (attachmentCookieFresh(url, orgId)) return true;
             long now = System.currentTimeMillis();
-            if (now - sLastMintAt < 3000) return false;
-            sLastMintAt = now;
-            return mintAttachmentCookie(auth1, orgId) && attachmentCookieFresh(url);
+            boolean sameOrg = (orgId == null) ? (sLastMintOrg == null) : orgId.equals(sLastMintOrg);
+            if (sameOrg && now - sLastMintAt < 3000) return false;
+            sLastMintAt = now; sLastMintOrg = orgId;
+            return mintAttachmentCookie(auth1, orgId) && attachmentCookieFresh(url, orgId);
         }
     }
     /** 铸造 attachments_token Cookie: POST set-attachment-cookie(Bearer 有效) → Set-Cookie 落入 CookieManager。 */
@@ -2292,7 +2302,9 @@ public class MainActivity extends AppCompatActivity {
                 if (got) try { cm.flush(); } catch (Exception ignored) {}
             }
             try { c.disconnect(); } catch (Exception ignored) {}
-            return got && code >= 200 && code < 300;
+            boolean ok = got && code >= 200 && code < 300;
+            if (ok) sCookieOrg = (orgId == null || orgId.isEmpty()) ? null : orgId;
+            return ok;
         }
     }
     // 媒体鉴权本源补齐: 只有「账号标签」(accountJson 开页)才有 tab.auth1 —— 用户自己登录/链接打开的
@@ -2328,7 +2340,7 @@ public class MainActivity extends AppCompatActivity {
     static void warmAttachmentCookie(final String auth1, final String orgId, final String pageUrl) {
         try {
             if (auth1 == null || auth1.isEmpty() || pageUrl == null || !pageUrl.contains("app.devin.ai")) return;
-            if (attachmentCookieFresh("https://app.devin.ai/attachments/")) return;   // 新鲜 → 不重复铸造 (过期则重铸)
+            if (attachmentCookieFresh("https://app.devin.ai/attachments/", orgId)) return;   // 本组织新鲜 → 不重复铸造 (过期/他组织则重铸)
             new Thread(() -> ensureAttachmentCookie(auth1, orgId, "https://app.devin.ai/attachments/")).start();
         } catch (Exception ignored) {}
     }
