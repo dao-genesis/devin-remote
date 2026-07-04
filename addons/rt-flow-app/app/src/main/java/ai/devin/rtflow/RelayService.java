@@ -87,7 +87,10 @@ public class RelayService extends Service {
         String flag = readUserFile("remote-ops-flag");
         if (flag == null || flag.isEmpty()) { remoteOpsEnabled = true; writeUserFile("remote-ops-flag", "1"); }
         else remoteOpsEnabled = "1".equals(flag);
-        startForeground(1, buildNotification("内网穿透服务启动中…"));
+        // Android 12+ 后台重启(START_STICKY/开机拉起)时前台提权可能被系统禁止
+        //   (ForegroundServiceStartNotAllowedException) —— 不接住会崩溃循环("keeps stopping")。
+        //   降级为普通后台服务继续跑, 下次进前台再由 startRelay 正常提权。
+        try { startForeground(1, buildNotification("内网穿透服务启动中…")); } catch (Exception ignored) {}
         acquireWake();
         main.post(this::initEngine);
         // 去中心化直连默认开启: 服务一起即拉起本地 server (绑 0.0.0.0), 同一局域网的控制端可零中继/零隧道直连本机。
