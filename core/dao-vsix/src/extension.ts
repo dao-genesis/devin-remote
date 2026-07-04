@@ -1435,6 +1435,40 @@ async function waitForExecOutput(filePath: string, marker: string, timeoutMs: nu
 }
 function daoExecMarker(): string { return `__DAO_DONE_${Math.random().toString(36).slice(2, 10)}__`; }
 
+// ═══════════════════════════════════════════════════════════
+// 帛书·「大巧若拙」— /api/exec 无头直执行(根治「靠 GUI 集成终端跑命令」之脆)。
+//   旧法: createTerminal + sendText + 轮询临时文件哨兵。它系于 IDE 集成终端的
+//   shell-integration/焦点/GUI 生存态——在远程无头 exthost 里终端不落盘 → 哨兵永不至 →
+//   即便 `echo hi` 也恒「timeout waiting for output」(实测 v3.50.70 经 mesh 复现)。
+//   治法「得一」: HTTP 远控本就该以 child_process 直取 stdout/stderr/exitCode,
+//   确定性·不依赖任何 GUI 态。默认走此路; 仅当显式 type==='terminal-visible' 才用可视终端。
+async function daoHeadlessExec(cmd: string, cwd: string | undefined, timeoutMs: number, shell?: string): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }> {
+    const cp = await import('child_process');
+    const wsCwd = cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir();
+    return new Promise((resolve) => {
+        const opts: any = { cwd: wsCwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024, env: process.env };
+        let child: any;
+        try {
+            if (shell === 'powershell' || shell === 'ps') {
+                child = cp.spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], opts);
+            } else if (shell === 'bash') {
+                child = cp.spawn('bash', ['-lc', cmd], opts);
+            } else {
+                child = cp.spawn(cmd, { ...opts, shell: true });
+            }
+        } catch (e: any) {
+            resolve({ stdout: '', stderr: String(e && e.message || e), exitCode: null, timedOut: false }); return;
+        }
+        let out = '', err = '', timedOut = false, settled = false;
+        const done = (r: { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }) => { if (settled) return; settled = true; clearTimeout(to); resolve(r); };
+        const to = setTimeout(() => { timedOut = true; try { child.kill(); } catch { /* 守柔 */ } done({ stdout: out, stderr: err, exitCode: null, timedOut: true }); }, Math.max(1000, timeoutMs));
+        child.stdout?.on('data', (d: any) => { out += d.toString(); });
+        child.stderr?.on('data', (d: any) => { err += d.toString(); });
+        child.on('error', (e: any) => { done({ stdout: out, stderr: (err + (err ? '\n' : '') + String(e && e.message || e)).trim(), exitCode: null, timedOut }); });
+        child.on('close', (code: number) => { done({ stdout: out, stderr: err, exitCode: code, timedOut }); });
+    });
+}
+
 async function executeTool(tool: string, args: any): Promise<any> {
     switch (tool) {
         case 'list_dir': {
@@ -1471,15 +1505,10 @@ async function executeTool(tool: string, args: any): Promise<any> {
             return results || [];
         }
         case 'run_command': {
-            const term = vscode.window.createTerminal('dao-tool');
-            term.show(false);
-            const tmpFile = path.join(os.tmpdir(), `dao-tool-${Date.now()}.txt`);
-            const marker = daoExecMarker();
-            term.sendText(daoExecCaptureCmd(args.command, tmpFile, marker));
-            const r = await waitForExecOutput(tmpFile, marker, 30000);
-            try { fs.unlinkSync(tmpFile); } catch {}
-            setTimeout(() => term.dispose(), 1000);
-            return { output: r.output };
+            // 无头直执行(同 /api/exec 根治): 不依赖 GUI 集成终端落盘
+            const h = await daoHeadlessExec(args.command, args.cwd, Math.min(args.timeout || 30000, 120000), args.shell);
+            const combined = h.stderr ? (h.stdout + (h.stdout && h.stderr ? '\n' : '') + h.stderr) : h.stdout;
+            return { output: combined, exitCode: h.exitCode, timedOut: h.timedOut };
         }
         default:
             return { error: `unknown tool: ${tool}` };
@@ -3416,20 +3445,26 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         }
         case '/api/exec': {
             const body: any = JSON.parse(await readBody(req));
-            const { cmd, type = 'terminal', cwd, timeout: tmout } = body;
+            const { cmd, type = 'terminal', cwd, timeout: tmout, shell } = body;
             if (type === 'vscode') {
                 return await vscode.commands.executeCommand(cmd);
             }
-            const term = vscode.window.createTerminal({ name: 'dao-exec', cwd: cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath });
-            term.show(false);
-            const tmpFile = path.join(os.tmpdir(), `dao-exec-${Date.now()}.txt`);
-            const marker = daoExecMarker();
-            term.sendText(daoExecCaptureCmd(cmd, tmpFile, marker));
-            const waitMs = Math.min(tmout || 20000, 60000);
-            const r = await waitForExecOutput(tmpFile, marker, waitMs);
-            try { fs.unlinkSync(tmpFile); } catch {}
-            setTimeout(() => term.dispose(), 1000);
-            return { status: r.done ? 'completed' : 'timeout', stdout: r.output, exitCode: r.done ? 0 : null, command: cmd };
+            const waitMs = Math.min(tmout || 20000, 120000);
+            // 显式要「操作用户可见终端」时才走 GUI 终端; 其余(含默认)一律无头直执行(确定性·不依赖终端集成)
+            if (type === 'terminal-visible') {
+                const term = vscode.window.createTerminal({ name: 'dao-exec', cwd: cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath });
+                term.show(false);
+                const tmpFile = path.join(os.tmpdir(), `dao-exec-${Date.now()}.txt`);
+                const marker = daoExecMarker();
+                term.sendText(daoExecCaptureCmd(cmd, tmpFile, marker));
+                const rv = await waitForExecOutput(tmpFile, marker, waitMs);
+                try { fs.unlinkSync(tmpFile); } catch {}
+                setTimeout(() => term.dispose(), 1000);
+                return { status: rv.done ? 'completed' : 'timeout', stdout: rv.output, exitCode: rv.done ? 0 : null, command: cmd };
+            }
+            const h = await daoHeadlessExec(cmd, cwd, waitMs, shell);
+            const combined = h.stderr ? (h.stdout + (h.stdout && h.stderr ? '\n' : '') + h.stderr) : h.stdout;
+            return { status: h.timedOut ? 'timeout' : 'completed', stdout: combined, stderr: h.stderr, exitCode: h.exitCode, command: cmd };
         }
         case '/api/command': {
             const body: any = JSON.parse(await readBody(req));
@@ -13656,6 +13691,7 @@ if (process.env.DAO_SELFTEST === '1') {
         bridgeIsLeaderInstance,
         bridgeMachinePort,
         bridgeReadPublishedToken,
+        daoHeadlessExec,
         setState(s: { ws?: any; bridgeUrl?: string; bridgeToken?: string }) {
             if (s.ws) ws = s.ws;
             if (typeof s.bridgeUrl === 'string') bridgeUrl = s.bridgeUrl;

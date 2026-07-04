@@ -147,8 +147,44 @@ test("命中 rate limit 字样", () => withLog("failed: rate-limited by edge", (
 test("正常日志(含 trycloudflare URL)不误判为限流", () => withLog("your quick tunnel https://foo.trycloudflare.com is ready", () => assert.strictEqual(S.cfLogHasRateLimit(), false)));
 test("空/无日志 → false", () => { try { fs.unlinkSync(P.CF_LOG); } catch {} assert.strictEqual(S.cfLogHasRateLimit(), false); });
 
-// ── 收尾 ──
-console.log("\n" + (failed ? "FAIL" : "PASS") + " " + passed + "  FAIL " + failed);
-if (failed) { for (const [n, e] of fails) console.error("  ✗ " + n + "\n    " + (e && e.stack || e)); }
-try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch {}
-process.exit(failed ? 1 : 0);
+// ── 异步: daoHeadlessExec · /api/exec 无头直执行(根治 GUI 集成终端不落盘之脆) ──
+async function testAsync(name, fn) {
+  try { await fn(); passed++; console.log("  ok   " + name); }
+  catch (e) { failed++; fails.push([name, e]); console.log("  FAIL " + name + " — " + (e && e.message)); }
+}
+async function runAsyncGroup() {
+  console.log("\n[daoHeadlessExec · 无头直执行: 直取 stdout/exitCode, 不依赖终端集成/GUI]");
+  const isWin = process.platform === "win32";
+  await testAsync("回显命令 stdout 命中 (echo)", async () => {
+    const r = await S.daoHeadlessExec("echo dao_selftest_marker", undefined, 15000);
+    assert.ok(/dao_selftest_marker/.test(r.stdout), "stdout=" + JSON.stringify(r.stdout));
+    assert.strictEqual(r.timedOut, false);
+    assert.strictEqual(r.exitCode, 0);
+  });
+  await testAsync("非零退出码被如实返回", async () => {
+    const cmd = isWin ? "exit 3" : "sh -c 'exit 3'";
+    const r = await S.daoHeadlessExec(cmd, undefined, 15000);
+    assert.strictEqual(r.exitCode, 3, "exitCode=" + r.exitCode);
+  });
+  await testAsync("stderr 被单独捕获", async () => {
+    const cmd = isWin ? "echo boom 1>&2" : "sh -c 'echo boom 1>&2'";
+    const r = await S.daoHeadlessExec(cmd, undefined, 15000);
+    assert.ok(/boom/.test(r.stderr) || /boom/.test(r.stdout), "stderr=" + r.stderr);
+  });
+  await testAsync("超时命令被 kill 且标记 timedOut(不谎报完成)", async () => {
+    const cmd = isWin ? "ping -n 10 127.0.0.1 >NUL" : "sleep 10";
+    const r = await S.daoHeadlessExec(cmd, undefined, 1200);
+    assert.strictEqual(r.timedOut, true, "应超时: " + JSON.stringify(r));
+  });
+  await testAsync("绝不返回 GUI 终端占位符 [timeout waiting for output]", async () => {
+    const r = await S.daoHeadlessExec("echo ok", undefined, 15000);
+    assert.ok(r.stdout.indexOf("timeout waiting for output") < 0, "stdout=" + r.stdout);
+  });
+
+  // ── 收尾 ──
+  console.log("\n" + (failed ? "FAIL" : "PASS") + " " + passed + "  FAIL " + failed);
+  if (failed) { for (const [n, e] of fails) console.error("  ✗ " + n + "\n    " + (e && e.stack || e)); }
+  try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch {}
+  if (failed) process.exit(1);
+}
+runAsyncGroup();
