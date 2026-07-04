@@ -45,6 +45,12 @@ public class TabActivity extends AppCompatActivity {
     private WebView web;
     private String accJson = "{}";
     private String accAuth1 = "", accOrgId = "";
+    // 附件 Cookie 是组织级共享状态 → 回到前台即按本实例组织预铸 (他组织标签铸过则重铸)
+    @Override protected void onResume() {
+        super.onResume();
+        if (accAuth1 != null && !accAuth1.isEmpty())
+            MainActivity.warmAttachmentCookie(accAuth1, accOrgId, "https://app.devin.ai/attachments/");
+    }
 
     // 网页 <input type=file> 上传 (缺 onShowFileChooser 时点击无任何反应 — 与真浏览器不一致)
     private ValueCallback<Uri[]> filePathCallback;
