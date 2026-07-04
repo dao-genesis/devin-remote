@@ -329,6 +329,20 @@ function buildAuthBridge(rewriteBase, auth) {
     "if(needAuth(nu)){try{this.setRequestHeader('Authorization','Bearer '+__a1);this.setRequestHeader('x-cog-org-id',__org);}catch(e){}}return r;};" +
     // EventSource(Devin 对话实时事件) 前缀模式下亦须补 __pfx, 否则公网 SSE 打到错账号/根域。
     "try{var _ES=window.EventSource;if(_ES){var nES=function(u,o){return new _ES(__pf(u),o);};nES.prototype=_ES.prototype;try{nES.CONNECTING=_ES.CONNECTING;nES.OPEN=_ES.OPEN;nES.CLOSED=_ES.CLOSED;}catch(e){}window.EventSource=nES;}}catch(e){}" +
+    // 对话导航/标题上报(对齐手机 APK 标签追踪): 本页在 iframe 内挂载时, SPA 路由变化与
+    //   document.title 变化经 postMessage 上报父窗(__daoConvNav) —— 跨域 iframe(IDE webview 内
+    //   localhost 反代)父窗无法读 contentWindow.location, 唯此通道能把「当前打开的对话」告知外层页签。
+    "try{if(window.parent&&window.parent!==window){var __lastNav='';" +
+    "var __navRe=/\\/sessions\\/(?:devin-)?([A-Za-z0-9_-]+)/;" +
+    "var __navRep=function(){try{var p=location.pathname||'';var mm=p.match(__navRe);var sid=(mm&&mm[1])||'';" +
+    "var tt=String(document.title||'').replace(/\\s*[|·-]\\s*(Devin|Cognition).*$/i,'').trim();" +
+    "var k=sid+'|'+p+'|'+tt;if(k===__lastNav)return;__lastNav=k;" +
+    "window.parent.postMessage({__daoConvNav:{sid:sid,path:p,title:tt}},'*');}catch(e){}};" +
+    "try{var _ps2=history.pushState;history.pushState=function(){var r=_ps2.apply(history,arguments);setTimeout(__navRep,50);return r;};}catch(e){}" +
+    "try{var _rs2=history.replaceState;history.replaceState=function(){var r=_rs2.apply(history,arguments);setTimeout(__navRep,50);return r;};}catch(e){}" +
+    "try{window.addEventListener('popstate',function(){setTimeout(__navRep,50);});}catch(e){}" +
+    "try{setInterval(__navRep,2000);}catch(e){}" +
+    "setTimeout(__navRep,300);}}catch(e){}" +
     "}catch(e){}})();</script>"
   );
 }

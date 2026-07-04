@@ -878,6 +878,7 @@ function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[
   var fr=document.createElement('iframe');fr.setAttribute('allow','clipboard-read; clipboard-write; microphone; camera');fr.style.display='none';
   fr.addEventListener('load',function(){setLoading(id,false);});fr.addEventListener('error',function(){setLoading(id,false);});
   S.appendChild(fr);
+  m.baseLabel=m.baseLabel||m.label||'';
   tabs[id]={btn:btn,frame:fr,url:m.url,email:m.email||'',zoom:1,meta:m,loading:false,_loaded:false,_dot:dot,_lbl:lb,_amt:am};order.push(id);applyZoom(tabs[id]);setActive(id);sync();schedPersist();try{schedStatusSoon();}catch(e){}
   vscode.postMessage({type:'histPush',url:m.url,label:m.label||'Devin',kind:'acc'});}
 // 归一 · 状态字符串 → 状态点类名(对齐 devin_cloud.classifySession · 软兜底): 空=idle灰, 余映射 running/awaiting/blocked/finished。
@@ -910,6 +911,18 @@ var _shStatT=null;
 // 归一 · iframe 内导航感知(同源反代可读 pathname · 对照手机 APK): 用户在号首页/新建标签里点进某对话 →
 //   捕获 /sessions/<id> 回填 meta.devinId, 后续轮询即按该对话回填对话名+状态灯(而非只显额度/账号名)。
 function _captureTabConv(t,mt){try{var loc=t&&t.frame&&t.frame.contentWindow&&t.frame.contentWindow.location;var pth=(loc&&loc.pathname)||'';var mm=pth.match(/\\/sessions\\/(?:devin-)?([A-Za-z0-9_-]+)/);if(mm&&mm[1]&&mt.devinId!==mm[1]){mt.devinId=mm[1];schedPersist();}}catch(e){}}
+// 归一 · 跨域 iframe 导航上报(对齐手机 APK · 注入桥 __daoConvNav): IDE webview 里反代 iframe 为
+//   跨域源, contentWindow.location 不可读 → 由页内注入桥 postMessage 上报当前对话 sid + 标题;
+//   据 ev.source 定位所属标签, 回填 devinId + 即时对话名, 并立刻触发一轮状态轮询上灯。
+function _onConvNav(src,d){d=d||{};var sid=String(d.sid||'');var tt=String(d.title||'').trim();
+  for(var i=0;i<order.length;i++){var id=order[i];if(id.indexOf('board:')===0||id.indexOf('web:')===0)continue;var t=tabs[id];
+    if(!t||!t.frame||t.frame.contentWindow!==src)continue;var mt=t.meta||(t.meta={});
+    var chg=false;
+    if(mt.devinId!==sid){mt.devinId=sid;chg=true;}
+    if(sid&&tt&&tt!=='Devin'&&tt!=='(未命名)'&&mt.label!==tt){mt.label=tt;if(t._lbl)t._lbl.textContent=tt;chg=true;}
+    if(!sid&&chg&&t._lbl&&mt.email){var _fb=mt.baseLabel||mt.email.split('@')[0];mt.label=_fb;t._lbl.textContent=_fb;}
+    if(chg){schedPersist();schedStatusSoon();if(id===active)_syncDocTitle();}
+    return;}}
 function shellStatusTick(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];if(id.indexOf('board:')===0||id.indexOf('web:')===0)continue;var t=tabs[id];var mt=(t&&t.meta)||{};if(!mt.email)continue;_captureTabConv(t,mt);arr.push({id:id,email:mt.email,devinId:mt.devinId||''});}if(arr.length)vscode.postMessage({type:'shellStatus',tabs:arr});}catch(e){}}
 function schedStatusSoon(){clearTimeout(_shStatT);_shStatT=setTimeout(shellStatusTick,1200);}
 // 对齐手机端刷新手感: 12s→5s (活跃对话额度/状态/卡住提示更新提速 · 每账号一次轻量 listSessions)
@@ -1391,6 +1404,7 @@ window.addEventListener('dragleave',function(e){if(e.relatedTarget===null||e.rel
 window.addEventListener('drop',function(e){if(_dragId||_convDragActive){DROP.className='';_convDragActive=false;return;}e.preventDefault();DROP.className='';var uris='';try{uris=e.dataTransfer.getData('text/uri-list')||e.dataTransfer.getData('text/plain')||'';}catch(x){}var names=[];try{if(e.dataTransfer.files)for(var i=0;i<e.dataTransfer.files.length;i++)names.push(e.dataTransfer.files[i].name);}catch(x){}vscode.postMessage({type:'filesDropped',uris:uris,names:names});});
 window.addEventListener('message',function(ev){var m=ev.data||{};
   if(m.__cwRelay){vscode.postMessage({type:'cloudRelay',msg:m.__cwRelay,board:m.__board||''});return;}
+  if(m.__daoConvNav){try{_onConvNav(ev.source,m.__daoConvNav);}catch(e){}return;}
   if(m.type==='open'){mkTab(m);}
   else if(m.type==='tabUpdate'){try{updateTab(m);}catch(e){}}
   else if(m.type==='closeAll'){var ks=order.slice();for(var i=0;i<ks.length;i++)closeTab(ks[i]);vscode.postMessage({type:'closeAllAck'});}
@@ -1870,44 +1884,7 @@ async function shellHandleMessage(sid, m) {
         try { if (_ctx && _ctx.globalState) _ctx.globalState.update('dao.shellTabs', Array.isArray(m.tabs) ? m.tabs.slice(0, 40) : []); } catch (e) {}
         return;
       case 'shellStatus': {
-        // 归一 · /shell 标签状态轮询(补 shell 侧此前缺失·对照手机 APK sessStatus 六态): 每账号一次
-        //   listRunningSessions → 命中: running/awaiting/blocked(额度类经账号实时额度对账 → 真无余量才 exhausted,
-        //   有余量归 finished 休眠·复刻手机 quotaLive 防误标); 未命中: finished。并回填对话名 + 实时额度。
-        const tabsIn = Array.isArray(m.tabs) ? m.tabs.slice(0, 60) : [];
-        if (!tabsIn.length) return;
-        const byEmail = new Map();
-        for (const t of tabsIn) { const e = String((t && t.email) || '').toLowerCase(); if (!e || !t.id) continue; if (!byEmail.has(e)) byEmail.set(e, []); byEmail.get(e).push(t); }
-        const QRE = /out_of_quota|usage_limit|insufficient|overage|exceeded|quota|depleted|allowance/i;
-        for (const [email, tl] of byEmail) {
-          try {
-            const auth = devinCloud.getCachedAuth(email);
-            if (!auth || !auth.auth1) continue;
-            let act = [];
-            try { act = await devinCloud.listRunningSessions(auth); } catch (e) {}
-            const amap = new Map();
-            for (const s of (act || [])) { const id2 = String(s.devinId || '').replace(/^devin-/, ''); if (id2) amap.set(id2, s); }
-            let h = null, dollars = null;
-            try { await _refreshHealthForTick(email); } catch (e) {}
-            try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
-            for (const t of tl) {
-              const sid = String(t.devinId || '').replace(/^devin-/, '');
-              // 账号首页标签(无具体对话·对齐手机 APK): 以该号最新活跃会话回填对话名+状态灯; 无活跃 → idle 灰。
-              const hit = sid ? amap.get(sid) : ((act && act.length) ? act[0] : null);
-              let cls = hit ? (hit.statusClass || 'running') : (sid ? 'finished' : 'idle');
-              try {
-                if (hit && cls === 'blocked' && QRE.test(JSON.stringify(hit.latest_status_contents || '') + ' ' + String(hit.status || ''))) {
-                  const live = !!(h && (((typeof h.dPct === 'number') && h.dPct > 0) || ((typeof h.wPct === 'number') && h.wPct > 0) || ((typeof h.overageDollars === 'number') && h.overageDollars > 0)));
-                  cls = live ? 'finished' : 'exhausted';
-                }
-              } catch (e) {}
-              const upd = { type: 'tabUpdate', id: t.id, statusClass: cls };
-              const title = hit && String(hit.title || '').trim();
-              if (title && title !== '(未命名)') upd.label = title;
-              if (dollars != null) upd.dollars = dollars;
-              send(upd);
-            }
-          } catch (e) {}
-        }
+        await _handleShellStatus(m, send);
         return;
       }
       case 'translate': {
@@ -2242,6 +2219,9 @@ function _wireMultiPanel(panel) {
         catch (e) { _toast("导入失败: " + ((e && e.message) || e)); try { panel.webview.postMessage({ type: "usError", error: (e && e.message) || String(e) }); } catch (e2) {} }
         return;
       }
+      // 归一 · 标签状态轮询(与公网 /shell 同一宿主入口): 前端 5s tick 上报打开中的账号标签
+      //   (email + 注入桥回填的 devinId) → listRunningSessions 判六态 → tabUpdate 上灯/回填对话名/额度。
+      if (m.type === "shellStatus") { await _handleShellStatus(m, (x) => { try { panel.webview.postMessage(x); } catch (e) {} }); return; }
       if (m.type === "closed") { _multiTabs.delete(m.id); _saveMultiTabs(); return; }
       if (m.type === "closeAllAck") { _multiTabs.clear(); _saveMultiTabs(); return; }
       if (m.type === "copyCred") {
@@ -2472,6 +2452,74 @@ function _ensureMultiPanel() {
   _wireMultiPanel(panel);
   if (!_multiStatusTimer) _multiStatusTimer = setInterval(() => { _multiTabStatusTick().catch(() => {}); }, 8000); // 20s→8s · 对齐手机端状态/额度刷新手感
   return panel;
+}
+// 归一 · 标签状态轮询宿主端(公网 /shell 与 IDE 多实例 webview 同一入口·对照手机 APK sessStatus 六态):
+//   每账号一次 listRunningSessions → 命中: running/awaiting/blocked(额度类经账号实时额度对账 →
+//   真无余量才 exhausted, 有余量归 finished 休眠·复刻手机 quotaLive 防误标); 未命中: finished。
+//   并回填对话名(非活跃对话经标题缓存兜底) + 实时额度。
+async function _handleShellStatus(m, send) {
+  const tabsIn = Array.isArray(m.tabs) ? m.tabs.slice(0, 60) : [];
+  if (!tabsIn.length) return;
+  const byEmail = new Map();
+  for (const t of tabsIn) { const e = String((t && t.email) || '').toLowerCase(); if (!e || !t.id) continue; if (!byEmail.has(e)) byEmail.set(e, []); byEmail.get(e).push(t); }
+  const QRE = /out_of_quota|usage_limit|insufficient|overage|exceeded|quota|depleted|allowance/i;
+  for (const [email, tl] of byEmail) {
+    try {
+      let auth = devinCloud.getCachedAuth(email);
+      // auth 未缓存(如 IDE 重启后还原的标签) → 节流自动登录取号(每号 10min 一试·不阻塞其他号),
+      //   否则该号标签永无状态灯/对话名(旧病灶: 直接 continue 即静默死区)。
+      if (!auth || !auth.auth1) auth = await _shellEnsureAuth(email);
+      if (!auth || !auth.auth1) continue;
+      let act = [];
+      try { act = await devinCloud.listRunningSessions(auth); } catch (e) {}
+      const amap = new Map();
+      for (const s of (act || [])) { const id2 = String(s.devinId || '').replace(/^devin-/, ''); if (id2) amap.set(id2, s); }
+      let h = null, dollars = null;
+      try { await _refreshHealthForTick(email); } catch (e) {}
+      try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+      for (const t of tl) {
+        const sid = String(t.devinId || '').replace(/^devin-/, '');
+        // 账号首页标签(无具体对话·对齐手机 APK): 以该号最新活跃会话回填对话名+状态灯; 无活跃 → idle 灰。
+        const hit = sid ? amap.get(sid) : ((act && act.length) ? act[0] : null);
+        let cls = hit ? (hit.statusClass || 'running') : (sid ? 'finished' : 'idle');
+        try {
+          if (hit && cls === 'blocked' && QRE.test(JSON.stringify(hit.latest_status_contents || '') + ' ' + String(hit.status || ''))) {
+            const live = !!(h && (((typeof h.dPct === 'number') && h.dPct > 0) || ((typeof h.wPct === 'number') && h.wPct > 0) || ((typeof h.overageDollars === 'number') && h.overageDollars > 0)));
+            cls = live ? 'finished' : 'exhausted';
+          }
+        } catch (e) {}
+        const upd = { type: 'tabUpdate', id: t.id, statusClass: cls };
+        let title = hit && String(hit.title || '').trim();
+        // 非活跃对话(已结束/休眠)不在 listRunningSessions 内 → 从对话标题缓存回填, 页签仍显对话名。
+        if ((!title || title === '(未命名)') && sid) { try { title = String(_convTitleMap[sid] || _convTitleMap['devin-' + sid] || '').trim(); } catch (e) {} }
+        if (title && title !== '(未命名)') upd.label = title;
+        if (dollars != null) upd.dollars = dollars;
+        send(upd);
+      }
+    } catch (e) {}
+  }
+}
+// /shell 状态轮询取号: auth 未缓存时经 _resolveAuthForEmail 自动登录, 但每号 10min 内只试一次
+//   (负缓存·防坏密码每 5s tick 反复打登录接口), in-flight 去重防并发重登。
+const _shellAuthNeg = new Map(); // emailLower → lastFailTs
+const _shellAuthInflight = new Map(); // emailLower → Promise
+async function _shellEnsureAuth(email) {
+  const key = String(email || '').toLowerCase();
+  if (!key) return null;
+  const neg = _shellAuthNeg.get(key);
+  if (neg && Date.now() - neg < 10 * 60 * 1000) return null;
+  if (_shellAuthInflight.has(key)) return _shellAuthInflight.get(key);
+  const p = (async () => {
+    try {
+      const auth = await _resolveAuthForEmail(key);
+      if (auth && auth.auth1) { _shellAuthNeg.delete(key); return auth; }
+      _shellAuthNeg.set(key, Date.now());
+      return null;
+    } catch (e) { _shellAuthNeg.set(key, Date.now()); return null; }
+    finally { _shellAuthInflight.delete(key); }
+  })();
+  _shellAuthInflight.set(key, p);
+  return p;
 }
 async function _resolveAuthForEmail(email, password) {
   let auth = devinCloud.getCachedAuth(email);
