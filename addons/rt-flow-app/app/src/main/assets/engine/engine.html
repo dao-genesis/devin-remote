@@ -1362,6 +1362,11 @@
       onRemoved: function(a){
         try{ if(N.setTabStatus){ N.setTabStatus(a.id||"","",""); if(a.email) N.setTabStatus(a.email,"",""); } }catch(e){}
         notify("clean-"+(a.id||a.email), "\u2713 \u5f52\u96f6\u8d26\u53f7\u5df2\u5907\u4efd\u5e76\u79fb\u51fa\u8d26\u53f7\u5e93", String(a.email||a.id||""));
+      },
+      // auth1 过期自愈: 用账密重登一次(autoclean 内部 10min 节流), 归零号不再因登录态过期永滞库中
+      relogin: async function(a){
+        try{ var r=await DaoCore.loginAndStore(a.email, a.password); if(r&&r.ok) return DaoCore.findAcc(a.id)||DaoCore.findAcc(a.email)||null; }catch(e){}
+        return null;
       }
     }) : null;
     // ── 常驻后台·增量备份心跳 (与额度/清理解耦·ZIP 时刻跟随最新对话) ────────────────
@@ -1395,15 +1400,31 @@
       }catch(e){}
       _bgCleanBusy = false;
     }
+    var _tickBusy = false;
     async function tick(){
       if (!watchEnabled()) return;
+      if (_tickBusy) return; _tickBusy = true;   // 重入护栏: 大池(100+号)单轮可能超过 POLL_MS, 防并发叠轮洪峰
+      try { await _tickOnce(); } catch(e){}
+      _tickBusy = false;
+    }
+    async function _tickOnce(){
       var accs = []; try { accs = loadAcc().filter(function(x){ return x.auth1 && x.orgId; }); } catch(e){}
       if (!accs.length) return;
+      // 对话追踪(trackStuck)与 额度/清理/备份 解耦·各行其道:
+      //   旧病灶: trackStuck 失败/超时即 return → 下游 bgAutoCleanTick/bgBackupTick 永不执行,
+      //   归零移出库「开关全开却从不生效」的根因之一。今追踪块失败只跳过通知, 维护块照常跑。
+      var r = null; try { r = await CMDS.trackStuck({ watchSids: Object.keys(loadPrev()) }); } catch(e){ r = null; }
+      if (r && r.ok && Array.isArray(r.sessions)) { try { _convTrack(r); } catch(e){} }
+      // 额度权威刷新(同拍同轮): 活跃号必刷 + 空闲号轮转, 刷毕直推原生页签 → 金额/状态不再依赖切号板在前台
+      try { await bgQuotaTick((r&&r.sessions)||[], accs); } catch(e){}
+      // 归零移出库·常驻接管(同拍殿后): 全池逐号走共用清理流水线, 不再依赖切号板在前台
+      try { await bgAutoCleanTick(accs); } catch(e){}
+      // 增量备份·常驻接管(每轮轮转一号): ZIP 备份时刻跟随最新对话内容, 不依赖切号板在前台
+      try { await bgBackupTick(accs); } catch(e){}
+    }
+    function _convTrack(r){
       var prev = loadPrev(), next = {}, now = Date.now();
       var coldStart = !prev || !Object.keys(prev).length;   // 冷启(prev 空): 只播种, 不对全部既有活跃会话刷屏「新对话」
-      // watchSids=上轮在追踪的全部 sid → trackStuck 据此精确登记终态(中断/挂起/完成…)·并回报本轮扫描成功的账号。
-      var r; try { r = await CMDS.trackStuck({ watchSids: Object.keys(prev) }); } catch(e){ return; }
-      if (!r || !r.ok || !Array.isArray(r.sessions)) return;
       var scanned = Object.create(null); (r.scanned||[]).forEach(function(e){ scanned[String(e).toLowerCase()]=1; });   // 本轮扫描成功的账号(门控结束判定)
       // 本轮 active(running/awaiting) 与 attention(action_required/blocked) 集合
       var cur = Object.create(null), quotaByAcct = Object.create(null), quotaTitleByAcct = Object.create(null), titleByAcct = Object.create(null);
@@ -1460,13 +1481,7 @@
       try { _mirrorTickToVault(r.sessions, now, r.ended); } catch(e){}   // 常驻后台权威态写入共享金库(含最近结束闭环) → 网页/跨设备对话追踪恒鲜(≤60s)·一号不漏
       // 额度通知 (真·系统推送, 与对话卡座同款): 已耗尽聚合 + 即将耗尽预警。
       try { quotaWatch(quotaByAcct, quotaTitleByAcct, now); } catch(e){}
-      try { quotaLowWatch(accs, titleByAcct, now); } catch(e){}
-      // 额度权威刷新(同拍同轮): 活跃号必刷 + 空闲号轮转, 刷毕直推原生页签 → 金额/状态不再依赖切号板在前台
-      try { await bgQuotaTick(r.sessions, accs); } catch(e){}
-      // 归零移出库·常驻接管(同拍殿后): 全池逐号走共用清理流水线, 不再依赖切号板在前台
-      try { await bgAutoCleanTick(accs); } catch(e){}
-      // 增量备份·常驻接管(每轮轮转一号): ZIP 备份时刻跟随最新对话内容, 不依赖切号板在前台
-      try { await bgBackupTick(accs); } catch(e){}
+      try { quotaLowWatch(loadAcc().filter(function(x){ return x.auth1 && x.orgId; }), titleByAcct, now); } catch(e){}
     }
     setTimeout(function(){ tick(); setInterval(tick, POLL_MS); }, FIRST_DELAY);
     log("convwatch armed (对话追踪·全局通知, 轮询 " + (POLL_MS/1000) + "s)");

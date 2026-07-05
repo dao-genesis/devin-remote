@@ -1410,6 +1410,11 @@ var _dvClean = DaoAutoClean.create({
     try{ delete _trk[(a.email||"").toLowerCase()]; }catch(e){}
     _selIds.delete(a.id);
     _bigAlert("✓ 归零账号 "+String(a.email||a.id).split("@")[0]+" 已备份并移出账号库");
+  },
+  // auth1 过期自愈: 用账密重登一次(autoclean 内部 10min 节流), 归零号不再因登录态过期永滞库中
+  relogin:async function(a){
+    try{ var r=await DaoCore.loginAndStore(a.email,a.password); if(r&&r.ok){ render(); return DaoCore.findAcc(a.id)||DaoCore.findAcc(a.email)||null; } }catch(e){}
+    return null;
   }
 });
 var CLEAN_STALE_MS = _dvClean.CLEAN_STALE_MS; // 24h 无更新才允许清理

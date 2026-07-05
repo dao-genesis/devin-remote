@@ -29,6 +29,15 @@
     var loadAcc = deps.loadAcc, saveAcc = deps.saveAcc;
     var autoDlBlocked = deps.autoDlBlocked || function () { return false; };
     var onRemoved = deps.onRemoved || function () {};
+    var relogin = deps.relogin || null;      // 可选: async(a)→重登成功返回最新账号对象, 失败返回 null (auth 过期自愈)
+    var _reloginTs = {};                     // id → 上次尝试重登时间 (10min 节流·防对失效号每轮打登录接口)
+    async function _tryRelogin(a) {
+      if (!relogin || !a || !a.email || !a.password) return null;
+      if (Date.now() - (_reloginTs[a.id] || 0) < 600000) return null;
+      _reloginTs[a.id] = Date.now();
+      try { var na = await relogin(a); if (na && hasAuth(na)) return na; } catch (e) {}
+      return null;
+    }
     var _cleanTs = {};                     // id → 上次清理时间 (节流)
     var CLEAN_STALE_MS = 24 * 3600 * 1000; // 24h 无更新才允许清理
 
@@ -106,7 +115,7 @@
     async function autoCleanFor(a, force) {
       if (!force && !cfg("autoCleanup", true)) return { state: "skip", reason: "未开自动清理" };
       if (!force && autoDlBlocked()) return { state: "skip", reason: "计费网络·自动备份/清理暂缓(仅WiFi)" };
-      if (!hasAuth(a)) return { state: "skip", reason: "未登录" };
+      if (!hasAuth(a)) { var ra = await _tryRelogin(a); if (ra) a = ra; else return { state: "skip", reason: "未登录" }; }
       var q = a.quota; if (!q || typeof q.dPct !== "number") return { state: "skip", reason: "额度未知" };
       if (typeof q.overageDollars !== "number") return { state: "skip", reason: "美金余额未取到·不清理" };
       var th = parseFloat(cfg("autoThreshold", 3)); if (!isFinite(th)) th = 3;
@@ -115,6 +124,8 @@
       var zero = (bal <= 0);
       if (!force && Date.now() - (_cleanTs[a.id] || 0) < 3600000) return { state: "skip", reason: "1h 内已清", bal: bal };
       var bk = await fullBackupAccount(a);
+      // 备份/列表失败常见根因 = auth1 已过期(401) → 用账密自愈重登一次再试, 归零号不再因过期登录态永滞库中
+      if ((!bk.ok || !bk.listOk)) { var ra2 = await _tryRelogin(a); if (ra2) { a = ra2; bk = await fullBackupAccount(a); } }
       if (!bk.ok) return { state: "backup-fail", reason: "备份失败·不清理", bal: bal };
       // 对话列表取失败 → 无从判断「24h 内是否活跃」与「是否已全量备份」→ 绝不清理、绝不移出。
       //   (旧病灶: 列表失败被当成「0 条对话·皆陈旧」→ 近期活跃号未备份即被移出库)
