@@ -307,7 +307,7 @@ function _originGetProxyAgent(isHttps) {
 const PORT = parseInt(process.env.ORIGIN_PORT || "8889", 10);
 // v9.6.1 · 反者道之动 · 远曰反 · 回归 v9.1.2 之全前端按钮 (七按钮: 道/官/实/原/编/复/卸 + dots/customBadge)
 // 以 v9.1.2 本源哲学为锚 · 守大常不动 · 五细节皆成: isAlreadyInverted · _rawTape+all_fields · 部署不 kill · 前端按钮回归
-const ORIGIN_VERSION_BASE = "v9.9.337"; // v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
+const ORIGIN_VERSION_BASE = "v9.9.338"; // v9.9.338 · 反者道之动(撤销一切秒数硬限·两处 H2 stream 超时归零·H1 requestTimeout=0·唯下游离场才回收·AI 自然而止·道并行而不相悖) · v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
 // 印 153 · 唯变所适 · 软编码归宗 · 二十五章「逝曰远 远曰反」· 七十六章「兵强则不胜」
 // 病: 多 ext-host 共端口 :8937 · 旧版 in-process proxy 持续 listen · self_file 锁死旧版目录
 //     → 即便装毕新版 vsix · /ping 仍返 v9.9.19/v9.9.20 之 self_file · canon_name 走旧映射
@@ -6885,14 +6885,15 @@ function proxyToCloud(req, res, overrideBody, _rid) {
     if (!_upClosed && !res.writableEnded) _cancelUpstream("res.close");
   });
 
-  // v9.9.337 · 流续不断 · stream 级空闲超时 180s→600s · 二十二章「少则得 多则惑」
-  // 根因: thinking 模型(Claude/DeepSeek)推理阶段可静默 3-5 分钟无数据 → 180s 超时火 → NGHTTP2_CANCEL
-  //       → 下游收截断响应 → Cascade 显示「继续」→ 用户体验为「对话到一半突然中断」
-  // 药: 600s (10min) 安全阈值 · 覆盖最长 thinking 模型推理窗口 · 仍有兜底防泄漏
+  // v9.9.338 · 反者道之动 · 撤销一切「秒数」硬限 · 四十章「反者道之动 弱者道之用」
+  // 真本源: 对话该多长, AI 自会知止(知止不殆·三十二章) · 人为设 180s/600s 皆是「有以为」之下德
+  //         → 反致「上礼为之而莫之应, 攘臂而扔之」= 强掐推理 = 对话中断
+  // 道并行而不相悖: 不设时长上限 · 唯「下游客户端真离场」才回收上游流 (见上三路 close 监听)
+  //   → 正常对话全链路零干扰、AI 自然而止; 客户端 stop/断线时才 NGHTTP2_CANCEL 释放, 互不相悖
+  // 防泄漏: H2 session 45s keepalive ping 探活 · socket 真死则 session error/close 冒泡 → 流自然收
+  //         故无需人为 idle 超时; setTimeout(0) 显式关闭 Node 默认流超时
   try {
-    upStream.setTimeout(600000, () =>
-      _cancelUpstream("upStream.timeout(600s)"),
-    );
+    upStream.setTimeout(0);
   } catch {}
 
   upStream.on("response", (h2resHeaders) => {
@@ -7933,13 +7934,11 @@ function _officialChatReplay(target, norm, sink, _forceMain) {
     up.on("response", (h) => {
       status = (h && h[":status"]) || 0;
     });
-    up.setTimeout(600000, () => {
-      try {
-        up.close(http2.constants.NGHTTP2_CANCEL);
-      } catch (_) {}
-      sink.onError && sink.onError("官方直通超时(600s)");
-      resolve({ ok: false });
-    });
+    // v9.9.338 · 反者道之动 · 官方直通亦不设时长上限 · AI 自然而止(知止不殆)
+    // 防泄漏: session 45s keepalive ping 探活 · socket 真死则 up.on('error') 冒泡 resolve
+    try {
+      up.setTimeout(0);
+    } catch (_) {}
     up.on("data", (c) => chunks.push(c));
     up.on("end", () => {
       try {
@@ -8747,12 +8746,12 @@ _h2Server.on("sessionError", (err) => {
       code: err.code,
     });
 });
-// v9.9.337 · H1 server 超时放宽 · 配合 H2 上游 600s stream 超时
-// 根因: requestTimeout 120s < stream 600s → H1 提前关连接 → 下游丢失长推理响应
-// keepAliveTimeout: 空闲连接回收 · 30s 足够 (LS 高频请求 · 很少真空闲)
+// v9.9.338 · 反者道之动 · H1 请求生命周期不设上限(requestTimeout=0) · 对话长短由 AI 自然而止
+// headersTimeout: 请求头接收阀(防 slowloris · 头永远秒到) · keepAliveTimeout: 空闲连接回收
+// 二者均不触碰活跃请求/响应流 → 道并行而不相悖
 _h1Server.keepAliveTimeout = 30000;
 _h1Server.headersTimeout = 30000;
-_h1Server.requestTimeout = 600000;
+_h1Server.requestTimeout = 0;
 
 // v9.9.58 · 反者道之动 · H2内部端口动态化 · 不再硬编码 PORT+1
 // 病: 多用户(Administrator/zhou)各得FNV-1a端口(8937/8981) · 但H2内部端口硬编码8890
