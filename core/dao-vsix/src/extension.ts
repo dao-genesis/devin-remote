@@ -804,17 +804,17 @@ export async function activate(context: vscode.ExtensionContext) {
                     return { ok: !!(url || tok) };
                 }
                 if (c === 'bridgeStart') {
-                    const r = await bridgeStartTunnel(false);
+                    const r = await bridgeStartTunnel(false, true);
                     if (r.ok) vscode.window.showInformationMessage('隧道已启动');
                     else vscode.window.showWarningMessage(r.reason === 'cloudflared-not-found'
                         ? '未找到 cloudflared：无法启动公网隧道。请装 cloudflared 到 PATH 或 ~/.dao/bin/，或改用命名隧道。'
                         : '公网隧道启动失败（cloudflared 无法运行）。');
                     return r;
                 }
-                if (c === 'bridgeStop') { bridgeStopTunnel(); vscode.window.showInformationMessage('隧道已停止'); return { ok: true }; }
+                if (c === 'bridgeStop') { bridgeStopTunnel(true); vscode.window.showInformationMessage('隧道已停止 · 自动守护已挂起(点「启动/重启」即恢复)'); return { ok: true }; }
                 if (c === 'bridgeRestart') {
                     const wasNamed = !!bridgeReadNamedToken(); bridgeStopTunnel();
-                    const r = await bridgeStartTunnel(wasNamed);
+                    const r = await bridgeStartTunnel(wasNamed, true);
                     if (r.ok) vscode.window.showInformationMessage('隧道已重启');
                     else vscode.window.showWarningMessage(r.reason === 'cloudflared-not-found'
                         ? '未找到 cloudflared：无法重启公网隧道。请装 cloudflared 或改用命名隧道。'
@@ -822,7 +822,8 @@ export async function activate(context: vscode.ExtensionContext) {
                     return r;
                 }
                 if (c === 'bridgeRefreshToken') {
-                    if (!bridgeUrl) { vscode.window.showWarningMessage('当前为常驻桥持久化连接 · Token 由常驻服务管理。请先「启动隧道」再刷新。'); return { ok: false }; }
+                    // 道并行不相悖: 令牌源恒为机器级 ws.token, 与隧道由谁起无关 — 持久化(常驻)态下同样可刷新/重发布,
+                    //   不再拒绝(旧法致持久化态下此按钮死按钮)。
                     // 帛书·「知常曰明」: 对外令牌恒等机器级恒稳源 ws.token(永不再漂)。
                     //   「刷新」即强制把权威令牌重新发布/扩散到所有账号(自愈漂移), 不再凭空铸新牌致脱钩。
                     bridgeToken = ws.token || bridgeToken;
@@ -4370,6 +4371,23 @@ let bridgeToken: string = '';
 const CF_LOG = path.join(BRIDGE_DIR, 'cloudflared-vsix.log');
 const CF_PID = path.join(BRIDGE_DIR, 'cloudflared-vsix.pid');
 const CF_PORT = path.join(BRIDGE_DIR, 'cloudflared-vsix.port');
+// 帛书·「道并行而不相悖」: 用户手动「⏹ 停止」落盘为暂停旗 — 自愈环(liveness/autoPersist)见旗即挂起自动重建,
+//   任一手动「▶ 启动 / 🔄 重启」即撤旗恢复常驻守护; 持久化与手动五按钮两不相害。24h 安全自复(防遗忘致永久断网)。
+const CF_USERSTOP = path.join(BRIDGE_DIR, 'cloudflared-vsix.userstop');
+const CF_USERSTOP_MAX_MS = 24 * 3600 * 1000;
+function bridgeUserStopped(): boolean {
+    try {
+        const st = fs.statSync(CF_USERSTOP);
+        if (Date.now() - st.mtimeMs > CF_USERSTOP_MAX_MS) { try { fs.unlinkSync(CF_USERSTOP); } catch { /* 守柔 */ } return false; }
+        return true;
+    } catch { return false; }
+}
+function bridgeSetUserStopped(on: boolean): void {
+    try {
+        if (on) { bridgeEnsureDir(); fs.writeFileSync(CF_USERSTOP, new Date().toISOString(), 'utf8'); }
+        else fs.unlinkSync(CF_USERSTOP);
+    } catch { /* 守柔 */ }
+}
 let cfPollTimer: any = null;
 // 帛书补丁·止抖三律: 新生隧道自起时刻(建立期/冷却期判据源) — 免 liveness 每 8s 抖杀尚在建立的 quick-tunnel。
 let _cfLastStartMs = 0;
@@ -4609,9 +4627,15 @@ function bridgeFindCloudflared(): string {
     return ''; // 未找到: 返回空串(不再返回字面量制造假成功)
 }
 
-async function bridgeStartTunnel(named: boolean): Promise<{ ok: boolean; reason?: string; url?: string; reused?: boolean }> {
+async function bridgeStartTunnel(named: boolean, manual = false): Promise<{ ok: boolean; reason?: string; url?: string; reused?: boolean }> {
     const { spawn } = require('child_process');
     bridgeEnsureDir();
+    // 道并行不相悖: 手动即天意 — 撤停止旗+清退避计数, 绕过一切自动闸; 自动调用方遇停止旗则挂起。
+    if (manual) { bridgeSetUserStopped(false); _cfSpawnFails = 0; _cfBackoffUntilMs = 0; _cfLastStartMs = 0; }
+    else if (bridgeUserStopped()) {
+        daoLoopLog('tunnel', '用户已手动停止 · 自动重建挂起(点「▶ 启动/🔄 重启」即恢复)');
+        return { ok: false, reason: 'user-stopped' };
+    }
     // 帛书·「知常曰明」: 对外令牌恒等机器级恒稳源 ws.token(載盤即復·永不再漂);
     //   仅 ws.token 极早期缺位才回落持久 auth-token / 新铸, 杜绝窗口重载凭空铸新牌致已发布令牌静默失效。
     bridgeToken = ws.token || bridgeToken || bridgeLoadAuthToken() || crypto.randomBytes(24).toString('hex');
@@ -4646,7 +4670,8 @@ async function bridgeStartTunnel(named: boolean): Promise<{ ok: boolean; reason?
     // 帛书补丁·万流归宗闸: backoff计数+退避+leader+冷却 统一内置于唯一创建入口,
     //   令 autoPersist / livenessTick / 手动 等一切自动调用方共享同一限流·同一选举,
     //   杜绝 autoPersist 等旁路绕过闸门无限自起的根因抖动。「反者道之动·弱者道之用」
-    if (!named) {
+    //   手动(manual)不入此闸: 退避/leader/冷却皆为自动环限流而设, 用户点按即authoritative。
+    if (!named && !manual) {
         // 退避计数: 审视上次自起结果 — 速亡(无URL+进程已死)或逾建立期无URL → 失败+指数退避
         try {
             if (_cfLastStartMs && _cfLastStartMs !== _cfLastCountedStartMs) {
@@ -4757,7 +4782,9 @@ async function bridgeStartTunnel(named: boolean): Promise<{ ok: boolean; reason?
     return { ok: true };
 }
 
-function bridgeStopTunnel() {
+function bridgeStopTunnel(manual = false) {
+    // 道并行不相悖: 手动停止落旗 → 自愈环挂起自动重建, 「停止」真停(直至手动启动/重启或24h安全自复)。
+    if (manual) bridgeSetUserStopped(true);
     if (bridgeProc) { try { bridgeProc.kill(); } catch {} bridgeProc = null; }
     // 收尸脱宿主孤儿: 仅 kill 本窗口句柄不够(复用来的孤儿 bridgeProc 恒 null → 旧法什么也没杀,
     //   下次 start 又从日志读到同一死 URL 复用 → 死隧道永生。故按 PID 文件真杀 + 清端口/日志。)
@@ -5272,6 +5299,7 @@ function bridgeGetState(): any {
         workspace: vscode.workspace.workspaceFolders?.[0]?.name || '',
         root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
         version: EXT_VERSION,
+        userStopped: bridgeUserStopped(),
     };
     if (bridgeUrl) {
         return Object.assign({ connected: true, persistent: false, source: 'inprocess', url: bridgeUrl, token: ws.token || bridgeToken, host: os.hostname(), updated: new Date().toISOString() }, base);
@@ -6205,7 +6233,7 @@ function rBridgeFull(){
   h+='<div class="card" style="font-size:11px;color:var(--muted);margin-bottom:6px">无名之樸 · 插件启动即自动打通整机公网穿透，<b style="color:var(--fg)">零配置、无需任何账号</b>；云端 Agent 即可远程操作本机。</div>';
   // ── 模块1: 实时状态 ──
   if(!on){
-    h+='<div class="card"><div class="cr"><span class="l">隧道状态</span><span class="v" style="color:var(--warn)">'+(b.lastErr?esc(b.lastErr):'未连接 · 启动中…')+'</span></div>';
+    h+='<div class="card"><div class="cr"><span class="l">隧道状态</span><span class="v" style="color:var(--warn)">'+(b.userStopped?'已手动停止 · 自动守护挂起(点▶恢复)':(b.lastErr?esc(b.lastErr):'未连接 · 启动中…'))+'</span></div>';
     h+='<div class="cr"><span class="l">本地端口</span><span class="v">'+(b.localPort||b.port||'—')+'</span></div></div>';
     h+='<div class="br"><button class="btn primary" onclick="cmd(&#39;bridgeStart&#39;)">▶ 启动隧道</button>';
     h+='<button class="btn" onclick="cmd(&#39;bridgeRestart&#39;)">🔄 重启隧道</button></div>';
@@ -7872,36 +7900,36 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             }
             // ═══ Bridge 集成命令 — 帛书·「天下之至柔驰骋于天下之致坚」═══
             case 'bridgeStart': {
-                await bridgeStartTunnel(false);
-                refreshReply({ type: 'actionResult', command: 'bridgeStart', ok: true });
+                const r = await bridgeStartTunnel(false, true);
+                refreshReply({ type: 'actionResult', command: 'bridgeStart', ok: r.ok });
                 break;
             }
             case 'bridgeStartNamed': {
                 const token = await vscode.window.showInputBox({ prompt: '命名隧道 Token (cloudflared tunnel run --token)', placeHolder: 'eyJ...' });
                 if (token) {
                     bridgeSaveNamedToken(token);
-                    await bridgeStartTunnel(true);
+                    await bridgeStartTunnel(true, true);
                     refreshReply({ type: 'actionResult', command: 'bridgeStartNamed', ok: true });
                 }
                 break;
             }
             case 'bridgeStop': {
-                bridgeStopTunnel();
+                bridgeStopTunnel(true);
                 refreshReply({ type: 'actionResult', command: 'bridgeStop', ok: true });
                 break;
             }
             case 'bridgeRestart': {
                 const wasNamed = !!bridgeReadNamedToken();
                 bridgeStopTunnel();
-                await bridgeStartTunnel(wasNamed);
-                refreshReply({ type: 'actionResult', command: 'bridgeRestart', ok: true });
+                const r = await bridgeStartTunnel(wasNamed, true);
+                refreshReply({ type: 'actionResult', command: 'bridgeRestart', ok: r.ok });
                 break;
             }
             case 'bridgeReset': {
                 try { fs.unlinkSync(path.join(BRIDGE_DIR, 'tunnel-token')); } catch { /* 守柔 */ }
                 bridgeStopTunnel();
-                await bridgeStartTunnel(false);
-                refreshReply({ type: 'actionResult', command: 'bridgeReset', ok: true });
+                const r = await bridgeStartTunnel(false, true);
+                refreshReply({ type: 'actionResult', command: 'bridgeReset', ok: r.ok });
                 break;
             }
             case 'bridgeExportCloudMd': {
@@ -7946,13 +7974,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             // 先令服务器接纳新牌(checkAuth 同时认 ws.token + bridgeToken)→旧牌不失效→换牌不断链;
             // 再回写 conn.json + 重写 MD + 反向注入到所有账号 Knowledge(新牌实时扩散)。
             case 'bridgeRefreshToken': {
-                // 仅当本进程自起隧道时可刷新(server 认 ws.token+bridgeToken, 故换牌不断链);
-                // 持久化(常驻桥)模式下隧道与令牌皆由常驻服务管理, 此处刷新会写错 token 反而断链 → 守柔拒绝。
-                if (!bridgeUrl) {
-                    vscode.window.showWarningMessage('当前为常驻桥持久化连接 · Token 由常驻服务管理。如需本插件自管令牌, 请先「▶ 启动隧道」再刷新。');
-                    refreshReply({ type: 'actionResult', command: 'bridgeRefreshToken', ok: false });
-                    break;
-                }
+                // 道并行不相悖: 令牌源恒为机器级权威牌(ws.token/leader 真相), 与隧道由谁起无关 —
+                //   持久化(常驻)态下同样可刷新/重发布(旧法守柔拒绝致此按钮在持久化态下成死按钮)。
                 // 帛书·「知常曰明」: 对外令牌恒等机器级恒稳源 ws.token(永不再漂);「刷新」即强制重新发布/扩散权威令牌。
                 bridgeToken = ws.token || bridgeToken;
                 bridgeSaveAuthToken(bridgeToken);
@@ -7980,7 +8003,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 diag += '隧道探活: ' + (alive ? '✓ 在线' : '✗ 离线') + '\n';
                 if (!alive) {
                     diag += '→ 自动重建隧道…\n';
-                    try { bridgeStopTunnel(); await bridgeStartTunnel(!!bridgeReadNamedToken()); diag += '→ 隧道重建完成 · URL: ' + (bridgeUrl || '(等待)') + '\n'; } catch { diag += '→ 隧道重建失败\n'; }
+                    try { bridgeStopTunnel(); await bridgeStartTunnel(!!bridgeReadNamedToken(), true); diag += '→ 隧道重建完成 · URL: ' + (bridgeUrl || '(等待)') + '\n'; } catch { diag += '→ 隧道重建失败\n'; }
                 }
                 diag += '→ 执行反向注入…\n';
                 try {
