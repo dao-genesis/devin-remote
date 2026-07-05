@@ -137,6 +137,7 @@ public class TabActivity extends AppCompatActivity {
                 MainActivity.installKbHelper(v);                      // 键盘弹出滚动补偿
                 MainActivity.installBackspaceGuard(v);                // IME 退格护栏 (与主壳一致)
                 MainActivity.installVideoFit(v);                      // 录像播放器窄屏适配 (与主壳一致)
+                MainActivity.installMediaRetry(v);                    // 媒体加载自愈 (与主壳一致)
             }
             // 媒体鉴权代取: /attachments/ 图片视频与主壳同源同一套 (Cookie 转发 + 401 铸造自愈)
             @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView v, android.webkit.WebResourceRequest req) {

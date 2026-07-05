@@ -1190,6 +1190,7 @@ public class MainActivity extends AppCompatActivity {
                     installKbHelper(v);         // 键盘弹出时输入框上滚到可见区中部 (不被遮挡)
                     installBackspaceGuard(v);   // 退格护栏: 拦下输入法误发的左右两侧同删
                     installVideoFit(v);         // 录像播放器窄屏适配: 视频区与步骤栏纵向堆叠同屏
+                    installMediaRetry(v);       // 媒体加载自愈: 附件/对象存储直链瞬断→退避自动重载
                     harvestPageAuth(v, tab, u); // 非账号标签从页面登录态采收 auth → 媒体代取可用
                     warmAttachmentCookie(tab.auth1, tab.orgId, u);   // 预铸附件 Cookie → 首次图片/视频即已授权
                     if (tab.translated) applyTranslate(v); // 翻译态跨页保持
@@ -1204,7 +1205,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
+                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -3474,7 +3475,8 @@ public class MainActivity extends AppCompatActivity {
         return true;
     }
 
-    private void startDownload(String url, String ua, String contentDisposition, String mime) {
+    private void startDownload(String url, String ua, String contentDisposition, String mime) { startDownload(url, ua, contentDisposition, mime, 0); }
+    private void startDownload(String url, String ua, String contentDisposition, String mime, int attempt) {
         // blob:/data: 无法走系统 DownloadManager → 转 JS 取内容, 统一收进应用内下载列表
         if (url != null && url.startsWith("blob:")) { captureBlobDownload(url); return; }
         if (url != null && url.startsWith("data:")) { captureDataUrl(url, contentDisposition); return; }
@@ -3497,7 +3499,7 @@ public class MainActivity extends AppCompatActivity {
                 // 落到应用专属外部目录 → 由应用内下载管理器统一展示/打开/拖拽
                 req.setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, name);
                 DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-                if (dm != null) { long id = dm.enqueue(req); dlPending.put(id, new String[]{ name, fMime == null ? "" : fMime }); runOnUiThread(() -> toast("开始下载: " + name)); }
+                if (dm != null) { long id = dm.enqueue(req); dlPending.put(id, new String[]{ name, fMime == null ? "" : fMime, fUrl, String.valueOf(attempt) }); runOnUiThread(() -> toast(attempt > 0 ? ("重试下载: " + name) : ("开始下载: " + name))); }
             } catch (Exception e) { runOnUiThread(() -> toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage()))); }
         }).start();
     }
@@ -3555,6 +3557,34 @@ public class MainActivity extends AppCompatActivity {
             + "var t=null;function deb(){if(t)clearTimeout(t);t=setTimeout(fit,300);}"
             + "new MutationObserver(deb).observe(document.body,{childList:true,subtree:true});"
             + "window.addEventListener('resize',deb);fit();"
+            + "}catch(e){}})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    // 媒体加载自愈: 国内直连时, 附件/对象存储(S3/CloudFront 预签名直链)的图片·视频·音频加载
+    //   易被跨境链路瞬断(连接重置/超时)或预签名过期(403)击中, 表现为「图片时有时无·视频加载不了」。
+    //   此钩子在捕获阶段监听媒体元素 error: 命中 app.devin.ai/attachments 或对象存储直链时,
+    //   按 1.5s/4s/9s 退避自动重载至多 3 次 (同 URL 重取 → /attachments 会重新 302 出新鲜预签名);
+    //   视频重载前记住播放位置, 元数据就绪后 seek 回原处, 用户无感。幂等 + 只重试媒体元素, 不扰其他请求。
+    static void installMediaRetry(WebView w) {
+        if (w == null) return;
+        String js = "(function(){try{if(window.__rtMediaRetry)return;window.__rtMediaRetry=1;"
+            + "var RX=/app\\.devin\\.ai\\/attachments\\/|\\.amazonaws\\.com\\/|\\.cloudfront\\.net\\//;"
+            + "document.addEventListener('error',function(ev){try{"
+            + "var el=ev.target;if(!el||!el.tagName)return;"
+            + "var tag=el.tagName.toUpperCase();"
+            + "if(tag==='SOURCE'){el=el.parentElement;if(!el)return;tag=el.tagName.toUpperCase();}"
+            + "if(tag!=='IMG'&&tag!=='VIDEO'&&tag!=='AUDIO')return;"
+            + "var u=el.currentSrc||el.src||'';if(!RX.test(u))return;"
+            + "var n=el.__rtRetry||0;if(n>=3)return;el.__rtRetry=n+1;"
+            + "setTimeout(function(){try{"
+            + "if(!el.isConnected)return;"
+            + "if(tag==='IMG'){var s=el.src;el.src='';el.src=s;}"
+            + "else{var t=el.currentTime||0,playing=!el.paused;"
+            + "el.load();"
+            + "el.addEventListener('loadedmetadata',function h(){el.removeEventListener('loadedmetadata',h);"
+            + "try{if(t>0)el.currentTime=t;if(playing&&el.play)el.play().catch(function(){});}catch(e){}});}"
+            + "}catch(e){}},[1500,4000,9000][n]||9000);"
+            + "}catch(e){}},true);"
             + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
@@ -3686,7 +3716,15 @@ public class MainActivity extends AppCompatActivity {
                     addDownloadRecord(name, persisted.getAbsolutePath(), puri, mime, persisted.length());
                     toast(puri.isEmpty() ? ("下载完成: " + name) : ("已下载并同步系统下载: " + name));
                 } else if (st == DownloadManager.STATUS_FAILED) {
-                    toast("下载失败");
+                    // 弱网/跨境链路(对象存储直链)易瞬断或凭据过期(403) → 重铸 Cookie 后自动重试,
+                    // 至多 2 次; 仍败才报失败, 免用户手点重来。
+                    int at = 0; try { if (meta != null && meta.length > 3) at = Integer.parseInt(meta[3]); } catch (Exception ignored) {}
+                    String srcUrl = (meta != null && meta.length > 2) ? meta[2] : null;
+                    if (srcUrl != null && !srcUrl.isEmpty() && at < 2) {
+                        String nm = meta[0]; String mm = meta[1].isEmpty() ? null : meta[1];
+                        toast("下载中断, 自动重试: " + nm);
+                        startDownload(srcUrl, null, "attachment; filename=\"" + nm + "\"", mm, at + 1);
+                    } else toast("下载失败");
                 }
             } finally { cur.close(); }
         } catch (Exception ignored) {}
