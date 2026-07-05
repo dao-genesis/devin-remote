@@ -712,6 +712,22 @@ function test(name, fn) {
     assert.ok(html.includes("第一条问题ALPHA"), "首条用户消息摘要");
     assert.ok(html.includes("第二条追问GAMMA"), "次条用户消息摘要");
   });
+  test("富媒体渲染: 图片/视频/链接/裸URL 正确成标签(对齐手机 APK)", () => {
+    const evs = [
+      { type: "initial_user_message", message: "看图 ![截图](https://app.devin.ai/attachments/x/a.png) 和视频 https://ex.com/v.mp4" },
+      { type: "devin_message", message: "文档见 [官网](https://devin.ai/docs) 或直接 https://devin.ai/go 谢谢。" },
+      { type: "devin_message", message: "代码里的不该链接: `见 https://in.code/x` 与 ```\nhttps://in.block/y\n```" },
+    ];
+    const html = cloud.buildConversationHtml("T", "devin-abc", evs, {});
+    assert.ok(/<img[^>]+src="https:\/\/app\.devin\.ai\/attachments\/x\/a\.png"/.test(html), "md 图片→<img>");
+    assert.ok(/<video[^>]+src="https:\/\/ex\.com\/v\.mp4"/.test(html), "裸视频URL→<video>");
+    assert.ok(/<a[^>]+href="https:\/\/devin\.ai\/docs"[^>]*>官网<\/a>/.test(html), "md 链接→<a>带文案");
+    assert.ok(/<a[^>]+href="https:\/\/devin\.ai\/go"/.test(html), "裸URL→<a>");
+    assert.ok(/结尾标点不吞|谢谢。/.test(html), "尾随中文标点保留(不并入URL)");
+    assert.ok(!/<a[^>]+href="https:\/\/in\.code\/x"/.test(html), "行内代码内URL不链接化");
+    assert.ok(!/<a[^>]+href="https:\/\/in\.block\/y"/.test(html), "代码块内URL不链接化");
+    assert.ok(html.includes(".body .rm-img{"), "富媒体图片样式已注入");
+  });
   test("opts.base 注入「返回对话列表」回链 (归一·iframe 内导航回列表)", () => {
     const noBase = cloud.buildConversationHtml("T", "devin-abc", _convEvents, {});
     assert.ok(!/class="back"/.test(noBase), "无 base 时不加回链(备份文件场景)");

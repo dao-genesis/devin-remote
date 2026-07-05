@@ -2034,6 +2034,12 @@ function buildConversationHtml(title, devinId, events, opts) {
     '.body p{margin:6px 0}\n' +
     '.body pre{background:#010409;border:1px solid var(--border);border-radius:6px;padding:12px;overflow-x:auto;font-size:13px}\n' +
     '.body code{background:#010409;padding:2px 6px;border-radius:4px;font-size:13px}\n' +
+    '.body a{color:var(--accent);text-decoration:none;word-break:break-all}\n' +
+    '.body a:hover{text-decoration:underline}\n' +
+    '.body .rm-img{max-width:100%;height:auto;border-radius:8px;margin:6px 0;display:block;cursor:zoom-in;background:#010409}\n' +
+    '.body .rm-imglink{display:inline-block}\n' +
+    '.body .rm-v,.body .rm-a{max-width:100%;border-radius:8px;margin:6px 0;display:block}\n' +
+    '.body .rm-v{background:#000}\n' +
     'details{margin:4px 0}\n' +
     'summary{cursor:pointer;color:var(--accent)}\n' +
     'details pre{max-height:300px;overflow:auto}\n' +
@@ -2155,18 +2161,44 @@ function _convClientScript() {
 function _escHtml(s) {
   return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
+// 富媒体 MD→HTML (对齐手机 APK): 代码块/行内代码 + 图片/视频/音频/链接(md 与裸 URL) + 段落。
+// 输入已 HTML-escaped(& < > " ' 已转义); 反引号/方括号/圆括号/斜杠均原样保留, 可安全解析。
+const _RE_IMG = /\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)(?=$|[?#])/i;
+const _RE_VID = /\.(mp4|webm|mov|m4v|ogv|mkv)(?=$|[?#])/i;
+const _RE_AUD = /\.(mp3|wav|ogg|m4a|flac|aac)(?=$|[?#])/i;
+function _mediaTag(url, alt) {
+  // url 为已转义文本(其中 & 呈 &amp;), 直接置入 src/href 属性浏览器可正确解码。
+  if (_RE_VID.test(url)) return '<video class="rm-v" controls preload="metadata" src="' + url + '"></video>';
+  if (_RE_AUD.test(url)) return '<audio class="rm-a" controls preload="metadata" src="' + url + '"></audio>';
+  if (_RE_IMG.test(url)) return '<a class="rm-imglink" href="' + url + '" target="_blank" rel="noopener"><img class="rm-img" loading="lazy" src="' + url + '" alt="' + (alt || '') + '"></a>';
+  return null;
+}
 function _mdToHtml(escaped) {
-  // 极简 MD→HTML: 代码块/行内代码/段落 (已 HTML-escaped 输入)
   let s = escaped;
-  // 代码块 ```...```
-  s = s.replace(/```([^`]*?)```/g, '<pre><code>$1</code></pre>');
-  // 行内代码 `...`
-  s = s.replace(/`([^`]+?)`/g, '<code>$1</code>');
-  // 段落(双换行)
-  s = s.replace(/\n\n/g, '</p><p>');
-  // 单换行 → <br>
-  s = s.replace(/\n/g, '<br>');
-  return '<p>' + s + '</p>';
+  const stash = [];
+  const keep = (html) => { stash.push(html); return '\u0000' + (stash.length - 1) + '\u0000'; };
+  // 1) 代码块/行内代码 先抽出保护(内部 URL 不被链接化)
+  s = s.replace(/```([^`]*?)```/g, (m, c) => keep('<pre><code>' + c + '</code></pre>'));
+  s = s.replace(/`([^`]+?)`/g, (m, c) => keep('<code>' + c + '</code>'));
+  // 2) Markdown 图片 ![alt](url)
+  s = s.replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (m, alt, url) =>
+    keep(_mediaTag(url, alt) || '<a href="' + url + '" target="_blank" rel="noopener">' + (alt || url) + '</a>'));
+  // 3) Markdown 链接 [text](url)
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (m, txt, url) =>
+    keep('<a href="' + url + '" target="_blank" rel="noopener">' + txt + '</a>'));
+  // 4) 裸 URL 自动识别(图片/视频/音频直显, 其余成链接) · 保留前导分隔符与尾随标点
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (m, pre, url) => {
+    let trail = '';
+    const tm = url.match(/[.,;:!?)\]。，、；：！？）】」》]+$/);
+    if (tm) { trail = tm[0]; url = url.slice(0, -trail.length); }
+    return pre + keep(_mediaTag(url) || '<a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>') + trail;
+  });
+  // 5) 段落/换行
+  s = s.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>');
+  s = '<p>' + s + '</p>';
+  // 6) 还原受保护片段
+  s = s.replace(/\u0000(\d+)\u0000/g, (m, i) => stash[+i]);
+  return s;
 }
 
 // 对话备份为文件夹 (v4.4.0: 替代 ZIP · HTML/MD/JSON/files 四位一体)
