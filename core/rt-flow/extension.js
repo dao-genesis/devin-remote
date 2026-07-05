@@ -590,7 +590,7 @@ html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e1116;colo
 .tab.on2{background:#0e1116;color:#e6edf3;box-shadow:inset 0 -2px 0 #3fb950}
 .tab .dot{width:10px;height:10px;border-radius:50%;background:#6e7681;flex:0 0 auto}
 .tab .dot.running{background:#3fb950;box-shadow:0 0 6px #3fb950}.tab .dot.finished{background:#58a6ff}.tab .dot.blocked{background:#f0883e}.tab .dot.expired{background:#f85149}.tab .dot.exhausted{background:#a371f7}.tab .dot.awaiting{background:#d29922}
-@keyframes dpul{0%,100%{opacity:1}50%{opacity:.35}}.tab .dot.running{animation:dpul 1.4s ease-in-out infinite}
+@keyframes dpul{0%,100%{opacity:1}50%{opacity:.35}}/* 正常/运行态常亮绿灯·不呼吸(用户诉求) */.tab .dot.running{animation:none}
 .tab .no{min-width:10px;height:11px;line-height:11px;text-align:center;font-size:7px;font-weight:700;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:3px;padding:0 1px;flex:0 0 auto;opacity:.8}
 .tab .lbl{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tab .amt{color:#3fb950;font-weight:700;font-size:9px;flex:0 0 auto}
@@ -10948,7 +10948,7 @@ body.resizing .row{contain:strict;contain-intrinsic-size:auto 28px}
 .batch-bar.visible{display:flex}
 .batch-bar button{background:#5a1d1d;color:var(--red);border:none;padding:2px 10px;border-radius:3px;cursor:pointer;font-size:11px}
 .monitor-bar{display:flex;align-items:center;gap:6px;background:#1a2a1a;border:1px solid #2a3a2a;border-radius:4px;padding:3px 8px;margin:4px 0;font-size:10px;color:var(--blue);flex-wrap:wrap}
-.mon-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+.mon-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:none}
 .mon-dot.off{background:#666;animation:none}
 .mon-stat{padding:0 3px}
 .mode-sw{display:inline-flex;align-items:center;gap:3px;font-size:10px;color:#666;float:right}
@@ -10956,7 +10956,7 @@ body.resizing .row{contain:strict;contain-intrinsic-size:auto 28px}
 .mode-sw button:hover{color:var(--blue);border-color:#555}
 .mode-sw button.on{color:var(--green);border-color:#2a4a2a}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-.live-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--green);margin:0 2px;animation:pulse 2s infinite}
+.live-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--green);margin:0 2px;animation:none}
 .fresh{color:var(--green);font-size:14px}
 /* v2.4.0 · stale 陈年标记 · UI 不骗人 */
 .stale{font-size:9px;color:#888;background:#2a2a1a;padding:0 4px;border-radius:3px;border:1px solid #4a4a2a}
