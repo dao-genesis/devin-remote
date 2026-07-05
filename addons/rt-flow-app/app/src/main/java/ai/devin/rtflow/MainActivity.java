@@ -3521,24 +3521,37 @@ public class MainActivity extends AppCompatActivity {
     //   的 flex 行布局; 手机宽(≈384px)不足以容下侧栏 → 视频列被挤到 0 宽, 只见步骤列表看不见视频。
     //   通用修法(不依赖具体类名): 发现 <video> 所处的 0 宽列且父容器是 flex 行 → 改父容器为纵向堆叠,
     //   视频区在上(55%)、侧栏/进度步骤在下, 两者同屏互不覆盖。幂等 + MutationObserver 覆盖 SPA 动态开窗。
+    //   邻里不扰: ① 只对全屏浮层(position:fixed 祖先·即播放器弹窗)内的视频生效, 绝不碰对话流里的
+    //   内嵌卡片/日常面板; ② 记录改前 inline cssText, 弹窗关闭/视频移除/宽屏时整组还原 —— SPA 复用
+    //   DOM 节点也不会把堆叠样式带去其他页面(修「看完视频后其他文件面板也变竖排」)。
     static void installVideoFit(WebView w) {
         if (w == null) return;
         String js = "(function(){try{if(window.__rtVidFit)return;window.__rtVidFit=1;"
+            + "var F=[];"
+            + "function inFixed(e){for(;e&&e!==document.body;e=e.parentElement){if(getComputedStyle(e).position==='fixed')return true;}return false;}"
+            + "function revert(f){try{f.row.style.cssText=f.rowCss;delete f.col.__rtFit;"
+            + "for(var i=0;i<f.kids.length;i++)f.kids[i].el.style.cssText=f.kids[i].css;}catch(e){}}"
+            + "function sweep(){for(var i=F.length-1;i>=0;i--){var f=F[i];"
+            + "if(!f.col.isConnected||!f.col.querySelector('video')||window.innerWidth>700){revert(f);F.splice(i,1);}}}"
             + "function fixOne(v){try{if(window.innerWidth>700)return;"
             + "var col=null,row=null;"
             + "for(var e=v;e&&e!==document.body;e=e.parentElement){"
             + "var wd=e.getBoundingClientRect().width;var p=e.parentElement;"
             + "if(wd<2&&p&&p.getBoundingClientRect().width>100){col=e;row=p;break;}}"
             + "if(!col||col.__rtFit)return;"
+            + "if(!inFixed(row))return;"
             + "var cs=getComputedStyle(row);"
             + "if(cs.display.indexOf('flex')<0||cs.flexDirection!=='row')return;"
-            + "col.__rtFit=1;row.style.flexDirection='column';"
+            + "var f={row:row,col:col,rowCss:row.style.cssText,kids:[]};"
+            + "for(var i=0;i<row.children.length;i++)f.kids.push({el:row.children[i],css:row.children[i].style.cssText});"
+            + "col.__rtFit=1;F.push(f);"
+            + "row.style.flexDirection='column';"
             + "col.style.width='100%';col.style.minWidth='100%';col.style.flex='0 0 55%';col.style.minHeight='200px';"
             + "for(var i=0;i<row.children.length;i++){var c=row.children[i];if(c!==col){"
             + "c.style.width='100%';c.style.maxWidth='100%';c.style.flex='1 1 auto';"
             + "c.style.borderLeft='0';c.style.borderTop='1px solid rgba(127,127,127,.35)';c.style.minHeight='0';}}"
             + "}catch(e){}}"
-            + "function fit(){try{document.querySelectorAll('video').forEach(fixOne);}catch(e){}}"
+            + "function fit(){try{sweep();document.querySelectorAll('video').forEach(fixOne);}catch(e){}}"
             + "var t=null;function deb(){if(t)clearTimeout(t);t=setTimeout(fit,300);}"
             + "new MutationObserver(deb).observe(document.body,{childList:true,subtree:true});"
             + "window.addEventListener('resize',deb);fit();"
