@@ -2329,15 +2329,50 @@ async function backupAccountFull(auth, opts) {
 // 列出备份根下「账号(带编号) → 对话(带编号·可查看正文)」树, 供前端浏览。
 //   新结构: <账号>/对话/<NNN_标题_id>/(含 _meta.json+对话.html) · <账号>/账号信息/
 //   兼容旧结构: 对话文件夹/ZIP 直接位于 <账号>/ 下。
-function _scanConvEntries(base) {
+// 短 ID(目录/ZIP 名内嵌的 devinId 前 8 位) → 全量 devinId。
+//   backup_state 键形如 <orgBare>:devin-<id>; 唯一前缀命中才返回(宁缺毋错)。
+//   意义: ZIP 备份与 _meta.json 缺失/损坏的旧文件夹本无 devinId → 前端「🚀 进入(多实例)」
+//   按钮因此消失; 据文件名短 ID 反查即恢复可开。
+function _shortIdResolver() {
+  let ids = null;
+  return (short) => {
+    short = String(short || "").toLowerCase();
+    if (!/^[a-z0-9]{8}$/.test(short)) return "";
+    if (!ids) {
+      ids = [];
+      try {
+        for (const k of Object.keys(readJson(DC_BACKUP_STATE, {}))) {
+          const i = k.indexOf(":");
+          const id = (i >= 0 ? k.slice(i + 1) : k).trim();
+          if (id) ids.push(id);
+        }
+      } catch {}
+    }
+    let hit = "";
+    for (const id of ids) {
+      if (id.replace(/^devin-/, "").toLowerCase().startsWith(short)) {
+        if (hit && hit !== id) return ""; // 多义 → 放弃
+        hit = id;
+      }
+    }
+    return hit;
+  };
+}
+function _scanConvEntries(base, resolveShort) {
   const convs = [];
   let entries = [];
   try { entries = fs.readdirSync(base, { withFileTypes: true }); } catch { return convs; }
+  const rs = resolveShort || _shortIdResolver();
   for (const e of entries) {
     if (e.isFile() && e.name.toLowerCase().endsWith(".zip")) {
       let size = 0, mtime = 0;
       try { const st = fs.statSync(path.join(base, e.name)); size = st.size; mtime = st.mtimeMs; } catch {}
-      convs.push({ name: e.name, path: path.join(base, e.name), size, mtime, type: "zip", num: 0 });
+      // ZIP 名 = <devinId 末8位>_<对话名>.zip → 反查全量 devinId + 标题
+      const zm = e.name.match(/^([A-Za-z0-9]{8})_(.+)\.zip$/i);
+      convs.push({
+        name: e.name, path: path.join(base, e.name), size, mtime, type: "zip", num: 0,
+        title: zm ? zm[2] : "", devinId: zm ? rs(zm[1]) : "",
+      });
     } else if (e.isDirectory() && !e.name.startsWith("_") && e.name !== "账号信息" && e.name !== "对话" && e.name !== "files") {
       const metaPath = path.join(base, e.name, "_meta.json");
       if (!fs.existsSync(metaPath)) continue;
@@ -2345,9 +2380,12 @@ function _scanConvEntries(base) {
       try { mtime = fs.statSync(metaPath).mtimeMs; } catch {}
       try { meta = JSON.parse(fs.readFileSync(metaPath, "utf8")); } catch {}
       const htmlPath = path.join(base, e.name, "对话.html");
+      // 文件夹名 = <NNN>_<标题>_<ID末8位> → meta 缺失/损坏时据尾段短 ID 反查
+      let did = meta.devinId || "";
+      if (!did) { const fm = e.name.match(/_([A-Za-z0-9]{8})$/); if (fm) did = rs(fm[1]); }
       convs.push({
         name: e.name, path: path.join(base, e.name), mtime, type: "folder",
-        title: meta.title || "", devinId: meta.devinId || "", eventCount: meta.eventCount || 0, num: meta.convNo || 0,
+        title: meta.title || "", devinId: did, eventCount: meta.eventCount || 0, num: meta.convNo || 0,
         hasHtml: fs.existsSync(htmlPath), htmlPath,
       });
     }
@@ -2359,6 +2397,7 @@ function listBackups(root) {
   const out = { root, accounts: [] };
   let dirs = [];
   try { dirs = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return out; }
+  const rs = _shortIdResolver(); // 整树共享一个短ID解析器(state 只读一次)
   for (const d of dirs) {
     if (d.name.startsWith("_")) continue;
     const accDir = path.join(root, d.name);
@@ -2366,10 +2405,10 @@ function listBackups(root) {
     try { acctMeta = JSON.parse(fs.readFileSync(path.join(accDir, ".account.json"), "utf8")); } catch {}
     const convParent = path.join(accDir, "对话");
     // 新结构优先扫 对话/ 子目录; 同时扫账号目录根 (兼容旧结构遗留的对话/ZIP)
-    const convs = _scanConvEntries(fs.existsSync(convParent) ? convParent : accDir);
+    const convs = _scanConvEntries(fs.existsSync(convParent) ? convParent : accDir, rs);
     if (fs.existsSync(convParent)) {
       // 兼容: 既有 对话/ 又有根级旧文件夹时, 两者合并
-      for (const c of _scanConvEntries(accDir)) convs.push(c);
+      for (const c of _scanConvEntries(accDir, rs)) convs.push(c);
     }
     convs.sort((a, b) => (a.num && b.num ? a.num - b.num : b.mtime - a.mtime));
     const infoDir = path.join(accDir, "账号信息");
