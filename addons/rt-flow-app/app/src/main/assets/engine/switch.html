@@ -761,12 +761,15 @@ async function dvConvDl(i,did){
 }
 async function dvConvZip(i,did){
   var a=loadAcc()[i]; if(!a)return; toast("打包 ZIP(对话+工作日志+产出文件)…");
-  var r=await DaoCloud.exportSessionZip(a,did,function(d,t){ toast("取产出文件 "+d+"/"+t+"…"); });
+  // 增量打包: 本地备份库已有该对话整包 → 复用其中已下载的产出文件字节, 只增量取新增/变更 (省流量提速)
+  var prevB64="";
+  try{ if(N.vaultReadBackupB64) prevB64=N.vaultReadBackupB64(_acctFolder(a), "sess-"+did+".zip")||""; }catch(e){}
+  var r=await DaoCloud.exportSessionZip(a,did,function(d,t){ toast("取产出文件 "+d+"/"+t+"…"); }, prevB64||null);
   if(!r||!r.ok){ toast("打包失败: "+((r&&r.error)||""),true); return; }
   var name="devin-"+(a.email||a.id).split("@")[0]+"-"+did.slice(0,10)+".zip";
   try{ if(N.saveBase64File){ N.saveBase64File(name, r.b64); } else { toast("本机不支持二进制下载",true); return; } }
   catch(e){ toast("下载失败",true); return; }
-  toast("✓ 已下载 ZIP ("+(r.fileCount||0)+" 个产出文件)");
+  toast("✓ 已下载 ZIP ("+(r.fileCount||0)+" 个产出文件"+(r.reused?(" · 复用本地 "+r.reused):"")+")");
 }
 async function dvConvArch(i,did){
   var a=loadAcc()[i]; if(!a)return; if(!confirm("归档(水过无痕)本对话?"))return; toast("归档中…");

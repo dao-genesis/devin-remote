@@ -101,18 +101,7 @@ public final class HttpBridge {
 
     public static void exec(final String reqId, final String method, final String url,
                             final String headersJson, final String body, final Cb cb) {
-        INTERACTIVE.submit(() -> {
-            String result;
-            try { result = doHttp(method, url, headersJson, body, false); }
-            catch (Exception e) {
-                // 默认路由(可能经已死 VPN)失败 → 有 VPN 在跑且有底层网络 → 绕 VPN 直连重试一次
-                if (vpnActive() && directNetwork() != null) {
-                    try { result = doHttp(method, url, headersJson, body, true); }
-                    catch (Exception e2) { result = "{\"status\":0,\"error\":" + jsonStr(String.valueOf(e2.getMessage())) + "}"; }
-                } else result = "{\"status\":0,\"error\":" + jsonStr(String.valueOf(e.getMessage())) + "}";
-            }
-            cb.done(reqId, result);
-        });
+        INTERACTIVE.submit(() -> cb.done(reqId, run(method, url, headersJson, body, false)));
     }
 
     /** 二进制下载 (会话产出文件经 presigned URL 取回): 响应体以 base64 回灌 {status, b64}。
@@ -120,17 +109,37 @@ public final class HttpBridge {
      *  走 BULK 池 (低优先级·小并发), 备份大文件下载不再拖慢交互请求。 */
     public static void execB64(final String reqId, final String method, final String url,
                                final String headersJson, final String body, final Cb cb) {
-        BULK.submit(() -> {
-            String result;
-            try { result = doHttpB64(method, url, headersJson, body, false); }
+        BULK.submit(() -> cb.done(reqId, run(method, url, headersJson, body, true)));
+    }
+
+    /** 单次尝试: 默认路由(可能经已死 VPN)失败 → 有 VPN 在跑且有底层网络 → 绕 VPN 直连再试一次。 */
+    private static String attempt(String method, String url, String headersJson, String body, boolean b64) throws Exception {
+        try { return b64 ? doHttpB64(method, url, headersJson, body, false) : doHttp(method, url, headersJson, body, false); }
+        catch (Exception e) {
+            if (vpnActive() && directNetwork() != null)
+                return b64 ? doHttpB64(method, url, headersJson, body, true) : doHttp(method, url, headersJson, body, true);
+            throw e;
+        }
+    }
+
+    /** 幂等请求(GET/HEAD)瞬时异常(超时/连接重置等)自动重试, 短退避最多 3 次 —— 移动网络抖动下
+     *  额度/列表/备份下载不再一次抖动即失败; 非幂等(POST 等)保持单次, 防重复提交。 */
+    private static String run(String method, String url, String headersJson, String body, boolean b64) {
+        String m = (method == null || method.isEmpty()) ? "GET" : method.toUpperCase();
+        boolean idem = "GET".equals(m) || "HEAD".equals(m);
+        int tries = idem ? 3 : 1;
+        Exception last = null;
+        for (int i = 0; i < tries; i++) {
+            try { return attempt(method, url, headersJson, body, b64); }
             catch (Exception e) {
-                if (vpnActive() && directNetwork() != null) {
-                    try { result = doHttpB64(method, url, headersJson, body, true); }
-                    catch (Exception e2) { result = "{\"status\":0,\"error\":" + jsonStr(String.valueOf(e2.getMessage())) + "}"; }
-                } else result = "{\"status\":0,\"error\":" + jsonStr(String.valueOf(e.getMessage())) + "}";
+                last = e;
+                if (i < tries - 1) {
+                    try { Thread.sleep(600L * (i + 1)); }
+                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                }
             }
-            cb.done(reqId, result);
-        });
+        }
+        return "{\"status\":0,\"error\":" + jsonStr(String.valueOf(last == null ? "" : last.getMessage())) + "}";
     }
 
     private static String doHttp(String method, String urlStr, String headersJson, String body, boolean direct) throws Exception {

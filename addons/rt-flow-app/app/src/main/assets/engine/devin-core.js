@@ -48,9 +48,32 @@
       setTimeout(function () { if (__cbs[id]) { delete __cbs[id]; if (!done) { done = true; resolve({ status: 0, error: "timeout" }); } } }, 40000);
     });
   }
+  // 瞬时失败判定: 网络错/超时(status 0) · 5xx · 429 → 值得重试; 4xx/2xx 是确定结果, 不重试。
+  function _transient(res) {
+    if (!res) return true;
+    var s = res.status || 0;
+    return s === 0 || s === 429 || (s >= 500 && s <= 599);
+  }
+  // 幂等请求(GET/HEAD·下载)瞬时失败自动重试: 移动网络抖动/隧道轮换下, 备份/额度/列表等读取不再一次失败即放弃。
+  //   仅幂等请求重试 (POST 不重试, 防重复提交); 指数退避, 最多 3 次。
+  async function _retryTransient(fn, tries) {
+    tries = tries || 3;
+    var res;
+    for (var i = 0; i < tries; i++) {
+      res = await fn();
+      if (!_transient(res) || i === tries - 1) return res;
+      await new Promise(function (k) { setTimeout(k, Math.min(6000, Math.pow(2, i) * 700)); });
+    }
+    return res;
+  }
   // method 可选第 5 参 low=true → 低优先 (供后台备份/导出的文本读取让路给交互请求)。
   function httpReq(method, url, headers, body, low) {
-    return _txtGate(function () { return _rawHttpReq(method, url, headers, body); }, !!low);
+    var m = (method || "GET").toUpperCase();
+    var idem = (m === "GET" || m === "HEAD");
+    return _txtGate(function () {
+      return idem ? _retryTransient(function () { return _rawHttpReq(method, url, headers, body); })
+                  : _rawHttpReq(method, url, headers, body);
+    }, !!low);
   }
   function _rawHttpReqB64(method, url, headers, body) {
     return new Promise(function (resolve) {
@@ -65,8 +88,9 @@
     });
   }
   // 二进制 HTTP (响应体 base64) → {status, b64, size} · 供下载会话产出文件 (二进制无损)。始终走低优先二进制通道。
+  //   产出文件下载全是幂等 GET → 瞬时失败(网络抖动/5xx/429)自动重试, 备份不再因一次抖动缺文件。
   function httpReqB64(method, url, headers, body) {
-    return _binGate(function () { return _rawHttpReqB64(method, url, headers, body); }, true);
+    return _binGate(function () { return _retryTransient(function () { return _rawHttpReqB64(method, url, headers, body); }); }, true);
   }
   function _parse(res) {
     var j = null; try { j = JSON.parse(res && res.text != null ? res.text : ""); } catch (e) {}
@@ -106,7 +130,8 @@
     if (!email || !password) return { ok: false, error: "email and password required" };
     // Step1: windsurf 密码登录 → auth1
     var r1 = await devinJsonPost(URL_LOGIN, { Origin: WINDSURF, Referer: WINDSURF + "/account/login" }, { email: email, password: password });
-    if (r1.status === 429 && retry < 3) { await new Promise(function (k) { setTimeout(k, Math.pow(2, retry) * 2000); }); return devinLogin(email, password, retry + 1); }
+    // 登录本身幂等(只是认证) → 429/网络抖动/5xx 皆重试, 移动网络下登录链不再一次抖动即失败
+    if (_transient(r1) && retry < 3) { await new Promise(function (k) { setTimeout(k, Math.pow(2, retry) * 2000); }); return devinLogin(email, password, retry + 1); }
     var j1 = r1.json || {};
     if (r1.status !== 200 || (!j1.token && !j1.auth1_token)) {
       return { ok: false, error: "登录失败: " + (j1.detail || j1.error || j1.message || (r1.error || ("HTTP " + r1.status))) };
@@ -118,6 +143,7 @@
     var r2 = await devinJsonPost(URL_POSTAUTH, { Origin: WINDSURF, Referer: WINDSURF + "/profile", "Connect-Protocol-Version": "1", "X-Devin-Auth1-Token": auth1 }, { auth1_token: auth1 });
     var j2 = r2.json || {};
     var sessionToken = j2.sessionToken || j2.session_token || "";
+    if ((!sessionToken) && _transient(r2) && retry < 3) { await new Promise(function (k) { setTimeout(k, Math.pow(2, retry) * 2000); }); return devinLogin(email, password, retry + 1); }
     if (r2.status !== 200 || !sessionToken) return { ok: false, error: "PostAuth 失败: " + (j2.error || j2.code || j2.message || "no_session") };
 
     // Step3: Devin post-auth → orgId/orgName/orgSlug

@@ -3564,6 +3564,7 @@ public class MainActivity extends AppCompatActivity {
             + "var wd=e.getBoundingClientRect().width;var p=e.parentElement;"
             + "if(wd<2&&p&&p.getBoundingClientRect().width>100){col=e;row=p;break;}}"
             + "if(!col||col.__rtFit||row.__rtFitRow)return;"
+            + "if(row.querySelector(':scope>[data-rtdvfit]'))return;" /* 双保险: 按 DOM 标记防同行二次插条 */
             + "if(!inOverlay(row))return;"
             + "var cs=getComputedStyle(row);"
             + "if(cs.display.indexOf('flex')<0||cs.flexDirection!=='row')return;"

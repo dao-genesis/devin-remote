@@ -43,6 +43,15 @@
     // 终态会话(内容已定格·无人在跑): 平台会周期性触碰其 updated_at, 不能据此判「活跃」
     var _TERM_ST = { suspended: 1, expired: 1, stopped: 1, finished: 1, archived: 1, interrupted: 1, deleted: 1 };
     function _dormant(s) { var st = String((s && (s.status_enum || s.status)) || "").toLowerCase(); return !!_TERM_ST[st]; }
+    // 活跃对话 = 非终态 且 (运行中 或 近 15min 有更新) —— 这类内容仍在变, 只走「实时 MD」轻量轨(不重下产出文件);
+    //   反之(闲置)才在 WiFi 下打「全量增量 ZIP」。省移动流量: 活跃期每轮备份不再整包重下, 稳定后一次成整包。
+    var ACTIVE_WINDOW_MS = 15 * 60 * 1000;
+    function _isActive(s, ts) {
+      if (_dormant(s)) return false;
+      if (ts && (Date.now() - ts) < ACTIVE_WINDOW_MS) return true;
+      var st = String((s && (s.status_enum || s.status || s.activity_status || s.current_activity)) || "").toLowerCase();
+      return /run|working|active|execut|progress|stream|cod|plan|test|think|busy|resum|start/.test(st);
+    }
 
     function _acctFolder(a) { return String((a && (a.email || a.id)) || "acc").split("@")[0].replace(/[^a-zA-Z0-9_\-]/g, "_") || "acc"; }
     function loadBackupManifest(a) {
@@ -60,19 +69,29 @@
     async function backupSessionFull(a, s, man) {
       var sid = s.devin_id || s.session_id || s.id; if (!sid) return { skipped: true };
       var title = s.title || s.name || s.prompt || sid; var ts = DaoCloud.sessTs(s) || 0;
-      var prev = man.sessions[sid];
-      if (prev && prev.backedUpAt && !prev.deleted && ts > 0 && prev.ts === ts && prev.title === title && prev.complete !== false) {
-        if (!prev.guide && !prev.zip) { try { var g0 = DaoCloud.buildAccessGuide(a, sid, title); if (g0 && N.vaultSaveBackup && N.vaultSaveBackup(_acctFolder(a), "指引-" + sid + ".md", g0)) prev.guide = "指引-" + sid + ".md"; } catch (e) {} }
+      var prev = man.sessions[sid]; var folder = _acctFolder(a);
+      // 双轨判定: 闲置 且 WiFi(非计费网络) 才做重量级「全量增量 ZIP」; 否则(活跃/计费网络)只走实时 MD 轻量轨。
+      var canFullZip = !_isActive(s, ts) && !autoDlBlocked();
+      // 无变化即跳过: 已是整包 ZIP(备齐), 或此刻无法升级为整包(仍活跃/计费网络) → 跳过 (仅补指引)。
+      //   若旧备份只有实时 MD 且现在闲时+WiFi → 不跳过, 落到下面升级为整包 ZIP (增量复用旧字节)。
+      if (prev && prev.backedUpAt && !prev.deleted && ts > 0 && prev.ts === ts && prev.title === title && prev.complete !== false && (prev.zip || !canFullZip)) {
+        if (!prev.guide && !prev.zip) { try { var g0 = DaoCloud.buildAccessGuide(a, sid, title); if (g0 && N.vaultSaveBackup && N.vaultSaveBackup(folder, "指引-" + sid + ".md", g0)) prev.guide = "指引-" + sid + ".md"; } catch (e) {} }
         return { skipped: true, sid: sid };
       }
-      var folder = _acctFolder(a); var convOk = false, zipOk = false, guideOk = false, hasFiles = 0, evCnt = 0;
-      try {
-        var z = await DaoCloud.exportSessionZip(a, sid);
-        if (z && z.ok && z.b64) { evCnt = z.events || 0; hasFiles = z.fileCount || 0; zipOk = !!(N.vaultSaveBackupB64 && N.vaultSaveBackupB64(folder, "sess-" + sid + ".zip", z.b64)); }
-      } catch (e) {}
+      var convOk = false, zipOk = false, guideOk = false;
+      var hasFiles = prev ? (prev.hasFiles || 0) : 0, evCnt = prev ? (prev.events || 0) : 0;
+      if (canFullZip) {
+        try {
+          // 增量: 传入上一份整包, 已下载的产出文件字节按 key 复用, 只增量取新增/变更 → 省流量。
+          var prevZipB64 = (prev && prev.zip && N.vaultReadBackupB64) ? N.vaultReadBackupB64(folder, prev.zip) : "";
+          var z = await DaoCloud.exportSessionZip(a, sid, null, prevZipB64 || null);
+          if (z && z.ok && z.b64) { evCnt = z.events || 0; hasFiles = z.fileCount || 0; zipOk = !!(N.vaultSaveBackupB64 && N.vaultSaveBackupB64(folder, "sess-" + sid + ".zip", z.b64)); }
+        } catch (e) {}
+      }
       if (zipOk) {
         try { if (N.vaultDeleteBackup) { N.vaultDeleteBackup(folder, "conv-" + sid + ".md"); N.vaultDeleteBackup(folder, "指引-" + sid + ".md"); } } catch (e) {}
       } else {
+        // 实时 MD 轨 (活跃对话/计费网络/整包失败兜底): 只刷新对话 md + 取数指引, 不重下产出文件。
         try {
           var c = await DaoCloud.exportSession(a, sid, "conversation");
           if (c && c.ok && c.fallback) { try { var c2 = await DaoCloud.exportSession(a, sid, "conversation"); if (c2 && c2.ok && !c2.fallback) c = c2; } catch (e) {} }
@@ -80,9 +99,14 @@
         } catch (e) {}
         try { var g = DaoCloud.buildAccessGuide(a, sid, title); if (g) guideOk = !!(N.vaultSaveBackup && N.vaultSaveBackup(folder, "指引-" + sid + ".md", g)); } catch (e) {}
       }
-      if (!convOk && !zipOk) return { failed: true, sid: sid };
-      man.sessions[sid] = { sid: sid, title: title, ts: ts, backedUpAt: Date.now(), md: convOk ? ("conv-" + sid + ".md") : null, guide: guideOk ? ("指引-" + sid + ".md") : null, zip: zipOk ? ("sess-" + sid + ".zip") : null, hasFiles: hasFiles, events: evCnt, complete: (evCnt > 0), deleted: false };
-      return { backedUp: true, sid: sid };
+      // 实时 MD 轨没重打包时, 保留上一份整包 ZIP 引用 (勿丢旧全量产出)。
+      var keepZip = zipOk ? ("sess-" + sid + ".zip") : (prev && prev.zip ? prev.zip : null);
+      if (!convOk && !zipOk && !keepZip) return { failed: true, sid: sid };
+      man.sessions[sid] = { sid: sid, title: title, ts: ts, backedUpAt: Date.now(),
+        md: convOk ? ("conv-" + sid + ".md") : (prev && prev.md ? prev.md : null),
+        guide: guideOk ? ("指引-" + sid + ".md") : (prev && prev.guide ? prev.guide : null),
+        zip: keepZip, hasFiles: hasFiles, events: evCnt, complete: (evCnt > 0), deleted: false };
+      return { backedUp: true, sid: sid, track: zipOk ? "zip" : "md" };
     }
     // 账号全量备份(增量·完整文件夹): 逐对话备份 + 账号集成底层 + 清单。
     async function fullBackupAccount(a) {

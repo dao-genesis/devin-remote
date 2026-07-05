@@ -1,6 +1,6 @@
 {
-  "versionCode": 256,
-  "versionName": "0.37.152",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.152/DevinCloud-mobile-v0.37.152.apk",
-  "notes": "v0.37.152 · 修分隔条泄漏: 切模块残留/复制到对话页(回收判定加固·data-rtdvfit 全局兜底清扫·行级防重复插条)"
+  "versionCode": 257,
+  "versionName": "0.37.153",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.153/DevinCloud-mobile-v0.37.153.apk",
+  "notes": "v0.37.153 · 备份双轨+增量ZIP(活跃走实时MD·闲时WiFi整包增量复用旧字节省流量) · 网络瞬断自动重试(JS+原生·登录链韧性) · 手动ZIP增量提速 · 分隔条防重双保险"
 }
