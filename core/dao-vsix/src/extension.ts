@@ -1888,11 +1888,16 @@ function sigPublishOne(server: string, topic: string, body: string, timeoutMs: n
     });
 }
 async function sigPublishFrame(topic: string, frame: string): Promise<boolean> {
+    // 帛书·「大成若缺」: 应答广播到全部可达 broker(非粘性首达)。对端(客户端)与本机的
+    //   可达 broker 集合可能不对称(各受限网络只能触达不同子集); 粘性首达即便存在公共 broker
+    //   也可能落在对端够不着的那个 → 应答静默丢失。故全投所有 broker, 只要有交集即必达。
     const order = (sigState.warm.length ? sigState.warm : sigState.servers);
-    for (const s of order) { if (await sigPublishOne(s, topic, frame, 8000)) { sigState.lastTxTs = Date.now(); return true; } }
-    // warm 全失败兜底: 再全量扫一遍原始列表
-    for (const s of sigState.servers) { if (order.indexOf(s) >= 0) continue; if (await sigPublishOne(s, topic, frame, 8000)) { sigState.lastTxTs = Date.now(); return true; } }
-    return false;
+    const full = order.slice();
+    for (const s of sigState.servers) if (full.indexOf(s) < 0) full.push(s);
+    const results = await Promise.all(full.map(s => sigPublishOne(s, topic, frame, 8000).catch(() => false)));
+    const anyOk = results.some(Boolean);
+    if (anyOk) sigState.lastTxTs = Date.now();
+    return anyOk;
 }
 async function sigPublishObj(role: string, corr: string, obj: any): Promise<boolean> {
     if (!sigState.key) return false;
@@ -2023,7 +2028,10 @@ async function sigStart(): Promise<void> {
         sigState.reasm = sigMakeReasm();
         sigState.handled = []; sigState.stopping = false;
         await sigWarmBrokers();
-        for (const s of (sigState.warm.length ? sigState.warm : sigState.servers)) sigSubscribeServer(s);
+        // 订阅全部 broker(非仅 warm): warm 仅探 POST 可达, 而 SSE 订阅(GET 长连)与 POST 可达性可不对称
+        //   (某 broker 限流 POST 却容许 GET)。客户端已改全投, 本机订全集才保证任一投递 broker 必被收听;
+        //   够不着的 broker 其订阅仅 backoff 空转、无害。warm 优化保留给出站(见 sigPublishFrame)。
+        for (const s of sigState.servers) sigSubscribeServer(s);
         sigState.enabled = true;
         try { console.log('[dao-sig] decentralized relay up · session=' + sigState.session + ' topic=' + sigState.topic + ' brokers=' + (sigState.warm.length || sigState.servers.length)); } catch {}
     } catch (e) { try { console.error('[dao-sig] start failed', e); } catch {} }
@@ -5006,10 +5014,13 @@ function bridgeGenerateCloudMd(pair?: { url: string; token: string }): string {
         'for b in BROKERS: threading.Thread(target=_sub,args=(b,),daemon=True).start()',
         'time.sleep(2)  # 让订阅流建立',
         'def pub(frame):',
+        '    # 广播到全部 broker(非粘性首达): 本机受限网络(如 GFW)可能只能订阅其中一部分 broker,',
+        '    #   客户端无从预知; 故必须全投, 才能保证与本机已订阅集必有交集 → 帧不静默丢失。',
+        '    ok=False',
         '    for s in BROKERS:',
-        '        try: opener.open(urllib.request.Request(s+"/"+TOPIC,data=frame.encode(),method="POST"),timeout=8); return True',
+        '        try: opener.open(urllib.request.Request(s+"/"+TOPIC,data=frame.encode(),method="POST"),timeout=8); ok=True',
         '        except Exception: continue',
-        '    return False',
+        '    return ok',
         'def rpc(path,method="GET",body=None,timeout=40):',
         '    corr=secrets.token_hex(8); payload=seal({"t":"rpc","id":corr,"path":path,"method":method,"body":body})',
         '    n=(len(payload)+1199)//1200 or 1',
