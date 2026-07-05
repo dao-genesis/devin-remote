@@ -1519,7 +1519,7 @@ function _standaloneShellHtml(opts) {
   let html = _multiShellHtml({ mobile: !!opts.mobile });
   html = html.replace(
     /<meta http-equiv="Content-Security-Policy"[^>]*>/i,
-    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; connect-src \'self\'; img-src data: https: http://localhost:* http://127.0.0.1:*; frame-src blob: \'self\' http://localhost:* http://127.0.0.1:*;">'
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; connect-src \'self\' http://localhost:* http://127.0.0.1:*; img-src data: https: http://localhost:* http://127.0.0.1:*; frame-src blob: \'self\' http://localhost:* http://127.0.0.1:*;">'
   );
   const shim = '<scr' + 'ipt>' + SHELL_HTTP_SHIM + '</scr' + 'ipt>';
   html = html.replace(/<head([^>]*)>/i, '<head$1>' + shim);
