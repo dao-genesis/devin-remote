@@ -2171,6 +2171,23 @@ async function _daoDownloadData(m, reply) {
       reply({ type: "dlRecentData", list: ded.slice(0, 80), accounts: emails.length, partial: !!partial, done: doneN, total: emails.length, covered: Object.keys(covered) });
     };
     if (!emails.length) { reply({ type: "dlRecentData", list: [], accounts: 0, partial: false, done: 0, total: 0, covered: [] }); return true; }
+    // 同源·首屏即见最新: 先以对话追踪聚合(_dvStatusAgg)合成实时条目立即回推(covered 空 → 前端只并入不清缓存),
+    //   打开即见正在运行/最新对话, 不等逐号 API 爬完(旧病灶: 首屏先显十几小时前的缓存旧对话)。
+    try {
+      const live = [];
+      for (const [em, st] of _dvStatusAgg) {
+        if (!st || !Array.isArray(st.items)) continue;
+        for (const it of st.items) {
+          const sid = String((it && it.id) || ""); if (!sid) continue;
+          live.push({ email: em, accNo: noOf(em), sid, title: (it && it.title) || sid, status: (it && it.cls) || "", statusClass: (it && it.cls) || "", updatedAt: st.ts || Date.now(), live: true });
+        }
+      }
+      if (live.length) reply({ type: "dlRecentData", list: live.slice(0, 80), accounts: emails.length, partial: true, done: 0, total: emails.length, covered: [] });
+      // 追踪中的活跃账号优先爬取 → 最新对话的权威数据最先回来
+      const hot = new Set();
+      for (const [em, st] of _dvStatusAgg) { if (st && Array.isArray(st.items) && st.items.length) hot.add(String(em).toLowerCase()); }
+      if (hot.size) emails = emails.slice().sort((a, b) => (hot.has(String(b).toLowerCase()) ? 1 : 0) - (hot.has(String(a).toLowerCase()) ? 1 : 0));
+    } catch (e) {}
     await _daoPool(emails, 8, async (email) => {
       try {
         const auth = devinCloud.getCachedAuth(email);
@@ -3518,6 +3535,26 @@ function _daoShareAuth(email, auth1, orgId, apiKey, apiServerUrl) {
   } catch {
     /* 守柔 */
   }
+}
+// 同源·「得一」: 切号板 PAT注密钥 → 同步落入反向注入档案(~/.dao/dao-inject-profile.json)的 GITHUB_PAT。
+//   旧病灶: gitInjectSecretBatch 只写活账号的 Devin 密钥, 从不触及注入档案 → 反向注入板 GITHUB_PAT 卡片恒
+//   显旧值/未设置("死数据"), 且后续新号自动注入仍用陈旧 PAT。故此处以「覆盖式 upsert」把 PAT 写回档案:
+//   dao-vsix 反向注入板下次 getInjectProfile 即读到新值(其档案文件监听亦触发池对账), 两侧恒同源。
+const DAO_INJECT_PROFILE_FILE = path.join(DAO_DIR, "dao-inject-profile.json");
+function _daoUpsertInjectProfilePat(pat) {
+  try {
+    const p = String(pat || "").trim();
+    if (!p) return false;
+    let j = {};
+    try { j = JSON.parse(fs.readFileSync(DAO_INJECT_PROFILE_FILE, "utf8")) || {}; } catch { j = {}; }
+    if (!Array.isArray(j.secrets)) j.secrets = [];
+    const ex = j.secrets.find((s) => s && s.name === "GITHUB_PAT");
+    if (ex) { if (ex.value === p) return false; ex.value = p; }
+    else j.secrets.push({ name: "GITHUB_PAT", value: p });
+    fs.mkdirSync(DAO_DIR, { recursive: true });
+    fs.writeFileSync(DAO_INJECT_PROFILE_FILE, JSON.stringify(j, null, 2), "utf8");
+    return true;
+  } catch { return false; }
 }
 // 广播切号事件 → 全能板即刻跟随 (auto 模式) · 复用既有 auth1, 无重复登录
 function _daoEmitAccount(email, auth1, orgId, apiKey, apiServerUrl) {
@@ -11003,7 +11040,7 @@ body.resizing .row{contain:strict;contain-intrinsic-size:auto 28px}
 .cv-summary b{margin-left:2px}
 .cv-dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex-shrink:0}
 .cv-dot.ok{background:#4ec9b0}
-.cv-dot.stuck{background:#f44;animation:cvpulse 1s infinite}
+.cv-dot.stuck{background:#f0883e;animation:none}/* 异常纯橙·不呼吸(用户诉求) */
 .cv-dot.off{background:#555}
 @keyframes cvpulse{0%,100%{opacity:1}50%{opacity:.3}}
 .cv-stuck-n{color:#f44}
@@ -13946,6 +13983,8 @@ async function handleWebviewMessage(msg) {
         const idx = Array.isArray(msg.indices) && msg.indices.length ? msg.indices : [];
         if (!idx.length) { _toast("\u2717 请先勾选账号"); break; }
         const sharedPat = (msg.pat && String(msg.pat).trim()) || "";
+        // 同源·先落档: 批量前即覆盖式写入注入档案 GITHUB_PAT → 反向注入板即时反映, 不等整批跑完
+        if (sharedPat) _daoUpsertInjectProfilePat(sharedPat);
         _toast("\u23F3 批量连 Git " + idx.length + " 账号 → 同一 GitHub …");
         let ok = 0, fail = 0, warn = 0, secOk = 0; const fails = [];
         for (const i of idx) {
@@ -13987,6 +14026,8 @@ async function handleWebviewMessage(msg) {
       case "gitInjectSecretBatch": {
         const pat = (msg.pat && String(msg.pat).trim()) || "";
         if (!pat) { _toast("\u2717 无 PAT"); break; }
+        // 同源·先落档: 批量注号前先覆盖式写入注入档案 → 反向注入板即时反映, 不等整批跑完
+        const profSynced = _daoUpsertInjectProfilePat(pat);
         const idx = Array.isArray(msg.indices) && msg.indices.length
           ? msg.indices
           : _store.accounts.map((_, k) => k); // 未勾选 → 全部账号
@@ -14004,7 +14045,7 @@ async function handleWebviewMessage(msg) {
           } catch (e) { fail++; fails.push(r.email + ":" + String((e && e.message) || e)); }
           _dvOverviewCache.delete(r.email.toLowerCase());
         }
-        _toast((fail ? "\u26A0" : "\u2713") + " PAT 注密钥: 成功 " + ok + " · 失败 " + fail + (skip ? " · 跳过(不可登录)" + skip : "") + "/" + idx.length);
+        _toast((fail ? "\u26A0" : "\u2713") + " PAT 注密钥: 成功 " + ok + " · 失败 " + fail + (skip ? " · 跳过(不可登录)" + skip : "") + "/" + idx.length + (profSynced ? " · 注入档案已同步" : ""));
         _notify("info", "PAT 反向注入 GITHUB_PAT 密钥: 成功 " + ok + " · 失败 " + fail + " · 跳过(不可登录) " + skip + "/" + idx.length + (fails.length ? ("\n明细: " + fails.join("; ")) : ""));
         log("[git] inject-secret-batch ok=" + ok + " fail=" + fail + " skip=" + skip + (fails.length ? "\n  " + fails.join("\n  ") : ""));
         _broadcastMsg({ type: "gitBatchDone" });
