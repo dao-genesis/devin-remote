@@ -11419,10 +11419,15 @@ interface DaoBatchProgress { total: number; done: number; ok: number; running: b
 let daoBatchProgress: DaoBatchProgress | null = null;
 
 // 仅登录取 auth1+orgId(login + devin post-auth), 不写 ws.*; 含 429 退避。
+// 帛书补丁·协同退避: 任一 worker 遇 429 即广播时戳 → 全池共退, 防止并发锤爆限流窗口。
+let _batchInject429Ts = 0;
 async function devinAuthOnly(email: string, password: string, retry?: number): Promise<{ ok: boolean; auth1?: string; orgId?: string; userId?: string; orgName?: string; error?: string }> {
     const n = retry || 0;
     const r1 = await devinJsonPost(DEVIN_URL_LOGIN, { Origin: DEVIN_WINDSURF, Referer: DEVIN_WINDSURF + '/account/login' }, { email, password });
-    if (r1.status === 429 && n < 4) { await new Promise(ok => setTimeout(ok, Math.pow(2, n) * 3000)); return devinAuthOnly(email, password, n + 1); }
+    if (r1.status === 429) {
+        _batchInject429Ts = Date.now();
+        if (n < 4) { await new Promise(ok => setTimeout(ok, Math.pow(2, n) * 3000)); return devinAuthOnly(email, password, n + 1); }
+    }
     const j1 = r1.json || {};
     const auth1 = j1.token || j1.auth1_token;
     if (r1.status !== 200 || !auth1) return { ok: false, error: 'login HTTP ' + r1.status + ': ' + (j1.detail || j1.error || 'no_token') };
@@ -11562,11 +11567,15 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
     // 有界并发池 — 帛书·「天下之至柔, 驰骋于天下之致坚」: 串行 ~40s/账号 × N 账号(实测 144 账号 ~96 分钟,
     //   久过窗口重启周期 → 永不收敛). 改有界并发(默认 6, 守柔防 429), 稳态因 sig 快路再降至秒级。
     const concurrency = Math.max(1, Math.min(getBatchInjectConcurrency(), accounts.length || 1));
+    _batchInject429Ts = 0;
     let next = 0;
     const worker = async (): Promise<void> => {
         while (true) {
             const i = next++;
             if (i >= accounts.length) break;
+            // 帛书·协同退避: 近期有 429 则全池等冷却(15s 窗口)再取下一账号, 防并发锤爆。
+            const since429 = Date.now() - _batchInject429Ts;
+            if (_batchInject429Ts && since429 < 15000) await new Promise(ok => setTimeout(ok, 15000 - since429));
             const res = await injectOne(accounts[i]);
             if (res.ok) daoBatchProgress!.ok++;
             daoBatchProgress!.results.push(res);
