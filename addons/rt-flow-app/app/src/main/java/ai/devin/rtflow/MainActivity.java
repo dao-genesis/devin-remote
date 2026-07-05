@@ -3525,6 +3525,9 @@ public class MainActivity extends AppCompatActivity {
     //   视频区在上、侧栏/进度步骤在下, 两者同屏互不覆盖。幂等 + MutationObserver 覆盖 SPA 动态开窗。
     //   中缝为可拖拽分隔条(触控/鼠标上下拉动调两块占比·占比记忆于 localStorage):
     //   不分场景——无论有无视频在播, 上块占用都可随手拉小, 避免非视频内容时上方留大片空白。
+    //   分隔条回收: SPA 复用 DOM, 面板切走后行节点可能被挪去对话页 → 回收判定除「列失联/无视频/宽屏」
+    //   外还查「分隔条脱位·行已不在浮层内」; 另按 data-rtdvfit 标记做全局兜底清扫(不在跟踪表内的
+    //   分隔条一律摘除), 行级 __rtFitRow 防同行重复插条(修「切走再切回出两条·条跟去对话页」)。
     //   邻里不扰: ① 只对浮层面板(祖先含 position:fixed 或 absolute·即播放器弹窗/侧开面板)内的视频生效
     //   —— 官网录像播放器有两种宿主: 全屏弹窗(fixed)与会话页内嵌面板(absolute inset-0), 两种都要覆盖;
     //   对话流里的内嵌卡片永不是 0 宽列, 不会触发, 日常面板不受扰。
@@ -3546,29 +3549,34 @@ public class MainActivity extends AppCompatActivity {
             + "var F=[];"
             + "function inOverlay(e){for(;e&&e!==document.body;e=e.parentElement){var p=getComputedStyle(e).position;if(p==='fixed'||p==='absolute')return true;}return false;}"
             + "function revert(f){try{if(f.div&&f.div.parentNode)f.div.parentNode.removeChild(f.div);"
-            + "f.row.style.cssText=f.rowCss;delete f.col.__rtFit;"
+            + "f.row.style.cssText=f.rowCss;delete f.col.__rtFit;delete f.row.__rtFitRow;"
             + "for(var i=0;i<f.kids.length;i++)f.kids[i].el.style.cssText=f.kids[i].css;}catch(e){}}"
             + "function sweep(){for(var i=F.length-1;i>=0;i--){var f=F[i];"
-            + "if(!f.col.isConnected||!f.col.querySelector('video')||window.innerWidth>700){revert(f);F.splice(i,1);}}}"
+            + "if(!f.col.isConnected||!f.div||!f.div.isConnected||f.div.parentNode!==f.row"
+            + "||!f.col.querySelector('video')||!inOverlay(f.row)||window.innerWidth>700){revert(f);F.splice(i,1);}}"
+            + "var st=document.querySelectorAll('[data-rtdvfit]');"
+            + "for(var i=0;i<st.length;i++){var d=st[i],own=false;"
+            + "for(var j=0;j<F.length;j++)if(F[j].div===d){own=true;break;}"
+            + "if(!own&&d.parentNode)d.parentNode.removeChild(d);}}"
             + "function fixOne(v){try{if(window.innerWidth>700)return;"
             + "var col=null,row=null;"
             + "for(var e=v;e&&e!==document.body;e=e.parentElement){"
             + "var wd=e.getBoundingClientRect().width;var p=e.parentElement;"
             + "if(wd<2&&p&&p.getBoundingClientRect().width>100){col=e;row=p;break;}}"
-            + "if(!col||col.__rtFit)return;"
+            + "if(!col||col.__rtFit||row.__rtFitRow)return;"
             + "if(!inOverlay(row))return;"
             + "var cs=getComputedStyle(row);"
             + "if(cs.display.indexOf('flex')<0||cs.flexDirection!=='row')return;"
             + "var f={row:row,col:col,rowCss:row.style.cssText,kids:[]};"
             + "for(var i=0;i<row.children.length;i++)f.kids.push({el:row.children[i],css:row.children[i].style.cssText});"
-            + "col.__rtFit=1;F.push(f);"
+            + "col.__rtFit=1;row.__rtFitRow=1;F.push(f);"
             + "var pct=parseFloat(localStorage.getItem('rtflow.vidSplit')||'55');if(!(pct>=5&&pct<=90))pct=55;"
             + "row.style.flexDirection='column';"
             + "col.style.width='100%';col.style.minWidth='100%';col.style.flex='0 0 '+pct+'%';col.style.minHeight='0';col.style.overflow='hidden';"
             + "for(var i=0;i<row.children.length;i++){var c=row.children[i];if(c!==col){"
             + "c.style.width='100%';c.style.maxWidth='100%';c.style.flex='1 1 auto';"
             + "c.style.borderLeft='0';c.style.minHeight='0';}}"
-            + "var dv=document.createElement('div');f.div=dv;"
+            + "var dv=document.createElement('div');f.div=dv;dv.setAttribute('data-rtdvfit','1');"
             + "dv.style.cssText='flex:0 0 18px;width:100%;cursor:row-resize;touch-action:none;display:flex;align-items:center;justify-content:center;background:rgba(127,127,127,.18);border-top:1px solid rgba(127,127,127,.35);border-bottom:1px solid rgba(127,127,127,.35);';"
             + "var grip=document.createElement('div');grip.style.cssText='width:46px;height:5px;border-radius:3px;background:rgba(127,127,127,.75);pointer-events:none;';dv.appendChild(grip);"
             + "row.insertBefore(dv,col.nextSibling);"
@@ -3588,7 +3596,8 @@ public class MainActivity extends AppCompatActivity {
             + "window.addEventListener('resize',deb);"
             + "document.addEventListener('transitionend',function(){setTimeout(fit,60);},true);"
             + "setInterval(function(){try{var need=false;document.querySelectorAll('video').forEach(function(v){"
-            + "if(v.getBoundingClientRect().width<2)need=true;});if(need||F.length)fit();}catch(e){}},3000);"
+            + "if(v.getBoundingClientRect().width<2)need=true;});"
+            + "if(need||F.length||document.querySelector('[data-rtdvfit]'))fit();}catch(e){}},3000);"
             + "window.__rtVidFitRun=fit;window.__rtVidFit=1;window.__rtVidFitBoot=0;fit();"
             + "}catch(e){window.__rtVidFitBoot=0;}};setup();"
             + "}catch(e){window.__rtVidFitBoot=0;}})();";
