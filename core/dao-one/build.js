@@ -57,7 +57,15 @@ function buildVsix() {
         (m, head, tail) =>
           head.includes("'getProxyPanel'") ? m : head + ", 'getProxyPanel'" + tail,
       );
-      log("vendor-vsix: applied proxy-fold.patch + folded getProxyPanel into noAuthNeeded (三合一叠加)");
+      // 归一·② Proxy Pro 独立子网页(汉堡列表/主页按钮): 把 'proxy' 折入 solo 白名单 →
+      //   getDaoCloudMiddlePanelHtml(st,'proxy') 进单板块模式(隐左导航·只渲 Proxy 面板),
+      //   与其它六大板块「分而治之·平级并排」完全一致。dao-vsix 源保持纯二合一(无 proxy)。
+      code = code.replace(
+        /(const\s+_solo\s*=\s*\[)([^\]]*?)(\]\s*\.includes)/,
+        (m, head, body, tail) =>
+          body.includes("'proxy'") ? m : head + body + ", 'proxy'" + tail,
+      );
+      log("vendor-vsix: applied proxy-fold.patch + folded getProxyPanel/noAuthNeeded + 'proxy' into _solo (三合一叠加)");
     }
     const res = transform(code, {
       transforms: ["typescript", "imports"],
@@ -114,6 +122,29 @@ function buildFlow() {
       copyFile(path.join(srcRoot, f), path.join(dst, f));
   if (fs.existsSync(path.join(srcRoot, "media")))
     copyDir(path.join(srcRoot, "media"), path.join(dst, "media"));
+  // 归一·② Proxy Pro 折入统一外壳 (rt-flow 源保持纯净·仅 dao-one 构建期幂等注入):
+  //   ① 汉堡菜单 PAGES 增一条「Proxy Pro」→ board:proxy (与六大板块同级·点开即独立子网页)。
+  //   ② BOARD_META 补 proxy 标签, 使该 solo 子网页标题/图标与其它板块一致。
+  //   二合一独立版(纯 rt-flow)永不出现此入口 → 「为变所适·完全整合」。
+  const flowExt = path.join(dst, "extension.js");
+  if (fs.existsSync(flowExt)) {
+    let flow = fs.readFileSync(flowExt, "utf8");
+    let touched = false;
+    if (!/proxy:\[/.test(flow)) {
+      flow = flow.replace(
+        /(var BOARD_META=\{[^}]*?)(\};)/,
+        (m, head, tail) => head.includes("proxy:") ? m : (touched = true, head + ",proxy:['🔀','Proxy Pro']" + tail),
+      );
+    }
+    if (!flow.includes("board:proxy")) {
+      flow = flow.replace(
+        /(\['🧩','MCP 服务器','board:mcp'\],)/,
+        (m) => (touched = true, m + "['🔀','Proxy Pro · 本源观照 / 渠道配置 / 模型路由','board:proxy'],"),
+      );
+    }
+    if (touched) fs.writeFileSync(flowExt, flow);
+    log("vendor-flow: folded Proxy Pro into PAGES(汉堡)+BOARD_META (三合一叠加·源纯净)" + (touched ? "" : " · 已存在跳过"));
+  }
   log("vendor-flow: copied extension.js + devin_cloud/proxy/web/git/stuck + py helpers + media");
 }
 
