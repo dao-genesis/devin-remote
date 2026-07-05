@@ -6890,7 +6890,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // v3.17.0 · iframe 内真切号面板的 vscode.postMessage → 中继进引擎 handleWebviewMessage
                 try { const int = _rtflowModule && _rtflowModule._internals; if (int && typeof int.handleWebviewMessage === 'function') await int.handleWebviewMessage(msg.msg); } catch (e: any) { /* 守柔 */ }
                 // v4.10.0 · PAT双流同步: 切号板块输入PAT(批量连/注密钥) → 自动同步到反向注入 profile.secrets(GITHUB_PAT)
-                //   用户只需在一处输入PAT, 切号+注入两条流共用, 不替换已有条目(累加)
+                //   用户只需在一处输入PAT, 切号+注入两条流共用, 覆盖式: 新 PAT 替换旧 GITHUB_PAT
                 try {
                     const relayMsg = msg.msg || {};
                     if ((relayMsg.type === 'gitConnectBatch' || relayMsg.type === 'gitInjectSecretBatch') && relayMsg.pat) {
@@ -6898,14 +6898,17 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                         // GitHub PAT 双形态: 经典 ghp_ 与细粒度 github_pat_ (gh CLI/OAuth gho_/ghu_ 亦放行)。
                         //   旧式仅认 ghp_ → 细粒度 PAT 能连 Git 却被静默漏注 profile.secrets, 后续新号自动注入不带 GITHUB_PAT。
                         if (isGitHubPat(pat)) {
+                            // v3.50.76 · 覆盖式更新(问题④): 用户输入新 PAT 即以新值为准 —— 替换已有 GITHUB_PAT,
+                            //   否则后续新号自动注入仍用陈旧 PAT(与切号侧 ensureGithubPatSecret 覆盖语义对齐)。
                             const profile = loadInjectProfile();
-                            const existing = (profile.secrets || []).find((s: any) => s.name === 'GITHUB_PAT');
-                            if (!existing) {
-                                profile.secrets = profile.secrets || [];
+                            profile.secrets = profile.secrets || [];
+                            const existing = profile.secrets.find((s: any) => s.name === 'GITHUB_PAT');
+                            if (existing) {
+                                if (existing.value !== pat) { existing.value = pat; saveInjectProfile(profile); }
+                            } else {
                                 profile.secrets.push({ name: 'GITHUB_PAT', value: pat });
                                 saveInjectProfile(profile);
                             }
-                            // 不替换已有: 用户已有GITHUB_PAT则保留, 避免覆盖
                         }
                     }
                 } catch { /* 守柔 */ }

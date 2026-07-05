@@ -124,9 +124,17 @@ async function injectSecret(auth, name, value) {
   return { ok: false, error: (r.text || "").slice(0, 120) };
 }
 // 注入并校验落库: settle 后「连续两次」读到才算稳态(排除尚未持久化的瞬态副本), 最多 3 轮。
-async function ensureGithubPatSecret(auth, pat) {
+// v4.27.0 · 覆盖式更新(问题④): Devin secrets 端点对同 key 二次 POST 返回 409 且**保留旧值**
+//   (injectSecret 视 409 为 existed·不改值)。故用户输入新 PAT 时, 旧 GITHUB_PAT 会被静默保留,
+//   后续对话/自动注入仍用陈旧 PAT。此处默认 override=true: 先删旧 GITHUB_PAT 再注新值, 令新 PAT 必生效。
+//   (secrets API 不回吐明文·无法比对值, 故覆盖模式下无条件先删后注, 由外层双读确认落库。)
+async function ensureGithubPatSecret(auth, pat, opts) {
+  const override = !opts || opts.override !== false; // 默认覆盖: 新 PAT 以新值为准
   for (let attempt = 0; attempt < 3; attempt++) {
-    try { await injectSecret(auth, "GITHUB_PAT", pat); } catch (e) {}
+    try {
+      if (override) { try { await deleteSecret(auth, "GITHUB_PAT"); } catch (e) {} await sleep(400); }
+      await injectSecret(auth, "GITHUB_PAT", pat);
+    } catch (e) {}
     await sleep(1200);
     try {
       if (await hasGithubPatSecret(auth)) { await sleep(600); if (await hasGithubPatSecret(auth)) return true; }
