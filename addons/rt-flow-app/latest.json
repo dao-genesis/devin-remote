@@ -1,6 +1,6 @@
 {
-  "versionCode": 255,
-  "versionName": "0.37.151",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.151/DevinCloud-mobile-v0.37.151.apk",
-  "notes": "v0.37.151 · 录像堆叠布局中缝改可拖拽分隔条(上下拉动调占比·占比记忆·无视频时空白可随手拉小)"
+  "versionCode": 256,
+  "versionName": "0.37.152",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.152/DevinCloud-mobile-v0.37.152.apk",
+  "notes": "v0.37.152 · 修分隔条泄漏: 切模块残留/复制到对话页(回收判定加固·data-rtdvfit 全局兜底清扫·行级防重复插条)"
 }
