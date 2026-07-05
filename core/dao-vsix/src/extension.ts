@@ -1301,6 +1301,7 @@ async function startServer(context: vscode.ExtensionContext) {
         }
         // 去中心化信令中继(路线C·零中心 ntfy): 与 cloudflared/Worker 并行的第二条公网入口, 任一 broker 活即可达
         sigStart().catch(() => {});
+        sigWatchRekey();
         // 公网同源资源图预热: 服务一就绪即后台并行抓全 SPA 模块图入 ~/.dao/asset-cache (L1+L2),
         //   令首个公网设备即命中宿主暖缓存·隧道只剩动态核心 (与 devin_proxy 多实例预热同理)。
         //   fire-and-forget·不阻服务监听; 失败守柔。
@@ -1810,16 +1811,20 @@ interface SigState {
     enabled: boolean; session: string; topic: string; servers: string[];
     key: Buffer | null; subs: any[]; reasm: ((msg: string, cb: (c: string, r: string, full: string) => void) => void) | null;
     handled: string[]; lastRxTs: number; lastTxTs: number; reqCount: number; warm: string[]; stopping: boolean;
+    tokenUsed: string;
 }
 const sigState: SigState = {
     enabled: false, session: '', topic: '', servers: [], key: null, subs: [], reasm: null,
     handled: [], lastRxTs: 0, lastTxTs: 0, reqCount: 0, warm: [], stopping: false,
+    tokenUsed: '',
 };
 
 function sigSha256(s: string): Buffer { return crypto.createHash('sha256').update(Buffer.from(s, 'utf8')).digest(); }
-function sigSessionId(): string {
-    const tok = bridgeAuthoritativeToken();
+function sigSessionIdFor(tok: string): string {
     return 'rtflow-' + crypto.createHash('sha256').update('dao-sig-session\n' + tok).digest('hex').slice(0, 16);
+}
+function sigSessionId(): string {
+    return sigSessionIdFor(bridgeAuthoritativeToken());
 }
 function sigTopicFor(session: string): string {
     const b = sigSha256('topic\n' + String(session));
@@ -2010,7 +2015,8 @@ async function sigStart(): Promise<void> {
     try {
         if (sigState.enabled) return;
         const tok = bridgeAuthoritativeToken(); if (!tok) return;
-        sigState.session = sigSessionId();
+        sigState.tokenUsed = tok;
+        sigState.session = sigSessionIdFor(tok);
         sigState.topic = sigTopicFor(sigState.session);
         sigState.servers = SIG_DEFAULT_SERVERS.slice();
         sigState.key = sigDeriveKey(sigState.session, tok);
@@ -2021,6 +2027,24 @@ async function sigStart(): Promise<void> {
         sigState.enabled = true;
         try { console.log('[dao-sig] decentralized relay up · session=' + sigState.session + ' topic=' + sigState.topic + ' brokers=' + (sigState.warm.length || sigState.servers.length)); } catch {}
     } catch (e) { try { console.error('[dao-sig] start failed', e); } catch {} }
+}
+// 权威令牌轮换(leader/epoch 交接)时 session/topic/key 全部由 token 派生 → 必须整体重铸,
+//   否则文档发布「新 token + 旧 session」的错配对, 云端派生的 AES 密钥永不匹配, 路线C 静默全聋。
+let _sigRekeyTimer: any = null;
+function sigWatchRekey(): void {
+    if (_sigRekeyTimer) return;
+    _sigRekeyTimer = setInterval(() => {
+        try {
+            const tok = bridgeAuthoritativeToken();
+            if (!tok || !sigState.enabled) { if (tok && !sigState.enabled && !sigState.stopping) sigStart().catch(() => {}); return; }
+            if (tok !== sigState.tokenUsed) {
+                try { console.log('[dao-sig] authoritative token rotated → rekey mesh session'); } catch {}
+                sigStop();
+                sigState.stopping = false;
+                sigStart().catch(() => {});
+            }
+        } catch { /* 守柔 */ }
+    }, 30000);
 }
 function sigStop(): void {
     sigState.stopping = true;
@@ -4939,8 +4963,10 @@ function bridgeGenerateCloudMd(pair?: { url: string; token: string }): string {
         '> 故 `/api/exec`、`/api/file`、`/api/ls` 等照常可用。公共 broker 全程只见密文(载荷以 token 派生 AES-256-GCM 封装)。',
         '',
         '```',
-        `去中心化 Session: ${sigState.session || sigSessionId()}`,
-        `Token(mesh 专用): ${bridgeAuthoritativeToken() || tok}`,
+        // 帛书·「Session 与 Token 恒成对」: session/密钥均由 token 派生, 文档必须发布同一 token 的配对,
+        //   否则云端用错配对派生密钥, 路线C 恒静默。以本实例 mesh 实际密钥所用 token 为准。
+        `去中心化 Session: ${sigState.enabled && sigState.tokenUsed ? sigState.session : sigSessionIdFor(bridgeAuthoritativeToken() || tok)}`,
+        `Token(mesh 专用): ${sigState.enabled && sigState.tokenUsed ? sigState.tokenUsed : (bridgeAuthoritativeToken() || tok)}`,
         `Brokers:         ${(sigState.servers.length ? sigState.servers : SIG_DEFAULT_SERVERS).join('  ')}`,
         '```',
         '',
