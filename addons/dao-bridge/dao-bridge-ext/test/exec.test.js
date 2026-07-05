@@ -52,6 +52,19 @@ function ok(name) { console.log("  PASS  " + name); passed++; }
     ok("buildExecCommand 规范化一致·Win+POSIX 双平台 (" + label + ")");
   }
 
+  // ── 1b. 被控端 bootstrap 轮询器 · 用户命令与回传闭环变量隔离 ──
+  //   曾有 bug: Invoke-Expression 在循环作用域直跑,用户命令若定义 $c(或 $aid/$out 等)
+  //   即覆写回传所需的命令对象 → cmd_id 变 null → 结果永不回传 → 操控端超时。
+  for (const [label, build] of [["ext", ext.buildBootstrap], ["core", core.buildBootstrap]]) {
+    const bs = build("https://hub.example/");
+    assert.ok(bs.includes("$__daoCid"), label + " bootstrap 固化 cmd_id 到独名变量 $__daoCid");
+    assert.ok(/cmd_id\s*=\s*\$__daoCid/.test(bs), label + " 回传用 $__daoCid 而非 $c.cmd_id");
+    assert.ok(!/cmd_id\s*=\s*\$c\.cmd_id/.test(bs), label + " 不得再用易被污染的 $c.cmd_id 回传");
+    assert.ok(/&\s*\{\s*Invoke-Expression/.test(bs), label + " 用户命令在子作用域 & { Invoke-Expression } 内执行,隔离变量污染");
+    assert.ok(!/foreach\(\$c in @\(\$poll\.commands\)\)/.test(bs), label + " 循环变量改用独名 $__daoCmd,避与用户 $c 冲突");
+    ok("buildBootstrap 被控端轮询器变量隔离·用户命令不污染回传闭环 (" + label + ")");
+  }
+
   // ── 2. 中枢本机真实执行（仅 win32）──
   if (process.platform === "win32") {
     const tmp = os.tmpdir();
