@@ -848,6 +848,35 @@ function test(name, fn) {
       } catch (e) {}
     }
   });
+  test("devin_cloud.archiveSettledConvZips: 沉寂对话打 ZIP 归档 + 增量免重打; 未沉寂不打", () => {
+    const fs = require("fs"), path = require("path"), os = require("os");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dao-arc-"));
+    try {
+      const conv = path.join(dir, "对话", "001_测试_abcd1234");
+      fs.mkdirSync(path.join(conv, "files"), { recursive: true });
+      fs.writeFileSync(path.join(conv, "对话.md"), "# hi");
+      fs.writeFileSync(path.join(conv, "files", "a.txt"), "data");
+      fs.writeFileSync(path.join(conv, "_meta.json"), JSON.stringify({ devinId: "devin-abcd1234ffff", title: "测试", backedUpAt: new Date(Date.now() - 8 * 86400000).toISOString() }));
+      // 沉寂(8天前) → 归档
+      let r = cloud.archiveSettledConvZips(dir, {});
+      assert.strictEqual(r.archived, 1, "沉寂对话应打 ZIP");
+      const zipPath = path.join(dir, "对话", "_归档", "abcd1234_测试.zip");
+      assert.ok(fs.existsSync(zipPath), "ZIP 应落在 对话/_归档/");
+      // 再跑 → 增量免重打
+      r = cloud.archiveSettledConvZips(dir, {});
+      assert.strictEqual(r.archived, 0, "ZIP 未落后不应重打");
+      assert.ok(r.skipped >= 1);
+      // 未沉寂(刚备份) → 不打
+      fs.writeFileSync(path.join(conv, "_meta.json"), JSON.stringify({ devinId: "devin-abcd1234ffff", title: "测试", backedUpAt: new Date().toISOString() }));
+      const conv2 = path.join(dir, "对话", "002_新_ffff0000");
+      fs.mkdirSync(conv2, { recursive: true });
+      fs.writeFileSync(path.join(conv2, "_meta.json"), JSON.stringify({ devinId: "devin-ffff0000aaaa", title: "新", backedUpAt: new Date().toISOString() }));
+      r = cloud.archiveSettledConvZips(dir, {});
+      assert.strictEqual(r.archived, 0, "未沉寂对话不应归档");
+    } finally {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
+    }
+  });
   test("package.json: 自动清理默认开; 归零移除默认开(v4.9.12 闭环)", () => {
     const fs = require("fs");
     const pkg = JSON.parse(fs.readFileSync(require("path").join(__dirname, "..", "package.json"), "utf8"));
