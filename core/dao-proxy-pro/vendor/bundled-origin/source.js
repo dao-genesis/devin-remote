@@ -7933,11 +7933,11 @@ function _officialChatReplay(target, norm, sink, _forceMain) {
     up.on("response", (h) => {
       status = (h && h[":status"]) || 0;
     });
-    up.setTimeout(180000, () => {
+    up.setTimeout(600000, () => {
       try {
         up.close(http2.constants.NGHTTP2_CANCEL);
       } catch (_) {}
-      sink.onError && sink.onError("官方直通超时(180s)");
+      sink.onError && sink.onError("官方直通超时(600s)");
       resolve({ ok: false });
     });
     up.on("data", (c) => chunks.push(c));
