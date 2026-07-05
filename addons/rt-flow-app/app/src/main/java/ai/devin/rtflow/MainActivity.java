@@ -3523,14 +3523,16 @@ public class MainActivity extends AppCompatActivity {
     //   的 flex 行布局; 手机宽(≈384px)不足以容下侧栏 → 视频列被挤到 0 宽, 只见步骤列表看不见视频。
     //   通用修法(不依赖具体类名): 发现 <video> 所处的 0 宽列且父容器是 flex 行 → 改父容器为纵向堆叠,
     //   视频区在上(55%)、侧栏/进度步骤在下, 两者同屏互不覆盖。幂等 + MutationObserver 覆盖 SPA 动态开窗。
-    //   邻里不扰: ① 只对全屏浮层(position:fixed 祖先·即播放器弹窗)内的视频生效, 绝不碰对话流里的
-    //   内嵌卡片/日常面板; ② 记录改前 inline cssText, 弹窗关闭/视频移除/宽屏时整组还原 —— SPA 复用
+    //   邻里不扰: ① 只对浮层面板(祖先含 position:fixed 或 absolute·即播放器弹窗/侧开面板)内的视频生效
+    //   —— 官网录像播放器有两种宿主: 全屏弹窗(fixed)与会话页内嵌面板(absolute inset-0), 两种都要覆盖;
+    //   对话流里的内嵌卡片永不是 0 宽列, 不会触发, 日常面板不受扰。
+    //   ② 记录改前 inline cssText, 弹窗关闭/视频移除/宽屏时整组还原 —— SPA 复用
     //   DOM 节点也不会把堆叠样式带去其他页面(修「看完视频后其他文件面板也变竖排」)。
     static void installVideoFit(WebView w) {
         if (w == null) return;
         String js = "(function(){try{if(window.__rtVidFit)return;window.__rtVidFit=1;"
             + "var F=[];"
-            + "function inFixed(e){for(;e&&e!==document.body;e=e.parentElement){if(getComputedStyle(e).position==='fixed')return true;}return false;}"
+            + "function inOverlay(e){for(;e&&e!==document.body;e=e.parentElement){var p=getComputedStyle(e).position;if(p==='fixed'||p==='absolute')return true;}return false;}"
             + "function revert(f){try{f.row.style.cssText=f.rowCss;delete f.col.__rtFit;"
             + "for(var i=0;i<f.kids.length;i++)f.kids[i].el.style.cssText=f.kids[i].css;}catch(e){}}"
             + "function sweep(){for(var i=F.length-1;i>=0;i--){var f=F[i];"
@@ -3541,7 +3543,7 @@ public class MainActivity extends AppCompatActivity {
             + "var wd=e.getBoundingClientRect().width;var p=e.parentElement;"
             + "if(wd<2&&p&&p.getBoundingClientRect().width>100){col=e;row=p;break;}}"
             + "if(!col||col.__rtFit)return;"
-            + "if(!inFixed(row))return;"
+            + "if(!inOverlay(row))return;"
             + "var cs=getComputedStyle(row);"
             + "if(cs.display.indexOf('flex')<0||cs.flexDirection!=='row')return;"
             + "var f={row:row,col:col,rowCss:row.style.cssText,kids:[]};"
