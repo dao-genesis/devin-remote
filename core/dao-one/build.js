@@ -177,8 +177,39 @@ function buildBridge() {
   log("vendor-bridge: copied extension.js + media (内网穿透本体)");
 }
 
+// ── ⑤ 折叠自验 (通用适配体系·防上游漂移): 上游任一插件更新后, 仅需重跑
+//   node build.js — 所有折叠锚点逐一断言, 缺一即构建失败并指名道姓,
+//   使 dao-vsix / rt-flow / dao-proxy-pro 的更新可以「拿来即折·折错即报」。
+function verifyFolds() {
+  const must = (file, tokens) => {
+    const p = path.join(root, file);
+    if (!fs.existsSync(p)) throw new Error("[fold-verify] missing " + file);
+    const c = fs.readFileSync(p, "utf8");
+    for (const t of tokens)
+      if (!c.includes(t))
+        throw new Error("[fold-verify] " + file + " 缺折叠锚点: " + t);
+  };
+  must("vendor-vsix/out/extension.js", [
+    "data-tab=\"proxy\"",          // 主页全能面板左栏 · Proxy Pro 第7板块入口
+    "id=\"v-proxy\"",              // 主页内嵌容器
+    "function rProxyFull",          // 主页内嵌渲染
+    "function rProxyResult",
+    "__proxyFetchReq",              // 子帧 fetch 桥
+    "'getProxyPanel'",              // 免登白名单
+    "'proxy'",                      // _solo 白名单 (独立子网页模式)
+    "t==='proxy'||",                // reloadActiveDataTab 面板板块早退
+  ]);
+  must("vendor-flow/extension.js", [
+    "board:proxy",                  // 汉堡菜单 PAGES 入口
+    "proxy:['🔀','Proxy Pro']",     // BOARD_META 标签
+  ]);
+  must("vendor-proxy/extension.js", ["getEaConfigHtml"]);
+  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×8 · vendor-flow ×2 · vendor-proxy ×1)");
+}
+
 buildVsix();
 buildProxy();
 buildFlow();
 buildBridge();
+verifyFolds();
 log("done · vendor-vsix / vendor-proxy / vendor-flow / vendor-bridge assembled");
