@@ -795,7 +795,9 @@ function test(name, fn) {
     const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
     assert.ok(/function _dvBackupVerifiedFull\(/.test(src), "须有 _dvBackupVerifiedFull 严格校验");
     assert.ok(/backupOk = _dvBackupVerifiedFull\(backupRes\)/.test(src), "清理前 backupOk 须由校验函数赋值");
-    assert.ok(/if \(autoCleanup && backupOk && totalCredits <= cleanupThreshold\)/.test(src), "清理须同时满足 autoCleanup+backupOk+阈值");
+    // v4.10.2 先门控后备份: 清理三重闸拆为 外闸(autoCleanup+阈值) + 备份闸(else if (!backupOk) 跳过) — 语义不变
+    assert.ok(/if \(autoCleanup && totalCredits <= cleanupThreshold\)/.test(src), "清理外闸须同时满足 autoCleanup+阈值");
+    assert.ok(/\} else if \(!backupOk\) \{/.test(src), "清理前须有 backupOk 闸 (未全量备份不删)");
     assert.ok(/if \(res\.convError\) return false;/.test(src) && /\(c\.failed \|\| 0\) > 0\) return false/.test(src) && /if \(!s \|\| s\.partial\) return false;/.test(src), "校验须覆盖对话异常/失败/快照部分");
   });
   test("extension.js: 归零移除仅在权威归零+清理无残留时触发, 且循环外统一 removeBatch", () => {
