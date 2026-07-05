@@ -3522,7 +3522,9 @@ public class MainActivity extends AppCompatActivity {
     // 录像/视频播放器窄屏适配: 官网测试录像播放器为「视频区(flex-1) + 步骤侧栏(w-[26rem]·416px 固定宽)」
     //   的 flex 行布局; 手机宽(≈384px)不足以容下侧栏 → 视频列被挤到 0 宽, 只见步骤列表看不见视频。
     //   通用修法(不依赖具体类名): 发现 <video> 所处的 0 宽列且父容器是 flex 行 → 改父容器为纵向堆叠,
-    //   视频区在上(55%)、侧栏/进度步骤在下, 两者同屏互不覆盖。幂等 + MutationObserver 覆盖 SPA 动态开窗。
+    //   视频区在上、侧栏/进度步骤在下, 两者同屏互不覆盖。幂等 + MutationObserver 覆盖 SPA 动态开窗。
+    //   中缝为可拖拽分隔条(触控/鼠标上下拉动调两块占比·占比记忆于 localStorage):
+    //   不分场景——无论有无视频在播, 上块占用都可随手拉小, 避免非视频内容时上方留大片空白。
     //   邻里不扰: ① 只对浮层面板(祖先含 position:fixed 或 absolute·即播放器弹窗/侧开面板)内的视频生效
     //   —— 官网录像播放器有两种宿主: 全屏弹窗(fixed)与会话页内嵌面板(absolute inset-0), 两种都要覆盖;
     //   对话流里的内嵌卡片永不是 0 宽列, 不会触发, 日常面板不受扰。
@@ -3543,7 +3545,8 @@ public class MainActivity extends AppCompatActivity {
             + "if(!document.body){setTimeout(setup,250);return;}"
             + "var F=[];"
             + "function inOverlay(e){for(;e&&e!==document.body;e=e.parentElement){var p=getComputedStyle(e).position;if(p==='fixed'||p==='absolute')return true;}return false;}"
-            + "function revert(f){try{f.row.style.cssText=f.rowCss;delete f.col.__rtFit;"
+            + "function revert(f){try{if(f.div&&f.div.parentNode)f.div.parentNode.removeChild(f.div);"
+            + "f.row.style.cssText=f.rowCss;delete f.col.__rtFit;"
             + "for(var i=0;i<f.kids.length;i++)f.kids[i].el.style.cssText=f.kids[i].css;}catch(e){}}"
             + "function sweep(){for(var i=F.length-1;i>=0;i--){var f=F[i];"
             + "if(!f.col.isConnected||!f.col.querySelector('video')||window.innerWidth>700){revert(f);F.splice(i,1);}}}"
@@ -3559,11 +3562,24 @@ public class MainActivity extends AppCompatActivity {
             + "var f={row:row,col:col,rowCss:row.style.cssText,kids:[]};"
             + "for(var i=0;i<row.children.length;i++)f.kids.push({el:row.children[i],css:row.children[i].style.cssText});"
             + "col.__rtFit=1;F.push(f);"
+            + "var pct=parseFloat(localStorage.getItem('rtflow.vidSplit')||'55');if(!(pct>=5&&pct<=90))pct=55;"
             + "row.style.flexDirection='column';"
-            + "col.style.width='100%';col.style.minWidth='100%';col.style.flex='0 0 55%';col.style.minHeight='200px';"
+            + "col.style.width='100%';col.style.minWidth='100%';col.style.flex='0 0 '+pct+'%';col.style.minHeight='0';col.style.overflow='hidden';"
             + "for(var i=0;i<row.children.length;i++){var c=row.children[i];if(c!==col){"
             + "c.style.width='100%';c.style.maxWidth='100%';c.style.flex='1 1 auto';"
-            + "c.style.borderLeft='0';c.style.borderTop='1px solid rgba(127,127,127,.35)';c.style.minHeight='0';}}"
+            + "c.style.borderLeft='0';c.style.minHeight='0';}}"
+            + "var dv=document.createElement('div');f.div=dv;"
+            + "dv.style.cssText='flex:0 0 18px;width:100%;cursor:row-resize;touch-action:none;display:flex;align-items:center;justify-content:center;background:rgba(127,127,127,.18);border-top:1px solid rgba(127,127,127,.35);border-bottom:1px solid rgba(127,127,127,.35);';"
+            + "var grip=document.createElement('div');grip.style.cssText='width:46px;height:5px;border-radius:3px;background:rgba(127,127,127,.75);pointer-events:none;';dv.appendChild(grip);"
+            + "row.insertBefore(dv,col.nextSibling);"
+            + "function mv(y){try{var r=row.getBoundingClientRect();if(r.height<40)return;"
+            + "var p=(y-r.top)/r.height*100;p=Math.max(5,Math.min(90,p));"
+            + "col.style.flex='0 0 '+p+'%';localStorage.setItem('rtflow.vidSplit',''+Math.round(p));}catch(e){}}"
+            + "dv.addEventListener('touchstart',function(ev){ev.preventDefault();ev.stopPropagation();},{passive:false});"
+            + "dv.addEventListener('touchmove',function(ev){ev.preventDefault();ev.stopPropagation();if(ev.touches&&ev.touches[0])mv(ev.touches[0].clientY);},{passive:false});"
+            + "dv.addEventListener('mousedown',function(ev){ev.preventDefault();ev.stopPropagation();"
+            + "var mm=function(e){mv(e.clientY);};var up=function(){document.removeEventListener('mousemove',mm);document.removeEventListener('mouseup',up);};"
+            + "document.addEventListener('mousemove',mm);document.addEventListener('mouseup',up);});"
             + "}catch(e){}}"
             + "function fit(){try{sweep();document.querySelectorAll('video').forEach(fixOne);}catch(e){}}"
             + "var ts=[];function deb(){while(ts.length)clearTimeout(ts.pop());"
