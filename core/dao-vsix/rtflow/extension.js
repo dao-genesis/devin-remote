@@ -12211,54 +12211,56 @@ async function _dvAutoBackupRun() {
       try { billing = await devinCloud.getBilling(auth); } catch {}
       const totalCredits = _billingTotalDollars(billing);
       if (totalCredits !== null && totalCredits < threshold) {
-        // 额度低于阈值 → 全量备份(文件夹/ZIP) · 备份成功是后续清理的前提
-        log("auto-backup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " < $" + threshold + " → 全量备份");
-        let backupRes = null, backupOk = false;
-        try {
-          backupRes = (mode === "folder")
-            ? await devinCloud.backupAccountFullFolders(auth, Object.assign({ targetDir: dir, incremental: false }, naming))
-            : await devinCloud.backupAccountFull(auth, Object.assign({ targetDir: dir, incremental: false }, naming));
-          // v4.9.0: 严格校验「全量备份」真正完整, 唯有完整才允许后续破坏性清理 (数据一定要全量备份完)
-          backupOk = _dvBackupVerifiedFull(backupRes);
-          if (!backupOk) log("auto-backup: " + acc.email + " 备份未通过完整性校验 → 跳过自动清理(未全量备份不删) · " + _dvBackupVerifyNote(backupRes));
-          // v4.9.11: 记录备份完成时间 (24h 冷却期起算点)
-          // v4.10.1 · 正本清源修复「归零清理从不触发」: 旧法每周期都把 backupCompletedAt 重置为 now,
-          //   而备份定时器远比 24h 频繁(默 ~小时级) → now-backupCompletedAt 恒 < 24h → isCleanupReady 的
-          //   cooldown 门永不满足 → 额度归零账号「全量备份→清理→出库」闭环从系统构建至今一次都没触发过
-          //   (实测桌面 cleanup_state.json: 数十账号 backupCompletedAt 全被刷成近 1~2 小时内的同一批时戳)。
-          //   修法: 冷却期锚点「本源起算」—— 仅当尚无锚点、或上轮已清理(cleanedAt≥旧锚点·需为新一轮重新起算)时落点;
-          //   低额度周期内每轮照常全量备份刷新数据, 但锚点保持不动 → 24h 真正能走完。账号充值再用则由 lastConvUpdateAt
-          //   的 recent_update 门守住近 24h 活跃, 不会误清。
-          if (backupOk) {
-            const _cs = devinCloud.getCleanupState(acc.email);
-            if (!_cs || !_cs.backupCompletedAt || (_cs.cleanedAt && _cs.cleanedAt >= _cs.backupCompletedAt)) {
-              devinCloud.setCleanupState(acc.email, { backupCompletedAt: Date.now() });
-            }
-          }
-        } catch (be) {
-          log("auto-backup full error: " + acc.email + ": " + (be.message || be) + " → 跳过自动清理(未备份不删)");
-        }
-        // v4.9.11: 24h 冷却期门控 — 备份完成且 24h 无对话更新才允许清理
+        // v4.10.2 · 先门控后备份(根治「老号清不动」): 旧法对每个低额号每周期都先跑一遍全量备份,
+        //   再查冷却门 — 百余归零号 × 全量备份(分钟级/号) → 单轮扫描以小时计, 窗口一 reload 又从头,
+        //   队尾老号永远轮不到清理。修法: 冷却门/本源判老(廉价·一次 listSessions)先行, 全量备份只在
+        //   三种真正需要时做: ① 首备落锚(开启 24h 冷却钟) ② 清理前留底(临删前拍最终快照) ③ 用户关闭
+        //   自动清理(仅留底模式)。门未满的号零备份直接跳过 → 单轮分钟级扫完全池, 老号真正清得动。
         const cooldownMs = Math.max(0, +_cfg("devinCloudCleanupCooldownHours", 24) || 24) * 3600000;
         const cleanupCheck = devinCloud.isCleanupReady(acc.email, cooldownMs);
         // addedAt 24h 免出库保护 (对照手机 APK): 重加/新加的账号在冷却期内绝不自动移出库
         const _addedRecently = acc.addedAt && Date.now() - acc.addedAt < cooldownMs;
-        if (autoCleanup && backupOk && totalCredits <= cleanupThreshold) {
-          // 本源判老(对照手机 APK·根治「老旧归零号还要再等 24h」): 冷却锚点只是「我们何时首次备份」,
-          //   与账号真实活跃无关 — 陈年归零号锚点新落也得干等 24h。故锚点未满时再看远端本源:
-          //   该号最新对话 updated_at 已早于冷却窗(或全无对话) → 账号本就沉寂, 直接视为冷却已满。
-          if (!cleanupCheck.ready && cleanupCheck.reason === "cooldown" && !_addedRecently) {
-            try {
-              const _ls = await devinCloud.listSessions(auth);
-              const _ss = (_ls && _ls.sessions) || [];
-              let _mx = 0;
-              for (const _s of _ss) { const _t = Date.parse(_s.updated_at || _s.created_at || "") || 0; if (_t > _mx) _mx = _t; }
-              if (_mx === 0 || Date.now() - _mx >= cooldownMs) {
-                cleanupCheck.ready = true;
-                log("auto-cleanup: " + acc.email + " 冷却锚点未满但远端最新对话已沉寂" + (_mx ? "~" + Math.round((Date.now() - _mx) / 3600000) + "h" : "(无对话)") + " → 本源判老·视为冷却已满");
+        // 本源判老(对照手机 APK·根治「老旧归零号还要再等 24h」): 冷却锚点只是「我们何时首次备份」,
+        //   与账号真实活跃无关 — 陈年归零号锚点新落也得干等 24h。故锚点未满时再看远端本源:
+        //   该号最新对话 updated_at 已早于冷却窗(或全无对话) → 账号本就沉寂, 直接视为冷却已满。
+        //   活跃归零号(远端近 24h 有更新)由此门天然豁免 — 只清老号, 绝不动近期在用的号。
+        if (autoCleanup && !cleanupCheck.ready && cleanupCheck.reason === "cooldown" && !_addedRecently && totalCredits <= cleanupThreshold) {
+          try {
+            const _ls = await devinCloud.listSessions(auth);
+            const _ss = (_ls && _ls.sessions) || [];
+            let _mx = 0;
+            for (const _s of _ss) { const _t = Date.parse(_s.updated_at || _s.created_at || "") || 0; if (_t > _mx) _mx = _t; }
+            if (_mx === 0 || Date.now() - _mx >= cooldownMs) {
+              cleanupCheck.ready = true;
+              log("auto-cleanup: " + acc.email + " 冷却锚点未满但远端最新对话已沉寂" + (_mx ? "~" + Math.round((Date.now() - _mx) / 3600000) + "h" : "(无对话)") + " → 本源判老·视为冷却已满");
+            }
+          } catch {}
+        }
+        const _willClean = autoCleanup && cleanupCheck.ready && totalCredits <= cleanupThreshold;
+        const _needAnchor = cleanupCheck.reason === "no_backup" || cleanupCheck.reason === "already_cleaned";
+        let backupRes = null, backupOk = false;
+        if (_needAnchor || _willClean || !autoCleanup) {
+          log("auto-backup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " < $" + threshold + " → 全量备份(" + (_willClean ? "清理前留底" : _needAnchor ? "首备落锚" : "仅留底") + ")");
+          try {
+            backupRes = (mode === "folder")
+              ? await devinCloud.backupAccountFullFolders(auth, Object.assign({ targetDir: dir, incremental: false }, naming))
+              : await devinCloud.backupAccountFull(auth, Object.assign({ targetDir: dir, incremental: false }, naming));
+            // v4.9.0: 严格校验「全量备份」真正完整, 唯有完整才允许后续破坏性清理 (数据一定要全量备份完)
+            backupOk = _dvBackupVerifiedFull(backupRes);
+            if (!backupOk) log("auto-backup: " + acc.email + " 备份未通过完整性校验 → 跳过自动清理(未全量备份不删) · " + _dvBackupVerifyNote(backupRes));
+            // v4.10.1 · 冷却期锚点「本源起算」: 仅当尚无锚点、或上轮已清理(cleanedAt≥旧锚点·需为新一轮
+            //   重新起算)时落点; 锚点保持不动 → 24h 真正能走完。充值再用由 recent_update 门守住, 不误清。
+            if (backupOk) {
+              const _cs = devinCloud.getCleanupState(acc.email);
+              if (!_cs || !_cs.backupCompletedAt || (_cs.cleanedAt && _cs.cleanedAt >= _cs.backupCompletedAt)) {
+                devinCloud.setCleanupState(acc.email, { backupCompletedAt: Date.now() });
               }
-            } catch {}
+            }
+          } catch (be) {
+            log("auto-backup full error: " + acc.email + ": " + (be.message || be) + " → 跳过自动清理(未备份不删)");
           }
+        }
+        if (autoCleanup && totalCredits <= cleanupThreshold) {
           if (!cleanupCheck.ready) {
             // 补出库: 上一轮已清理但未出库(旧版无出库/中途断) 的归零账号 —— 备份已校验、
             //   痕迹已清、24h 无新对话 → 直接出库, 不再卡死在 already_cleaned 永久滞留态。
@@ -12277,6 +12279,8 @@ async function _dvAutoBackupRun() {
               const hrs = cleanupCheck.remaining ? Math.ceil(cleanupCheck.remaining / 3600000) : "?";
               log("auto-cleanup: " + acc.email + " 冷却期未满(" + cleanupCheck.reason + ", 剩余~" + hrs + "h) → 跳过清理");
             }
+          } else if (!backupOk) {
+            log("auto-cleanup: " + acc.email + " 冷却已满但清理前留底备份未通过校验 → 跳过(未全量备份不删·守柔)");
           } else {
             log("auto-cleanup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " ≤ $" + cleanupThreshold + " 且全量备份已校验+24h冷却期已满 → 自动清理");
             try {
