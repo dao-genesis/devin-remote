@@ -3531,9 +3531,16 @@ public class MainActivity extends AppCompatActivity {
     //   触发时序: 面板开启有滑入动画, DOM 插入时列宽尚未定型(非 0 宽), 且动画结束后不再有
     //   mutation —— 单次防抖会永久错过 → 每次触发按 300/1000/2500ms 梯次重检,
     //   另有轻量定时哨兵(仅存在 0 宽视频时才动手)兑底。
+    //   守卫时序(修早注入永久失效): 旧版开头即置 __rtVidFit=1, 若注入时 document.body 尚未存在
+    //   (首次导航早期即注入), MutationObserver 挂接抛异常被吞, 但守卫已置 → 后续重复注入全部
+    //   短路, 该页永久无钩。今改为: 守卫仅在 setup 真正成功后才置, body 未就绪则自重试,
+    //   __rtVidFitBoot 防同页并发双装。
     static void installVideoFit(WebView w) {
         if (w == null) return;
-        String js = "(function(){try{if(window.__rtVidFit)return;window.__rtVidFit=1;"
+        String js = "(function(){try{if(window.__rtVidFit||window.__rtVidFitBoot)return;window.__rtVidFitBoot=1;"
+            + "var setup=function(){try{"
+            + "if(window.__rtVidFit)return;"
+            + "if(!document.body){setTimeout(setup,250);return;}"
             + "var F=[];"
             + "function inOverlay(e){for(;e&&e!==document.body;e=e.parentElement){var p=getComputedStyle(e).position;if(p==='fixed'||p==='absolute')return true;}return false;}"
             + "function revert(f){try{f.row.style.cssText=f.rowCss;delete f.col.__rtFit;"
@@ -3566,8 +3573,9 @@ public class MainActivity extends AppCompatActivity {
             + "document.addEventListener('transitionend',function(){setTimeout(fit,60);},true);"
             + "setInterval(function(){try{var need=false;document.querySelectorAll('video').forEach(function(v){"
             + "if(v.getBoundingClientRect().width<2)need=true;});if(need||F.length)fit();}catch(e){}},3000);"
-            + "window.__rtVidFitRun=fit;fit();"
-            + "}catch(e){}})();";
+            + "window.__rtVidFitRun=fit;window.__rtVidFit=1;window.__rtVidFitBoot=0;fit();"
+            + "}catch(e){window.__rtVidFitBoot=0;}};setup();"
+            + "}catch(e){window.__rtVidFitBoot=0;}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // 媒体加载自愈: 国内直连时, 附件/对象存储(S3/CloudFront 预签名直链)的图片·视频·音频加载

@@ -12229,7 +12229,14 @@ async function _dvAutoBackupRun() {
             const _ls = await devinCloud.listSessions(auth);
             const _ss = (_ls && _ls.sessions) || [];
             let _mx = 0;
-            for (const _s of _ss) { const _t = Date.parse(_s.updated_at || _s.created_at || "") || 0; if (_t > _mx) _mx = _t; }
+            // 终态会话(挂起/过期/停止/完成/归档)不计活跃: 平台会周期性触碰终态会话(尤其 suspended)
+            //   的 updated_at → 陈年归零号恒有「假·新鲜」时间戳, 本源判老永不通过(实测全池如此)。
+            const _TERM = { suspended: 1, expired: 1, stopped: 1, finished: 1, archived: 1, interrupted: 1, deleted: 1 };
+            for (const _s of _ss) {
+              const _st = String(_s.status_enum || _s.status || "").toLowerCase();
+              if (_TERM[_st] || _s.is_archived === true || _s.is_archived === "true") continue;
+              const _t = Date.parse(_s.updated_at || _s.created_at || "") || 0; if (_t > _mx) _mx = _t;
+            }
             if (_mx === 0 || Date.now() - _mx >= cooldownMs) {
               cleanupCheck.ready = true;
               log("auto-cleanup: " + acc.email + " 冷却锚点未满但远端最新对话已沉寂" + (_mx ? "~" + Math.round((Date.now() - _mx) / 3600000) + "h" : "(无对话)") + " → 本源判老·视为冷却已满");

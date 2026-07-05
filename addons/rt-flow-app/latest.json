@@ -1,6 +1,6 @@
 {
-  "versionCode": 253,
-  "versionName": "0.37.149",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.149/DevinCloud-mobile-v0.37.149.apk",
-  "notes": "v0.37.149 · 自动发版(代码已更新, 版本号自动递增)"
+  "versionCode": 254,
+  "versionName": "0.37.150",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.150/DevinCloud-mobile-v0.37.150.apk",
+  "notes": "v0.37.150 · 归零清理常驻真触发(与对话追踪解耦+auth过期自愈重登) · 录像窄屏钩子守卫时序修复"
 }
