@@ -2300,8 +2300,55 @@ async function backupAccountFolders(auth, opts) {
     prog("备份 " + done + "/" + sessions.length + " ...");
   });
   writeJson(DC_BACKUP_STATE, state);
+  // G · 沉寂对话本地 ZIP 归档(零 API 成本·对齐手机 APK)
+  try {
+    const arc = archiveSettledConvZips(accountDir, opts);
+    if (arc.archived) prog("沉寂对话 ZIP 归档 " + arc.archived + " 个(全量含 files)");
+    result.archivedZips = arc;
+  } catch {}
   prog("账号备份完成: 新备份" + result.backedUp + " 跳过" + result.skipped + " 失败" + result.failed);
   return result;
+}
+
+// 沉寂对话本地 ZIP 归档(对齐手机 APK「打包成 ZIP」): folder 模式下, 最后事件变更已沉寂
+//   ≥settleMs(默认 7 天)的对话, 把整个对话文件夹压成 <账号>/对话/_归档/<8id>_<标题>.zip
+//   (全量·含 files/HTML/MD/agent.json)。有新事件 → 文件夹重备 → backedUpAt 前移 →
+//   ZIP 落后即下轮重打(增量更新 ZIP 内容)。零 API 成本·纯本地压缩。
+function archiveSettledConvZips(accountDir, opts) {
+  opts = opts || {};
+  const settleMs = Math.max(3600000, +opts.settleMs || 7 * 24 * 3600000);
+  const convParent = path.join(accountDir, "对话");
+  const out = { archived: 0, skipped: 0, failed: 0 };
+  let entries = [];
+  try { entries = fs.readdirSync(convParent, { withFileTypes: true }); } catch { return out; }
+  const arcDir = path.join(convParent, "_归档");
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith("_")) continue;
+    const convDir = path.join(convParent, e.name);
+    let meta = null;
+    try { meta = JSON.parse(fs.readFileSync(path.join(convDir, "_meta.json"), "utf8")); } catch { continue; }
+    const backedAt = Date.parse(meta.backedUpAt || "") || 0;
+    if (!backedAt || Date.now() - backedAt < settleMs) { out.skipped++; continue; } // 未沉寂
+    const shortId = String(meta.devinId || "").replace(/^devin-/, "").slice(0, 8) || e.name.slice(-8);
+    const zipPath = path.join(arcDir, shortId + "_" + safeName(meta.title || e.name, 50) + ".zip");
+    // 增量: ZIP 已存在且不早于最后事件变更 → 免重打
+    try { if (fs.statSync(zipPath).mtimeMs >= backedAt) { out.skipped++; continue; } } catch {}
+    try {
+      const zip = new ZipWriter();
+      (function addDir(dir, rel) {
+        for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+          const abs = path.join(dir, f.name);
+          const r = rel ? rel + "/" + f.name : f.name;
+          if (f.isDirectory()) addDir(abs, r);
+          else if (f.isFile()) zip.addFile(r, fs.readFileSync(abs));
+        }
+      })(convDir, "");
+      ensureDir(arcDir);
+      fs.writeFileSync(zipPath, zip.toBuffer());
+      out.archived++;
+    } catch { out.failed++; }
+  }
+  return out;
 }
 
 // 完整本源备份(文件夹版) = 文件夹对话备份 + 账号数据全量快照
@@ -2776,6 +2823,7 @@ module.exports = {
   buildSessionsListHtml,
   backupOneConversationFolder,
   backupAccountFolders,
+  archiveSettledConvZips,
   backupAccountFullFolders,
   listBackups,
   unlockBackup,
