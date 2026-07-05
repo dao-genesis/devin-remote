@@ -40,6 +40,9 @@
     }
     var _cleanTs = {};                     // id → 上次清理时间 (节流)
     var CLEAN_STALE_MS = 24 * 3600 * 1000; // 24h 无更新才允许清理
+    // 终态会话(内容已定格·无人在跑): 平台会周期性触碰其 updated_at, 不能据此判「活跃」
+    var _TERM_ST = { suspended: 1, expired: 1, stopped: 1, finished: 1, archived: 1, interrupted: 1, deleted: 1 };
+    function _dormant(s) { var st = String((s && (s.status_enum || s.status)) || "").toLowerCase(); return !!_TERM_ST[st]; }
 
     function _acctFolder(a) { return String((a && (a.email || a.id)) || "acc").split("@")[0].replace(/[^a-zA-Z0-9_\-]/g, "_") || "acc"; }
     function loadBackupManifest(a) {
@@ -138,7 +141,12 @@
         // 已归档(平台无硬删·archive 即最强清除) → 登记已清理, 不重复归档不计 kept
         if (s.is_archived === true || s.is_archived === "true") { if (ent && !ent.deleted) { ent.deleted = true; ent.cleanedAt = now; cleaned++; } continue; }
         var ts = DaoCloud.sessTs(s) || 0;
-        if (now - ts < CLEAN_STALE_MS) { kept++; fresh++; continue; }   // 24h 内有更新 → 保留(只备份不清理)
+        // 「24h 内有更新」只对仍在活动的会话成立。平台会周期性触碰终态会话(尤其 suspended)的
+        // updated_at → 归零死号恒有一条「假·新鲜」会话, fresh 永不归零, 永滞库中(实测 15/15 如此)。
+        // 终态(挂起/过期/停止/完成/中断)会话内容已定格且本轮已备份 → 不计 fresh; 一旦被续跑,
+        // 状态回到 running 自然重新计 fresh, 安全不失。
+        if (now - ts < CLEAN_STALE_MS && !_dormant(s)) { fresh++; }     // 24h 内有更新且非终态 → 计新鲜
+        if (now - ts < CLEAN_STALE_MS) { kept++; continue; }            // 24h 内有更新 → 保留(只备份不清理)
         if (!ent || !ent.backedUpAt || (!ent.md && !ent.zip)) { kept++; continue; }
         try { var r = await DaoCloud.purgeSession(a, sid); if (r && r.deleted) { cleaned++; ent.deleted = true; ent.cleanedAt = now; } else kept++; } catch (e) { kept++; }
       }
