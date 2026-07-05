@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "3.50.78",
+  "version": "3.50.79",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
