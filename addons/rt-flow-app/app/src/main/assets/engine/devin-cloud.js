@@ -458,19 +458,32 @@
     }
     return result;
   }
-  // 取回某会话全部产出文件 → [{path, file, b64, size}] (b64 = 二进制 base64, 供 ZIP 无损打包)
-  async function collectSessionFiles(acc, sid, events, onProgress) {
+  // 取回某会话全部产出文件 → [{path, key, b64|bytes, size}] (b64/bytes = 二进制无损, 供 ZIP 打包)
+  //   prevBytesByKey (可选): { key → Uint8Array } —— 上一份整包 ZIP 里已存的产出文件字节。
+  //   命中的 key 直接复用旧字节 (不再 presigned + 下载) → 增量覆盖: 只对新增/变更的 key 走网络, 省移动流量。
+  async function collectSessionFiles(acc, sid, events, onProgress, prevBytesByKey) {
     var ev = events;
     if (!ev) { var e = await sessionEvents(acc, sid); ev = (e.ok && e.events) || []; }
     var keys = extractAllKeys(ev);
     var keyToPath = mapKeysToPaths(ev);
-    if (!keys.length) return { ok: true, files: [], index: [] };
-    var urlMap = await resolvePresignedUrls(acc, sid, keys);
-    var files = [], index = [], done = 0;
+    if (!keys.length) return { ok: true, files: [], index: [], total: 0, reused: 0 };
+    prevBytesByKey = prevBytesByKey || null;
+    // 只对「上一份 ZIP 没有的 key」解 presigned URL —— 复用的 key 一律不碰网络
+    var need = [];
+    for (var q = 0; q < keys.length; q++) { if (!(prevBytesByKey && prevBytesByKey[keys[q]])) need.push(keys[q]); }
+    var urlMap = need.length ? await resolvePresignedUrls(acc, sid, need) : {};
+    var files = [], index = [], done = 0, reused = 0;
     for (var i = 0; i < keys.length; i++) {
-      var key = keys[i]; var info = urlMap[key];
-      var path = keyToPath[key] || null;
-      if (!info) { index.push({ key: key, path: path, error: "no presigned url" }); continue; }
+      var key = keys[i]; var path = keyToPath[key] || null;
+      if (prevBytesByKey && prevBytesByKey[key]) {
+        var pb = prevBytesByKey[key];
+        files.push({ path: path, key: key, bytes: pb, size: pb.length, reused: true });
+        index.push({ key: key, path: path, size: pb.length });
+        reused++; done++; if (onProgress) try { onProgress(done, keys.length); } catch (e2) {}
+        continue;
+      }
+      var info = urlMap[key];
+      if (!info) { index.push({ key: key, path: path, error: "no presigned url" }); done++; if (onProgress) try { onProgress(done, keys.length); } catch (e3) {} continue; }
       try {
         var res = await C.httpReqB64("GET", info.url, info.headers || {}, "");
         if (res && res.status >= 200 && res.status < 300 && typeof res.b64 === "string") {
@@ -480,7 +493,7 @@
       } catch (er) { index.push({ key: key, path: path, error: String(er) }); }
       done++; if (onProgress) try { onProgress(done, keys.length); } catch (e2) {}
     }
-    return { ok: true, files: files, index: index, total: keys.length };
+    return { ok: true, files: files, index: index, total: keys.length, reused: reused };
   }
 
   // ── 纯 JS ZIP (STORE 存储法·零依赖·复刻桌面 ZipWriter 的可读结构: 对话md + 工作日志md + files/) ──
@@ -581,6 +594,30 @@
     } catch (e) {}
     return null;
   }
+  // 从 ZIP(b64 或 Uint8Array) 读取指定条目的原始字节 (二进制无损) — STORE 直切片 / DEFLATE 经 DecompressionStream。
+  //   供增量备份: 从上一份整包 ZIP 复用已下载的 files/<产出文件> 字节, 免重下。
+  async function zipReadBin(zip, wantName) {
+    try {
+      var z = (zip instanceof Uint8Array) ? zip : b64ToBytes(zip);
+      var i = z.length - 22; while (i >= 0 && _r32(z, i) !== 0x06054b50) i--;
+      if (i < 0) return null;
+      var n = _r16(z, i + 10), p = _r32(z, i + 16);
+      for (var k = 0; k < n; k++) {
+        if (_r32(z, p) !== 0x02014b50) break;
+        var method = _r16(z, p + 10), csize = _r32(z, p + 20), nlen = _r16(z, p + 28), elen = _r16(z, p + 30), clen = _r16(z, p + 32), lho = _r32(z, p + 42);
+        var name = utf8Decode(z.subarray(p + 46, p + 46 + nlen));
+        if (name === wantName) {
+          var ds = lho + 30 + _r16(z, lho + 26) + _r16(z, lho + 28);
+          var data = z.subarray(ds, ds + csize);
+          if (method === 0) return new Uint8Array(data);
+          if (method === 8) { var u = await _inflateRaw(data); return u || null; }
+          return null;
+        }
+        p += 46 + nlen + elen + clen;
+      }
+    } catch (e) {}
+    return null;
+  }
   // 取数指引 MD: 账号(邮箱/密码/org)+ Session ID + 提取流程 — 据此可随时整体重新取回该对话全部文件。
   //   作为备份「文件夹/ZIP」的本源锚定第二份文档 (与「对话_完整记录」配套), 任意上下文(headless 引擎/网页)皆可生成。
   function buildAccessGuide(acc, sid, title) {
@@ -621,15 +658,35 @@
   }
   // 取某对话完整内容(对话md + 取数指引md + 工作日志md + _meta.json + files/产出文件) → 打成单个 ZIP 的 base64 (含文件夹)。
   //   仅读历史, 不消耗额度; 额度耗尽账号亦可。复刻桌面「下载对话内容(ZIP)」的产物结构, 以完整对话记录为本源锚定。
-  async function exportSessionZip(acc, sid, onProgress) {
+  //   prevZipB64 (可选): 上一份 sess-<sid>.zip 的 base64/字节 → 增量覆盖: 对话 md/工作日志始终刷新为最新,
+  //   产出文件按 key 复用旧整包里已下载的字节, 只增量取新增/变更文件 (省移动流量·闲时 WiFi 打包)。
+  async function exportSessionZip(acc, sid, onProgress, prevZipB64) {
     var conv = await exportSession(acc, sid, "conversation");
     if (!conv || !conv.ok) return { ok: false, error: (conv && conv.error) || "对话导出失败" };
     // 事件流偶发回退稀疏 /messages → 再试一次拿全息事件流, 不把稀疏版当完整锚定
     if (conv.fallback) { try { var c2 = await exportSession(acc, sid, "conversation"); if (c2 && c2.ok && !c2.fallback) conv = c2; } catch (e) {} }
     var wl = null; try { wl = await exportSession(acc, sid, "worklog"); } catch (e) {}
     var ev = null; try { var er = await sessionEvents(acc, sid); ev = (er.ok && er.events) || []; } catch (e) {}
-    var col = { files: [], index: [] };
-    try { col = await collectSessionFiles(acc, sid, ev, onProgress); } catch (e) {}
+    // 从上一份整包 ZIP 提取「key → 已下载字节」映射, 供 collectSessionFiles 增量复用
+    var prevBytesByKey = null;
+    if (prevZipB64) {
+      try {
+        var pz = (prevZipB64 instanceof Uint8Array) ? prevZipB64 : b64ToBytes(prevZipB64);
+        var pmetaTxt = await zipReadText(pz, "_meta.json");
+        var pidx = pmetaTxt ? ((JSON.parse(pmetaTxt) || {}).files || []) : [];
+        if (pidx.length) {
+          prevBytesByKey = Object.create(null);
+          for (var pi = 0; pi < pidx.length; pi++) {
+            var pe = pidx[pi]; if (!pe || !pe.key || pe.error) continue;
+            var prel = String(pe.path || pe.key || "file").replace(/^\/+/, "");
+            var pbytes = await zipReadBin(pz, "files/" + prel);
+            if (pbytes) prevBytesByKey[pe.key] = pbytes;
+          }
+        }
+      } catch (e) { prevBytesByKey = null; }
+    }
+    var col = { files: [], index: [], reused: 0 };
+    try { col = await collectSessionFiles(acc, sid, ev, onProgress, prevBytesByKey); } catch (e) {}
     var title = conv.title || sid;
     var entries = [];
     // 本源核心: 完整对话记录(整条对话全过程) 放首位锚定; 取数指引/工作日志/产出文件皆辅助锚定它
@@ -642,9 +699,9 @@
     }, null, 2)) });
     (col.files || []).forEach(function (f) {
       var rel = String(f.path || f.key || "file").replace(/^\/+/, "");
-      entries.push({ name: "files/" + rel, bytes: b64ToBytes(f.b64 || "") });
+      entries.push({ name: "files/" + rel, bytes: f.bytes || b64ToBytes(f.b64 || "") });
     });
-    return { ok: true, title: title, fileCount: (col.files || []).length, entries: entries.length, events: conv.events || 0, fallback: !!conv.fallback, b64: bytesToB64(await buildZipAsync(entries)) };
+    return { ok: true, title: title, fileCount: (col.files || []).length, reused: col.reused || 0, entries: entries.length, events: conv.events || 0, fallback: !!conv.fallback, b64: bytesToB64(await buildZipAsync(entries)) };
   }
 
   // 会话最近更新时间(ms) — 字段名各端不一, 多候选兜底; 取不到回退 created/0。
@@ -717,7 +774,7 @@
 
   root.DaoCloud = {
     QUOTA_RE: QUOTA_RE, sessStatus: sessStatus, quotaLive: quotaLive, sessStatusA: sessStatusA,
-    buildZip: buildZip, buildZipAsync: buildZipAsync, zipReadText: zipReadText, bytesToB64: bytesToB64, utf8Bytes: utf8Bytes, exportSessionZip: exportSessionZip,
+    buildZip: buildZip, buildZipAsync: buildZipAsync, zipReadText: zipReadText, zipReadBin: zipReadBin, bytesToB64: bytesToB64, utf8Bytes: utf8Bytes, exportSessionZip: exportSessionZip,
     buildAccessGuide: buildAccessGuide,
     purgeSession: purgeSession, sessTs: sessTs,
     listSessions: listSessions, sessionDetail: sessionDetail, sessionMessages: sessionMessages,
