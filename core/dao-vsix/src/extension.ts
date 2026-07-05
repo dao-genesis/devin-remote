@@ -4349,6 +4349,9 @@ let _cfSpawnFails = 0;
 let _cfBackoffUntilMs = 0;
 let _cfLastCountedStartMs = 0;
 const CF_BACKOFF_MAX_MS = 300000; // 退避上限 5min: 冷却后尽快重试又不锤爆
+// 退避期「零成本探活」节流: 不锤隧道 API, 只 GET 已打印 URL 的 /api/health — 边缘封禁一消退即收编+反注
+let _cfBackoffProbeMs = 0;
+const CF_BACKOFF_PROBE_MIN_MS = 45000;
 function cfReadBoundPort(): number { try { const n = parseInt(fs.readFileSync(CF_PORT, 'utf8').trim(), 10); if (n > 0) return n; } catch (eCFP1) { /* 守柔 */ } return 0; }
 function cfWriteBoundPort(p: number): void { try { if (p) { bridgeEnsureDir(); fs.writeFileSync(CF_PORT, String(p), 'utf8'); } } catch (eCFP2) { /* 守柔 */ } }
 // 帛书·「上善若水」: 公网隧道 origin 恒随「活着的 leader」流动 — 取当前真应答 /api/health 的最小端口实例。
@@ -4636,8 +4639,31 @@ async function bridgeStartTunnel(named: boolean): Promise<{ ok: boolean; reason?
                 }
             }
         } catch (eBK) { /* 守柔 */ }
-        // ① 退避闸: 限流冷却期不锤 API
+        // ① 退避闸: 限流冷却期不锤 API — 但不干等: 冷却期内低频「零成本探活」已打印的 URL。
+        //   trycloudflare 限流是边缘侧按 IP 封禁, 常早于 20min 消退且不需重启进程即恢复 —
+        //   探通即立刻收编该 URL + 反向注入(「不断慢慢探测·成功即反注」), 不通才继续退避。
         if (_cfBackoffUntilMs && Date.now() < _cfBackoffUntilMs) {
+            const now = Date.now();
+            if (now - _cfBackoffProbeMs > CF_BACKOFF_PROBE_MIN_MS) {
+                _cfBackoffProbeMs = now;
+                const u = cfReadUrlFromLog();
+                const pidOk = !!cfPidAlive();
+                if (u && pidOk) {
+                    let alive = false;
+                    try { alive = await bridgeProbeAlive(u, 6000, bridgeToken); } catch (ePB1) { /* 守柔 */ }
+                    if (alive) {
+                        _cfSpawnFails = 0; _cfBackoffUntilMs = 0; _cfLastCountedStartMs = _cfLastStartMs;
+                        bridgeUrl = u;
+                        try { bridgeSaveConnJson(); } catch (ePB2) { /* 守柔 */ }
+                        try { bridgeWriteArtifacts(); } catch (ePB3) { /* 守柔 */ }
+                        try { _lastBridgeReinjectSig = ''; } catch (ePB4) { /* 守柔 */ }
+                        try { bridgeScheduleReinject('backoff-probe-revived'); } catch (ePB5) { /* 守柔 */ }
+                        try { refreshDaoCloudMiddlePanel(); } catch (ePB6) { /* 守柔 */ }
+                        daoLoopLog('tunnel', '退避期探活: 边缘封禁已消退 → 收编 ' + u + ' + 立即反注(零API成本·未重启进程)');
+                        return { ok: true, reused: true, url: u };
+                    }
+                }
+            }
             daoLoopLog('tunnel', '退避中·剩' + Math.round((_cfBackoffUntilMs - Date.now()) / 1000) + 's [startTunnel]');
             return { ok: false, reason: 'backoff-active' };
         }
