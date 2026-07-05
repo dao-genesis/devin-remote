@@ -3528,6 +3528,9 @@ public class MainActivity extends AppCompatActivity {
     //   对话流里的内嵌卡片永不是 0 宽列, 不会触发, 日常面板不受扰。
     //   ② 记录改前 inline cssText, 弹窗关闭/视频移除/宽屏时整组还原 —— SPA 复用
     //   DOM 节点也不会把堆叠样式带去其他页面(修「看完视频后其他文件面板也变竖排」)。
+    //   触发时序: 面板开启有滑入动画, DOM 插入时列宽尚未定型(非 0 宽), 且动画结束后不再有
+    //   mutation —— 单次防抖会永久错过 → 每次触发按 300/1000/2500ms 梯次重检,
+    //   另有轻量定时哨兵(仅存在 0 宽视频时才动手)兑底。
     static void installVideoFit(WebView w) {
         if (w == null) return;
         String js = "(function(){try{if(window.__rtVidFit)return;window.__rtVidFit=1;"
@@ -3556,9 +3559,14 @@ public class MainActivity extends AppCompatActivity {
             + "c.style.borderLeft='0';c.style.borderTop='1px solid rgba(127,127,127,.35)';c.style.minHeight='0';}}"
             + "}catch(e){}}"
             + "function fit(){try{sweep();document.querySelectorAll('video').forEach(fixOne);}catch(e){}}"
-            + "var t=null;function deb(){if(t)clearTimeout(t);t=setTimeout(fit,300);}"
+            + "var ts=[];function deb(){while(ts.length)clearTimeout(ts.pop());"
+            + "[300,1000,2500].forEach(function(ms){ts.push(setTimeout(fit,ms));});}"
             + "new MutationObserver(deb).observe(document.body,{childList:true,subtree:true});"
-            + "window.addEventListener('resize',deb);fit();"
+            + "window.addEventListener('resize',deb);"
+            + "document.addEventListener('transitionend',function(){setTimeout(fit,60);},true);"
+            + "setInterval(function(){try{var need=false;document.querySelectorAll('video').forEach(function(v){"
+            + "if(v.getBoundingClientRect().width<2)need=true;});if(need||F.length)fit();}catch(e){}},3000);"
+            + "window.__rtVidFitRun=fit;fit();"
             + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
