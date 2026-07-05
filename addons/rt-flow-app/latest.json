@@ -1,6 +1,6 @@
 {
-  "versionCode": 257,
-  "versionName": "0.37.153",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.153/DevinCloud-mobile-v0.37.153.apk",
-  "notes": "v0.37.153 · 备份双轨+增量ZIP(活跃走实时MD·闲时WiFi整包增量复用旧字节省流量) · 网络瞬断自动重试(JS+原生·登录链韧性) · 手动ZIP增量提速 · 分隔条防重双保险"
+  "versionCode": 258,
+  "versionName": "0.37.154",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.154/DevinCloud-mobile-v0.37.154.apk",
+  "notes": "v0.37.154 · 退格根治: 句中退格左右同删 bug 原生层全路径夹断(反序拆单删除挂起仲裁 + 跨光标组词区双删改写只左删), 模拟器 11 种输入法退格路径全量验证通过"
 }
