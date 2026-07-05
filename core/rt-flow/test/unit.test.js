@@ -1067,6 +1067,30 @@ function test(name, fn) {
       "extension.ts: applyInjectProfileToOrgInner 内的 upsert 须传 locked=true 旁路");
   });
 
+  // ── PAT 覆盖式更新 (问题④ · 源级护栏) ──
+  // 病灶: secrets 端点对同 key 二次 POST 返回 409 且保留旧值 → 用户输入新 PAT 后,
+  //   已有 GITHUB_PAT 的账号仍持陈旧 PAT; dao-vsix profile.secrets 同步也「不替换已有」。
+  // 护栏: ① ensureGithubPatSecret 默认覆盖(先删旧再注新); ② profile.secrets 同步须以新值替换旧值。
+  console.log("\n[PAT 覆盖式更新·源级护栏]");
+  test("devin_git.js: ensureGithubPatSecret 默认覆盖 — 先删旧 GITHUB_PAT 再注新值 (双副本)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "devin_git.js"], ["..", "..", "dao-vsix", "rtflow", "devin_git.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      const r = rel.join("/");
+      assert.ok(/async function ensureGithubPatSecret\(auth, pat, opts\)/.test(src), r + ": ensureGithubPatSecret 须收 opts(override)");
+      assert.ok(/const override = !opts \|\| opts\.override !== false/.test(src), r + ": 须默认 override=true");
+      assert.ok(/if \(override\) \{ try \{ await deleteSecret\(auth, "GITHUB_PAT"\); \} catch \(e\) \{\}/.test(src),
+        r + ": 覆盖模式须先删旧 GITHUB_PAT 再注入(409 不改值·不删则新 PAT 永不生效)");
+    }
+  });
+  test("dao-vsix: profile.secrets PAT 同步须覆盖旧值 (不得回退「不替换已有」)", () => {
+    const fs = require("fs"), path = require("path");
+    const ts = fs.readFileSync(path.join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts"), "utf8");
+    assert.ok(/if \(existing\) \{\s*\n\s*if \(existing\.value !== pat\) \{ existing\.value = pat; saveInjectProfile\(profile\); \}/.test(ts),
+      "extension.ts: 已有 GITHUB_PAT 时须以新 PAT 覆盖旧值");
+    assert.ok(!/不替换已有: 用户已有GITHUB_PAT则保留/.test(ts), "extension.ts: 不得残留「不替换已有」旧逻辑注释");
+  });
+
   // ── 12. 拖拽·指针式收口(原生 HTML5 DnD 在 webview 跨 iframe 丢事件 → 三拖拽全失效) ──
   console.log("\n[webview 拖拽·指针式·道并行]");
   {
