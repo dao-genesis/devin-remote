@@ -307,7 +307,7 @@ function _originGetProxyAgent(isHttps) {
 const PORT = parseInt(process.env.ORIGIN_PORT || "8889", 10);
 // v9.6.1 · 反者道之动 · 远曰反 · 回归 v9.1.2 之全前端按钮 (七按钮: 道/官/实/原/编/复/卸 + dots/customBadge)
 // 以 v9.1.2 本源哲学为锚 · 守大常不动 · 五细节皆成: isAlreadyInverted · _rawTape+all_fields · 部署不 kill · 前端按钮回归
-const ORIGIN_VERSION_BASE = "v9.9.336"; // v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
+const ORIGIN_VERSION_BASE = "v9.9.337"; // v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
 // 印 153 · 唯变所适 · 软编码归宗 · 二十五章「逝曰远 远曰反」· 七十六章「兵强则不胜」
 // 病: 多 ext-host 共端口 :8937 · 旧版 in-process proxy 持续 listen · self_file 锁死旧版目录
 //     → 即便装毕新版 vsix · /ping 仍返 v9.9.19/v9.9.20 之 self_file · canon_name 走旧映射
@@ -6773,24 +6773,51 @@ function _respondWithCatalog(res, catalog, rid) {
 // 透传 · v7.8 HTTP/2 双栈 (h2c 入 → h2 TLS 出)
 // ═══════════════════════════════════════════════════════════
 const _h2Sessions = {};
+// v9.9.337 · H2 session keepalive ping · 四十章「弱者道之用」
+// 根因: 云端 H2 session 空闲超阈即发 GOAWAY → 活跃流式推理被中断 → 对话截断
+// 药: 每 45s ping 一次 · 保鲜 session · 无活跃流时自然 idle close
+const _H2_PING_INTERVAL = 45000;
 function _getH2Session(host) {
   const key = host;
   const s = _h2Sessions[key];
-  if (s && !s.closed && !s.destroyed) return s;
+  if (s && !s.closed && !s.destroyed && !s._daoGoaway) return s;
+  if (s && (s._daoGoaway || s.closed || s.destroyed)) {
+    try { if (s._daoPingTimer) clearInterval(s._daoPingTimer); } catch {}
+  }
   log(`[h2] connect https://${host}:${CLOUD_PORT}`);
   const session = http2.connect(`https://${host}:${CLOUD_PORT}`);
+  // keepalive ping
+  session._daoPingTimer = setInterval(() => {
+    try {
+      if (session.closed || session.destroyed) {
+        clearInterval(session._daoPingTimer);
+        return;
+      }
+      session.ping((err) => {
+        if (err) log(`[h2] ping ${host} err: ${err.message}`);
+      });
+    } catch {}
+  }, _H2_PING_INTERVAL);
+  try { session._daoPingTimer.unref(); } catch {}
   session.on("error", (e) => {
     log(`[h2] session ${host} error: ${e.message}`);
+    try { clearInterval(session._daoPingTimer); } catch {}
     try {
       session.close();
     } catch {}
     delete _h2Sessions[key];
   });
   session.on("close", () => {
+    try { clearInterval(session._daoPingTimer); } catch {}
     delete _h2Sessions[key];
   });
-  session.on("goaway", () => {
-    log(`[h2] session ${host} goaway`);
+  // v9.9.337 · GOAWAY 优雅排水 · 十六章「万物并作 吾以观其复也」
+  // 根因: GOAWAY 立即删 session → 下一请求新建 session · 但旧 session 上的活跃流仍在
+  //        旧逻辑无碍(流自然结束) · 但新请求若用已 GOAWAY 的 session 会立即失败
+  // 药: 标记 _daoGoaway · _getH2Session 跳过已标记的 session · 让活跃流自然完成
+  session.on("goaway", (code) => {
+    log(`[h2] session ${host} goaway code=${code}`);
+    session._daoGoaway = true;
     delete _h2Sessions[key];
   });
   _h2Sessions[key] = session;
@@ -6858,10 +6885,13 @@ function proxyToCloud(req, res, overrideBody, _rid) {
     if (!_upClosed && !res.writableEnded) _cancelUpstream("res.close");
   });
 
-  // 双路超时: session 级 + stream 级 · 180s 硬顶 (Cascade 最长单请求)
+  // v9.9.337 · 流续不断 · stream 级空闲超时 180s→600s · 二十二章「少则得 多则惑」
+  // 根因: thinking 模型(Claude/DeepSeek)推理阶段可静默 3-5 分钟无数据 → 180s 超时火 → NGHTTP2_CANCEL
+  //       → 下游收截断响应 → Cascade 显示「继续」→ 用户体验为「对话到一半突然中断」
+  // 药: 600s (10min) 安全阈值 · 覆盖最长 thinking 模型推理窗口 · 仍有兜底防泄漏
   try {
-    upStream.setTimeout(180000, () =>
-      _cancelUpstream("upStream.timeout(180s)"),
+    upStream.setTimeout(600000, () =>
+      _cancelUpstream("upStream.timeout(600s)"),
     );
   } catch {}
 
@@ -8717,9 +8747,12 @@ _h2Server.on("sessionError", (err) => {
       code: err.code,
     });
 });
-_h1Server.keepAliveTimeout = 10000;
-_h1Server.headersTimeout = 15000;
-_h1Server.requestTimeout = 120000;
+// v9.9.337 · H1 server 超时放宽 · 配合 H2 上游 600s stream 超时
+// 根因: requestTimeout 120s < stream 600s → H1 提前关连接 → 下游丢失长推理响应
+// keepAliveTimeout: 空闲连接回收 · 30s 足够 (LS 高频请求 · 很少真空闲)
+_h1Server.keepAliveTimeout = 30000;
+_h1Server.headersTimeout = 30000;
+_h1Server.requestTimeout = 600000;
 
 // v9.9.58 · 反者道之动 · H2内部端口动态化 · 不再硬编码 PORT+1
 // 病: 多用户(Administrator/zhou)各得FNV-1a端口(8937/8981) · 但H2内部端口硬编码8890
