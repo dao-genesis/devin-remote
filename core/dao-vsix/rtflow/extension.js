@@ -737,6 +737,14 @@ html.m #hint{font-size:14px;padding:18px}
 #dlwin .dwx{background:#21262d;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:5px 10px;font-size:12px;cursor:pointer;flex:0 0 auto}
 #dlwin .empty{color:#6e7681;text-align:center;padding:26px 12px;font-size:13px}
 #dlwin .tip{font-size:11px;color:#6e7681;padding:4px 4px 6px}
+/* 悬浮窗可缩放(对齐常规软件·拖边框/拖角) — daowin/dlwin 同 */
+#daowin,#dlwin{min-width:340px;min-height:240px}
+.rzh{position:absolute;z-index:30;user-select:none;-webkit-user-select:none}
+.rzh.e{top:6px;bottom:14px;right:0;width:6px;cursor:ew-resize}
+.rzh.s{left:6px;right:14px;bottom:0;height:6px;cursor:ns-resize}
+.rzh.se{right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;z-index:31}
+.rzh.se::after{content:"";position:absolute;right:3px;bottom:3px;width:8px;height:8px;border-right:2px solid #55606d;border-bottom:2px solid #55606d;border-radius:0 0 2px 0}
+.rzh.se:hover::after{border-color:#1f6feb}
 </style></head><body>
 <div id="app">
   <div id="tb">
@@ -786,11 +794,13 @@ html.m #hint{font-size:14px;padding:18px}
     <div class="dwview" id="dwViewB"><div id="dwBackup"><div class="empty">加载中…</div></div></div>
     <div id="cv"><div class="cvtop"><button class="dwx" id="cvBack">‹ 返回</button><div class="cvtabs" id="cvTabs"></div></div><div class="cvacts" id="cvActs"></div><div class="cvbody" id="cvBody"></div></div>
   </div>
+  <div class="rzh e" data-rz="e"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
 </div>
 <div id="dlwin">
   <div class="dwh" id="dlHead"><span>⬇</span><span class="t" id="dlTitle">下载</span><button class="dwx" id="dlClose">✕ 关闭</button></div>
   <div class="dwbar"><button class="mini" id="dlRefresh">🔄 刷新</button><button class="mini" id="dlFolder">📁 下载文件夹</button></div>
   <div class="dlbody"><div class="tip">浏览器下载 · 在网页中下载的文件都会出现在这里 · <b>拖文件卡到网页</b>即上传到当前网页上传框(与对话备份无关 · 对齐手机 APK)</div><div id="dlList"><div class="empty">加载中…</div></div></div>
+  <div class="rzh e" data-rz="e"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
 </div>
 <div class="dtoast" id="daotoast"></div>
 <script>
@@ -1126,11 +1136,24 @@ function daoLoadRecent(){
   vscode.postMessage({type:'dlRecent'});}
 var _recRenderT=null;
 function _recRenderThrottled(){if(_recRenderT)return;_recRenderT=setTimeout(function(){_recRenderT=null;daoRenderRecent();},150);}
+// 按账号合并增量: 只用新数据替换「本轮已刷过账号(covered)」的行, 其余账号保留缓存行 →
+//   点开即显缓存全量最新, 流式只就地精修各号, 消除「先缩成一个号再慢慢涨回」的跳伞/一分钟抖动。
+function _mergeRecent(incoming,covered){
+  var cov=Object.create(null);(covered||[]).forEach(function(e){cov[String(e).toLowerCase()]=1;});
+  var kept=DAO_REC.filter(function(it){return !cov[String(it.email||'').toLowerCase()];});
+  var all=kept.concat(incoming||[]);
+  all.sort(function(a,b){return (b.updatedAt||0)-(a.updatedAt||0);});
+  var seen=Object.create(null),ded=[];
+  for(var i=0;i<all.length;i++){var it=all[i];if(it.sid&&seen[it.sid])continue;if(it.sid)seen[it.sid]=1;ded.push(it);}
+  DAO_REC=ded;
+}
 function daoOnRecent(m){
-  // 兼容老形态(直接传 list)与新形态(带 partial/done/total 的增量包)。
+  // 兼容老形态(直接传 list)与新形态(带 partial/done/total/covered 的增量包)。
   if(Array.isArray(m)){DAO_REC=m||[];daoRenderRecent();return;}
-  m=m||{};DAO_REC=m.list||[];
-  // 防跳伞: 流式增量包期间节流重绘(最多 ~150ms 一次)并保留滚动位置, 避免每包全量重绘造成「跳一大堆」闪烁; 完成包才落地最终渲染。
+  m=m||{};
+  // 无 covered 字段(老宿主) → 退回整体替换; 有则按账号合并(不丢未刷账号的缓存行)。
+  if(m.covered){_mergeRecent(m.list||[],m.covered);}else{DAO_REC=m.list||[];}
+  // 防跳伞: 流式增量包期间节流重绘(最多 ~150ms 一次)并保留滚动位置; 完成包才落地最终渲染。
   if(m.partial){
     if(!DAO_REC.length){var b=_dEl('dwRecent');if(b&&(!b.firstChild||b.querySelector('.empty')))b.innerHTML='<div class="empty">加载中… '+(m.done||0)+'/'+(m.total||'?')+' 账号</div>';}
     else _recRenderThrottled();
@@ -1298,6 +1321,20 @@ _dEl('dlwin').addEventListener('click',function(e){var el=e.target.closest&&e.ta
   hd.addEventListener('mousedown',function(e){if(e.target&&e.target.id==='dlClose')return;drag=true;var r=w.getBoundingClientRect();dx=e.clientX-r.left;dy=e.clientY-r.top;w.style.right='auto';w.style.left=r.left+'px';w.style.top=r.top+'px';e.preventDefault();});
   window.addEventListener('mousemove',function(e){if(!drag)return;var x=Math.max(0,Math.min(window.innerWidth-90,e.clientX-dx)),y=Math.max(0,Math.min(window.innerHeight-40,e.clientY-dy));w.style.left=x+'px';w.style.top=y+'px';});
   window.addEventListener('mouseup',function(){drag=false;});})();
+// 悬浮窗可缩放(拖边框/拖角·对齐常规软件) + 尺寸持久化 — daowin/dlwin 同一套
+(function(){
+  function saveSz(w){try{localStorage.setItem('dao_wsz_'+w.id,JSON.stringify({w:w.style.width,h:w.style.height}));}catch(e){}}
+  function restoreSz(w){try{var s=JSON.parse(localStorage.getItem('dao_wsz_'+w.id)||'null');if(!s)return;if(s.w){w.style.width=s.w;w.style.maxWidth='none';}if(s.h){w.style.height=s.h;w.style.maxHeight='none';}}catch(e){}}
+  function mk(w){if(!w)return;restoreSz(w);var rz=false,dir='',sx=0,sy=0,sw=0,sh=0;
+    w.addEventListener('mousedown',function(e){var g=e.target.closest&&e.target.closest('.rzh');if(!g)return;
+      dir=g.getAttribute('data-rz')||'se';var r=w.getBoundingClientRect();sx=e.clientX;sy=e.clientY;sw=r.width;sh=r.height;
+      w.style.right='auto';w.style.left=r.left+'px';w.style.top=r.top+'px';w.style.maxWidth='none';w.style.maxHeight='none';
+      rz=true;e.preventDefault();e.stopPropagation();});
+    window.addEventListener('mousemove',function(e){if(!rz)return;
+      if(dir.indexOf('e')>=0)w.style.width=Math.max(340,Math.min(window.innerWidth-8,sw+(e.clientX-sx)))+'px';
+      if(dir.indexOf('s')>=0)w.style.height=Math.max(240,Math.min(window.innerHeight-8,sh+(e.clientY-sy)))+'px';});
+    window.addEventListener('mouseup',function(){if(rz){rz=false;saveSz(w);}});}
+  mk(_dEl('daowin'));mk(_dEl('dlwin'));})();
 // ── 整页翻译(对照手机 APK translate.js·Edge 免费引擎) ──────────────────────
 //   手机: 原生桥 __dcTr 做 HTTP; 桌面: 宿主做 HTTP(translate 消息), 外壳直改同源 iframe 文本节点。
 //   遍历可见文本节点(含开放 Shadow DOM) → 分批送译 → 回填(保留原文可一键恢复) + MutationObserver 增量。
@@ -2125,14 +2162,16 @@ async function _daoDownloadData(m, reply) {
     //   末尾再回推一次 partial:false。前端先用缓存秒开, 收到增量持续刷新 → 不再等全量阻塞。
     const out = [];
     let doneN = 0, lastPaint = 0;
+    const covered = Object.create(null);
     const emit = (partial) => {
       const sorted = out.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
       const seen = Object.create(null), ded = [];
       for (const it of sorted) { if (it.sid && seen[it.sid]) continue; if (it.sid) seen[it.sid] = 1; ded.push(it); }
-      reply({ type: "dlRecentData", list: ded.slice(0, 80), accounts: emails.length, partial: !!partial, done: doneN, total: emails.length });
+      // covered = 本轮已真刷过的账号(含返回 0 对话者) → 前端据此只替换这些号的行, 其余保留缓存, 消除「先缩后涨」的跳伞。
+      reply({ type: "dlRecentData", list: ded.slice(0, 80), accounts: emails.length, partial: !!partial, done: doneN, total: emails.length, covered: Object.keys(covered) });
     };
-    if (!emails.length) { reply({ type: "dlRecentData", list: [], accounts: 0, partial: false, done: 0, total: 0 }); return true; }
-    await _daoPool(emails, 6, async (email) => {
+    if (!emails.length) { reply({ type: "dlRecentData", list: [], accounts: 0, partial: false, done: 0, total: 0, covered: [] }); return true; }
+    await _daoPool(emails, 8, async (email) => {
       try {
         const auth = devinCloud.getCachedAuth(email);
         if (auth && auth.auth1) {
@@ -2145,6 +2184,7 @@ async function _daoDownloadData(m, reply) {
           }
         }
       } catch (e) {}
+      covered[String(email).toLowerCase()] = 1;
       doneN++;
       const now = Date.now();
       if (now - lastPaint > 250) { lastPaint = now; emit(true); }
