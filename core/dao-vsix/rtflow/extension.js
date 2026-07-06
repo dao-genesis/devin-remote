@@ -12237,10 +12237,13 @@ async function _dvAutoBackupRun() {
   const removeEmails = [];
   // v4.26.6 · 即时出库(逐号落盘): 旧法攒到循环末统一出库 — 全池扫描以小时计,
   //   窗口 reload/中途异常即丢 removeEmails → 已清理号永不落盘出库(实测病灶)。
-  //   现法: 每号条件满足当即 removeSingle() 落盘, 循环末批处理保留为兜底。
+  //   现法: 每号条件满足当即 _store.remove() 落盘, 循环末批处理保留为兜底。
   const _evictNow = (email, why) => {
     try {
-      if (_store.removeSingle(email)) {
+      const _ei = _store.accounts.findIndex(
+        (a) => (a.email || "").toLowerCase() === String(email).toLowerCase(),
+      );
+      if (_ei >= 0 && _store.remove(_ei)) {
         log("auto-remove: " + email + " 即时出库 · " + why);
         try { _broadcastUI(true); } catch {}
         return true;
