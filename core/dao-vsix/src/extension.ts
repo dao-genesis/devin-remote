@@ -2772,6 +2772,27 @@ async function daoCdpEnsureChrome() {
 //   旧病灶: 无跟踪时 daoCdpPickPage 恒返 pages[0](常是遗留 about:blank), 与 navigate 新建的标签分叉 →
 //   snapshot/get_text/click 全落到空白标签("element not found"·空 DOM)。见 CHANGELOG dao-vsix。
 let daoCdpActiveTarget = null;
+// 完整 UA / 请求头模拟状态(会话级覆写本随「无状态短连 daoCdpBatch」断连即失, 故此处存「意图」,
+//   在每次工具驱动的导航/重载(browser_navigate/reload)所在的同一 CDP 会话内重放 → 跨页持久, 无需常驻会话)。
+type DaoCdpEmu = { ua?: string; acceptLanguage?: string; platform?: string; headers?: Record<string, string> };
+let daoCdpEmu: DaoCdpEmu | null = null;
+// 生成「重放 UA/请求头覆写」的 CDP 命令序列(无覆写意图则空), 供导航/重载批次前置串接。
+function daoCdpEmuCalls(): { method: string; params?: any }[] {
+    if (!daoCdpEmu) return [];
+    const calls: { method: string; params?: any }[] = [];
+    const ua = daoCdpEmu.ua;
+    const hasHeaders = !!(daoCdpEmu.headers && Object.keys(daoCdpEmu.headers).length);
+    if (ua || hasHeaders) calls.push({ method: 'Network.enable' });
+    if (ua) {
+        const p: any = { userAgent: ua };
+        if (daoCdpEmu.acceptLanguage) p.acceptLanguage = daoCdpEmu.acceptLanguage;
+        if (daoCdpEmu.platform) p.platform = daoCdpEmu.platform;
+        calls.push({ method: 'Network.setUserAgentOverride', params: p });
+        calls.push({ method: 'Emulation.setUserAgentOverride', params: p });
+    }
+    if (hasHeaders) calls.push({ method: 'Network.setExtraHTTPHeaders', params: { headers: daoCdpEmu.headers } });
+    return calls;
+}
 async function daoCdpPickPage(targetId) {
     await daoCdpEnsureChrome();
     let list = await daoCdpHttpGet('/json/list') || [];
@@ -2924,7 +2945,7 @@ function daoMcpToolDefs() {
         { name: 'browser_upload', description: '给文件输入框设置文件(本机绝对路径)', inputSchema: S({ ref: { type: 'string' }, selector: { type: 'string' }, files: { type: 'array' }, file: { type: 'string' }, targetId: { type: 'string' } }) },
         { name: 'browser_drag', description: '拖拽(from*→to*·ref/selector/x,y/nx,ny)', inputSchema: S({ fromRef: { type: 'string' }, fromSelector: { type: 'string' }, fromX: { type: 'number' }, fromY: { type: 'number' }, fromNx: { type: 'number' }, fromNy: { type: 'number' }, toRef: { type: 'string' }, toSelector: { type: 'string' }, toX: { type: 'number' }, toY: { type: 'number' }, toNx: { type: 'number' }, toNy: { type: 'number' }, targetId: { type: 'string' } }) },
         { name: 'browser_close', description: '关闭标签页(targetId)', inputSchema: S({ targetId: { type: 'string' } }, ['targetId']) },
-        { name: 'browser_emulate', description: '设备视口模拟(对照手机·responsive 布局): device=iphone|pixel|ipad 预设, 或自定义 width/height/mobile/deviceScaleFactor/touch; 视口+触摸持久生效(含跨导航), 完整 UA/请求头模拟需常驻会话暂未提供; reset=true 还原', inputSchema: S({ device: { type: 'string', enum: ['iphone', 'pixel', 'ipad'] }, width: { type: 'number' }, height: { type: 'number' }, mobile: { type: 'boolean' }, deviceScaleFactor: { type: 'number' }, touch: { type: 'boolean' }, reset: { type: 'boolean' }, targetId: { type: 'string' } }) },
+        { name: 'browser_emulate', description: '设备模拟(对照手机·responsive 布局+完整 UA/请求头): device=iphone|pixel|ipad 预设(含匹配移动端 UA/platform), 或自定义 width/height/mobile/deviceScaleFactor/touch 视口 + ua/acceptLanguage/platform/headers(额外请求头对象); 视口+触摸持久生效(含跨导航), UA/请求头经 browser_navigate/reload 在导航会话内重放续持; reset=true 还原并清除 UA 意图', inputSchema: S({ device: { type: 'string', enum: ['iphone', 'pixel', 'ipad'] }, width: { type: 'number' }, height: { type: 'number' }, mobile: { type: 'boolean' }, deviceScaleFactor: { type: 'number' }, touch: { type: 'boolean' }, ua: { type: 'string' }, acceptLanguage: { type: 'string' }, platform: { type: 'string' }, headers: { type: 'object' }, reset: { type: 'boolean' }, targetId: { type: 'string' } }) },
         { name: 'browser_cookies', description: 'Cookie 读写(登录态续用): action=get|set|clear|delete', inputSchema: S({ action: { type: 'string', enum: ['get', 'set', 'clear', 'delete'] }, urls: { type: 'array' }, cookies: { type: 'array' }, name: { type: 'string' }, url: { type: 'string' }, domain: { type: 'string' }, path: { type: 'string' }, targetId: { type: 'string' } }) },
         { name: 'browser_pdf', description: '整页导出 PDF(Page.printToPDF·传 path 落盘)', inputSchema: S({ path: { type: 'string' }, landscape: { type: 'boolean' }, background: { type: 'boolean' }, targetId: { type: 'string' } }) },
         { name: 'browser_fill_form', description: '批量填表单(一发填多字段·对照 Chrome-DevTools-MCP fill_form·省去逐字段 type): fields=[{ref|selector,value}] — 文本框写值/复选框勾选(value 真/假)/单选选中(value=该项 value)/下拉选项(value 字串或数组); 可选 submit=在首字段处回车提交', inputSchema: S({ fields: { type: 'array' }, submit: { type: 'boolean' }, targetId: { type: 'string' } }, ['fields']) },
@@ -3020,8 +3041,18 @@ async function daoMcpCallTool(name, a) {
         }
         case 'browser_navigate': {
             if (!a.url) return daoMcpErr('url required');
-            if (a.targetId) { const t = await daoCdpPickPage(a.targetId); await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Page.enable' }, { method: 'Page.navigate', params: { url: a.url } }]); daoCdpActiveTarget = a.targetId; return daoMcpText({ targetId: a.targetId, url: a.url }); }
-            const ver = await daoCdpEnsureChrome(); const r = await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.createTarget', params: { url: a.url } }]); if (r && r.targetId) daoCdpActiveTarget = r.targetId; return daoMcpText({ targetId: r && r.targetId, url: a.url });
+            if (a.targetId) { const t = await daoCdpPickPage(a.targetId); await daoCdpBatch(t.webSocketDebuggerUrl, [...daoCdpEmuCalls(), { method: 'Page.enable' }, { method: 'Page.navigate', params: { url: a.url } }]); daoCdpActiveTarget = a.targetId; return daoMcpText({ targetId: a.targetId, url: a.url, emulated: !!daoCdpEmu }); }
+            const ver = await daoCdpEnsureChrome();
+            // 有 UA/请求头模拟意图时: 先开 about:blank 得到目标会话, 再于其 ws 内「重放覆写→导航」同批完成
+            //   (createTarget 直开 url 无从在导航前设 UA → 首个请求漏改; 故拆两步保证首请求即带模拟头)。
+            if (daoCdpEmu) {
+                const cr = await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.createTarget', params: { url: 'about:blank' } }]);
+                const tid = cr && cr.targetId; if (tid) daoCdpActiveTarget = tid;
+                const t = await daoCdpPickPage(tid);
+                await daoCdpBatch(t.webSocketDebuggerUrl, [...daoCdpEmuCalls(), { method: 'Page.enable' }, { method: 'Page.navigate', params: { url: a.url } }]);
+                return daoMcpText({ targetId: tid, url: a.url, emulated: true });
+            }
+            const r = await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.createTarget', params: { url: a.url } }]); if (r && r.targetId) daoCdpActiveTarget = r.targetId; return daoMcpText({ targetId: r && r.targetId, url: a.url });
         }
         case 'browser_eval': {
             if (!a.code) return daoMcpErr('code required');
@@ -3068,7 +3099,7 @@ async function daoMcpCallTool(name, a) {
         }
         case 'browser_back': { const t = await daoCdpPickPage(a.targetId); await daoCdpEvalT(t, 'history.back()'); return daoMcpText('ok'); }
         case 'browser_forward': { const t = await daoCdpPickPage(a.targetId); await daoCdpEvalT(t, 'history.forward()'); return daoMcpText('ok'); }
-        case 'browser_reload': { const t = await daoCdpPickPage(a.targetId); await daoCdpBatch(t.webSocketDebuggerUrl, [{ method: 'Page.enable' }, { method: 'Page.reload', params: { ignoreCache: !!a.hard } }]); return daoMcpText('ok'); }
+        case 'browser_reload': { const t = await daoCdpPickPage(a.targetId); await daoCdpBatch(t.webSocketDebuggerUrl, [...daoCdpEmuCalls(), { method: 'Page.enable' }, { method: 'Page.reload', params: { ignoreCache: !!a.hard } }]); return daoMcpText('ok'); }
         case 'browser_get_text': { const t = await daoCdpPickPage(a.targetId); const tx = await daoCdpEvalT(t, daoBExpr('window.__daoB.text(' + JSON.stringify(a.selector || '') + ')')); return daoMcpText(String(tx || '').slice(0, daoClamp(a.max, 100, 200000, 20000))); }
         case 'browser_get_html': { const t = await daoCdpPickPage(a.targetId); const h = await daoCdpEvalT(t, daoBExpr('window.__daoB.html(' + JSON.stringify(a.selector || '') + ',' + (a.outer ? 'true' : 'false') + ')')); return daoMcpText(String(h || '').slice(0, daoClamp(a.max, 100, 500000, 50000))); }
         case 'browser_console': { const t = await daoCdpPickPage(a.targetId); const logs = await daoCdpEvalT(t, daoBExpr('(window.__daoB.logs||[]).slice(-' + daoClamp(a.limit, 1, 300, 80) + ')')); if (a.clear) await daoCdpEvalT(t, daoBExpr('(window.__daoB.logs.length=0),"ok"')); return daoMcpText(logs); }
@@ -3111,25 +3142,47 @@ async function daoMcpCallTool(name, a) {
                     { method: 'Emulation.setTouchEmulationEnabled', params: { enabled: false } },
                     { method: 'Emulation.clearDeviceMetricsOverride' },
                 ]);
-                return daoMcpText({ reset: { width: rw, height: rh }, note: '已复位桌面视口(默认 1280×800·可传 width/height 自定义)' });
+                daoCdpEmu = null;
+                return daoMcpText({ reset: { width: rw, height: rh }, note: '已复位桌面视口(默认 1280×800·可传 width/height 自定义) + 清除 UA/请求头模拟意图(后续导航/reload 回归真实 UA)' });
             }
             const presets = {
-                iphone: { width: 390, height: 844, deviceScaleFactor: 3, mobile: true },
-                pixel: { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true },
-                ipad: { width: 820, height: 1180, deviceScaleFactor: 2, mobile: true },
+                iphone: { width: 390, height: 844, deviceScaleFactor: 3, mobile: true, ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1', platform: 'iPhone' },
+                pixel: { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true, ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36', platform: 'Linux armv8l' },
+                ipad: { width: 820, height: 1180, deviceScaleFactor: 2, mobile: true, ua: 'Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1', platform: 'iPad' },
             };
             const p = (a.device && presets[a.device]) || {};
             const width = Math.round(+(a.width || p.width || 390)); const height = Math.round(+(a.height || p.height || 844));
             const mobile = a.mobile != null ? !!a.mobile : (p.mobile != null ? p.mobile : true);
             const dsf = +(a.deviceScaleFactor || p.deviceScaleFactor || 2); const touch = mobile || !!a.touch;
+            // 完整 UA/请求头模拟: 由 device 预设或显式 ua/acceptLanguage/platform/headers 供给。
+            //   UA 覆写是「会话级」(短连一断即失), 故此处只登记「意图」到 daoCdpEmu, 由 browser_navigate/reload
+            //   在其导航会话内重放(见 daoCdpEmuCalls) → 跨页持久, 无需常驻会话。仅当显式给出时才改写意图,
+            //   纯视口调用不动既有 UA 意图。
+            const ua = (typeof a.ua === 'string' && a.ua) ? a.ua : (p.ua || '');
+            const acceptLanguage = (typeof a.acceptLanguage === 'string' && a.acceptLanguage) ? a.acceptLanguage : '';
+            const platform = (typeof a.platform === 'string' && a.platform) ? a.platform : (p.platform || '');
+            const headers = (a.headers && typeof a.headers === 'object' && !Array.isArray(a.headers)) ? a.headers as Record<string, string> : null;
+            if (ua || acceptLanguage || platform || (headers && Object.keys(headers).length)) {
+                const emu: DaoCdpEmu = {};
+                if (ua) emu.ua = ua;
+                if (acceptLanguage) emu.acceptLanguage = acceptLanguage;
+                if (platform) emu.platform = platform;
+                if (headers && Object.keys(headers).length) emu.headers = headers;
+                daoCdpEmu = emu;
+            }
             // 经 live 实测: 设备度量(视口宽高)与触摸是「页面级」覆写, 跨「无状态短连 daoCdpBatch」与跨导航持久生效。
-            //   而 UA/精确 DPR(setUserAgentOverride / addScriptToEvaluateOnNewDocument)是「会话级」, daoCdpBatch 连接一断即被 Chrome 清除 → 不持久。
-            //   故 emulate 只承诺可靠落地的「视口 + 触摸」(覆盖 responsive 布局类移动端核验); 完整 UA/请求头模拟需常驻会话(后续螺旋), 此处据实标注、不虚报。
+            //   UA/请求头覆写在本批内一并下发(当前页即时生效·连接断后由后续导航/reload 重放续持), 二者叠加即完整设备模拟。
             await daoCdpBatch(t.webSocketDebuggerUrl, [
+                ...daoCdpEmuCalls(),
                 { method: 'Emulation.setDeviceMetricsOverride', params: { width, height, deviceScaleFactor: dsf, mobile } },
                 { method: 'Emulation.setTouchEmulationEnabled', params: { enabled: touch } },
             ]);
-            return daoMcpText({ emulated: { device: a.device || null, width, height, mobile, touch, deviceScaleFactor: dsf }, note: '视口+触摸持久生效(含跨导航); UA/请求头模拟需常驻 CDP 会话, 暂未提供' });
+            return daoMcpText({
+                emulated: { device: a.device || null, width, height, mobile, touch, deviceScaleFactor: dsf, ua: (daoCdpEmu && daoCdpEmu.ua) || null, acceptLanguage: (daoCdpEmu && daoCdpEmu.acceptLanguage) || null, platform: (daoCdpEmu && daoCdpEmu.platform) || null, headers: (daoCdpEmu && daoCdpEmu.headers) || null },
+                note: daoCdpEmu
+                    ? '视口+触摸持久生效(含跨导航); UA/请求头已登记并当批下发·后续 browser_navigate/reload 会在导航会话内重放续持(当前页 reload 即完全生效)'
+                    : '视口+触摸持久生效(含跨导航); 未设 UA —— 传 device 或 ua/acceptLanguage/platform/headers 可启用完整 UA/请求头模拟'
+            });
         }
         case 'browser_cookies': {
             const t = await daoCdpPickPage(a.targetId); const act = a.action || 'get';
