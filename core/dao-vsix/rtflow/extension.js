@@ -12229,8 +12229,29 @@ async function _dvAutoBackupRun() {
   const cleanupThreshold = Math.max(0, +_cfg("devinCloudAutoCleanupThreshold", threshold) || threshold);
   // v4.9.12 · 归零移除默认开 — 闭合「备份→清理→出库」整套循环: 额度彻底归零的账号在全量备份(严格校验)+清理无残留后自动出库. 取消勾选 (dvRmZero=false) 则仅清痕迹+本地留底·账号保留.
   const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", true);
-  const removeThreshold = Math.max(0, +_cfg("devinCloudAutoRemoveThreshold", 0) || 0);
+  // v4.26.6 · 出库阈值默认对齐清理阈值(清理即出库·闭环): 旧默认0 只出库「分文不剩」的号 →
+  //   残留 $0.27~$2 的耗尽号被反复清理却永不出库·永久滞留仓库(实测全池如此)。
+  //   用户显式配置仍优先(含显式 0=仅完全归零才出库)。
+  const _rtRaw = +_cfg("devinCloudAutoRemoveThreshold", cleanupThreshold);
+  const removeThreshold = Math.max(0, Number.isFinite(_rtRaw) ? _rtRaw : cleanupThreshold);
   const removeEmails = [];
+  // v4.26.6 · 即时出库(逐号落盘): 旧法攒到循环末统一出库 — 全池扫描以小时计,
+  //   窗口 reload/中途异常即丢 removeEmails → 已清理号永不落盘出库(实测病灶)。
+  //   现法: 每号条件满足当即 _store.remove() 落盘, 循环末批处理保留为兜底。
+  const _evictNow = (email, why) => {
+    try {
+      const _ei = _store.accounts.findIndex(
+        (a) => (a.email || "").toLowerCase() === String(email).toLowerCase(),
+      );
+      if (_ei >= 0 && _store.remove(_ei)) {
+        log("auto-remove: " + email + " 即时出库 · " + why);
+        try { _broadcastUI(true); } catch {}
+        return true;
+      }
+    } catch (e) { log("auto-remove error: " + email + ": " + (e.message || e)); }
+    removeEmails.push(email);
+    return false;
+  };
   for (let _abIdx = 0; _abIdx < _store.accounts.length; _abIdx++) {
     const acc = _store.accounts[_abIdx];
     if (!acc || !acc.email) continue;
@@ -12317,7 +12338,7 @@ async function _dvAutoBackupRun() {
               _staleConv &&
               totalCredits <= removeThreshold
             ) {
-              removeEmails.push(acc.email);
+              if (_evictNow(acc.email, "额度归零·痕迹已清(上轮)·补出库")) _abIdx--;
               _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零·痕迹已清(上轮) → 补出库");
             } else {
               const hrs = cleanupCheck.remaining ? Math.ceil(cleanupCheck.remaining / 3600000) : "?";
@@ -12335,9 +12356,11 @@ async function _dvAutoBackupRun() {
               devinCloud.setCleanupState(acc.email, { cleanedAt: Date.now() });
               const wipeClean = !!rep && rep.sessions.failed === 0 && rep.knowledge.failed === 0 && rep.playbooks.failed === 0 && rep.secrets.failed === 0;
               if (autoRemoveZero && wipeClean && !_addedRecently && totalCredits <= removeThreshold) {
-                removeEmails.push(acc.email);
+                if (_evictNow(acc.email, "已全量备份+清理无残留")) _abIdx--;
                 _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零 · 已全量备份+清理 → 从账号库移除");
               } else {
+                // 出库决策落盘可见可验(旧法仅 toast → 静默跳过无从排查)
+                log("auto-remove: " + acc.email + " 不出库 · autoRemoveZero=" + autoRemoveZero + " wipeClean=" + wipeClean + (wipeClean ? "" : "(对话残" + rep.sessions.failed + " 知识残" + rep.knowledge.failed + " 剧本残" + rep.playbooks.failed + " 密钥残" + rep.secrets.failed + ")") + " addedRecently=" + !!_addedRecently + " credits=$" + totalCredits.toFixed(2) + " vs 出库阈值$" + removeThreshold);
                 _notify("info", "[" + acc.email.split("@")[0] + "] 自动清理完成 · 已回归本源(对话已清理" + rep.sessions.deleted + "条·本地已留底)");
               }
             } catch (ce) {
@@ -14506,7 +14529,10 @@ async function handleWebviewMessage(msg) {
       case "devinCleanupZeroQuota": {
         const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
         const bkMode = _cfg("devinCloudBackupMode", "folder");
-        const removeThreshold = Math.max(0, +_cfg("devinCloudAutoRemoveThreshold", 0) || 0);
+        // v4.26.6 · 同自动环: 出库阈值默认对齐清理阈值 → 手动按钮也能收拾残留 $0.x~$2 的耗尽号
+        const _zqCleanTh = Math.max(0, +_cfg("devinCloudAutoCleanupThreshold", Math.max(0, +_cfg("devinCloudAutoBackupThreshold", 3) || 3)) || 3);
+        const _zqRaw = +_cfg("devinCloudAutoRemoveThreshold", _zqCleanTh);
+        const removeThreshold = Math.max(0, Number.isFinite(_zqRaw) ? _zqRaw : _zqCleanTh);
         _toast("\u23F3 扫描额度归零账号…");
         // 1. 找出额度归零账号 (billing 权威判定)
         const zero = [];

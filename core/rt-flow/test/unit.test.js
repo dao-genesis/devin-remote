@@ -821,8 +821,10 @@ function test(name, fn) {
     const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
     assert.ok(/if \(autoRemoveZero && wipeClean && !_addedRecently && totalCredits <= removeThreshold\)/.test(src), "移除须 autoRemoveZero+wipeClean+addedAt冷却+归零阈值四重闸");
     assert.ok(/const wipeClean = .*rep\.sessions\.failed === 0 && rep\.knowledge\.failed === 0 && rep\.playbooks\.failed === 0 && rep\.secrets\.failed === 0/.test(src), "wipeClean 须确认四类痕迹全清无失败");
-    assert.ok(/_store\.removeBatch\(idx\)/.test(src), "出库须走 removeBatch (单次IO+持久化)");
-    assert.ok(/removeEmails\.push\(acc\.email\)/.test(src), "归零账号先入 removeEmails, 循环外再删");
+    assert.ok(/_store\.removeBatch\(idx\)/.test(src), "循环外兜底须走 removeBatch (单次IO+持久化)");
+    // v4.26.6 · 即时出库: 条件满足当即 _store.remove 落盘 (中途断不丢), 循环末批处理仅兜底
+    assert.ok(/_ei >= 0 && _store\.remove\(_ei\)/.test(src) && /_evictNow\(acc\.email/.test(src), "归零账号即时 _store.remove 落盘出库");
+    assert.ok(/removeEmails\.push\(email\)/.test(src), "即时出库失败回落 removeEmails · 循环外兜底再删");
   });
   test("extension.js: 24h冷却锚点不得每周期重置 (v4.10.1 修复归零清理从不触发)", () => {
     const fs = require("fs");
@@ -900,7 +902,8 @@ function test(name, fn) {
     assert.strictEqual(props["wam.devinCloudAutoCleanup"].default, true, "自动清理默认开");
     // v4.9.12 · 用户要求: 归零移除默认开 — 闭合 备份→清理→出库 整套循环; 额度彻底归零的账号自动出库
     assert.strictEqual(props["wam.devinCloudAutoRemoveZeroQuota"].default, true, "归零移除默认开(闭环)");
-    assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 0, "归零阈值默认0(完全归零)");
+    // v4.26.6 · 出库阈值默认对齐清理阈值(清理即出库·闭环): 残留 $0.x~$2 的耗尽号不再永久滞留仓库
+    assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 3, "归零阈值默认3(对齐清理阈值·清理即出库)");
   });
 
   // ── 账号 1:1 同步 (dao-vsix 全能板以 RT Flow 活跃号为唯一权威源 · 源级护栏) ──

@@ -2,7 +2,7 @@
 	"name": "rt-flow",
 	"displayName": "Runtime Flow",
 	"description": "Runtime flow management · adaptive scheduling · 三板块统一: Cascade + Devin Cloud + Git(GitHub PAT 归一连接)",
-	"version": "4.26.5",
+	"version": "4.26.6",
 	"publisher": "devaid",
 	"repository": {
 		"type": "git",
@@ -271,8 +271,8 @@
 				},
 				"wam.devinCloudAutoRemoveThreshold": {
 					"type": "number",
-					"default": 0,
-					"description": "v4.9.0 · 归零移除额度阈值 (美元·默认0=完全归零). 余额 ≤ 此值且清理无残留时, 账号从账号库出库. 设 0 表示仅在额度真正归零时移除"
+					"default": 3,
+					"description": "v4.26.6 · 归零移除额度阈值 (美元·默认对齐清理阈值3·清理即出库闭环). 余额 ≤ 此值且全量备份校验+清理无残留时, 账号从账号库出库. 设 0 表示仅在额度完全归零(分文不剩)时移除"
 				},
 				"wam.devinCloudConvQuotaCap": {
 					"type": "boolean",
