@@ -1,6 +1,6 @@
 {
-  "versionCode": 259,
-  "versionName": "0.37.155",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.155/DevinCloud-mobile-v0.37.155.apk",
-  "notes": "v0.37.155 · 退格取证: 原生 InputConnection 全量调用追踪(DAO_IME 日志·每次删除/组词/按键含光标上下文), 真机复现一次即可远程拉日志精准定位左右同删根因"
+  "versionCode": 260,
+  "versionName": "0.37.156",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.156/DevinCloud-mobile-v0.37.156.apk",
+  "notes": "v0.37.156 · 退格取证②: 原生层日志已证实输入法通道只删左侧 → 双删发生在网页 JS 层; 本版加 JS 层输入事件全量取证(keydown/beforeinput/input/composition), 复现一次即可锁定编辑器层根因"
 }

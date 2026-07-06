@@ -377,6 +377,17 @@ public class TabActivity extends AppCompatActivity {
             "var oo=XMLHttpRequest.prototype.open,osd=XMLHttpRequest.prototype.send;" +
             "XMLHttpRequest.prototype.open=function(m,u){this.__api=isApi(u);return oo.apply(this,arguments);};" +
             "XMLHttpRequest.prototype.send=function(b){try{if(__a1&&this.__api){this.setRequestHeader('Authorization','Bearer '+__a1);if(__org)this.setRequestHeader('x-cog-org-id',__org);}}catch(e){}return osd.apply(this,arguments);};" +
+            // JS 层输入取证: 捕获阶段全记录 keydown/beforeinput/input(编辑器行为·与原生 DAO_IME 日志对照定位双删层次)。
+            // 输出走 console.log → logcat 'chromium' 标签可直取。只旁观不拦截。
+            "(function(){if(window.__daoImeTr)return;window.__daoImeTr=1;" +
+            "function st(t){try{if(t&&(t.tagName==='TEXTAREA'||t.tagName==='INPUT'))return ' sel='+t.selectionStart+','+t.selectionEnd+' len='+(t.value||'').length+' ar='+JSON.stringify((t.value||'').slice(Math.max(0,(t.selectionStart||0)-2),(t.selectionEnd||0)+2));" +
+            "var s=window.getSelection&&window.getSelection();if(s&&s.rangeCount){var r=s.getRangeAt(0);return ' ce.off='+r.startOffset+','+r.endOffset+' nlen='+((r.startContainer&&r.startContainer.textContent)||'').length;}}catch(e){}return '';}" +
+            "function lg(k,e){try{console.log('DAOIMEJS '+k+' t='+((e.target&&e.target.tagName)||'')+' it='+(e.inputType||'')+' d='+JSON.stringify(e.data==null?null:(''+e.data).slice(-8))+' k='+(e.key||'')+' c='+(e.isComposing?1:0)+st(e.target));}catch(x){}}" +
+            "document.addEventListener('keydown',function(e){lg('kd',e);},true);" +
+            "document.addEventListener('beforeinput',function(e){lg('bi',e);},true);" +
+            "document.addEventListener('input',function(e){lg('in',e);},true);" +
+            "document.addEventListener('compositionupdate',function(e){lg('cu',e);},true);" +
+            "document.addEventListener('compositionend',function(e){lg('ce',e);},true);})();" +
             "}catch(e){}})();";
     }
 
