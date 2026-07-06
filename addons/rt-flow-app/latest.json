@@ -1,6 +1,6 @@
 {
-  "versionCode": 258,
-  "versionName": "0.37.154",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.154/DevinCloud-mobile-v0.37.154.apk",
-  "notes": "v0.37.154 · 退格根治: 句中退格左右同删 bug 原生层全路径夹断(反序拆单删除挂起仲裁 + 跨光标组词区双删改写只左删), 模拟器 11 种输入法退格路径全量验证通过"
+  "versionCode": 259,
+  "versionName": "0.37.155",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.155/DevinCloud-mobile-v0.37.155.apk",
+  "notes": "v0.37.155 · 退格取证: 原生 InputConnection 全量调用追踪(DAO_IME 日志·每次删除/组词/按键含光标上下文), 真机复现一次即可远程拉日志精准定位左右同删根因"
 }
