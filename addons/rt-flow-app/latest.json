@@ -1,6 +1,6 @@
 {
-  "versionCode": 261,
-  "versionName": "0.37.157",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.157/DevinCloud-mobile-v0.37.157.apk",
-  "notes": "v0.37.157 · 根治额度/账号状态自动刷新失效与对话提醒缺失: 切号引擎后台停泊时计时器被 Chromium 节流+可见性门控拦截 → 自动逻辑形同虚设(只能手动刷); 本版由原生侧前台每 8s 可靠外驱引擎心跳(不受节流/隐藏影响), 状态轮询·额度刷新·阻塞/耗尽提醒全部恢复自动, 国内外网络一致生效"
+  "versionCode": 262,
+  "versionName": "0.37.158",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.158/DevinCloud-mobile-v0.37.158.apk",
+  "notes": "v0.37.158 · 退格取证③: JS 层输入事件取证补覆盖主壳标签页(之前只注入了独立窗口, 主壳对话页无日志 → 复现一次即可锁定双删层次); 根治额度/账号状态自动刷新失效与对话提醒缺失: 切号引擎后台停泊时计时器被 Chromium 节流+可见性门控拦截 → 自动逻辑形同虚设(只能手动刷); 本版由原生侧前台每 8s 可靠外驱引擎心跳(不受节流/隐藏影响), 状态轮询·额度刷新·阻塞/耗尽提醒全部恢复自动, 国内外网络一致生效"
 }
