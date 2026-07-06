@@ -18,7 +18,7 @@ const cp = require("child_process");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const TRY_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
-const BRIDGE_VERSION = "3.7.0";
+const BRIDGE_VERSION = "3.7.1";
 
 // 归一 · 反注 MCP 蹭耐用桥隧道: 综合 MCP(mcp_http.py)本机监听 9100, 其自起的快速隧道
 //   既翻倍触发 Cloudflare 限流又死不自愈。故由常驻桥把 /mcp 透明流式反代到本机 MCP,
@@ -1684,7 +1684,29 @@ class Bridge {
       updated: new Date().toISOString(), version: BRIDGE_VERSION,
     };
     try { fs.writeFileSync(this.connPath(), JSON.stringify(connData, null, 2), "utf8"); } catch (e) {}
-    try { fs.writeFileSync(this.globalConnPath(), JSON.stringify(connData, null, 2), "utf8"); } catch (e) {}
+    // 帛书·「宁守柔而不以死覆生」: 全局 cf-hub-conn.json 是多桥实例(多窗口/多工作区)共享的单一真相源。
+    //   若本实例隧道未起(this.url 空), 绝不以空址覆盖另一活实例刚写入的新鲜可达地址 —— 否则本实例的
+    //   30s 周期写会把整机唯一活隧道地址抹成 ""(实测: 死隧道的「三电脑服务器」实例反复清掉活「一生二」
+    //   实例的 computed-males 地址), 致 dao-vsix 反向注入读到空址、知识库恒写「(未连接)」。
+    //   守柔: 本实例有活址即照写(活写者优先·后写覆盖前写皆达同机, 无害); 本实例空址且他实例地址仍新鲜
+    //   (<3min) 才保留他者活址(连同其端口/更新时刻), 待其转陈旧再由本实例接管。
+    let globalData = connData;
+    if (!this.url) {
+      try {
+        const ex = JSON.parse(fs.readFileSync(this.globalConnPath(), "utf8"));
+        const exUrl = String((ex && ex.url) || "").trim();
+        const exAgeMs = Date.now() - new Date((ex && ex.updated) || 0).getTime();
+        if (/^https?:\/\//.test(exUrl) && exAgeMs >= 0 && exAgeMs < 3 * 60 * 1000) {
+          globalData = Object.assign({}, connData, {
+            url: exUrl, token: ex.token || connData.token,
+            local_url: ex.local_url || connData.local_url, port: ex.port || connData.port,
+            workspace: ex.workspace || connData.workspace, root: ex.root || connData.root,
+            updated: ex.updated, preservedBy: connData.host,
+          });
+        }
+      } catch (e) {}
+    }
+    try { fs.writeFileSync(this.globalConnPath(), JSON.stringify(globalData, null, 2), "utf8"); } catch (e) {}
   }
 
   stop() {
