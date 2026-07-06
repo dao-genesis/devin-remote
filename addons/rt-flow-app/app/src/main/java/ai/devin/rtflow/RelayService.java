@@ -1350,6 +1350,20 @@ public class RelayService extends Service {
 
     private int engineRecoveries = 0;   // 引擎渲染进程被回收并自愈的累计次数 (诊断用)
 
+    /** 引擎外驱泵: 离屏 WebView 的 JS 计时器会被 Chromium 节流/冻结(息屏/Doze 尤甚) →
+     *  convwatch(对话通知)/额度刷新/自动清理备份的 setInterval 形同虚设。evaluateJavascript
+     *  不受计时器节流影响, 由原生 Handler 周期直驱 window.__convTick(), 与 MainActivity
+     *  外驱 switch.html engineHeartbeat() 同一范式 → 通知与额度自动刷新与前后台/息屏无关、恒可靠。 */
+    private static final long CONV_PUMP_MS = 60000;
+    private final Runnable convPump = new Runnable() {
+        @Override public void run() {
+            if (engine != null) {
+                try { engine.evaluateJavascript("try{window.__convTick&&window.__convTick()}catch(e){};try{window.DaoCore&&DaoCore.pumpTimers&&DaoCore.pumpTimers()}catch(e){}", null); } catch (Exception ignored) {}
+            }
+            main.postDelayed(this, CONV_PUMP_MS);
+        }
+    };
+
     @SuppressWarnings("SetJavaScriptEnabled")
     private void initEngine() {
         engine = new WebView(this);
@@ -1380,6 +1394,8 @@ public class RelayService extends Service {
         engine.addJavascriptInterface(new Bridge(), "Native");
         engine.loadUrl("file:///android_asset/engine/engine.html");
         engine.resumeTimers();
+        main.removeCallbacks(convPump);
+        main.postDelayed(convPump, CONV_PUMP_MS);
     }
 
     /** 远程操控安全开关 (默认关, 需在穿透面板手动启用) */
@@ -2127,5 +2143,5 @@ public class RelayService extends Service {
         super.onTaskRemoved(rootIntent);
     }
     @Nullable @Override public IBinder onBind(Intent intent) { return null; }
-    @Override public void onDestroy() { instance = null; releaseWake(); main.removeCallbacks(proxySweeper); stopAllProxies(); stopTunnel(); if (engine != null) { engine.destroy(); engine = null; } super.onDestroy(); }
+    @Override public void onDestroy() { instance = null; releaseWake(); main.removeCallbacks(proxySweeper); main.removeCallbacks(convPump); stopAllProxies(); stopTunnel(); if (engine != null) { engine.destroy(); engine = null; } super.onDestroy(); }
 }

@@ -75,20 +75,39 @@
   async function sessionMessages(acc, sid, low) {
     var r = await jget(APP + "/api/sessions/" + sid + "/messages", acc, low);
     if (r.status === 200) { var j = r.json || {}; return { ok: true, messages: Array.isArray(j.messages) ? j.messages : (Array.isArray(j) ? j : []) }; }
-    return { ok: true, messages: [] };
+    return { ok: false, status: r.status, error: errOf(r), messages: [] };
   }
+
+  // auth1 过期自愈: 有存储的邮箱+密码即重登换新 auth1 (每账号对象仅重登一次, 防连环重登)。
+  //   归零号提取只得 103B 空文件的真因: auth1 过期 → 事件流/消息全 401, 旧逻辑把失败吞成
+  //   ok:true 空 md。此处逆流到底层: 401/403 即重登再取, 重登仍失败才如实报错。
+  async function _reloginAcc(acc) {
+    if (!acc || acc.__relogged || !acc.email || !acc.password || !C.loginAndStore) return false;
+    acc.__relogged = true;
+    try {
+      var r = await C.loginAndStore(acc.email, acc.password);
+      var na = r && r.account;
+      if (r && r.ok && na && na.auth1) {
+        acc.auth1 = na.auth1; acc.orgId = na.orgId || acc.orgId; acc.userId = na.userId || acc.userId;
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+  function _authDead(status) { return status === 401 || status === 403; }
 
   // 事件流 (SSE/ndjson) → 有序去重事件 (会话全息真源)
   async function sessionEvents(acc, sid, low) {
     var url = APP + "/api/events/" + sid + "/stream";
     var headers = Object.assign(H(acc), { Accept: "text/event-stream" });
-    var raw = "";
+    var raw = "", res = null;
     for (var a = 0; a < 3; a++) {
-      var res = await C.httpReq("GET", url, headers, "", low);
+      res = await C.httpReq("GET", url, headers, "", low);
       if (res.status === 200 && typeof res.text === "string") { raw = res.text; break; }
+      if (_authDead(res.status)) break;   // 令牌死: 重试无益, 交由上层重登自愈
       if (a < 2) await C.sleep(1500 * (a + 1));
     }
-    if (!raw) return { ok: false, events: [] };
+    if (!raw) return { ok: false, status: (res && res.status) || 0, error: res && (res.error || res.text), events: [] };
     var merged = new Map();
     function add(ev) { if (!ev || !ev.type) return; var id = ev.event_id || (ev.type + "-" + ev.timestamp + "-" + ev.created_at_ms); if (!merged.has(id)) merged.set(id, ev); }
     var i = 0;
@@ -249,10 +268,18 @@
   async function exportSession(acc, sid, kind, low) {
     kind = kind || "conversation";
     var detail = await sessionDetail(acc, sid, low);
+    if (!detail.ok && _authDead(detail.status) && await _reloginAcc(acc)) detail = await sessionDetail(acc, sid, low);
     var title = (detail.ok && detail.session && detail.session.title) || sid;
     var ev = await sessionEvents(acc, sid, low);
+    if (!ev.ok && _authDead(ev.status) && await _reloginAcc(acc)) ev = await sessionEvents(acc, sid, low);
     if (ev.ok && ev.events.length) return { ok: true, title: title, md: kind === "worklog" ? buildWorklog(title, sid, ev.events) : buildConversation(title, sid, ev.events), events: ev.events.length };
     var msgs = await sessionMessages(acc, sid, low);
+    if (!msgs.ok && _authDead(msgs.status) && await _reloginAcc(acc)) msgs = await sessionMessages(acc, sid, low);
+    // 事件流与消息全空 → 如实报错 (绝不产出只有标题头的空 md; 真实会话至少含首条用户消息)
+    if (!(msgs.messages || []).length) {
+      var st = msgs.status || ev.status || detail.status || 0;
+      return { ok: false, status: st, error: "提取失败: 事件流与消息均空" + (st ? " (HTTP " + st + (_authDead(st) ? " · auth1 过期且重登失败, 请核对该账号密码" : "") + ")" : "") };
+    }
     var lines = ["# " + title, "", "> Session: " + sid, ""];
     (msgs.messages || []).forEach(function (m) {
       var role = m.role || m.type || "unknown"; var content = m.content || m.text || m.message || "";

@@ -264,7 +264,7 @@
       var sid=a.sid||a.sessionId; if(!sid) return {ok:false,error:"需 sid (会话ID; 可先 listSessions 取)"};
       var out={ok:true, account:acc.email, orgId:acc.orgId, sessionId:sid};
       try{ var d=await DaoCloud.sessionDetail(acc, sid); if(d&&d.ok) out.detail=d.session; }catch(e){}
-      try{ var conv=await DaoCloud.exportSession(acc, sid, "conversation"); out.title=conv&&conv.title; out.conversationMd=conv&&(conv.md||conv.markdown||conv.text); out.events=conv&&conv.events; }catch(e){ out.convErr=String(e); }
+      try{ var conv=await DaoCloud.exportSession(acc, sid, "conversation"); if(conv&&conv.ok){ out.title=conv.title; out.conversationMd=conv.md||conv.markdown||conv.text; out.events=conv.events; } else { out.ok=false; out.error=(conv&&conv.error)||"对话导出失败"; out.status=conv&&conv.status; } }catch(e){ out.ok=false; out.convErr=String(e); out.error=out.error||("对话导出异常: "+e); }
       try{ var wl=await DaoCloud.exportSession(acc, sid, "worklog"); out.worklogMd=wl&&(wl.md||wl.markdown||wl.text); }catch(e){}
       try{ var m=await DaoCloud.sessionMessages(acc, sid); var files=[]; (m.messages||[]).forEach(function(msg){ var atts=msg.attachments||msg.files||[]; (atts||[]).forEach(function(f){ if(f&&(f.url||f.path||f.name)) files.push({name:f.name||f.path||"", url:f.url||"", path:f.path||""}); }); }); out.files=files; out.fileCount=files.length; }catch(e){}
       if(a.save){ try{ var fn=(a.name||("session-"+sid))+".md"; var body="# 会话提取 "+sid+" ("+acc.email+")\n\n"+(out.conversationMd||"")+"\n\n---\n\n"+(out.worklogMd||""); if(N.writeFile) N.writeFile(fn, body); out.saved=fn; }catch(e){} }
@@ -1400,13 +1400,19 @@
       }catch(e){}
       _bgCleanBusy = false;
     }
-    var _tickBusy = false;
+    var _tickBusy = false, _tickStart = 0;
     async function tick(){
       if (!watchEnabled()) return;
-      if (_tickBusy) return; _tickBusy = true;   // 重入护栏: 大池(100+号)单轮可能超过 POLL_MS, 防并发叠轮洪峰
+      // 看门狗: 单轮协程挂死(网络请求永不回) → busy 永真、后续心跳全空转。忙超 5min 即弃旧轮复位。
+      if (_tickBusy && Date.now() - _tickStart > 300000) _tickBusy = false;
+      if (_tickBusy) return; _tickBusy = true; _tickStart = Date.now();   // 重入护栏: 大池(100+号)单轮可能超过 POLL_MS, 防并发叠轮洪峰
       try { await _tickOnce(); } catch(e){}
       _tickBusy = false;
     }
+    // 原生外驱入口: 离屏 WebView 的 setInterval 会被 Chromium 节流/冻结(息屏/Doze 下 convwatch
+    //   与额度刷新形同虚设 —— "通知没有/额度不动"之根因)。RelayService 以 Handler 周期
+    //   evaluateJavascript 调本入口(不受计时器节流), 自身 setInterval 仅作前台兜底。
+    window.__convTick = tick;
     async function _tickOnce(){
       var accs = []; try { accs = loadAcc().filter(function(x){ return x.auth1 && x.orgId; }); } catch(e){}
       if (!accs.length) return;

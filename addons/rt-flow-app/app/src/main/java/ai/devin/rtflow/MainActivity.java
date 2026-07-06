@@ -4771,7 +4771,8 @@ public class MainActivity extends AppCompatActivity {
             }
             if (mdName != null && !mdName.isEmpty()) {
                 final String md = vaultReadBackup(folder, mdName);
-                if (md != null && !md.isEmpty()) {
+                // 仅注入含正文段落的备份 (旧版空导出仅有标题头 ~103B, 无 "## " 消息段 → 跳过走网络重取)
+                if (md != null && !md.isEmpty() && md.contains("## ")) {
                     main.post(() -> {
                         java.util.List<String[]> files = new java.util.ArrayList<>();
                         files.add(new String[]{ base + "-conversation.md", b64Utf8(md) });
