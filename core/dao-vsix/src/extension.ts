@@ -5433,8 +5433,12 @@ let _bridgeLastAliveMs = 0;
 let _bridgeLivenessFail = 0;
 // 三环自检 · 统一审计日志 — 帛书·「自知者明」: 让隧道环/额度环的每次「识别→决策」可见可验(环① 另有 dao-pool-reconcile.log)。
 //   守柔: 仅记瞬时决策(活/死·跟随/保持), 单文件滚动, 失败静默不扰主流程。
+//   多实例共写同一文件, 每行带自身身份 p<端口>·v<版本> — 谁说的话谁署名, 取证不再猜。
 function daoLoopLog(tag: string, line: string): void {
-    try { fs.appendFileSync(path.join(DAO_DIR, 'dao-loops.log'), new Date().toISOString() + ' [' + tag + '] ' + line + '\n'); } catch { /* 守柔 */ }
+    try {
+        const who = 'p' + ((ws && ws.port) || process.pid) + '·v' + EXT_VERSION;
+        fs.appendFileSync(path.join(DAO_DIR, 'dao-loops.log'), new Date().toISOString() + ' [' + who + '] [' + tag + '] ' + line + '\n');
+    } catch { /* 守柔 */ }
 }
 // 真验通达: relay 边缘(Worker)对一切请求(含 /api/health)强制 Bearer 鉴权 → 缺 token 必 401。
 //   旧法 GET 无 token, 把 401(<500) 误判为"活" → relay 通道下隧道真断也探不出 → 知识库不会刷新。
