@@ -12026,6 +12026,10 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
     if (sig === _lastBridgeReinjectSig) return { injected: 0, changed: false }; // 无变化·守柔不重注·省网
     _bridgeReinjectInflight = true;
     let injected = 0;
+    // 帛书·「诚全而归之」: 失败必显·必重试。旧疾: upsert 异常被守柔吞没仍记 injected++ 并缓存签名 →
+    //   一次跨境网络抖动即令知识库永冻旧址(签名不再翻·永不重试), 云端按库读到死址。今: 逐单核账,
+    //   有败则不缓存签名(下轮探活环自然重试), 且成败一律落 dao-loops(可观测)。
+    let failed = 0;
     try {
         // ① 自愈核心: 探活择优, 采纳「当前真实可达」桥地址为本进程 bridgeUrl, 使注入文档用活地址。
         //   宁可守柔不注, 也不以死地址/(未连接) 覆盖账号库良态 — 根治旧实例/轮换把知识库写死致云端找不到端口。
@@ -12056,11 +12060,11 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
             doneOrgs.add(a.orgId);
             // KB②: 幂等 upsert 最新内穿(整机直连)文档 (守 manual 锁)
             if (!isManualLocked(a.orgId, 'knowledge', DAO_BRIDGE_KB_NAME)) {
-                try { await devinUpsertKnowledge(a.orgId, DAO_BRIDGE_KB_NAME, md, DAO_BRIDGE_KB_TRIGGER, a.auth1); } catch { /* 守柔 */ }
+                try { const r = await devinUpsertKnowledge(a.orgId, DAO_BRIDGE_KB_NAME, md, DAO_BRIDGE_KB_TRIGGER, a.auth1); if (!r || !r.ok) failed++; } catch { failed++; }
             }
             // KB③: 幂等 upsert 最新 MCP 使用文档(四大模块·URL 随隧道自更) (守 manual 锁)
             if (!isManualLocked(a.orgId, 'knowledge', DAO_MCP_KB_NAME)) {
-                try { await devinUpsertKnowledge(a.orgId, DAO_MCP_KB_NAME, mcpMd, DAO_MCP_KB_TRIGGER, a.auth1); } catch { /* 守柔 */ }
+                try { const r = await devinUpsertKnowledge(a.orgId, DAO_MCP_KB_NAME, mcpMd, DAO_MCP_KB_TRIGGER, a.auth1); if (!r || !r.ok) failed++; } catch { failed++; }
             }
             // MCP: URL 已变 → 先删旧同名安装再建新 (守 manual 锁)
             if (mcpEntry && !isManualLocked(a.orgId, 'mcps', DAO_MCP_NAME)) {
@@ -12078,11 +12082,17 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
             }
             injected++;
         }
-        _lastBridgeReinjectSig = sig;
-        _lastInjectedBridgeUrl = livePair.url; // 记录实注活址 → 探活环据此对账, 杜绝 KB 与内部态脱钩
-        _lastInjectedBridgeToken = livePair.token; // 记录实注配对令牌(与 URL 同源·实测鉴权胜出者) → 探活环据此对账
-        try { bridgeSaveLastInject(_lastInjectedBridgeUrl, _lastInjectedBridgeToken); } catch { /* 守柔 */ }
-        try { console.log('[dao] bridge real-time reinject (' + reason + ') → ' + injected + ' org(s)'); } catch { /* 守柔 */ }
+        if (failed === 0) {
+            _lastBridgeReinjectSig = sig;
+            _lastInjectedBridgeUrl = livePair.url; // 记录实注活址 → 探活环据此对账, 杜绝 KB 与内部态脱钩
+            _lastInjectedBridgeToken = livePair.token; // 记录实注配对令牌(与 URL 同源·实测鉴权胜出者) → 探活环据此对账
+            try { bridgeSaveLastInject(_lastInjectedBridgeUrl, _lastInjectedBridgeToken); } catch { /* 守柔 */ }
+            daoLoopLog('tunnel', 'reinject OK(' + reason + ') → ' + injected + ' org(s) · ' + livePair.url);
+        } else {
+            _lastBridgeReinjectSig = ''; // 有败不缓存签名 → 下轮探活环自动重试, 直至全数写入
+            daoLoopLog('tunnel', 'reinject PARTIAL(' + reason + '): ' + injected + ' org(s) 中 ' + failed + ' 次写入失败 → 签名不缓存·下轮自动重试');
+        }
+        try { console.log('[dao] bridge real-time reinject (' + reason + ') → ' + injected + ' org(s), failed=' + failed); } catch { /* 守柔 */ }
     } finally { _bridgeReinjectInflight = false; }
     return { injected, changed: true };
 }
