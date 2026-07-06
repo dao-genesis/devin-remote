@@ -1,6 +1,6 @@
 {
-  "versionCode": 262,
-  "versionName": "0.37.158",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.158/DevinCloud-mobile-v0.37.158.apk",
-  "notes": "v0.37.158 · 退格取证③: JS 层输入事件取证补覆盖主壳标签页(之前只注入了独立窗口, 主壳对话页无日志 → 复现一次即可锁定双删层次); 根治额度/账号状态自动刷新失效与对话提醒缺失: 切号引擎后台停泊时计时器被 Chromium 节流+可见性门控拦截 → 自动逻辑形同虚设(只能手动刷); 本版由原生侧前台每 8s 可靠外驱引擎心跳(不受节流/隐藏影响), 状态轮询·额度刷新·阻塞/耗尽提醒全部恢复自动, 国内外网络一致生效"
+  "versionCode": 263,
+  "versionName": "0.37.159",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.159/DevinCloud-mobile-v0.37.159.apk",
+  "notes": "v0.37.159 · 额度/状态自动刷新第二病灶根治(真机实证): 引擎页停泊后台时 Chromium 冻结 setTimeout → 重试退避/超时兜底永不唤醒, 扫描协程挂死使 busy 标志永真 → 外驱心跳虽到但全部空转(实测 _quotaBusy/_trkBusy 卡死、额度 45 分钟不动; 手动复位后 40s 内即恢复跳动)。本版在 engineHeartbeat(外驱时钟·不受冻结影响)加扫描看门狗: 忙但 >60s 无进度即代际复位重启扫描, 被弃扫描苏醒后自动退场不串扫; 状态轮询·额度刷新·阻塞/耗尽提醒自此彻底常青, 国内外网络一致生效"
 }
