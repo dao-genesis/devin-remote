@@ -1109,6 +1109,9 @@ var _trkBusy=false;
 //   扫描协程挂死使 busy 标志永真 → 后续心跳全部空转。engineHeartbeat(外驱时钟)监测
 //   「忙但无进度」超限即强制复位; _sweepGen 代际号使被弃扫描苏醒后既不清新扫描标志也不续跑。
 var _sweepGen=0, _trkProg=0, _quotaProg=0, _quotaLiveProg=0;
+// 网络进度钩子(devin-core 每次 HTTP 回包即调): 扫描只要还有回包就算活,
+//   看门狗只杀「60s 零回包」的真挂死, 不误杀单号耗时长(多URL重试/重登)的健康扫描。
+window.__daoNetProg=function(){ var n=Date.now(); if(_trkBusy)_trkProg=n; if(_quotaBusy)_quotaProg=n; if(_quotaLiveBusy)_quotaLiveProg=n; };
 // 单账号会话扫描 → 写入 _trk (从 pollTrk 串行循环抽出, 供并发池调用)。
 async function _pollOneAcc(a, realNo){
   var r=await DaoCloud.listSessions(a,50); if(!r||!r.ok)return;
@@ -1459,6 +1462,13 @@ async function dvRunAutoCleanNow(){
   toast("✓ 全流程完成: 清理"+cleaned+"·移出"+removed+(failed?("·失败"+failed):""));
 }
 var _quotaWarmed=false;   // 冷启动首轮: 全部已登录账号都刷一遍 → 一上来就是活数据, 不再满屏 $--
+// 清理旁路队列: 备份+清理单号可达数分钟, 内联 await 会把整个额度扫描堵死(实测病灶:
+//   2 分钟零号刷新)。额度轮只入队, 本队列独立串行消化, 互不阻塞。
+var _cleanQ=[], _cleanQIds={}, _cleanRunning=false;
+function _cleanEnqueue(a){ if(!a||!a.id||_cleanQIds[a.id])return; _cleanQIds[a.id]=1; _cleanQ.push(a.id); _cleanDrain(); }
+async function _cleanDrain(){ if(_cleanRunning)return; _cleanRunning=true;
+  try{ while(_cleanQ.length){ var id=_cleanQ.shift(); delete _cleanQIds[id]; var a=DaoCore.findAcc(id); if(a){ try{ await autoCleanFor(a); }catch(e){} } } }finally{ _cleanRunning=false; }
+}
 async function autoQuotaTick(force){
   if(!force && _notVisible()) return;     // 性能: 板块隐藏/后台 → 暂停额度刷新心跳, 显示时再补; force=用户点刷新, 不受门控
   if(_quotaBusy || _quotaLiveBusy) return; _quotaBusy=true; _quotaProg=Date.now(); var __g=_sweepGen;   // 与对话快轮互斥, 不叠加
@@ -1475,7 +1485,7 @@ async function autoQuotaTick(force){
       try{ await DaoCore.refreshQuotaFor(a.id, force); }catch(e){}   // force=用户手动刷新 → 绕过额度合并短缓存, 取真最新
       _quotaProg=Date.now();
       var fresh=DaoCore.findAcc(a.id)||a; _balAlert(fresh); await applyConvCapFor(fresh);
-      try{ await autoCleanFor(fresh); }catch(e){}    // 低额且无对话 → 备份+清理(归零移出库)
+      _cleanEnqueue(fresh);    // 低额且无对话 → 备份+清理(归零移出库) —— 旁路队列, 不阻塞额度扫描
     }
     if(batch.length) render();
     _quotaWarmed=true;
