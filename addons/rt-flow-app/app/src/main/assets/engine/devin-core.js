@@ -13,6 +13,21 @@
   var __seq = 0, __cbs = Object.create(null);
   root.__httpCb = function (id, res) { var cb = __cbs[id]; if (cb) { delete __cbs[id]; cb(res); } };
 
+  // ── 冻结免疫计时 ──────────────────────────────────────────────────────────────
+  //   本页停泊后台时 Chromium 冻结 setTimeout → 重试退避睡眠/HTTP 超时兜底永不唤醒,
+  //   扫描协程挂死。所有睡眠/超时改走注册表 + 外驱泵(原生心跳 evaluateJavascript 每跳
+  //   flush 已到期项, 不受冻结影响); 前台时 setTimeout 照常先到, 双保难。
+  var __tmSeq = 0, __tms = Object.create(null);
+  function _deadline(ms, f) {
+    var id = ++__tmSeq; __tms[id] = { t: Date.now() + ms, f: f };
+    setTimeout(function () { var e = __tms[id]; if (e) { delete __tms[id]; try { e.f(); } catch (x) {} } }, ms);
+  }
+  function _sleep(ms) { return new Promise(function (k) { _deadline(ms, k); }); }
+  function pumpTimers() {
+    var n = Date.now();
+    for (var id in __tms) { var e = __tms[id]; if (e && n >= e.t) { delete __tms[id]; try { e.f(); } catch (x) {} } }
+  }
+
   // ── 出站并发调度器 (道法自然·彻底解决多账号并发+自动备份卡顿) ──────────────
   //   两条独立通道, 各自限流并按优先级排队:
   //     · 文本通道  (登录/额度/会话列表/状态轮询/远程RPC) — 高优先, 并发上限较大;
@@ -45,7 +60,7 @@
       var b = (body == null) ? "" : (typeof body === "string" ? body : JSON.stringify(body));
       try { N.httpReq(id, method || "GET", url, JSON.stringify(headers || {}), b); }
       catch (e) { delete __cbs[id]; resolve({ status: 0, error: String(e) }); return; }
-      setTimeout(function () { if (__cbs[id]) { delete __cbs[id]; if (!done) { done = true; resolve({ status: 0, error: "timeout" }); } } }, 40000);
+      _deadline(40000, function () { if (__cbs[id]) { delete __cbs[id]; if (!done) { done = true; resolve({ status: 0, error: "timeout" }); } } });
     });
   }
   // 瞬时失败判定: 网络错/超时(status 0) · 5xx · 429 → 值得重试; 4xx/2xx 是确定结果, 不重试。
@@ -62,7 +77,7 @@
     for (var i = 0; i < tries; i++) {
       res = await fn();
       if (!_transient(res) || i === tries - 1) return res;
-      await new Promise(function (k) { setTimeout(k, Math.min(6000, Math.pow(2, i) * 700)); });
+      await _sleep(Math.min(6000, Math.pow(2, i) * 700));
     }
     return res;
   }
@@ -84,7 +99,7 @@
       var b = (body == null) ? "" : (typeof body === "string" ? body : JSON.stringify(body));
       try { N.httpReqB64(id, method || "GET", url, JSON.stringify(headers || {}), b); }
       catch (e) { delete __cbs[id]; resolve({ status: 0, error: String(e) }); return; }
-      setTimeout(function () { if (__cbs[id]) { delete __cbs[id]; if (!done) { done = true; resolve({ status: 0, error: "timeout" }); } } }, 90000);
+      _deadline(90000, function () { if (__cbs[id]) { delete __cbs[id]; if (!done) { done = true; resolve({ status: 0, error: "timeout" }); } } });
     });
   }
   // 二进制 HTTP (响应体 base64) → {status, b64, size} · 供下载会话产出文件 (二进制无损)。始终走低优先二进制通道。
@@ -131,7 +146,7 @@
     // Step1: windsurf 密码登录 → auth1
     var r1 = await devinJsonPost(URL_LOGIN, { Origin: WINDSURF, Referer: WINDSURF + "/account/login" }, { email: email, password: password });
     // 登录本身幂等(只是认证) → 429/网络抖动/5xx 皆重试, 移动网络下登录链不再一次抖动即失败
-    if (_transient(r1) && retry < 3) { await new Promise(function (k) { setTimeout(k, Math.pow(2, retry) * 2000); }); return devinLogin(email, password, retry + 1); }
+    if (_transient(r1) && retry < 3) { await _sleep(Math.pow(2, retry) * 2000); return devinLogin(email, password, retry + 1); }
     var j1 = r1.json || {};
     if (r1.status !== 200 || (!j1.token && !j1.auth1_token)) {
       return { ok: false, error: "登录失败: " + (j1.detail || j1.error || j1.message || (r1.error || ("HTTP " + r1.status))) };
@@ -143,7 +158,7 @@
     var r2 = await devinJsonPost(URL_POSTAUTH, { Origin: WINDSURF, Referer: WINDSURF + "/profile", "Connect-Protocol-Version": "1", "X-Devin-Auth1-Token": auth1 }, { auth1_token: auth1 });
     var j2 = r2.json || {};
     var sessionToken = j2.sessionToken || j2.session_token || "";
-    if ((!sessionToken) && _transient(r2) && retry < 3) { await new Promise(function (k) { setTimeout(k, Math.pow(2, retry) * 2000); }); return devinLogin(email, password, retry + 1); }
+    if ((!sessionToken) && _transient(r2) && retry < 3) { await _sleep(Math.pow(2, retry) * 2000); return devinLogin(email, password, retry + 1); }
     if (r2.status !== 200 || !sessionToken) return { ok: false, error: "PostAuth 失败: " + (j2.error || j2.code || j2.message || "no_session") };
 
     // Step3: Devin post-auth → orgId/orgName/orgSlug
@@ -403,6 +418,7 @@
     devinLogin: devinLogin, devinFetchQuota: devinFetchQuota,
     loadAcc: loadAcc, saveAcc: saveAcc, getActive: getActive, setActive: setActive, findAcc: findAcc, upsertAcc: upsertAcc,
     loginAndStore: loginAndStore, hydrateAuth1: hydrateAuth1, refreshQuotaFor: refreshQuotaFor, refreshAllQuota: refreshAllQuota, auth1Alive: auth1Alive,
+    pumpTimers: pumpTimers, sleep: _sleep,
     APP: APP, WINDSURF: WINDSURF
   };
 })(window);

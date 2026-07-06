@@ -1,6 +1,6 @@
 {
-  "versionCode": 263,
-  "versionName": "0.37.159",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.159/DevinCloud-mobile-v0.37.159.apk",
-  "notes": "v0.37.159 · 额度/状态自动刷新第二病灶根治(真机实证): 引擎页停泊后台时 Chromium 冻结 setTimeout → 重试退避/超时兜底永不唤醒, 扫描协程挂死使 busy 标志永真 → 外驱心跳虽到但全部空转(实测 _quotaBusy/_trkBusy 卡死、额度 45 分钟不动; 手动复位后 40s 内即恢复跳动)。本版在 engineHeartbeat(外驱时钟·不受冻结影响)加扫描看门狗: 忙但 >60s 无进度即代际复位重启扫描, 被弃扫描苏醒后自动退场不串扫; 状态轮询·额度刷新·阻塞/耗尽提醒自此彻底常青, 国内外网络一致生效"
+  "versionCode": 264,
+  "versionName": "0.37.160",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.160/DevinCloud-mobile-v0.37.160.apk",
+  "notes": "v0.37.160 · 冻结免疫计时(源头根治): v0.37.159 看门狗只是兜底(每 60s 才救一次·实测扫描仍蜗行), 真源是停泊页所有 setTimeout 被 Chromium 冻结 → 重试退避睡眠/HTTP 40s 超时兜底永不唤醒。本版 devin-core 全部睡眠/超时改走注册表+外驱泵(原生心跳每 8s flush 已到期项, 不受冻结影响), devin-cloud 重试退避同改; 前台 setTimeout 照常先到、双保险。额度/状态扫描自此不再挂死, 看门狗降为极端兜底"
 }
