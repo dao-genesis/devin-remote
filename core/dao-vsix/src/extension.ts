@@ -11681,7 +11681,7 @@ function computeOrgInjectSig(token: string, url: string, rulesText: string, brid
         s: p.secrets.map(x => x.name + '=' + h(x.value)).sort(),
         k: p.knowledge.map(x => x.name + ':' + h(x.body) + ':' + (x.trigger || '')).sort(),
         pb: p.playbooks.map(x => x.title + ':' + h(x.body)).sort(),
-        m: p.mcps.map(x => mcpSlug(x) + ':' + h(x.url || x.command || '')).sort(),
+        m: p.mcps.map(x => mcpSlug(x) + ':' + h(x.url || x.command || '') + ':' + h(x.headers ? JSON.stringify(x.headers) : '')).sort(),
         a: (p.automations || []).map(x => x.name + ':' + h(x.prompt || '')).sort(),
         ml: p.messageLimitAuto ? 'auto' : String(p.messageLimit),
         mo: p.messageLimitOffset, en: p.enabled, ac: p.autoCleanup,
@@ -11862,10 +11862,27 @@ function _secretsFingerprint(p: InjectProfile): string {
         return JSON.stringify((p.secrets || []).map(x => (x.name || '') + '=' + h(x.value || '')).sort());
     } catch { return ''; }
 }
+// 官方 GitHub MCP(api.githubcopilot.com)其 Authorization 头把 PAT 字面烧入 —— 与 GITHUB_PAT 密钥必须同源。
+//   PAT 换新的各写入口(切号批量/覆盖注入/ipSetPat)只改 secrets, 不动 MCP 头 → 档内 MCP 头恒陈旧,
+//   再经反向注入把「老 PAT 头」铺满全池。此处在落档前统一把该 MCP 头对齐当前 GITHUB_PAT, 令一处改·处处新。
+function _syncGithubMcpHeaderToPat(p: InjectProfile): void {
+    try {
+        const pat = String(((p.secrets || []).find(s => s && s.name === DAO_PAT_SECRET_NAME) || {} as any).value || '').trim();
+        if (!pat) return;
+        for (const m of (p.mcps || [])) {
+            if (!m || !m.url) continue;
+            if (String(m.url).toLowerCase().indexOf('api.githubcopilot.com') < 0) continue;
+            const cur = m.headers && (m.headers as any).Authorization;
+            const want = 'Bearer ' + pat;
+            if (cur !== want) { m.headers = Object.assign({}, m.headers, { Authorization: want }); }
+        }
+    } catch { /* 守柔 */ }
+}
 function saveInjectProfile(p: InjectProfile): void {
     // 根治「换新 PAT 却仍是旧数据」: 收敛签名快路(sigMap)会把「已收敛」org 跳过全部上行写入;
     //   若仅静默改档而不失效签名, 新 PAT 永不重注。故凡 secrets 指纹变更(PAT/任一密钥换值) →
     //   立即清空 dao-inject-sig.json, 令下一轮批量/自循环对全池强制重注该密钥, 新值必生效。
+    try { _syncGithubMcpHeaderToPat(p); } catch { /* 守柔 */ }
     let prevFp = '';
     try { prevFp = _secretsFingerprint(loadInjectProfile()); } catch { /* 守柔 */ }
     try { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(INJECT_PROFILE_FILE, JSON.stringify(p, null, 2), 'utf8'); } catch { /* 守柔 */ }
@@ -12477,18 +12494,34 @@ async function applyInjectProfileToOrgInner(orgId: string, auth1: string, p: Inj
     }
     for (const pb of p.playbooks) { if (pb && pb.title && !isManualLocked(orgId, 'playbooks', pb.title)) { try { await devinUpsertPlaybook(orgId, pb.title, pb.body || '', auth1, true); } catch { /* 守柔 */ } } }
     for (const a of (p.automations || [])) { if (a && a.name) { try { await devinUpsertAutomation(orgId, a, auth1); } catch { /* 守柔 */ } } }
-    // 钉住的 MCP — 幂等: 已存在(按 slug)则跳过, 否则追录到该 org
+    // 钉住的 MCP — 幂等追录 + 换值必刷新。
+    //   已存在(按 name/slug): 一般跳过; 但**携带鉴权头的 MCP**(如 GitHub MCP 的 Bearer PAT、
+    //   DAO Bridge MCP 的 token)其 headers 把密钥字面烧进安装记录 —— devinListMcpInstallations
+    //   不回传 headers 无从比对, 且 add-only 恒跳过 → PAT/token 换新后该 MCP 头永远是老值
+    //   (用户所见「PAT 还是老数据」之真因)。本注入循环仅在 org 注入签名变更(含 secrets 指纹变更,
+    //   见 computeOrgInjectSig)时运行, 故对**含头 MCP** 先删旧同名安装再建新, 令新头必生效;
+    //   无头 MCP(纯 STDIO/公开 HTTP)维持跳过, 不徒增 API 抖动。对齐 DAO Bridge MCP 换址重注做法。
     if (p.mcps && p.mcps.length) {
-        let existing: Set<string> = new Set();
+        const nameToIds: Map<string, string[]> = new Map();
         try {
             const inst = await devinListMcpInstallations(orgId, auth1);
-            if (inst.ok && inst.items) for (const it of inst.items) existing.add(String((it.name || '').replace(/^★ /, '')).toLowerCase());
+            if (inst.ok && inst.items) for (const it of inst.items) {
+                const nm = String((it.name || '').replace(/^★ /, '')).toLowerCase();
+                if (!nm) continue;
+                const arr = nameToIds.get(nm) || []; if (it.id) arr.push(String(it.id)); nameToIds.set(nm, arr);
+            }
         } catch { /* 守柔 */ }
         for (const m of p.mcps) {
             if (!m || !m.name) continue;
             if (isManualLocked(orgId, 'mcps', m.name) || isManualLocked(orgId, 'mcps', mcpSlug(m))) continue;
             const slug = mcpSlug(m);
-            if (existing.has(String(m.name).toLowerCase()) || existing.has(slug)) continue;
+            const existIds = (nameToIds.get(String(m.name).toLowerCase()) || []).concat(nameToIds.get(slug) || []);
+            const carriesAuth = !!(m.headers && typeof m.headers === 'object' && Object.keys(m.headers).length);
+            if (existIds.length && !carriesAuth) continue; // 无头且已存在 → 幂等跳过
+            if (existIds.length && carriesAuth) {
+                // 含头且已存在 → 先删旧再建, 使换新的 PAT/token 头生效
+                for (const id of existIds) { try { await devinDeleteMcp(orgId, id, auth1); } catch { /* 守柔 */ } }
+            }
             try { await devinAddCustomMcp(orgId, Object.assign({}, m, { slug }), auth1); } catch { /* 守柔 */ }
         }
     }
