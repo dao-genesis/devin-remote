@@ -213,6 +213,19 @@ public class MainActivity extends AppCompatActivity {
                 int strStartAbs = -1, strLi = -1; // ④ 组词区起点(绝对)与左字符在区内下标
                 long strAt = 0;
 
+                // 取证追踪: 记录每一次 IME→编辑器 的调用(方法+参数+光标两侧各2字符), 供真机 logcat -s DAO_IME 直取证。
+                void tr(String s) {
+                    String ctx = "";
+                    try {
+                        android.view.inputmethod.ExtractedText et = getExtractedText(new android.view.inputmethod.ExtractedTextRequest(), 0);
+                        if (et != null && et.text != null && et.selectionStart >= 0) {
+                            int p = et.selectionStart, q = et.selectionEnd, n = et.text.length();
+                            ctx = " |sel=" + (p + et.startOffset) + ".." + (q + et.startOffset)
+                                + " around='" + et.text.subSequence(Math.max(0, p - 2), Math.min(p, n)) + "\u2038" + et.text.subSequence(Math.min(q, n), Math.min(q + 2, n)) + "'";
+                        }
+                    } catch (Throwable t) { }
+                    android.util.Log.i("DAO_IME", s + ctx);
+                }
                 void cancelFwd() { if (pendingFwd != null) { guardH.removeCallbacks(pendingFwd); pendingFwd = null; } }
                 void clearStraddle() { strTxt = null; strStartAbs = -1; strLi = -1; }
                 boolean superDel(int b, int a, boolean cp) { return cp ? super.deleteSurroundingTextInCodePoints(b, a) : super.deleteSurroundingText(b, a); }
@@ -220,6 +233,7 @@ public class MainActivity extends AppCompatActivity {
                 @Override public boolean deleteSurroundingText(int beforeLength, int afterLength) { return del(beforeLength, afterLength, false); }
                 @Override public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) { return del(beforeLength, afterLength, true); }
                 boolean del(int b, int a, boolean cp) {
+                    tr("del(" + b + "," + a + (cp ? ",cp" : "") + ")");
                     long now = android.os.SystemClock.uptimeMillis();
                     if (b > 0) {
                         lastBkAt = now;
@@ -238,6 +252,7 @@ public class MainActivity extends AppCompatActivity {
                     return superDel(b, a, cp);
                 }
                 @Override public boolean sendKeyEvent(android.view.KeyEvent event) {
+                    if (event != null && event.getAction() == android.view.KeyEvent.ACTION_DOWN) tr("key(" + event.getKeyCode() + ")");
                     if (event != null) {
                         long now = android.os.SystemClock.uptimeMillis();
                         int kc = event.getKeyCode();
@@ -247,6 +262,7 @@ public class MainActivity extends AppCompatActivity {
                     return super.sendKeyEvent(event);
                 }
                 @Override public boolean setComposingRegion(int start, int end) {
+                    tr("setComposingRegion(" + start + "," + end + ")");
                     clearStraddle();
                     try {
                         android.view.inputmethod.ExtractedText et = getExtractedText(new android.view.inputmethod.ExtractedTextRequest(), 0);
@@ -263,6 +279,7 @@ public class MainActivity extends AppCompatActivity {
                     return super.setComposingRegion(start, end);
                 }
                 @Override public boolean setComposingText(CharSequence text, int newCursorPosition) {
+                    tr("setComposingText(len=" + (text == null ? -1 : text.length()) + "," + newCursorPosition + ")");
                     if (strTxt != null && text != null && (android.os.SystemClock.uptimeMillis() - strAt) < 3000
                             && strLi >= 0 && strLi + 1 < strTxt.length()) {
                         String t = text.toString();
@@ -281,13 +298,21 @@ public class MainActivity extends AppCompatActivity {
                     return super.setComposingText(text, newCursorPosition);
                 }
                 @Override public boolean commitText(CharSequence text, int newCursorPosition) {
+                    tr("commitText(len=" + (text == null ? -1 : text.length()) + "," + newCursorPosition + ")");
                     clearStraddle();
                     return super.commitText(text, newCursorPosition);
                 }
                 @Override public boolean finishComposingText() {
+                    tr("finishComposingText");
                     clearStraddle();
                     return super.finishComposingText();
                 }
+                @Override public boolean setSelection(int start, int end) {
+                    tr("setSelection(" + start + "," + end + ")");
+                    return super.setSelection(start, end);
+                }
+                @Override public boolean beginBatchEdit() { tr("beginBatchEdit"); return super.beginBatchEdit(); }
+                @Override public boolean endBatchEdit() { tr("endBatchEdit"); return super.endBatchEdit(); }
             };
         }
     }
