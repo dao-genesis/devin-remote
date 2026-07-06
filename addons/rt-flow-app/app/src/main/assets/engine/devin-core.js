@@ -11,7 +11,12 @@
 
   // ── 原生 HTTP 桥 (Promise 封装) ──────────────────────────────────────────
   var __seq = 0, __cbs = Object.create(null);
-  root.__httpCb = function (id, res) { var cb = __cbs[id]; if (cb) { delete __cbs[id]; cb(res); } };
+  root.__httpCb = function (id, res) {
+    var cb = __cbs[id]; if (cb) { delete __cbs[id]; cb(res); }
+    // 网络进度钩子: 每次原生 HTTP 回包即报进度 → 扫描看门狗只在「60s 无任何回包」时
+    //   才判挂死, 不再误杀单号耗时长(多 URL 重试/重登)但仍在推进的健康扫描。
+    try { if (root.__daoNetProg) root.__daoNetProg(); } catch (e) {}
+  };
 
   // ── 冻结免疫计时 ──────────────────────────────────────────────────────────────
   //   本页停泊后台时 Chromium 冻结 setTimeout → 重试退避睡眠/HTTP 超时兜底永不唤醒,
