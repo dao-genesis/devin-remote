@@ -2201,12 +2201,12 @@ public class MainActivity extends AppCompatActivity {
      *  其自身的状态轮询/额度心跳全被可见性门控拦下 → 自动刷新与对话提醒形同虚设。
      *  evaluateJavascript 不受计时器节流/页面可见性影响, 故由原生侧可靠驱动。 */
     private static final long ENGINE_TICK_MS = 8000;
+    private static final long ENGINE_TICK_BG_MS = 30000;   // 后台降频不停跳: 对话阻塞/耗尽推送无需回前台才发(evaluateJavascript 不受 onPause 影响)
     private final Runnable engineTick = new Runnable() {
         @Override public void run() {
-            if (!appForeground) return;
             WebView sw = switchWeb();
             if (sw != null) { try { sw.evaluateJavascript("try{engineHeartbeat()}catch(e){}", null); } catch (Exception ignored) {} }
-            main.postDelayed(this, ENGINE_TICK_MS);
+            main.postDelayed(this, appForeground ? ENGINE_TICK_MS : ENGINE_TICK_BG_MS);
         }
     };
 
@@ -6228,6 +6228,7 @@ public class MainActivity extends AppCompatActivity {
         main.removeCallbacks(presenceTick);
         main.removeCallbacks(openAcctTick);
         main.removeCallbacks(engineTick);
+        main.postDelayed(engineTick, ENGINE_TICK_BG_MS);   // 后台续跳(30s 降频): 状态追踪/阻塞提醒不再等回前台, 推送时效从十几分钟降到 ≤半分钟
         main.removeCallbacks(memHygiene);
         bgSince = System.currentTimeMillis();
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {} // 持久化其它网站登录 Cookie

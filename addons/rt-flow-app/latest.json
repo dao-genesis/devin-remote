@@ -1,6 +1,6 @@
 {
-  "versionCode": 265,
-  "versionName": "0.37.161",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.161/DevinCloud-mobile-v0.37.161.apk",
-  "notes": "v0.37.161 · 额度扫描第三病灶根治(真机实证·三连修收官): ① 备份+清理(可达数分钟/号)原内联阻塞额度扫描, 实测 2 分钟零号刷新 → 改旁路队列独立串行消化, 额度轮只入队不等待(真机实测: 3 分钟 145 号额度刷新, 冷启全量首轮完成); ② 看门狗改「60s 零 HTTP 回包」才判挂死(每次原生回包即报进度), 不再误杀单号耗时长(多URL重试/重登)但仍推进的健康扫描。叠加 v0.37.160 冻结免疫计时, 额度/状态自动刷新与阻塞/耗尽提醒全面常青"
+  "versionCode": 266,
+  "versionName": "0.37.162",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.162/DevinCloud-mobile-v0.37.162.apk",
+  "notes": "v0.37.162 · 提醒时效根治: 引擎心跳后台不再停跳(降频 30s 续跳, evaluateJavascript 不受 onPause 影响) —— 对话阻塞/额度耗尽推送无需回前台才发, 时效从「回前台才知道(可迟十几分钟)」降到 ≤半分钟; 状态灯后台持续更新, 回前台即是新。叠加 v0.37.161 额度扫描旁路队列(3 分钟百余号刷新), 状态/额度/提醒 时效·准确·稳定三位一体"
 }
