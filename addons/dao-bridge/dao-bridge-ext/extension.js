@@ -1162,7 +1162,12 @@ class Bridge {
     this._wdBusy = true;
     try {
       const ok = await this._publicHealthCheck();
-      if (ok) { this._healthFails = 0; this._lastOkAt = Date.now(); }
+      if (ok) {
+        this._healthFails = 0; this._lastOkAt = Date.now();
+        // 活隧道周期重申(心跳落盘): 全局 conn 的「新鲜度」是防死实例覆盖活址的裁决依据(见 writeArtifacts),
+        // 若只在起隧道时写一次, 陈旧的活址会被误判可覆盖。每 ≤60s 重申一次, 活址恒新鲜; 真死后自然转陈旧让位。
+        if (!this._lastArtAt || Date.now() - this._lastArtAt > 60000) this.writeArtifacts();
+      }
       else {
         this._healthFails++;
         this.lastErr = "回环自检失败 ×" + this._healthFails + (this.url ? (" (" + this.url + ")") : " (无公网URL)");
@@ -1675,6 +1680,7 @@ class Bridge {
   }
 
   writeArtifacts() {
+    this._lastArtAt = Date.now();
     try { fs.writeFileSync(this.mdPath(), this.generateCloudAgentMd(), "utf8"); } catch (e) {}
     try { fs.writeFileSync(this.localAgentMdPath(), this.generateLocalAgentMd(), "utf8"); } catch (e) {}
     const wsInfo = workspaceInfo();
