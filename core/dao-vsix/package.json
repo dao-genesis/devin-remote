@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "3.50.84",
+  "version": "3.50.85",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -54,6 +54,16 @@
           "default": true,
           "description": "Auto-start server on activation"
         },
+        "dao.ensureWorkspace": {
+          "type": "boolean",
+          "default": true,
+          "description": "启动必带工作区: 激活时若窗口无工作区文件夹, 自动挂载默认工作区 (dao.defaultWorkspace 或 ~/dao-workspace), 使远程整机操作/终端/文件读写恒有确定的根目录 (道法自然·启动即就绪)"
+        },
+        "dao.defaultWorkspace": {
+          "type": "string",
+          "default": "",
+          "description": "默认工作区目录 (留空则用 ~/dao-workspace)。仅当 dao.ensureWorkspace 为真且当前窗口无工作区时挂载"
+        },
         "dao.githubPat": {
           "type": "string",
           "default": "",
@@ -84,7 +94,7 @@
         "dao.devinAutoSync": {
           "type": "boolean",
           "default": true,
-          "description": "Auto-sync Windsurf credentials to Devin Cloud on startup"
+          "description": "Auto-sync Devin Desktop (Windsurf-compatible) credentials to Devin Cloud on startup"
         },
         "dao.bridgeAutoPersist": {
           "type": "boolean",
