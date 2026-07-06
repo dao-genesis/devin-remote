@@ -4117,7 +4117,7 @@ function activate(ctx) {
     _essenceProvider = new EssenceProvider(ctx);
     ctx.subscriptions.push(
       vscode.window.registerWebviewViewProvider(
-        "dao.essence",
+        "daopp.essence",
         _essenceProvider,
         {
           webviewOptions: { retainContextWhenHidden: true },
@@ -4130,7 +4130,7 @@ function activate(ctx) {
     _eaRouterProvider = new EaRouterProvider(ctx);
     ctx.subscriptions.push(
       vscode.window.registerWebviewViewProvider(
-        "dao.router",
+        "daopp.router",
         _eaRouterProvider,
         {
           webviewOptions: { retainContextWhenHidden: true },

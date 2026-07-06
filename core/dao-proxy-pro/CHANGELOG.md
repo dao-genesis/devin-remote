@@ -2,6 +2,13 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.341 · 视图 ID 归 daopp.* 命名空间(根治与归一内折 Proxy Pro 抢注视图)
+: v9.9.340 并行修复只把命令归了 `daopp.*`，视图仍注册 `dao.essence`/`dao.router` —— 与
+  dao-one 内折的 vendor-proxy 抢注同一视图, 后激活方直接 FATAL(`view already registered`),
+  归一插件整体激活失败, 连带官方服务链路错位(连不上服务)。本版把视图 ID 一并归
+  `daopp.essence`/`daopp.router`(package.json contributes 与 registerWebviewViewProvider 两处同步),
+  独立版与归一内折版井水不犯河水。
+
 v9.9.334 · 守真突破(活鉴权信封 · 脱「首次须用户发对话」之依赖 · 无为而无不为)
 : v9.9.333 的会话鉴权保鲜仍以「最新捕获帧 `_lastChatFrame`」为唯一鉴权源, 而该帧只由
   CHAT_PROTO(GetChatMessage)捕获 → 持久帧 token 随会话轮换失活时, 仍须「用户再发一条

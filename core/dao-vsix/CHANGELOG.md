@@ -2,6 +2,9 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.92
+- **根治「冗余独立版 dao.dao-vsix 卸载后自动复活」**。归一(dao-one)内折副本(vendor-vsix)的 `bridgeSelfUpdateCheck` 照常从 GitHub Release 拉取 dao-vsix VSIX 并 `--install-extension` —— 装上的是**独立版** `dao.dao-vsix`，与宿主 dao-one 抢注同名命令(`dao.startServer` already exists)与视图，刚清理的单体插件 ≤6h 即被复活。修法：自更新入口检 `__dirname` 含 `vendor-vsix` 即直接返回，内折副本更新随 dao-one 整体发版，不走独立版通道。
+
 ## 3.50.66
 - **正本清源根治「额度归零→全量备份→清理→出库」闭环从系统构建至今一次都没触发过**。云端经 dao-bridge 直连桌面实测 `~/.wam/devin_cloud/cleanup_state.json`：数十个低额度账号的 `backupCompletedAt` 全被刷成近 1~2 小时内的同一批时戳 —— 病灶在 `_dvAutoBackupRun`：每个备份周期都无条件 `setCleanupState(email,{backupCompletedAt: Date.now()})` 把 24h 冷却锚点重置为 now，而备份定时器远比 24h 频繁 → `isCleanupReady` 的 `now-backupCompletedAt < 24h` 恒成立 → cooldown 门永不满足 → 归零清理/出库永不发生（全库仅 4 个账号带 `evicted:true`，皆来自数月前旧运行）。
   - **修法**：冷却锚点「本源起算」——落 `backupCompletedAt` 前先 `getCleanupState`，仅当①尚无锚点 或 ②上轮已清理（`cleanedAt >= 旧锚点`·需为新一轮重新起算）时才落新锚点；低额度周期内每轮照常全量备份刷新数据、但锚点保持不动 → 24h 冷却真正能走完。账号充值再用则由 `lastConvUpdateAt` 的 `recent_update` 门守住近 24h 活跃、不会误清。

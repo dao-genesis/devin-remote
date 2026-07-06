@@ -4955,6 +4955,10 @@ function selfUpdateDownload(url: string, dst: string, ms: number): Promise<boole
 }
 
 async function bridgeSelfUpdateCheck(): Promise<void> {
+    // 归一(dao-one)内折副本(vendor-vsix)不自更新: 它若拉取 dao-vsix Release 安装, 装上的是独立版
+    // dao.dao-vsix —— 与宿主 dao-one 抢注同名命令/视图, 已卸载的冗余单体插件会被它反复复活。
+    // 内折副本的更新随 dao-one 整体发版, 不走本通道。
+    if (/[\\/]vendor-vsix[\\/]/.test(__dirname)) return;
     if (Date.now() - _selfUpdateLastCheck < SELF_UPDATE_INTERVAL) return;
     _selfUpdateLastCheck = Date.now();
     try {
