@@ -12235,6 +12235,20 @@ async function _dvAutoBackupRun() {
   const _rtRaw = +_cfg("devinCloudAutoRemoveThreshold", cleanupThreshold);
   const removeThreshold = Math.max(0, Number.isFinite(_rtRaw) ? _rtRaw : cleanupThreshold);
   const removeEmails = [];
+  // v4.26.6 · 即时出库(逐号落盘): 旧法攒到循环末统一出库 — 全池扫描以小时计,
+  //   窗口 reload/中途异常即丢 removeEmails → 已清理号永不落盘出库(实测病灶)。
+  //   现法: 每号条件满足当即 removeSingle() 落盘, 循环末批处理保留为兜底。
+  const _evictNow = (email, why) => {
+    try {
+      if (_store.removeSingle(email)) {
+        log("auto-remove: " + email + " 即时出库 · " + why);
+        try { _broadcastUI(true); } catch {}
+        return true;
+      }
+    } catch (e) { log("auto-remove error: " + email + ": " + (e.message || e)); }
+    removeEmails.push(email);
+    return false;
+  };
   for (let _abIdx = 0; _abIdx < _store.accounts.length; _abIdx++) {
     const acc = _store.accounts[_abIdx];
     if (!acc || !acc.email) continue;
@@ -12321,7 +12335,7 @@ async function _dvAutoBackupRun() {
               _staleConv &&
               totalCredits <= removeThreshold
             ) {
-              removeEmails.push(acc.email);
+              if (_evictNow(acc.email, "额度归零·痕迹已清(上轮)·补出库")) _abIdx--;
               _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零·痕迹已清(上轮) → 补出库");
             } else {
               const hrs = cleanupCheck.remaining ? Math.ceil(cleanupCheck.remaining / 3600000) : "?";
@@ -12339,7 +12353,7 @@ async function _dvAutoBackupRun() {
               devinCloud.setCleanupState(acc.email, { cleanedAt: Date.now() });
               const wipeClean = !!rep && rep.sessions.failed === 0 && rep.knowledge.failed === 0 && rep.playbooks.failed === 0 && rep.secrets.failed === 0;
               if (autoRemoveZero && wipeClean && !_addedRecently && totalCredits <= removeThreshold) {
-                removeEmails.push(acc.email);
+                if (_evictNow(acc.email, "已全量备份+清理无残留")) _abIdx--;
                 _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零 · 已全量备份+清理 → 从账号库移除");
               } else {
                 // 出库决策落盘可见可验(旧法仅 toast → 静默跳过无从排查)
