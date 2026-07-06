@@ -190,129 +190,28 @@ public class MainActivity extends AppCompatActivity {
         String orgId = "";          // 该标签绑定账号的 org id
     }
 
-    // 退格根治(原生 InputConnection 层): 部分输入法按一次退格会同时删除光标左右两侧字符。
-    //   这类删除由 IME 直改编辑缓冲, 不经可取消的 JS beforeinput 事件 → JS 护栏拦不到, 只能在原生层夹断。
-    //   已覆盖的四条路径:
-    //   ① deleteSurroundingText(before>0, after>0) —— 单调用左右同删 → after 归 0 只保留左删。
-    //   ② 退格后紧跟(<250ms)纯前向删除(拆单误发·含 KEYCODE_FORWARD_DEL) → 吞掉前向那一半。
-    //   ③ 反序拆单: 纯前向删除先到、退格随后 → 前向删除先挂起 250ms, 若退格接踵而至则丢弃挂起的
-    //     前向删除; 若无退格跟进则原样放行(不影响真实的 Del 前向删除)。
-    //   ④ 跨光标组词区: setComposingRegion 跨越光标两侧后, setComposingText 一次性把光标左右
-    //     两字符一起去掉 → 改写为只删左侧一字符, 光标落在删除点。
-    //   拼音组合输入的正常 setComposingText(光标在组词区末尾)不满足④的判定条件, 不受干扰。
+    // 输入直通(回归本源): IME→编辑器 全部原样放行, 不拦截、不挂起、不改写。
+    //   仅对「删除类」调用留一行轻量参数日志(无同步取文·零往返·零延迟), 供 logcat -s DAO_IME 溯源。
     static class GuardedWebView extends WebView {
         GuardedWebView(Context c) { super(c); }
-        long lastBkAt = 0;   // 最近一次退格(左删/DEL 键)的时刻
-        final android.os.Handler guardH = new android.os.Handler(android.os.Looper.getMainLooper());
         @Override public android.view.inputmethod.InputConnection onCreateInputConnection(EditorInfo outAttrs) {
             android.view.inputmethod.InputConnection ic = super.onCreateInputConnection(outAttrs);
             if (ic == null) return null;
             return new android.view.inputmethod.InputConnectionWrapper(ic, true) {
-                Runnable pendingFwd = null;       // ③ 挂起中的纯前向删除
-                String strTxt = null;             // ④ 跨光标组词区原文
-                int strStartAbs = -1, strLi = -1; // ④ 组词区起点(绝对)与左字符在区内下标
-                long strAt = 0;
-
-                // 取证追踪: 记录每一次 IME→编辑器 的调用(方法+参数+光标两侧各2字符), 供真机 logcat -s DAO_IME 直取证。
-                void tr(String s) {
-                    String ctx = "";
-                    try {
-                        android.view.inputmethod.ExtractedText et = getExtractedText(new android.view.inputmethod.ExtractedTextRequest(), 0);
-                        if (et != null && et.text != null && et.selectionStart >= 0) {
-                            int p = et.selectionStart, q = et.selectionEnd, n = et.text.length();
-                            ctx = " |sel=" + (p + et.startOffset) + ".." + (q + et.startOffset)
-                                + " around='" + et.text.subSequence(Math.max(0, p - 2), Math.min(p, n)) + "\u2038" + et.text.subSequence(Math.min(q, n), Math.min(q + 2, n)) + "'";
-                        }
-                    } catch (Throwable t) { }
-                    android.util.Log.i("DAO_IME", s + ctx);
+                @Override public boolean deleteSurroundingText(int b, int a) {
+                    android.util.Log.i("DAO_IME", "del(" + b + "," + a + ")");
+                    return super.deleteSurroundingText(b, a);
                 }
-                void cancelFwd() { if (pendingFwd != null) { guardH.removeCallbacks(pendingFwd); pendingFwd = null; } }
-                void clearStraddle() { strTxt = null; strStartAbs = -1; strLi = -1; }
-                boolean superDel(int b, int a, boolean cp) { return cp ? super.deleteSurroundingTextInCodePoints(b, a) : super.deleteSurroundingText(b, a); }
-
-                @Override public boolean deleteSurroundingText(int beforeLength, int afterLength) { return del(beforeLength, afterLength, false); }
-                @Override public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) { return del(beforeLength, afterLength, true); }
-                boolean del(int b, int a, boolean cp) {
-                    tr("del(" + b + "," + a + (cp ? ",cp" : "") + ")");
-                    long now = android.os.SystemClock.uptimeMillis();
-                    if (b > 0) {
-                        lastBkAt = now;
-                        if (pendingFwd != null) { cancelFwd(); android.util.Log.d("DAO_IME", "guard③ 丢弃挂起前向删除"); }
-                        if (a > 0) { a = 0; android.util.Log.d("DAO_IME", "guard① 左右同删→只左删"); }
-                        return superDel(b, a, cp);
-                    }
-                    if (a > 0) {
-                        if (now - lastBkAt < 250) { android.util.Log.d("DAO_IME", "guard② 吞前向删除"); return true; }
-                        cancelFwd();
-                        final int fa = a; final boolean fcp = cp;
-                        pendingFwd = () -> { pendingFwd = null; superDel(0, fa, fcp); };
-                        guardH.postDelayed(pendingFwd, 250);
-                        return true;
-                    }
-                    return superDel(b, a, cp);
+                @Override public boolean deleteSurroundingTextInCodePoints(int b, int a) {
+                    android.util.Log.i("DAO_IME", "del(" + b + "," + a + ",cp)");
+                    return super.deleteSurroundingTextInCodePoints(b, a);
                 }
-                @Override public boolean sendKeyEvent(android.view.KeyEvent event) {
-                    if (event != null && event.getAction() == android.view.KeyEvent.ACTION_DOWN) tr("key(" + event.getKeyCode() + ")");
-                    if (event != null) {
-                        long now = android.os.SystemClock.uptimeMillis();
-                        int kc = event.getKeyCode();
-                        if (kc == android.view.KeyEvent.KEYCODE_DEL) { lastBkAt = now; if (pendingFwd != null) { cancelFwd(); android.util.Log.d("DAO_IME", "guard③ 丢弃挂起前向删除(键)"); } }
-                        else if (kc == android.view.KeyEvent.KEYCODE_FORWARD_DEL && (now - lastBkAt) < 250) return true;
-                    }
-                    return super.sendKeyEvent(event);
+                @Override public boolean sendKeyEvent(android.view.KeyEvent e) {
+                    if (e != null && e.getAction() == android.view.KeyEvent.ACTION_DOWN
+                            && (e.getKeyCode() == android.view.KeyEvent.KEYCODE_DEL || e.getKeyCode() == android.view.KeyEvent.KEYCODE_FORWARD_DEL))
+                        android.util.Log.i("DAO_IME", "key(" + e.getKeyCode() + ")");
+                    return super.sendKeyEvent(e);
                 }
-                @Override public boolean setComposingRegion(int start, int end) {
-                    tr("setComposingRegion(" + start + "," + end + ")");
-                    clearStraddle();
-                    try {
-                        android.view.inputmethod.ExtractedText et = getExtractedText(new android.view.inputmethod.ExtractedTextRequest(), 0);
-                        if (et != null && et.text != null && et.selectionStart == et.selectionEnd && et.selectionStart >= 0) {
-                            int off = et.startOffset;
-                            int st = Math.min(start, end) - off, en = Math.max(start, end) - off;
-                            int s = et.selectionStart;
-                            if (st >= 0 && en <= et.text.length() && st < s && en > s) {
-                                strTxt = et.text.subSequence(st, en).toString();
-                                strStartAbs = st + off; strLi = s - 1 - st; strAt = android.os.SystemClock.uptimeMillis();
-                            }
-                        }
-                    } catch (Throwable t) { clearStraddle(); }
-                    return super.setComposingRegion(start, end);
-                }
-                @Override public boolean setComposingText(CharSequence text, int newCursorPosition) {
-                    tr("setComposingText(len=" + (text == null ? -1 : text.length()) + "," + newCursorPosition + ")");
-                    if (strTxt != null && text != null && (android.os.SystemClock.uptimeMillis() - strAt) < 3000
-                            && strLi >= 0 && strLi + 1 < strTxt.length()) {
-                        String t = text.toString();
-                        String bothRemoved = strTxt.substring(0, strLi) + strTxt.substring(strLi + 2);
-                        String leftRemoved = strTxt.substring(0, strLi) + strTxt.substring(strLi + 1);
-                        if (t.equals(bothRemoved) && !t.equals(leftRemoved)) {
-                            android.util.Log.d("DAO_IME", "guard④ 跨光标组词区双删→只左删");
-                            int caret = strStartAbs + strLi;
-                            clearStraddle();
-                            boolean r = super.setComposingText(leftRemoved, 1);
-                            super.setSelection(caret, caret);
-                            return r;
-                        }
-                    }
-                    clearStraddle();
-                    return super.setComposingText(text, newCursorPosition);
-                }
-                @Override public boolean commitText(CharSequence text, int newCursorPosition) {
-                    tr("commitText(len=" + (text == null ? -1 : text.length()) + "," + newCursorPosition + ")");
-                    clearStraddle();
-                    return super.commitText(text, newCursorPosition);
-                }
-                @Override public boolean finishComposingText() {
-                    tr("finishComposingText");
-                    clearStraddle();
-                    return super.finishComposingText();
-                }
-                @Override public boolean setSelection(int start, int end) {
-                    tr("setSelection(" + start + "," + end + ")");
-                    return super.setSelection(start, end);
-                }
-                @Override public boolean beginBatchEdit() { tr("beginBatchEdit"); return super.beginBatchEdit(); }
-                @Override public boolean endBatchEdit() { tr("endBatchEdit"); return super.endBatchEdit(); }
             };
         }
     }
@@ -3745,35 +3644,11 @@ public class MainActivity extends AppCompatActivity {
             + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
-    // 退格护栏: 部分输入法(三星键盘等)在富文本编辑器(contenteditable)里按一次退格, 会把光标
-    //   左右两侧的字符同时删掉 —— 表现为 IME 在 deleteContentBackward 之外额外发出一个
-    //   deleteContentForward, 或单个退格的目标区间越过光标吞掉右侧字符。此护栏在 document
-    //   捕获阶段兜底: ① 紧跟退格(<150ms)的 IME 向前删除一律拦下(手机键盘本无 Del 键, 该事件
-    //   必为输入法误发); ② 单个退格的目标区间越过光标 → 拦下改为只删左侧。仅处理系统真实事件
-    //   (isTrusted) 且不干预拼音/组合输入中(isComposing)。幂等(window.__rtBsGuard 守卫)。
+    // 输入直通(回归本源): 不再有任何 beforeinput 拦截/改写(拦截式护栏实测造成卡顿·光标错位·弹跳)。
+    //   仅保留捕获阶段纯旁观取证日志, 供 logcat 对照原生 DAO_IME 溯源。
     static void installBackspaceGuard(WebView w) {
         if (w == null) return;
-        String js = "(function(){if(window.__rtBsGuard)return;window.__rtBsGuard=1;"
-            + "var lastBk=0;"
-            + "document.addEventListener('beforeinput',function(e){"
-            + "if(!e.isTrusted||e.isComposing)return;"
-            + "var t=e.target;if(!t)return;"
-            + "var ce=!!t.isContentEditable;"
-            + "if(!ce&&!/^(input|textarea)$/i.test(t.tagName||''))return;"
-            + "var now=Date.now();"
-            + "if(e.inputType==='deleteContentBackward'){lastBk=now;"
-            + "if(!ce||!e.getTargetRanges)return;"
-            + "try{var sel=window.getSelection();"
-            + "if(sel&&sel.isCollapsed&&sel.anchorNode){var r=e.getTargetRanges()[0];"
-            + "if(r){var over=false;"
-            + "if(r.endContainer===sel.anchorNode){over=r.endOffset>sel.anchorOffset;}"
-            + "else{var tr=document.createRange();tr.setStart(r.startContainer,r.startOffset);tr.setEnd(r.endContainer,r.endOffset);"
-            + "try{over=tr.comparePoint(sel.anchorNode,sel.anchorOffset)===0&&!(r.endContainer===sel.anchorNode&&r.endOffset===sel.anchorOffset);}catch(__){}}"
-            + "if(over){e.preventDefault();e.stopImmediatePropagation();document.execCommand('delete');return;}}}}catch(_){}"
-            + "return;}"
-            + "if(e.inputType==='deleteContentForward'&&(now-lastBk)<150){"
-            + "e.preventDefault();e.stopImmediatePropagation();}"
-            + "},true);})();"
+        String js = ""
             // JS 层输入取证(主壳标签页也覆盖): 捕获阶段旁观记录 keydown/beforeinput/input/composition,
             //   console.log → logcat 'chromium' 直取, 与原生 DAO_IME 日志对照即可定位双删发生层次。只旁观不拦截。
             + "(function(){if(window.__daoImeTr)return;window.__daoImeTr=1;"
