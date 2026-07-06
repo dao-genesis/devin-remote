@@ -5777,19 +5777,22 @@ async function bridgeLivenessTick(): Promise<void> {
             const effTok = bridgeEffectiveToken();
             // (a) 地址漂移: 当前活址 ≠ 实注址 → 知识库滞留旧址, 补注。
             const urlDrift = !!(eff && _lastInjectedBridgeUrl && eff !== _lastInjectedBridgeUrl);
-            // (b) 令牌漂移: 当前令牌 ≠ 已发布令牌 → 轮换却没人重注, 知识库令牌已失效, 补注(被动签名在 URL 不变时探不出此盲区)。
+            // (b) 令牌漂移: 当前令牌 ≠ 已发布令牌(被动签名在 URL 不变时探不出此盲区)。
             const tokDrift = !!(effTok && _lastInjectedBridgeToken && effTok !== _lastInjectedBridgeToken);
-            // (c) 实测有效性: 以云端 Agent 之法用「已发布 URL+token」打需鉴权端点; 隧道虽活但实测无效(401/5xx) → 补注。
+            // (c) 实测有效性为唯一裁决: 以云端 Agent 之法用「已发布 URL+token」打需鉴权端点。
+            //   漂移(a/b)只是线索, 不是裁决 —— 非 leader 实例本牌恒异于机器权威牌, 按牌面比对必误报
+            //   token-drift, 徒致每轮「主动刷新→SKIP(非 leader)」空转; 已发布配对实测仍通即良态·守而不注。
             let effDead = false, effReason = '';
             const pubUrl = _lastInjectedBridgeUrl || eff;
             const pubTok = _lastInjectedBridgeToken || effTok;
-            if (!urlDrift && !tokDrift && pubUrl && pubTok) {
+            if (pubUrl && pubTok) {
                 try { const pe = await bridgeProbeEffective(pubUrl, pubTok, 6000); if (!pe.ok) { effDead = true; effReason = pe.reason + (pe.code ? '/' + pe.code : ''); } } catch { /* 守柔 */ }
+            } else if (urlDrift || tokDrift) {
+                effDead = true; effReason = '无已发布配对可核';
             }
-            if (urlDrift || tokDrift || effDead) {
-                const why = urlDrift ? 'url-drift(' + _lastInjectedBridgeUrl + '→' + eff + ')'
-                    : tokDrift ? 'token-drift(已发布令牌失配)'
-                    : 'published-ineffective(' + effReason + ')';
+            if (effDead) {
+                const hint = urlDrift ? '·url-drift(' + _lastInjectedBridgeUrl + '→' + eff + ')' : (tokDrift ? '·token-drift' : '');
+                const why = 'published-ineffective(' + effReason + ')' + hint;
                 daoLoopLog('tunnel', 'probe ALIVE 但已发布配源失效[' + why + ']→主动刷新+反注入');
                 try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ }
                 bridgeScheduleReinject('liveness-effectiveness');
