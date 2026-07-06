@@ -604,6 +604,32 @@ function getDaoAsset(name: string): string {
     return '';
 }
 
+// ═══════════════════════════════════════════════════════════
+// 道法自然 · 启动必带工作区 — 帛书·三十九「侯王得一以为天下正」
+// 病灶: 窗口若无工作区文件夹 (workspaceFolders 空), 则整机远程操作/终端/文件
+//   读写皆无确定根目录 (cwd 退回 homedir·各处不一致), 且 workspace-trust 限制模式
+//   下扩展易被静默禁用 (见 AGENTS.md 踩坑9)。
+// 解: 激活即确保有一份默认工作区 (config dao.defaultWorkspace 或 ~/dao-workspace),
+//   目录不存在则创建, 再经 updateWorkspaceFolders 就地挂载 (不重开窗口·无为而无不为)。
+//   已有工作区则守柔跳过。config dao.ensureWorkspace=false 可关闭。
+// ═══════════════════════════════════════════════════════════
+function ensureStartupWorkspace(): void {
+    try {
+        const cfg = vscode.workspace.getConfiguration('dao');
+        if (!cfg.get<boolean>('ensureWorkspace', true)) return;
+        const folders = vscode.workspace.workspaceFolders;
+        if (folders && folders.length > 0) return; // 已带工作区 → 守柔跳过
+        const configured = (cfg.get<string>('defaultWorkspace', '') || '').trim();
+        const wsDir = configured || path.join(os.homedir(), 'dao-workspace');
+        try { fs.mkdirSync(wsDir, { recursive: true }); } catch { /* 守柔 */ }
+        // 挂载首个工作区文件夹 (index 0, deleteCount 0) — VS Code 无既有工作区时
+        // 加首个文件夹通常触发窗口重载, 但状态经 ~/.dao 持久化, 重载后 activate 复跑即恒带工作区。
+        const uri = vscode.Uri.file(wsDir);
+        const ok = vscode.workspace.updateWorkspaceFolders(0, 0, { uri, name: path.basename(wsDir) || 'dao-workspace' });
+        if (ok) { try { console.error('[dao-vsix] 启动必带工作区 · 已挂载默认工作区: ' + wsDir); } catch { /* 守柔 */ } }
+    } catch (e) { try { console.error('[dao-vsix] ensureStartupWorkspace 守柔:', e); } catch { /* 守柔 */ } }
+}
+
 
 export async function activate(context: vscode.ExtensionContext) {
     // 初始化每窗口专属状态
@@ -691,6 +717,9 @@ export async function activate(context: vscode.ExtensionContext) {
     // 窗口打开 → 检测代理 → 自动认证 → 自动注入 → 即开即用
     // 无为而无不为 — 用户零操作，如流水般自然
     // ═══════════════════════════════════════════════════════════
+
+    // Step 0: 启动必带工作区 — 无工作区即挂载默认工作区 (远程整机操作恒有确定根目录)
+    ensureStartupWorkspace();
 
     // Step 0: 检测代理隧道 — 在所有网络请求之前
     detectProxyPort();
@@ -8200,8 +8229,17 @@ function findBrowserExe(): string | null {
     const isMac = process.platform === 'darwin';
     const candidates: string[] = [];
     if (isWin) {
-        // Devin Desktop 内置 Chrome 路径
-        candidates.push('C:\\devin\\chrome\\chrome-win64\\chrome.exe');
+        // 底层全面切 Devin Desktop: 优先其内置 Chrome (窗口/验证页恒由 Devin Desktop 生态启动)。
+        // 1) 从宿主 IDE 安装目录推导 (process.execPath = Devin Desktop/Windsurf 的 Electron 二进制)
+        try {
+            const ideDir = path.dirname(process.execPath);
+            candidates.push(path.join(ideDir, 'chrome', 'chrome-win64', 'chrome.exe'));
+            candidates.push(path.join(path.dirname(ideDir), 'chrome', 'chrome-win64', 'chrome.exe'));
+        } catch { /* 守柔 */ }
+        // 2) 常见盘符扫描 (Devin Desktop 可装于任意盘, 如 D:\Devin)
+        for (const drv of ['C', 'D', 'E', 'F']) {
+            candidates.push(drv + ':\\devin\\chrome\\chrome-win64\\chrome.exe');
+        }
         candidates.push((process.env['LOCALAPPDATA'] || '') + '\\Google\\Chrome\\Application\\chrome.exe');
         candidates.push((process.env['ProgramFiles'] || '') + '\\Google\\Chrome\\Application\\chrome.exe');
         candidates.push((process.env['ProgramFiles(x86)'] || '') + '\\Google\\Chrome\\Application\\chrome.exe');
@@ -8478,10 +8516,16 @@ function parseAccountLine(line: string): { email: string; password: string } | n
 
 async function devinLogin(email: string, password: string, retryCount?: number): Promise<{ ok: boolean; auth1?: string; userId?: string; error?: string }> {
     // Step 1: Login → auth1 — 帛书·七十三「勇于不敢则活」429退避
+    // 切号板·国内网络登录优化 (参照手机 APK 多镜像韧性): 登录链首帧最易受国内网络瞬断/
+    //   丢包/被墙影响, 表象=「登录失败」实为传输层未达。故除 429 退避外, 对网络层失败
+    //   (status 0: timeout/connreset/DNS) 亦退避重试, 且用更长超时给弱网留足握手窗口。
+    //   devinJsonPost 内已含「直连优先→本地代理降级」双路 → 与 APK 多路可达同源。
     const maxRetry = retryCount || 0;
-    const r1 = await devinJsonPost(DEVIN_URL_LOGIN, { Origin: DEVIN_WINDSURF, Referer: DEVIN_WINDSURF + '/account/login' }, { email, password });
-    if (r1.status === 429 && maxRetry < 3) {
-        const wait = Math.pow(2, maxRetry) * 2000;
+    const r1 = await devinJsonPost(DEVIN_URL_LOGIN, { Origin: DEVIN_WINDSURF, Referer: DEVIN_WINDSURF + '/account/login' }, { email, password }, 25000);
+    if ((r1.status === 429 || r1.status === 0 || r1.status === 502 || r1.status === 503 || r1.status === 504) && maxRetry < 4) {
+        // 429/网关错误 → 2s·4s·8s·16s 指数退避; 纯网络失败(status 0) → 更短 1s·2s·4s·8s (弱网快速再拨)
+        const base = r1.status === 0 ? 1000 : 2000;
+        const wait = Math.pow(2, maxRetry) * base;
         await new Promise(ok => setTimeout(ok, wait));
         return devinLogin(email, password, maxRetry + 1);
     }
@@ -9238,7 +9282,7 @@ async function devinAutoChain(): Promise<boolean> {
         }
     } catch {}
 
-    // 路径2: Windsurf凭证自动登录 — 帛书·六十二「道者万物之注」
+    // 路径2: Devin Desktop 凭证自动登录 (vscdb 优先 Devin, 兼容老版 Windsurf) — 帛书·六十二「道者万物之注」
     const wsCreds = readWindsurfCredentials();
     if (wsCreds) {
         // 子路径2a: 有email+password → 五步链完整登录
@@ -9247,7 +9291,7 @@ async function devinAutoChain(): Promise<boolean> {
                 const loginResult = await devinLogin(wsCreds.email, wsCreds.password);
                 if (loginResult.ok) {
                     saveAccountAuth(wsCreds.email);
-                    vscode.window.showInformationMessage('Devin Cloud 自动登录成功 (Windsurf凭证)');
+                    vscode.window.showInformationMessage('Devin Cloud 自动登录成功 (Devin Desktop 凭证)');
                     return true;
                 }
             } catch {}
@@ -9352,7 +9396,7 @@ async function devinAutoChain(): Promise<boolean> {
                             ws.devinQuota = await devinFetchQuota(apiKey, apiServerUrl).catch(() => null);
                             ws.devinSaveConfig();
                             saveAccountAuth(wsCreds.email);
-                            vscode.window.showInformationMessage('Devin Cloud 自动登录成功 (Windsurf Token)');
+                            vscode.window.showInformationMessage('Devin Cloud 自动登录成功 (Devin Desktop Token)');
                             return true;
                         }
                     }
