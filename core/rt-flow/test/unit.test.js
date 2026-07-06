@@ -821,8 +821,10 @@ function test(name, fn) {
     const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
     assert.ok(/if \(autoRemoveZero && wipeClean && !_addedRecently && totalCredits <= removeThreshold\)/.test(src), "移除须 autoRemoveZero+wipeClean+addedAt冷却+归零阈值四重闸");
     assert.ok(/const wipeClean = .*rep\.sessions\.failed === 0 && rep\.knowledge\.failed === 0 && rep\.playbooks\.failed === 0 && rep\.secrets\.failed === 0/.test(src), "wipeClean 须确认四类痕迹全清无失败");
-    assert.ok(/_store\.removeBatch\(idx\)/.test(src), "出库须走 removeBatch (单次IO+持久化)");
-    assert.ok(/removeEmails\.push\(acc\.email\)/.test(src), "归零账号先入 removeEmails, 循环外再删");
+    assert.ok(/_store\.removeBatch\(idx\)/.test(src), "循环外兜底须走 removeBatch (单次IO+持久化)");
+    // v4.26.6 · 即时出库: 条件满足当即 removeSingle 落盘 (中途断不丢), 循环末批处理仅兜底
+    assert.ok(/_store\.removeSingle\(email\)/.test(src) && /_evictNow\(acc\.email/.test(src), "归零账号即时 removeSingle 落盘出库");
+    assert.ok(/removeEmails\.push\(email\)/.test(src), "即时出库失败回落 removeEmails · 循环外兜底再删");
   });
   test("extension.js: 24h冷却锚点不得每周期重置 (v4.10.1 修复归零清理从不触发)", () => {
     const fs = require("fs");
