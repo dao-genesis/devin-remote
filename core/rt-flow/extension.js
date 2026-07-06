@@ -665,7 +665,7 @@ html.m #hint{font-size:14px;padding:18px}
   #daowin{width:96vw!important;height:84%!important;right:2vw!important;left:auto}
 }
 /* ── 归一 · 下载/备份悬浮窗(复刻手机端 APK daopan.html) ── */
-#daowin{position:absolute;top:44px;right:10px;width:560px;height:74%;max-width:96vw;max-height:88%;background:#0e1116;border:1px solid #2a313c;border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.6);z-index:26;display:none;flex-direction:column;overflow:hidden}
+#daowin{position:absolute;top:44px;right:10px;width:500px;height:64%;max-width:96vw;max-height:88%;background:#0e1116;border:1px solid #2a313c;border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.6);z-index:26;display:none;flex-direction:column;overflow:hidden}
 #daowin.on{display:flex}
 #daowin .dwh{display:flex;align-items:center;gap:8px;padding:8px 11px;background:#161b22;border-bottom:1px solid #21262d;cursor:move;flex:0 0 auto;user-select:none}
 #daowin .dwh .t{flex:1;font-size:13px;font-weight:700;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -741,6 +741,8 @@ html.m #hint{font-size:14px;padding:18px}
 #daowin,#dlwin{min-width:340px;min-height:240px}
 .rzh{position:absolute;z-index:30;user-select:none;-webkit-user-select:none}
 .rzh.e{top:6px;bottom:14px;right:0;width:6px;cursor:ew-resize}
+.rzh.w{top:6px;bottom:14px;left:0;width:6px;cursor:ew-resize}
+.rzh.n{left:6px;right:14px;top:0;height:5px;cursor:ns-resize}
 .rzh.s{left:6px;right:14px;bottom:0;height:6px;cursor:ns-resize}
 .rzh.se{right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;z-index:31}
 .rzh.se::after{content:"";position:absolute;right:3px;bottom:3px;width:8px;height:8px;border-right:2px solid #55606d;border-bottom:2px solid #55606d;border-radius:0 0 2px 0}
@@ -794,13 +796,13 @@ html.m #hint{font-size:14px;padding:18px}
     <div class="dwview" id="dwViewB"><div id="dwBackup"><div class="empty">加载中…</div></div></div>
     <div id="cv"><div class="cvtop"><button class="dwx" id="cvBack">‹ 返回</button><div class="cvtabs" id="cvTabs"></div></div><div class="cvacts" id="cvActs"></div><div class="cvbody" id="cvBody"></div></div>
   </div>
-  <div class="rzh e" data-rz="e"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
+  <div class="rzh e" data-rz="e"></div><div class="rzh w" data-rz="w"></div><div class="rzh n" data-rz="n"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
 </div>
 <div id="dlwin">
   <div class="dwh" id="dlHead"><span>⬇</span><span class="t" id="dlTitle">下载</span><button class="dwx" id="dlClose">✕ 关闭</button></div>
   <div class="dwbar"><button class="mini" id="dlRefresh">🔄 刷新</button><button class="mini" id="dlFolder">📁 下载文件夹</button></div>
   <div class="dlbody"><div class="tip">浏览器下载 · 在网页中下载的文件都会出现在这里 · <b>拖文件卡到网页</b>即上传到当前网页上传框(与对话备份无关 · 对齐手机 APK)</div><div id="dlList"><div class="empty">加载中…</div></div></div>
-  <div class="rzh e" data-rz="e"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
+  <div class="rzh e" data-rz="e"></div><div class="rzh w" data-rz="w"></div><div class="rzh n" data-rz="n"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
 </div>
 <div class="dtoast" id="daotoast"></div>
 <script>
@@ -940,16 +942,19 @@ try{setInterval(shellStatusTick,5000);}catch(e){}
 // 归一 · 状态续接(对齐手机端会话保持): 持久化当前打开的标签集 → 宿主 globalState;
 //   重开 /shell 时宿主在 ready 回推 restoreTabs, 逐个还原(老用户停在原网页·新用户落主页)。
 var _persistT=null;
+function _liveWebUrl(t){try{var loc=t.frame.contentWindow.location;if((loc.pathname||'').indexOf('/__web')!==0)return '';var m=/[?&]u=([^&]+)/.exec(loc.search||'');return m?decodeURIComponent(m[1]):'';}catch(e){return '';}}
+function _liveAccPath(t){try{var loc=t.frame.contentWindow.location;var p=(loc.pathname||'')+(loc.search||'');p=p.replace(/[?&]dao_acct=[^&]*/g,'');if(p.indexOf('?')<0)p=p.replace('&','?');if(!p||p==='/'||p==='/?'||p.indexOf('/__web')===0)return '';return p;}catch(e){return '';}}
 function persistShell(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];
   if(id.indexOf('board:')===0){arr.push({kind:'board',board:id.slice(6)});}
-  else if(id.indexOf('web:')===0){var tw=tabs[id];var mw=(tw&&tw.meta)||{};var wu=mw.origUrl||'';if(wu)arr.push({kind:'web',url:wu,label:mw.label||wu});}
-  else{var t=tabs[id];var mt=(t&&t.meta)||{};if(mt.email)arr.push({kind:'acc',email:mt.email,devinId:mt.devinId||'',title:mt.label||'',status:mt.status||''});}}
+  else if(id.indexOf('web:')===0){var tw=tabs[id];var mw=(tw&&tw.meta)||{};var wu=_liveWebUrl(tw)||mw.origUrl||'';if(wu)arr.push({kind:'web',url:wu,label:mw.label||wu});}
+  else{var t=tabs[id];var mt=(t&&t.meta)||{};if(mt.email)arr.push({kind:'acc',email:mt.email,devinId:mt.devinId||'',path:_liveAccPath(t),title:mt.label||'',status:mt.status||''});}}
   vscode.postMessage({type:'shellSaveTabs',tabs:arr});}catch(e){}}
 function schedPersist(){clearTimeout(_persistT);_persistT=setTimeout(persistShell,400);}
+setInterval(function(){try{persistShell();}catch(e){}},15000); // 页内导航(iframe 内跳转)无事件可钩 → 周期性抓实时位置持久化
 function restoreTabs(arr){if(!arr||!arr.length)return;for(var i=0;i<arr.length;i++){var s=arr[i]||{};try{
   if(s.kind==='board'){openBoard(s.board||'home');}
   else if(s.kind==='web'&&s.url){vscode.postMessage({type:'openWebTab',url:s.url,label:s.label||s.url});}
-  else if(s.kind==='acc'&&s.email){vscode.postMessage({type:'reopen',email:s.email,devinId:s.devinId||''});}}catch(e){}}}
+  else if(s.kind==='acc'&&s.email){vscode.postMessage({type:'reopen',email:s.email,devinId:s.devinId||'',path:s.path||''});}}catch(e){}}}
 // 归一 · 站内新标签开任意网页/搜索(复刻手机端 APK · 不再弹外部系统浏览器):
 //   经本地 HTTP 代理 /__web?u= 直出(剥 XFO/CSP · 注入 base + 链接/表单拦截), 当 iframe 挂一张站内标签。
 function openWebTab(u,label){if(!u)return;vscode.postMessage({type:'openWebTab',url:u,label:(label||u).slice(0,60),hist:1});}
@@ -1297,7 +1302,7 @@ _dEl('cvBack').onclick=daoHideCv;
 (function(){var w=_dEl('daowin'),hd=_dEl('dwHead'),dx=0,dy=0,drag=false;if(!w||!hd)return;
   hd.addEventListener('mousedown',function(e){if(e.target&&e.target.id==='dwClose')return;drag=true;var r=w.getBoundingClientRect();dx=e.clientX-r.left;dy=e.clientY-r.top;w.style.right='auto';w.style.left=r.left+'px';w.style.top=r.top+'px';e.preventDefault();});
   window.addEventListener('mousemove',function(e){if(!drag)return;var x=Math.max(0,Math.min(window.innerWidth-90,e.clientX-dx)),y=Math.max(0,Math.min(window.innerHeight-40,e.clientY-dy));w.style.left=x+'px';w.style.top=y+'px';});
-  window.addEventListener('mouseup',function(){drag=false;});})();
+  window.addEventListener('mouseup',function(){if(drag){drag=false;try{window._daoWinSave&&window._daoWinSave(w);}catch(e){}}});})();
 // ⬇下载悬浮窗 事件: 关闭/刷新/打开文件夹 + 列表内 打开/定位/删除(事件委托·CSP 安全) + 标题栏拖拽
 _dEl('dlClose').onclick=dlClose;
 _dEl('dlRefresh').onclick=dlLoad;
@@ -1320,19 +1325,23 @@ _dEl('dlwin').addEventListener('click',function(e){var el=e.target.closest&&e.ta
 (function(){var w=_dEl('dlwin'),hd=_dEl('dlHead'),dx=0,dy=0,drag=false;if(!w||!hd)return;
   hd.addEventListener('mousedown',function(e){if(e.target&&e.target.id==='dlClose')return;drag=true;var r=w.getBoundingClientRect();dx=e.clientX-r.left;dy=e.clientY-r.top;w.style.right='auto';w.style.left=r.left+'px';w.style.top=r.top+'px';e.preventDefault();});
   window.addEventListener('mousemove',function(e){if(!drag)return;var x=Math.max(0,Math.min(window.innerWidth-90,e.clientX-dx)),y=Math.max(0,Math.min(window.innerHeight-40,e.clientY-dy));w.style.left=x+'px';w.style.top=y+'px';});
-  window.addEventListener('mouseup',function(){drag=false;});})();
-// 悬浮窗可缩放(拖边框/拖角·对齐常规软件) + 尺寸持久化 — daowin/dlwin 同一套
+  window.addEventListener('mouseup',function(){if(drag){drag=false;try{window._daoWinSave&&window._daoWinSave(w);}catch(e){}}});})();
+// 悬浮窗可缩放(拖四边/拖角·对齐常规软件) + 尺寸与位置持久化 — daowin/dlwin 同一套
 (function(){
-  function saveSz(w){try{localStorage.setItem('dao_wsz_'+w.id,JSON.stringify({w:w.style.width,h:w.style.height}));}catch(e){}}
-  function restoreSz(w){try{var s=JSON.parse(localStorage.getItem('dao_wsz_'+w.id)||'null');if(!s)return;if(s.w){w.style.width=s.w;w.style.maxWidth='none';}if(s.h){w.style.height=s.h;w.style.maxHeight='none';}}catch(e){}}
-  function mk(w){if(!w)return;restoreSz(w);var rz=false,dir='',sx=0,sy=0,sw=0,sh=0;
+  function saveSz(w){try{localStorage.setItem('dao_wsz_'+w.id,JSON.stringify({w:w.style.width,h:w.style.height,l:w.style.left,t:w.style.top}));}catch(e){}}
+  window._daoWinSave=saveSz;
+  function restoreSz(w){try{var s=JSON.parse(localStorage.getItem('dao_wsz_'+w.id)||'null');if(!s)return;if(s.w){w.style.width=s.w;w.style.maxWidth='none';}if(s.h){w.style.height=s.h;w.style.maxHeight='none';}
+    if(s.l&&s.t){var l=parseFloat(s.l),t=parseFloat(s.t);if(isFinite(l)&&isFinite(t)){l=Math.max(0,Math.min(window.innerWidth-90,l));t=Math.max(0,Math.min(window.innerHeight-40,t));w.style.right='auto';w.style.left=l+'px';w.style.top=t+'px';}}}catch(e){}}
+  function mk(w){if(!w)return;restoreSz(w);var rz=false,dir='',sx=0,sy=0,sw=0,sh=0,sl=0,st=0;
     w.addEventListener('mousedown',function(e){var g=e.target.closest&&e.target.closest('.rzh');if(!g)return;
-      dir=g.getAttribute('data-rz')||'se';var r=w.getBoundingClientRect();sx=e.clientX;sy=e.clientY;sw=r.width;sh=r.height;
+      dir=g.getAttribute('data-rz')||'se';var r=w.getBoundingClientRect();sx=e.clientX;sy=e.clientY;sw=r.width;sh=r.height;sl=r.left;st=r.top;
       w.style.right='auto';w.style.left=r.left+'px';w.style.top=r.top+'px';w.style.maxWidth='none';w.style.maxHeight='none';
       rz=true;e.preventDefault();e.stopPropagation();});
     window.addEventListener('mousemove',function(e){if(!rz)return;
       if(dir.indexOf('e')>=0)w.style.width=Math.max(340,Math.min(window.innerWidth-8,sw+(e.clientX-sx)))+'px';
-      if(dir.indexOf('s')>=0)w.style.height=Math.max(240,Math.min(window.innerHeight-8,sh+(e.clientY-sy)))+'px';});
+      if(dir.indexOf('s')>=0)w.style.height=Math.max(240,Math.min(window.innerHeight-8,sh+(e.clientY-sy)))+'px';
+      if(dir.indexOf('w')>=0){var nw2=Math.max(340,Math.min(window.innerWidth-8,sw-(e.clientX-sx)));w.style.left=(sl+sw-nw2)+'px';w.style.width=nw2+'px';}
+      if(dir.indexOf('n')>=0){var nh2=Math.max(240,Math.min(window.innerHeight-8,sh-(e.clientY-sy)));w.style.top=Math.max(0,st+sh-nh2)+'px';w.style.height=nh2+'px';}});
     window.addEventListener('mouseup',function(){if(rz){rz=false;saveSz(w);}});}
   mk(_dEl('daowin'));mk(_dEl('dlwin'));})();
 // ── 整页翻译(对照手机 APK translate.js·Edge 免费引擎) ──────────────────────
@@ -1983,7 +1992,7 @@ async function shellHandleMessage(sid, m) {
       }
       case 'switchOpen':
       case 'reopen': {
-        const open = await _shellResolveOpen({ email: m.email, devinId: m.devinId });
+        const open = await _shellResolveOpen({ email: m.email, devinId: m.devinId, path: m.path });
         if (open) send(open);
         return;
       }
@@ -2407,7 +2416,7 @@ function _wireMultiPanel(panel) {
       }
       if (m.type === "shellSaveTabs") { try { if (_ctx && _ctx.globalState) _ctx.globalState.update("dao.shellTabs", Array.isArray(m.tabs) ? m.tabs.slice(0, 40) : []); } catch (e) {} return; }
       if (m.type === "reopen") {
-        try { await openMultiInstance({ email: m.email, devinId: m.devinId }); } catch (e) {}
+        try { await openMultiInstance({ email: m.email, devinId: m.devinId, path: m.path }); } catch (e) {}
         return;
       }
       if (m.type === "histPush") { _pushMultiHist(m.url, m.label, m.kind); try { panel.webview.postMessage({ type: "history", list: _getMultiHist() }); } catch (e) {} return; }
@@ -3553,6 +3562,9 @@ function _daoUpsertInjectProfilePat(pat) {
     else j.secrets.push({ name: "GITHUB_PAT", value: p });
     fs.mkdirSync(DAO_DIR, { recursive: true });
     fs.writeFileSync(DAO_INJECT_PROFILE_FILE, JSON.stringify(j, null, 2), "utf8");
+    // PAT 换值 → 同步清收敛签名缓存(dao-inject-sig.json): 否则批量注入的 sig 快路把「已收敛」org
+    //   全跳过, 新 PAT 永不重注(用户见到的仍是老数据)。清缓存即令下一轮全池强制重注。
+    try { fs.unlinkSync(path.join(DAO_DIR, "dao-inject-sig.json")); } catch (e) {}
     return true;
   } catch { return false; }
 }
@@ -11180,7 +11192,23 @@ function dvConvZipBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u271
 function dvConvDelBatch(i){const ids=_dvcIds(i);if(!ids.length){showToast('\u2717 先勾选对话');return;}vscode.postMessage({type:'dvConvDelBatch',index:i,devinIds:ids});}
 /* v4.9.6 · C: 本地对话拉取(已清零号) — 切换显示 + 请求本账号本地备份清单 */
 function dvLocalConvs(i){const c=document.getElementById('dvLocal'+i);if(!c)return;if(c.style.display!=='none'&&c.innerHTML.trim()){c.style.display='none';return;}c.style.display='block';c.innerHTML='<span style="color:#888;font-size:11px">\u8bfb\u53d6\u672c\u5730\u5907\u4efd\u2026</span>';vscode.postMessage({type:'dvLocalConvs',index:i});}
-document.addEventListener('click',function(e){const t=e.target;if(!t||!t.closest)return;const v=t.closest('.dv-localview');if(v&&v.dataset.path){e.preventDefault();vscode.postMessage({type:'devinViewBackupConv',path:v.dataset.path});return;}const r=t.closest('.dv-localreveal');if(r&&r.dataset.path){e.preventDefault();vscode.postMessage({type:'devinRevealPath',path:r.dataset.path});return;}const x=t.closest('.dv-trk-x');if(x&&x.dataset.id){e.preventDefault();e.stopPropagation();const it=x.closest('.dv-trk-item');if(it)it.style.display='none';vscode.postMessage({type:'dvUntrackConv',id:x.dataset.id});return;}const g=t.closest('.dv-trk-go');if(g&&g.dataset.act){e.preventDefault();e.stopPropagation();const em=g.dataset.email||'';const did=g.dataset.did||'';if(g.dataset.act==='convRt'){showToast('\u23F3 \u6b64\u5bf9\u8bdd\u2192IDE\u591a\u5b9e\u4f8b\u2026');vscode.postMessage({type:'convRouteToIde',email:em,devinId:did});}else if(g.dataset.act==='convSb'){showToast('\u23F3 \u6b64\u5bf9\u8bdd\u2192\u6d4f\u89c8\u5668\u591a\u5b9e\u4f8b\u2026');vscode.postMessage({type:'convOpenSysBrowser',email:em,devinId:did});}return;}});
+document.addEventListener('click',function(e){const t=e.target;if(!t||!t.closest)return;const v=t.closest('.dv-localview');if(v&&v.dataset.path){e.preventDefault();vscode.postMessage({type:'devinViewBackupConv',path:v.dataset.path});return;}const r=t.closest('.dv-localreveal');if(r&&r.dataset.path){e.preventDefault();vscode.postMessage({type:'devinRevealPath',path:r.dataset.path});return;}});
+/* 追踪行按钮改 pointerdown 委派 — 根治第一行(运行中对话)点不动: convUpdate 在 mousedown→mouseup 间 replaceWith 重建 DOM → click 不再触发; pointerdown 先于重建到达 */
+document.addEventListener('pointerdown',function(e){if(e.button!==0&&e.pointerType==='mouse')return;const t=e.target;if(!t||!t.closest)return;
+  const x=t.closest('.dv-trk-x');if(x&&x.dataset.id){e.preventDefault();e.stopPropagation();const it=x.closest('.dv-trk-item');if(it)it.style.display='none';vscode.postMessage({type:'dvUntrackConv',id:x.dataset.id});return;}
+  const g=t.closest('.dv-trk-go');if(!g)return;
+  if(g.dataset.batch){e.preventDefault();e.stopPropagation();if(g.dataset.batch==='clr')_trkClear();else trkBatch(g.dataset.batch);return;}
+  if(g.dataset.act){e.preventDefault();e.stopPropagation();const em=g.dataset.email||'';const did=g.dataset.did||'';if(g.dataset.act==='convRt'){showToast('\u23F3 \u6b64\u5bf9\u8bdd\u2192IDE\u591a\u5b9e\u4f8b\u2026');vscode.postMessage({type:'convRouteToIde',email:em,devinId:did});}else if(g.dataset.act==='convSb'){showToast('\u23F3 \u6b64\u5bf9\u8bdd\u2192\u6d4f\u89c8\u5668\u591a\u5b9e\u4f8b\u2026');vscode.postMessage({type:'convOpenSysBrowser',email:em,devinId:did});}return;}});
+/* 追踪行多选(Shift 区间) + 批量 IDE/网页/取消追踪 — 选择持久化跨 convUpdate 重建 */
+let _trkLastCk=null;
+function _trkCks(){return [...document.querySelectorAll('.dv-trk-ck')];}
+function _trkSync(){const n=_trkCks().filter(c=>c.checked).length;const b=document.getElementById('trkBar');if(b)b.style.display=n?'inline-flex':'none';const c=document.getElementById('trkCnt');if(c)c.textContent=n;}
+function _trkPersist(){try{const st=vscode.getState()||{};vscode.setState({...st,trkSel:_trkCks().filter(c=>c.checked).map(c=>c.dataset.did),trkTs:Date.now()});}catch(e){}}
+function _trkRestore(){try{const st=vscode.getState()||{};const arr=Array.isArray(st.trkSel)?st.trkSel:[];if(!arr.length)return;if(st.trkTs&&Date.now()-st.trkTs>600000)return;const s=new Set(arr);_trkCks().forEach(c=>{if(s.has(c.dataset.did))c.checked=true;});_trkSync();}catch(e){}}
+function trkSel(ev){const cks=_trkCks();const cur=ev&&ev.target?cks.indexOf(ev.target):-1;if(ev&&ev.shiftKey&&_trkLastCk!=null&&cur>=0){const a=Math.min(cur,_trkLastCk),b=Math.max(cur,_trkLastCk),on=ev.target.checked;for(let k=a;k<=b;k++)cks[k].checked=on;}if(cur>=0)_trkLastCk=cur;_trkSync();_trkPersist();}
+function _trkClear(){_trkCks().forEach(c=>c.checked=false);_trkLastCk=null;_trkSync();_trkPersist();}
+function trkBatch(act){const cks=_trkCks().filter(c=>c.checked);if(!cks.length){showToast('\u2717 先勾选对话');return;}for(const c of cks){const em=c.dataset.email||'',did=c.dataset.did||'';if(act==='rt')vscode.postMessage({type:'convRouteToIde',email:em,devinId:did});else if(act==='sb')vscode.postMessage({type:'convOpenSysBrowser',email:em,devinId:did});else if(act==='x'){const it=c.closest('.dv-trk-item');if(it)it.style.display='none';vscode.postMessage({type:'dvUntrackConv',id:did});}}showToast((act==='x'?'已批量取消追踪 ':'\u23F3 批量打开 ')+cks.length+' 个');if(act==='x')_trkClear();}
+try{_trkRestore();}catch(e){}
 /* v4.7.0 · 知识库/剧本/密钥 多选(Shift) + 查看/下载/删除 + 批量 */
 let _bdLast={};
 function _bdChks(i,k){return [...document.querySelectorAll('.bd-chk[data-i="'+i+'"][data-k="'+k+'"]')];}
@@ -11272,7 +11300,7 @@ if(m.type==='gitDone'){const d=document.getElementById('dvDetail'+m.index);if(d&
 if(m.type==='gitBatchDone'){document.querySelectorAll('.dv-detail.open').forEach(d=>{const i=parseInt(d.getAttribute('data-i'));if(Number.isFinite(i))vscode.postMessage({type:'devinExpand',index:i,refresh:true});});}
 if(m.type==='devinRunStatus'&&Array.isArray(m.items)){const _rk=JSON.stringify(m.items);if(_rk===_lastRunKey)return;_lastRunKey=_rk;document.querySelectorAll('.dv-run').forEach(el=>{el.querySelectorAll('.run,.awa,.blk').forEach(x=>x.remove());});m.items.forEach(it=>{const el=document.querySelector('.dv-run[data-email="'+(it.email||'').toLowerCase()+'"]');if(!el)return;const tip=(it.titles||[]).join(' | ');const mk=(cls,txt,n)=>{if(!(n>0))return;const s=document.createElement('span');s.className=cls;s.textContent=txt+n;s.title=tip;el.insertBefore(s,el.firstChild);};mk('blk','\\u25CF 卡住',it.blocked);mk('awa','\\u25CF 待输入',it.awaiting);mk('run','\\u25CF 运行',it.running);});}
 if(m.type==='devinConvCap'&&Array.isArray(m.items)){m.items.forEach(it=>{const sp=document.querySelector('.dv-stat[data-capemail="'+(it.email||'').toLowerCase()+'"]');if(sp){const c=(typeof it.cap==='number')?it.cap.toFixed(2):'\\u2014';sp.textContent='\\u5bf9\\u8bdd\\u4e0a\\u9650 $'+c+(it.drain?' \\u00b7\\u62bd\\u5e72\\u4e2d':'')+(it.inUse?' \\u00b7\\u4f7f\\u7528\\u4e2d':'');sp.style.color=it.drain?'#dcaa55':(it.inUse?'#4ec9b0':'');}});}
-if(m.type==='convUpdate'&&m.html){const _sig=(m.sig!=null?m.sig:m.html);if(_sig===_lastConvSig)return;_lastConvSig=_sig;_lastConvHtml=m.html;const old=document.querySelector('.conv-section');if(old){const ic=!!(old.querySelector('.conv-body')&&old.querySelector('.conv-body').classList.contains('collapsed'));const tmp=document.createElement('div');tmp.innerHTML=m.html;const nw=tmp.querySelector('.conv-section');if(nw){const el=document.scrollingElement||document.documentElement;const _y=el?el.scrollTop|0:0;old.replaceWith(nw);if(ic){const nb=nw.querySelector('.conv-body');const na=nw.querySelector('#convArrow');if(nb){nb.classList.add('collapsed');if(na)na.textContent='\u25BC';}}if(el&&_y>0&&el.scrollTop!==_y){el.scrollTop=_y;requestAnimationFrame(()=>{el.scrollTop=_y;});}}}}
+if(m.type==='convUpdate'&&m.html){const _sig=(m.sig!=null?m.sig:m.html);if(_sig===_lastConvSig)return;_lastConvSig=_sig;_lastConvHtml=m.html;const old=document.querySelector('.conv-section');if(old){const ic=!!(old.querySelector('.conv-body')&&old.querySelector('.conv-body').classList.contains('collapsed'));const tmp=document.createElement('div');tmp.innerHTML=m.html;const nw=tmp.querySelector('.conv-section');if(nw){const el=document.scrollingElement||document.documentElement;const _y=el?el.scrollTop|0:0;old.replaceWith(nw);if(ic){const nb=nw.querySelector('.conv-body');const na=nw.querySelector('#convArrow');if(nb){nb.classList.add('collapsed');if(na)na.textContent='\u25BC';}}if(el&&_y>0&&el.scrollTop!==_y){el.scrollTop=_y;requestAnimationFrame(()=>{el.scrollTop=_y;});}try{_trkRestore();}catch(e){}}}}
 if(m.type==='devinBackupTree'){_dvShowBackups(m.tree);}
 if(m.type==='dvLocalConvList'){const c=document.getElementById('dvLocal'+m.index);if(c){c.style.display='block';c.innerHTML=m.html||'';}}
 });
@@ -12059,7 +12087,8 @@ function _dvStatusAggHtml() {
         '<span class="dv-trk-go" style="margin-left:auto" data-act="convRt" data-email="' + _esc(email) + '" data-did="' + _esc(String(it.id)) + '" title="此对话 → IDE 内置浏览器多实例(注入该号登录·各登各号)">\uD83D\uDDA5</span>' +
         '<span class="dv-trk-go" data-act="convSb" data-email="' + _esc(email) + '" data-did="' + _esc(String(it.id)) + '" title="此对话 → 系统浏览器多实例(独立隔离·注入该号)">\uD83C\uDF10</span>'
       ) : "";
-      rows.push('<div class="dv-trk-item">' + noBadge + '<span class="dv-trk-st ' + cls + '" title="' + tip + '">' +
+      const _ckBox = it.id ? '<input type="checkbox" class="dv-trk-ck" data-did="' + _esc(String(it.id)) + '" data-email="' + _esc(email) + '" onclick="trkSel(event)" title="勾选此对话(Shift 可区间多选) · 批量 IDE/网页/取消追踪" style="margin:0;flex-shrink:0">' : "";
+      rows.push('<div class="dv-trk-item">' + _ckBox + noBadge + '<span class="dv-trk-st ' + cls + '" title="' + tip + '">' +
         (cls === "running" ? "运行" : cls === "awaiting" ? "待输入" : "卡住") + "</span>" +
         '<span class="dv-trk-who">' + _esc(who) + "</span>" +
         '<span class="dv-trk-tt" title="' + _esc(it.title) + '">' + _esc(_truncTitle(it.title, 22)) + "</span>" + _goBtns + _xBtn + "</div>");
@@ -12079,6 +12108,11 @@ function _dvStatusAggHtml() {
     '<span>运行<b style="color:#4ec9b0">' + totalRun + "</b></span>" +
     (totalAwait ? '<span>待输入<b style="color:#d29922">' + totalAwait + "</b></span>" : "") +
     (totalBlocked ? '<span>卡住<b style="color:#f44">' + totalBlocked + "</b></span>" : "") +
+    '<span id="trkBar" style="display:none;gap:4px;align-items:center;margin-left:auto">已选<b id="trkCnt" style="color:#9cdcfe">0</b>' +
+    '<span class="dv-trk-go" data-batch="rt" title="勾选对话 → 批量 IDE 内多实例">\uD83D\uDDA5批</span>' +
+    '<span class="dv-trk-go" data-batch="sb" title="勾选对话 → 批量系统浏览器多实例">\uD83C\uDF10批</span>' +
+    '<span class="dv-trk-go" data-batch="x" title="批量取消追踪勾选对话">\u2715批</span>' +
+    '<span class="dv-trk-go" data-batch="clr" title="清除勾选">清</span></span>' +
     "</div>";
   return sum + rows.join("");
 }

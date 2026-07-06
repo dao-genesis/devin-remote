@@ -5431,6 +5431,8 @@ let _bridgeLivenessTimer: ReturnType<typeof setTimeout> | null = null;
 let _bridgeLivenessStopped = false;
 let _bridgeLastAliveMs = 0;
 let _bridgeLivenessFail = 0;
+// 面板按需探活防抖(单飞): injectStatus 渲染发现状态陈旧时补探, 不与 30s 探活环叠加轰击。
+let _injectStatusProbing = false;
 // 三环自检 · 统一审计日志 — 帛书·「自知者明」: 让隧道环/额度环的每次「识别→决策」可见可验(环① 另有 dao-pool-reconcile.log)。
 //   守柔: 仅记瞬时决策(活/死·跟随/保持), 单文件滚动, 失败静默不扰主流程。
 //   多实例共写同一文件, 每行带自身身份 p<端口>·v<版本> — 谁说的话谁署名, 取证不再猜。
@@ -7010,6 +7012,15 @@ function refreshDaoCloudMiddlePanel() {
     } catch { data.inject = null; }
     // 反向注入实况状态(状态面板用) — 守柔: 绝不因此阻断 postMiddle
     try {
+        // 根治「反向注入板恒显离线」: _bridgeLastAliveMs 仅由 30s 探活环回写, 窗口刚启/面板先渲时
+        //   仍是 0/陈旧 → 明明隧道活着却渲成离线。此处若状态陈旧则按需后台补一枪探活, 活即回写并重渲。
+        if (bridgeUrl && (Date.now() - _bridgeLastAliveMs) >= 90000 && !_injectStatusProbing) {
+            _injectStatusProbing = true;
+            bridgeProbeAlive(bridgeUrl, 6000, bridgeEffectiveToken()).then(ok => {
+                _injectStatusProbing = false;
+                if (ok) { _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0; refreshDaoCloudMiddlePanel(); }
+            }).catch(() => { _injectStatusProbing = false; });
+        }
         data.injectStatus = {
             tunnelUrl: bridgeUrl || '',
             tunnelAlive: _bridgeLastAliveMs > 0 && (Date.now() - _bridgeLastAliveMs) < 90000,
@@ -7022,6 +7033,9 @@ function refreshDaoCloudMiddlePanel() {
     } catch { data.injectStatus = {}; }
     postMiddle(data);
 }
+
+// 备份树缓存(秒开): loadBackups 全盘同步扫描慢, 先渲缓存树再后台重扫覆盖。
+let _backupsTreeCache: { root: string; tree: any } | null = null;
 
 async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionContext) {
     const reply = (d: any) => postMiddle(d);
@@ -7299,7 +7313,14 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     const dc = loadDevinCloud();
                     if (!dc || typeof dc.listBackups !== 'function') { reply({ type: 'backupsData', tree: { root: '', accounts: [] }, error: 'rt-flow 备份引擎不可用' }); break; }
                     const root = resolveBackupRoot();
+                    // 先出缓存树(秒开) → 后台重扫回推真身: 备份树是全盘同步扫描(账号×对话),
+                    //   每次开板全量重扫致「加载太慢」; 有缓存即先渲上一棵, 扫完再覆盖。
+                    if (_backupsTreeCache && _backupsTreeCache.root === root) {
+                        reply({ type: 'backupsData', tree: _backupsTreeCache.tree });
+                        await new Promise<void>(r => setImmediate(r));
+                    }
                     const tree = dc.listBackups(root);
+                    _backupsTreeCache = { root, tree };
                     // 道法自然 · 同源: 读 rt-flow 对话追踪共享状态文件 (~/.wam/_dv_status.json),
                     //   据 devinId 把【实时对话状态】合并进备份树 → 近期对话卡片状态点与「对话追踪」面板同源。
                     try {
@@ -7322,7 +7343,10 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                                     for (const c of (a.conversations || [])) {
                                         const id = String((c && c.devinId) || '').replace(/^devin-/, '');
                                         const m = id ? smap.get(id) : null;
-                                        if (m) { c.status = m.status; c.liveTs = m.ts || c.mtime; if (!c.title && m.title) c.title = m.title; }
+                                        // 只合并状态/标题, 不再以追踪面板快照 ts 覆盖排序时间(liveTs):
+                                        //   该 ts 是整个面板的快照时刻, 所有被追踪对话同值 → 「近期对话」
+                                        //   被顶成同一时刻、真实新旧全错位。排序恒以备份文件真实 mtime 为准。
+                                        if (m) { c.status = m.status; if (!c.title && m.title) c.title = m.title; }
                                     }
                                 }
                             }
@@ -11827,8 +11851,23 @@ function loadInjectProfile(): InjectProfile {
         return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], mcps: [], automations: [], messageLimit: null, messageLimitAuto: true, messageLimitOffset: 3, lastInjectedOrg: '', daoSeeded: false };
     }
 }
+// 密钥指纹(名+值哈希) — 用于探测 secrets 是否真变更(尤其 PAT 换新)。
+function _secretsFingerprint(p: InjectProfile): string {
+    try {
+        const h = (s: string) => crypto.createHash('sha1').update(String(s || ''), 'utf8').digest('hex').slice(0, 12);
+        return JSON.stringify((p.secrets || []).map(x => (x.name || '') + '=' + h(x.value || '')).sort());
+    } catch { return ''; }
+}
 function saveInjectProfile(p: InjectProfile): void {
+    // 根治「换新 PAT 却仍是旧数据」: 收敛签名快路(sigMap)会把「已收敛」org 跳过全部上行写入;
+    //   若仅静默改档而不失效签名, 新 PAT 永不重注。故凡 secrets 指纹变更(PAT/任一密钥换值) →
+    //   立即清空 dao-inject-sig.json, 令下一轮批量/自循环对全池强制重注该密钥, 新值必生效。
+    let prevFp = '';
+    try { prevFp = _secretsFingerprint(loadInjectProfile()); } catch { /* 守柔 */ }
     try { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(INJECT_PROFILE_FILE, JSON.stringify(p, null, 2), 'utf8'); } catch { /* 守柔 */ }
+    try {
+        if (_secretsFingerprint(p) !== prevFp) { try { fs.unlinkSync(INJECT_SIG_FILE); } catch { /* 无缓存即无需清 */ } }
+    } catch { /* 守柔 */ }
 }
 // 道·「绝利一源」单账号手动锁定 — 用户在单账号 K/P/S/MCP 面板手动新建/锁定的条目,
 // 切账号反向注入 autoCleanup 时按 (orgId,kind,name) 豁免, 不被批量清理。守柔: 只防删, 永不多删。
