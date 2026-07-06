@@ -1,6 +1,6 @@
 {
-  "versionCode": 266,
-  "versionName": "0.37.162",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.162/DevinCloud-mobile-v0.37.162.apk",
-  "notes": "v0.37.162 · 提醒时效根治: 引擎心跳后台不再停跳(降频 30s 续跳, evaluateJavascript 不受 onPause 影响) —— 对话阻塞/额度耗尽推送无需回前台才发, 时效从「回前台才知道(可迟十几分钟)」降到 ≤半分钟; 状态灯后台持续更新, 回前台即是新。叠加 v0.37.161 额度扫描旁路队列(3 分钟百余号刷新), 状态/额度/提醒 时效·准确·稳定三位一体"
+  "versionCode": 267,
+  "versionName": "0.37.163",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.163/DevinCloud-mobile-v0.37.163.apk",
+  "notes": "v0.37.163 · 输入回归本源(反者道之动): 全部拆除退格拦截式护栏 —— 原生 InputConnection 层的吞删/挂起/改写(guard①②③④)与 JS 层 beforeinput 拦截(实测反致 按键卡顿·光标错位·弹跳)一律移除, IME→编辑器 完全原样直通; 每次 IME 调用的同步取文日志(getExtractedText 每键一次往返·卡顿主源)也一并去除, 只留删除类调用的零开销参数日志。输入手感恢复原生"
 }
