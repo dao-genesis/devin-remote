@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "3.50.83",
+  "version": "3.50.84",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -213,8 +213,8 @@
         },
         "wam.devinCloudAutoRemoveThreshold": {
           "type": "number",
-          "default": 0,
-          "description": "v4.9.0 · 归零移除额度阈值 (美元·默认0=完全归零). 余额 ≤ 此值且清理无残留时, 账号从账号库出库. 设 0 表示仅在额度真正归零时移除"
+          "default": 3,
+          "description": "v4.26.6 · 归零移除额度阈值 (美元·默认对齐清理阈值3·清理即出库闭环). 余额 ≤ 此值且全量备份校验+清理无残留时, 账号从账号库出库. 设 0 表示仅在额度完全归零(分文不剩)时移除"
         },
         "wam.devinCloudConvQuotaCap": {
           "type": "boolean",

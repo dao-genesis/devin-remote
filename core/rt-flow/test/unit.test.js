@@ -900,7 +900,8 @@ function test(name, fn) {
     assert.strictEqual(props["wam.devinCloudAutoCleanup"].default, true, "自动清理默认开");
     // v4.9.12 · 用户要求: 归零移除默认开 — 闭合 备份→清理→出库 整套循环; 额度彻底归零的账号自动出库
     assert.strictEqual(props["wam.devinCloudAutoRemoveZeroQuota"].default, true, "归零移除默认开(闭环)");
-    assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 0, "归零阈值默认0(完全归零)");
+    // v4.26.6 · 出库阈值默认对齐清理阈值(清理即出库·闭环): 残留 $0.x~$2 的耗尽号不再永久滞留仓库
+    assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 3, "归零阈值默认3(对齐清理阈值·清理即出库)");
   });
 
   // ── 账号 1:1 同步 (dao-vsix 全能板以 RT Flow 活跃号为唯一权威源 · 源级护栏) ──
