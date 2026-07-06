@@ -1718,6 +1718,7 @@ async function forceRefreshNow(accId){
 //   后台计时器节流/页面 hidden 影响) → 状态轮询/额度心跳/对话提醒全部由此可靠驱动, 与网络环境无关。
 function engineHeartbeat(){
   _extDriveTs = Date.now();
+  try{ DaoCore.pumpTimers(); }catch(e){}   // 冻结免疫计时外驱泵: 停泊页被冻的睡眠/超时由此唤醒
   // 扫描看门狗(外驱时钟): 页面自身 setTimeout 被冻时, 重试退避/超时兜底永不回来,
   //   扫描协程挂死使 busy 永真、心跳全空转(实测病灶)。忙但 >60s 无进度 → 代际+1
   //   弃旧扫描(苏醒后自行退场)并复位标志, 下一跳重启新扫描。

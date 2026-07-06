@@ -45,7 +45,7 @@
         return { ok: true, sessions: arr };
       }
       if (r.status && r.status !== 0 && r.status !== 502 && r.status !== 503 && r.status !== 504) break;
-      await new Promise(function (k) { setTimeout(k, 600); });
+      await C.sleep(600);   // 冻结免疫睡眠(devin-core 注册表+外驱泵): 停泊页重试退避不挂死
     }
     return { ok: false, status: last && last.status, error: errOf(last) };
   }
@@ -86,7 +86,7 @@
     for (var a = 0; a < 3; a++) {
       var res = await C.httpReq("GET", url, headers, "", low);
       if (res.status === 200 && typeof res.text === "string") { raw = res.text; break; }
-      if (a < 2) await new Promise(function (k) { setTimeout(k, 1500 * (a + 1)); });
+      if (a < 2) await C.sleep(1500 * (a + 1));
     }
     if (!raw) return { ok: false, events: [] };
     var merged = new Map();
