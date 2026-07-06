@@ -5525,10 +5525,37 @@ function bridgeMachinePort(): number {
     } catch { /* 守柔 */ }
     return 0;
 }
-// 机器级内穿/ MCP 文档恒由 leader(端口最小活实例)统一维护 → 杜绝多窗口实例彼此覆盖致文档抖动
+// 机器级内穿/ MCP 文档恒由 leader 统一维护 → 杜绝多窗口实例彼此覆盖致文档抖动
 //   (实测两实例 9920↔9921 轮流把文档改写成各自 端口/令牌, 时间戳每轮翻动·徒增网络 churn,
 //    且非 leader 写入自身私牌时窗内云端读到必 401)。未知 leader(冷启/单实例)守柔放行。
+// 帛书·「功成事遂·百姓皆谓我自然」: 维护权归「版本最高之活实例」(同版本再取端口最小)。
+//   旧法恒取端口最小 → 修复只活在新窗、维护权却锁死旧窗, 新码永远等旧窗重启才接掌自愈;
+//   今新版窗口一开即自然接责, 旧窗自动让贤, 无需打扰用户任何在用窗口。
+function bridgeVerCmp(a: string, b: string): number {
+    const pa = String(a || '').split('.').map(n => parseInt(n, 10) || 0);
+    const pb = String(b || '').split('.').map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const d = (pa[i] || 0) - (pb[i] || 0);
+        if (d) return d;
+    }
+    return 0;
+}
 function bridgeIsLeaderInstance(): boolean {
+    try {
+        const j = JSON.parse(fs.readFileSync(DAO_CONN_CURRENT, 'utf8'));
+        const alive: any[] = Array.isArray(j && j.alive) ? j.alive : [];
+        if (alive.length) {
+            let best: any = null;
+            for (const a of alive) {
+                const p = Number((a && a.port) || 0);
+                if (!(p >= 1 && p <= 65535)) continue;
+                if (!best) { best = a; continue; }
+                const vc = bridgeVerCmp(String(a.version || ''), String(best.version || ''));
+                if (vc > 0 || (vc === 0 && p < Number(best.port || 0))) best = a;
+            }
+            if (best) return Number(best.port || 0) === (ws.port || 0);
+        }
+    } catch { /* 守柔 */ }
     const lp = bridgeMachinePort();
     if (!lp) return true;
     return lp === (ws.port || 0);
