@@ -307,7 +307,7 @@ function _originGetProxyAgent(isHttps) {
 const PORT = parseInt(process.env.ORIGIN_PORT || "8889", 10);
 // v9.6.1 · 反者道之动 · 远曰反 · 回归 v9.1.2 之全前端按钮 (七按钮: 道/官/实/原/编/复/卸 + dots/customBadge)
 // 以 v9.1.2 本源哲学为锚 · 守大常不动 · 五细节皆成: isAlreadyInverted · _rawTape+all_fields · 部署不 kill · 前端按钮回归
-const ORIGIN_VERSION_BASE = "v9.9.338"; // v9.9.338 · 反者道之动(撤销一切秒数硬限·两处 H2 stream 超时归零·H1 requestTimeout=0·唯下游离场才回收·AI 自然而止·道并行而不相悖) · v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
+const ORIGIN_VERSION_BASE = "v9.9.339"; // v9.9.339 · 反者道之动·补全(外接api 路由流式亦撤秒数硬限·dao_router 两处 provider 请求 setTimeout(0)+keepalive·revproxy setTimeout(0)+keepalive·routed 模型长推理不再 120s 掐断·AI 自然而止) · v9.9.338 · 反者道之动(撤销一切秒数硬限·两处 H2 stream 超时归零·H1 requestTimeout=0·唯下游离场才回收·AI 自然而止·道并行而不相悖) · v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
 // 印 153 · 唯变所适 · 软编码归宗 · 二十五章「逝曰远 远曰反」· 七十六章「兵强则不胜」
 // 病: 多 ext-host 共端口 :8937 · 旧版 in-process proxy 持续 listen · self_file 锁死旧版目录
 //     → 即便装毕新版 vsix · /ping 仍返 v9.9.19/v9.9.20 之 self_file · canon_name 走旧映射

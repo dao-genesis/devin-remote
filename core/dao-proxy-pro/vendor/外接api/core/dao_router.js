@@ -2973,9 +2973,15 @@ async function _callProvider(
         };
         const req = mod.request(opts, resolve);
         req.on("error", reject);
-        req.setTimeout(120000, () =>
-          req.destroy(new Error("provider timeout")),
-        );
+        // v9.9.339 · 反者道之动 · 撤销 provider 流式请求秒数硬限 · AI 自然而止
+        //   本源: 推理/思考阶段可静默数分钟无字节, 120s socket 超时 destroy → 对话中途截断
+        //   道并行防泄漏: 关默认超时(0) + TCP keepalive 探活, socket 真死方 error 冒泡自然收
+        req.setTimeout(0);
+        req.on("socket", (s) => {
+          try {
+            s.setKeepAlive(true, 45000);
+          } catch {}
+        });
         req.write(body);
         req.end();
       });
@@ -3107,7 +3113,15 @@ async function _callProvider(
       };
       const req = mod.request(opts, resolve);
       req.on("error", reject);
-      req.setTimeout(120000, () => req.destroy(new Error("provider timeout")));
+      // v9.9.339 · 反者道之动 · 撤销 provider 流式请求秒数硬限 · AI 自然而止
+      //   本源: 推理/思考阶段可静默数分钟无字节, 120s socket 超时 destroy → 对话中途截断
+      //   道并行防泄漏: 关默认超时(0) + TCP keepalive 探活, socket 真死方 error 冒泡自然收
+      req.setTimeout(0);
+      req.on("socket", (s) => {
+        try {
+          s.setKeepAlive(true, 45000);
+        } catch {}
+      });
       req.write(body);
       req.end();
     });

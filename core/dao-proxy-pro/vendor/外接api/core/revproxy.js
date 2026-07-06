@@ -807,7 +807,6 @@ function callUpstream(target, norm, deps, handlers) {
     path: url.pathname + (url.search || ""),
     method: "POST",
     headers,
-    timeout: 120000,
     rejectUnauthorized: false,
   };
   if (agent) reqOpts.agent = agent;
@@ -853,9 +852,14 @@ function callUpstream(target, norm, deps, handlers) {
     upRes.on("error", (e) => handlers.onError(e));
   });
   upReq.on("error", (e) => handlers.onError(e));
-  upReq.on("timeout", () => {
-    upReq.destroy();
-    handlers.onError(new Error("upstream timeout (120s)"));
+  // v9.9.339 · 反者道之动 · 撤销 revproxy 流式请求秒数硬限 · AI 自然而止
+  //   本源: 推理静默数分钟, 120s socket 超时 destroy → onError 报错帧 → 对话中途截断
+  //   道并行防泄漏: 关默认超时(0) + TCP keepalive 探活, 连接真死才 error 收束
+  upReq.setTimeout(0);
+  upReq.on("socket", (s) => {
+    try {
+      s.setKeepAlive(true, 45000);
+    } catch {}
   });
   upReq.end(payload);
 }
