@@ -2196,6 +2196,20 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
+    /** 引擎心跳(外驱): 前台期间用原生 Handler 周期直驱切号引擎的 engineHeartbeat() ——
+     *  切号引擎 WebView 停泊后台时, Chromium 会节流/冻结其 JS 计时器且页面 hidden 恒真,
+     *  其自身的状态轮询/额度心跳全被可见性门控拦下 → 自动刷新与对话提醒形同虚设。
+     *  evaluateJavascript 不受计时器节流/页面可见性影响, 故由原生侧可靠驱动。 */
+    private static final long ENGINE_TICK_MS = 8000;
+    private final Runnable engineTick = new Runnable() {
+        @Override public void run() {
+            if (!appForeground) return;
+            WebView sw = switchWeb();
+            if (sw != null) { try { sw.evaluateJavascript("try{engineHeartbeat()}catch(e){}", null); } catch (Exception ignored) {} }
+            main.postDelayed(this, ENGINE_TICK_MS);
+        }
+    };
+
     // ── 浏览器功能 ────────────────────────────────────────────────────────
     private static final String DESKTOP_UA =
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -6202,6 +6216,7 @@ public class MainActivity extends AppCompatActivity {
         main.removeCallbacks(visWatchdog);
         main.removeCallbacks(presenceTick);
         main.removeCallbacks(openAcctTick);
+        main.removeCallbacks(engineTick);
         main.removeCallbacks(memHygiene);
         bgSince = System.currentTimeMillis();
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {} // 持久化其它网站登录 Cookie
@@ -6331,6 +6346,8 @@ public class MainActivity extends AppCompatActivity {
         main.post(presenceTick);   // 前台巡检跨设备在场, 橙色标记随云端来去实时同步
         main.removeCallbacks(openAcctTick);
         main.post(openAcctTick);   // 前台保持「已打开账号标签」状态/额度实时识别 (不论是否在切号板块)
+        main.removeCallbacks(engineTick);
+        main.postDelayed(engineTick, 1500);   // 前台外驱引擎心跳: 状态/额度自动刷新与对话提醒不再依赖被节流的 WebView 计时器
         main.removeCallbacks(bgHygiene);   // 回前台 → 停后台重度保洁, 交还前台保洁
         main.removeCallbacks(memHygiene);
         main.postDelayed(memHygiene, MEM_HYGIENE_MS);   // 前台内存保洁: 主动有界化长会话占用, 根治「用久了越用越卡」
