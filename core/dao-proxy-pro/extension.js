@@ -92,12 +92,12 @@
 //   反伤本源, 此次净拨, 复归 v9.1.2 之朴, 仅留四味.
 //
 // 命令:
-//   wam.originInvert       · 道Agent 启 (含 forceRestartLS · 用户显式触发)
-//   wam.originPassthrough  · 官方Agent 启
-//   dao.toggleMode         · 道/官 热切
-//   dao.openPreview        · 浏览器观真 SP
-//   wam.verifyEndToEnd     · E2E 自检
-//   wam.selftest           · L1+L2 自检
+//   daopp.originInvert       · 道Agent 启 (含 forceRestartLS · 用户显式触发)
+//   daopp.originPassthrough  · 官方Agent 启
+//   daopp.toggleMode         · 道/官 热切
+//   daopp.openPreview        · 浏览器观真 SP
+//   daopp.verifyEndToEnd     · E2E 自检
+//   daopp.selftest           · L1+L2 自检
 
 "use strict";
 const vscode = require("vscode");
@@ -4080,37 +4080,37 @@ function activate(ctx) {
 
     // 注册命令
     ctx.subscriptions.push(
-      vscode.commands.registerCommand("wam.originInvert", cmdInvert),
-      vscode.commands.registerCommand("wam.originPassthrough", cmdPassthrough),
-      vscode.commands.registerCommand("dao.toggleMode", cmdToggle),
-      vscode.commands.registerCommand("dao.openPreview", cmdOpenPreview),
-      vscode.commands.registerCommand("wam.verifyEndToEnd", cmdVerifyE2E),
-      vscode.commands.registerCommand("wam.selftest", cmdSelftest),
+      vscode.commands.registerCommand("daopp.originInvert", cmdInvert),
+      vscode.commands.registerCommand("daopp.originPassthrough", cmdPassthrough),
+      vscode.commands.registerCommand("daopp.toggleMode", cmdToggle),
+      vscode.commands.registerCommand("daopp.openPreview", cmdOpenPreview),
+      vscode.commands.registerCommand("daopp.verifyEndToEnd", cmdVerifyE2E),
+      vscode.commands.registerCommand("daopp.selftest", cmdSelftest),
       // v9.9.0 · 印 124 · 第一细药 · 外接 api 开关 (默关 · 主公一字开)
       vscode.commands.registerCommand(
-        "dao.外接api.toggle",
+        "daopp.外接api.toggle",
         cmdExternalApiToggle,
       ),
       // ★ v9.9.90 · 外接api 热配置面板 · 五十七章「我无为也 而民自化」
-      vscode.commands.registerCommand("dao.eaConfig", cmdEaConfig),
+      vscode.commands.registerCommand("daopp.eaConfig", cmdEaConfig),
       // ★ 复原官方直连 (卸载善后/解锚) · 卡死中间态一键自救
-      vscode.commands.registerCommand("dao.restoreOfficial", cmdRestoreOfficial),
+      vscode.commands.registerCommand("daopp.restoreOfficial", cmdRestoreOfficial),
       // v9.9.29 · 印 160 · 终端会话池 (反者道之动 · 七层污染一招治)
-      vscode.commands.registerCommand("dao.term.exec", cmdTermExec),
-      vscode.commands.registerCommand("dao.term.list", cmdTermList),
-      vscode.commands.registerCommand("dao.term.close", cmdTermClose),
+      vscode.commands.registerCommand("daopp.term.exec", cmdTermExec),
+      vscode.commands.registerCommand("daopp.term.list", cmdTermList),
+      vscode.commands.registerCommand("daopp.term.close", cmdTermClose),
       // ★ v9.9.260 · 模型解锁 · 执大象 天下往
       vscode.commands.registerCommand(
-        "dao.modelUnlock.toggle",
+        "daopp.modelUnlock.toggle",
         cmdModelUnlockToggle,
       ),
       vscode.commands.registerCommand(
-        "dao.modelUnlock.status",
+        "daopp.modelUnlock.status",
         cmdModelUnlockStatus,
       ),
       // ★ v9.9.322 · 模型反代 · 反者道之动
-      vscode.commands.registerCommand("dao.revproxy.toggle", cmdRevproxyToggle),
-      vscode.commands.registerCommand("dao.revproxy.status", cmdRevproxyStatus),
+      vscode.commands.registerCommand("daopp.revproxy.toggle", cmdRevproxyToggle),
+      vscode.commands.registerCommand("daopp.revproxy.status", cmdRevproxyStatus),
     );
 
     // 注册 webview
@@ -4144,7 +4144,7 @@ function activate(ctx) {
       vscode.StatusBarAlignment.Right,
       100,
     );
-    _statusBarItem.command = "dao.eaConfig";
+    _statusBarItem.command = "daopp.eaConfig";
     refreshStatusBar();
     ctx.subscriptions.push(_statusBarItem);
 
@@ -4178,7 +4178,7 @@ function activate(ctx) {
 
     // ── 真药 D · activate 不杀 LS · 为道日损 (四十八章) ──
     // 首装/恢复 仅启 proxy + 锚 settings + 装 hook, 不主动 forceRestartLS
-    // LS 自然重启时 spawn hook 自挂; 用户欲即时切换可显式调 wam.originInvert
+    // LS 自然重启时 spawn hook 自挂; 用户欲即时切换可显式调 daopp.originInvert
 
     // ★ v9.9.261 · 反者道之动 · ACP 模式也启 HTTP 代理 + 锚 settings
     // 印222原判: Chat 走 ACP/stdio → HTTP MITM 无用且有害
@@ -6799,7 +6799,7 @@ class EaRouterProvider {
 async function cmdEaConfig() {
   try {
     const panel = vscode.window.createWebviewPanel(
-      "dao.eaConfig",
+      "daopp.eaConfig",
       "道 · 三模块面板 (本源观照·渠道配置·模型路由)",
       vscode.ViewColumn.One,
       {
