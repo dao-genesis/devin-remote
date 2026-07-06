@@ -5678,18 +5678,27 @@ function bridgeMcpToken(): string {
 //   汇集候选公网地址(进程内隧道 + 各已发布 conn 文件), 按新鲜度逐一 /api/health 探活,
 //   返回首个真实可达的 {url, token}; 全死返回 null(交调用方「宁可不注入也不以死地址覆盖良态」)。
 //   根治: 多实例/旧实例把「(未连接)」或已轮换的死地址写回账号知识库, 致云端读库连不上端口。
-// 独立闭环(鸡犬相闻·不相往来): 只探测进程内自有隧道, 不读外部 conn 文件
 async function bridgeResolveLiveConn(timeoutMs: number = 5000): Promise<{ url: string; token: string; source: string } | null> {
     // 帛书·「URL 与 Token 恒成对·以实测有效性为唯一裁决」— 根治多令牌域脱钩的总根:
     //   旧法把常驻桥发布 URL 强配机器级权威令牌(另一域的牌), 再用免鉴权 /api/health 探「活」→
     //   错配对永远探不出错, 反注入恒发布「URL 对而 Token 错」→ 云端 exec 恒 401, 改多少次都坏。
-    //   新法·「得一」: 候选**只**含「本实例自有隧道 + 机器级权威令牌」这一同源对, 用需鉴权端点实测。
-    //   切勿再读他者进程(独立 dao-bridge)发布的 conn.json 入列 —— 其 (url, token) 是另一域:
-    //   即便 foreign-url/api/exec 用 foreign-token 探得 200(常驻桥原生验此牌), 该 URL 反代到本插件的
-    //   /api/connection 等面时, 本进程 checkAuth 只认机器权威牌 → foreign-token 恒 401 → 云端裂脑复发。
-    //   故注入面与鉴权面同守单一权威: 只发布本实例可达端点, 令牌恒取机器权威牌(与 checkAuth 同源)。
+    //   新法·「得一」: 候选各项一律**配机器级权威令牌**(与本进程 checkAuth 同源), 再用需鉴权 /api/exec 实测;
+    //   实测不通者一律弃 → 天然排除「另一域令牌」的错配对, 无需靠「拒读外部 conn」这条过猛的闸门。
+    // 帛书·「反者道之动」纠偏: 昔者「独立闭环·只探进程内自有隧道」矫枉过正 —— 机控 /api 面实由常驻桥
+    //   (addons/dao-bridge)隧道对外(见 AGENTS 二), 本实例自有「公网穿透」隧道(绑 /shell)久遭 CF 限流而死,
+    //   于是 resolve-live 恒空 → bridgeInjectKnowledge 守柔中止 → 知识库恒写「(未连接)」而整机实则全天可达。
+    //   正解: 自有隧道空/死时, 采纳常驻桥已发布的活隧道地址(bridgeReadPublishedConn), 但**令牌恒配机器权威牌**
+    //   (非外部文件里的令牌), 以 /api/exec 实测通过才发布 → 既不裂脑(令牌单一权威)又让知识库随活隧道刷新。
     const cands: { url: string; token: string; source: string }[] = [];
-    if (bridgeUrl) cands.push({ url: bridgeUrl, token: bridgeAuthoritativeToken() || ws.token || bridgeToken || '', source: 'inprocess' });
+    const machTok = bridgeAuthoritativeToken() || ws.token || bridgeToken || '';
+    if (bridgeUrl) cands.push({ url: bridgeUrl, token: machTok, source: 'inprocess' });
+    try {
+        const pub = bridgeReadPublishedConn();
+        if (pub && pub.url && /^https?:\/\//.test(pub.url) && pub.ageMs < BRIDGE_CONN_FRESH_MS && pub.url !== bridgeUrl) {
+            // 常驻桥发布的活隧道地址 —— 恒配机器权威牌(不取 pub.token 那一域), 交下方 /api/exec 实测裁决。
+            cands.push({ url: pub.url, token: machTok, source: 'published:' + pub.source });
+        }
+    } catch { /* 守柔 */ }
     const seen = new Set<string>();
     let firstAlive: { url: string; token: string; source: string } | null = null;
     for (const c of cands) {
