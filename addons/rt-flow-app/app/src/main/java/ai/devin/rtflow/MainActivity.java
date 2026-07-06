@@ -3773,7 +3773,18 @@ public class MainActivity extends AppCompatActivity {
             + "return;}"
             + "if(e.inputType==='deleteContentForward'&&(now-lastBk)<150){"
             + "e.preventDefault();e.stopImmediatePropagation();}"
-            + "},true);})();";
+            + "},true);})();"
+            // JS 层输入取证(主壳标签页也覆盖): 捕获阶段旁观记录 keydown/beforeinput/input/composition,
+            //   console.log → logcat 'chromium' 直取, 与原生 DAO_IME 日志对照即可定位双删发生层次。只旁观不拦截。
+            + "(function(){if(window.__daoImeTr)return;window.__daoImeTr=1;"
+            + "function st(t){try{if(t&&(t.tagName==='TEXTAREA'||t.tagName==='INPUT'))return ' sel='+t.selectionStart+','+t.selectionEnd+' len='+(t.value||'').length+' ar='+JSON.stringify((t.value||'').slice(Math.max(0,(t.selectionStart||0)-2),(t.selectionEnd||0)+2));"
+            + "var s=window.getSelection&&window.getSelection();if(s&&s.rangeCount){var r=s.getRangeAt(0);return ' ce.off='+r.startOffset+','+r.endOffset+' nlen='+((r.startContainer&&r.startContainer.textContent)||'').length;}}catch(e){}return '';}"
+            + "function lg(k,e){try{console.log('DAOIMEJS '+k+' t='+((e.target&&e.target.tagName)||'')+' it='+(e.inputType||'')+' d='+JSON.stringify(e.data==null?null:(''+e.data).slice(-8))+' k='+(e.key||'')+' c='+(e.isComposing?1:0)+st(e.target));}catch(x){}}"
+            + "document.addEventListener('keydown',function(e){lg('kd',e);},true);"
+            + "document.addEventListener('beforeinput',function(e){lg('bi',e);},true);"
+            + "document.addEventListener('input',function(e){lg('in',e);},true);"
+            + "document.addEventListener('compositionupdate',function(e){lg('cu',e);},true);"
+            + "document.addEventListener('compositionend',function(e){lg('ce',e);},true);})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // DownloadListener 收到 blob: → 让当前页 JS 取出内容回传
