@@ -711,6 +711,8 @@ export async function activate(context: vscode.ExtensionContext) {
     try { daoSyncPatSecretIntoProfile(); } catch { /* 守柔 */ }
     // MCP=DAO Bridge · 把本机 MCP 网关公网地址钉入注入档案 → 反向注入所有账号 (URL 轮换自愈)
     try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
+    // MCP=GitHub 官方 · PAT↔MCP 联动: 有 GITHUB_PAT 即钉住官方 GitHub MCP(HTTP·Bearer PAT) → 随 PAT 反向注入所有账号
+    try { daoSyncGithubMcpIntoProfile(); } catch { /* 守柔 */ }
 
     // ═══════════════════════════════════════════════════════════
     // 道法自然 · 零配置自动链 — 帛书·六十二「道者万物之注」
@@ -7564,6 +7566,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     daoSeeded: cur.daoSeeded,
                 };
                 saveInjectProfile(np);
+                // PAT↔MCP 联动: 面板改 GITHUB_PAT(ipSetPat/增删密钥)后即刻校正官方 GitHub MCP 钉住条目
+                try { daoSyncGithubMcpIntoProfile(); } catch { /* 守柔 */ }
                 // enabled 且当前已登录 → 立即应用一次到当前 org (自循环起点)
                 if (np.enabled && ws.devinOrgId && ws.devinAuth1 && !ws.devinAuth1.startsWith('devin-session-token$')) {
                     vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '应用自动注入配置…' }, async () => {
@@ -11698,7 +11702,7 @@ async function devinFullInject(interactive: boolean = false, auto: boolean = fal
 // 全程自包含, 不改动当前面板登录态(ws.*); CJK 经 asciiSafeJson \uXXXX 上线服务端无损。
 // ═══════════════════════════════════════════════════════════
 interface DaoBatchAccount { email: string; password: string; }
-interface DaoBatchResult { email: string; ok: boolean; auth: string; orgId?: string; knowledge: boolean; bridge: boolean; playbook: boolean; secret: boolean; profile: boolean; cleaned: number; verified: boolean; error?: string; skipped?: boolean; }
+interface DaoBatchResult { email: string; ok: boolean; auth: string; orgId?: string; knowledge: boolean; bridge: boolean; playbook: boolean; secret: boolean; profile: boolean; mcp: boolean; cleaned: number; verified: boolean; error?: string; skipped?: boolean; }
 interface DaoBatchProgress { total: number; done: number; ok: number; running: boolean; results: DaoBatchResult[]; startedAt: string; finishedAt?: string; }
 let daoBatchProgress: DaoBatchProgress | null = null;
 
@@ -11793,7 +11797,7 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
     const flush = () => { try { fs.writeFileSync(resultsFile, JSON.stringify(daoBatchProgress, null, 2), 'utf8'); } catch { /* 守柔 */ } };
     // 单账号注入(纯函数式·只读全局期望态, 写自身 res 与 sigMap[orgId]; 无共享可变态 → 可并发)。
     const injectOne = async (a: DaoBatchAccount): Promise<DaoBatchResult> => {
-        const res: DaoBatchResult = { email: a.email, ok: false, auth: '', knowledge: false, bridge: false, playbook: false, secret: false, profile: false, cleaned: 0, verified: false };
+        const res: DaoBatchResult = { email: a.email, ok: false, auth: '', knowledge: false, bridge: false, playbook: false, secret: false, profile: false, mcp: false, cleaned: 0, verified: false };
         // 归零清理协同: RT Flow 已清理/出库的账号 → 批量自动注入守柔跳过 (除非用户主页单账号手动注入)。
         if (isInjectSuppressedForEmail(a.email)) { res.skipped = true; res.auth = 'skipped_cleaned'; return res; }
         try {
@@ -11806,7 +11810,7 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
             }
             // 已收敛快路: 缓存 auth 仍活 且 该 org 缓存 sig == 当前期望 sig → 跳过全部上行写入(稳态秒级)。
             if (auth1 && orgId && sigMap[orgId] === desiredSig) {
-                res.auth = 'skip-converged'; res.knowledge = res.bridge = res.secret = res.profile = res.playbook = res.verified = true; res.ok = true;
+                res.auth = 'skip-converged'; res.knowledge = res.bridge = res.secret = res.profile = res.playbook = res.mcp = res.verified = true; res.ok = true;
                 return res;
             }
             if (!auth1) {
@@ -11825,6 +11829,23 @@ async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchPr
             // 用户自选档案受 enabled 门控; !enabled 时仅注系统级固定道藏, 不触碰用户 org 自选项(根治「新账号初始化没配好」)。
             if (injectProfile.enabled) { try { await applyInjectProfileToOrg(orgId, auth1, injectProfile); res.profile = true; res.playbook = true; } catch { /* 守柔 */ } }
             else { res.profile = true; res.playbook = true; }
+            // MCP 落地校验: 回读该 org 的 MCP 安装, 确认档案钉住的每个 MCP(含官方 GitHub MCP)真已安装。
+            //   无钉住 MCP → 视作已达成(true); 有则须全部命中方 true。res.mcp 供 batch-inject/status 观测。
+            {
+                const wantM = (injectProfile.enabled ? (injectProfile.mcps || []) : []).filter(m => m && m.name);
+                if (!wantM.length) { res.mcp = true; }
+                else {
+                    try {
+                        const inst = await devinListMcpInstallations(orgId, auth1);
+                        const have = new Set<string>();
+                        if (inst.ok && inst.items) for (const it of inst.items) {
+                            const nm = String((it.name || '').replace(/^★ /, '')).toLowerCase();
+                            if (nm) have.add(nm);
+                        }
+                        res.mcp = wantM.every(m => have.has(String(m.name).toLowerCase()) || have.has(mcpSlug(m)));
+                    } catch { /* 守柔 */ }
+                }
+            }
             // 校验: 回读知识库确认「道法自然准则」落地且正文完整(防截断/损坏)
             //   写后即读存在索引延迟(read-after-write lag) → 守柔退避重读至多3次(0/400/900ms);
             //   命中即止, 仅未命中才退避, 不拖累正常路径 (verified 仅为诊断标志, 不参与 res.ok 判定)。
@@ -12018,6 +12039,9 @@ const DAO_MCP_KB_SENTINEL = '__DAO_BRIDGE_MCP_MD__';
 const DAO_MCP_KB_TRIGGER = '所有对话均触发 · 任何任务都应知道:可用 DAO Bridge MCP 做浏览器自动化(CDP)、GUI 鼠键截屏、窗口控件树、VSCode 命令等深层远程操作。Always retrieve this in every conversation.';
 // secret · 用户填入的 GitHub PAT 作为一个 secret 反向注入到所有账号 (图: secret=rt flow 用户 pat)
 const DAO_PAT_SECRET_NAME = 'GITHUB_PAT';
+// MCP · 官方 GitHub 远程 MCP — 与 GITHUB_PAT 联动同源: PAT 即其 Authorization Bearer, 见 _syncGithubMcpHeaderToPat。
+const DAO_GITHUB_MCP_NAME = 'GitHub MCP';
+const DAO_GITHUB_MCP_URL = 'https://api.githubcopilot.com/mcp/';
 // 唯二·知识① 道法自然(帛书老子+阴符经) — 与种入态/一键注入同名同触发, 收敛为单一规范条目
 const DAO_RULES_KB_NAME = '道法自然准则';
 const DAO_RULES_KB_TRIGGER = '所有对话均触发 道法自然';
@@ -12112,6 +12136,40 @@ function daoSyncPatSecretIntoProfile(): void {
             if (!p.enabled) { p.enabled = true; changed = true; }
         } else if (idx >= 0) {
             p.secrets.splice(idx, 1); changed = true;
+        }
+        if (changed) saveInjectProfile(p);
+    } catch { /* 道法自然·守柔 */ }
+}
+// MCP=GitHub 官方 · PAT↔MCP 联动 — 帛书·「二生三」: secret(PAT) 与 MCP 本一体两面。
+//   有 GITHUB_PAT 即确保注入档案含官方 GitHub MCP(HTTP·https://api.githubcopilot.com/mcp/·Bearer PAT);
+//   PAT 撤销即同步移除该 MCP。headers 的 PAT 值由 saveInjectProfile→_syncGithubMcpHeaderToPat 恒对齐当前
+//   GITHUB_PAT(一处改·处处新), 且 applyInjectProfileToOrg 对含头 MCP「先删旧同名再建新」使换新 PAT 头必生效。
+//   须在 daoSyncPatSecretIntoProfile 之后调用(依赖档案内已同步的 GITHUB_PAT secret)。
+function daoSyncGithubMcpIntoProfile(): void {
+    try {
+        const p = loadInjectProfile();
+        const pat = String(((p.secrets || []).find(s => s && s.name === DAO_PAT_SECRET_NAME) || {} as any).value || '').trim();
+        const idx = p.mcps.findIndex(m => m && (String(m.name || '').toLowerCase() === DAO_GITHUB_MCP_NAME.toLowerCase()
+            || (m.url && String(m.url).toLowerCase().indexOf('api.githubcopilot.com') >= 0)));
+        let changed = false;
+        if (pat) {
+            const want = 'Bearer ' + pat;
+            const entry: InjectProfileItemM = {
+                name: DAO_GITHUB_MCP_NAME, slug: 'github-mcp', transport: 'HTTP',
+                url: DAO_GITHUB_MCP_URL, headers: { Authorization: want },
+                short_description: 'GitHub official remote MCP', installation_scope: 'org',
+            };
+            if (idx < 0) { p.mcps.push(entry); changed = true; }
+            else {
+                const cur = p.mcps[idx];
+                const curAuth = cur.headers && (cur.headers as any).Authorization;
+                if (cur.url !== DAO_GITHUB_MCP_URL || cur.transport !== 'HTTP' || curAuth !== want) {
+                    p.mcps[idx] = Object.assign({}, cur, entry); changed = true;
+                }
+            }
+            if (changed && !p.enabled) p.enabled = true;
+        } else if (idx >= 0) {
+            p.mcps.splice(idx, 1); changed = true;
         }
         if (changed) saveInjectProfile(p);
     } catch { /* 道法自然·守柔 */ }
