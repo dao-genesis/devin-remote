@@ -1192,6 +1192,7 @@ public class MainActivity extends AppCompatActivity {
                     installLoginCapture(v);     // 监听登录提交 → 自动弹「保存登录？」
                     installKbHelper(v);         // 键盘弹出时输入框上滚到可见区中部 (不被遮挡)
                     installBackspaceGuard(v);   // 退格护栏: 拦下输入法误发的左右两侧同删
+                    installVoiceGuard(v);       // 语音护栏: 空编辑器零宽字符打底, 语音输入开头不再卡断
                     installVideoFit(v);         // 录像播放器窄屏适配: 视频区与步骤栏纵向堆叠同屏
                     installMediaRetry(v);       // 媒体加载自愈: 附件/对象存储直链瞬断→退避自动重载
                     harvestPageAuth(v, tab, u); // 非账号标签从页面登录态采收 auth → 媒体代取可用
@@ -1208,7 +1209,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
+                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVoiceGuard(v); installVideoFit(v); installMediaRetry(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -3709,6 +3710,51 @@ public class MainActivity extends AppCompatActivity {
             + "e.preventDefault();e.stopImmediatePropagation();return;}"
             + "pend=null;"
             + "},true);})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    // 语音输入护栏: Devin 网页 Slate 编辑器为空时, 语音 IME 的首段 setComposingText 触发
+    //   Slate 重挂节点 → restartInput 掐断语音会话(只出第一个字即卡断); 编辑器开头已有任意字符
+    //   时则完全正常(官方浏览器同现, 网页通病)。修法 = 空编辑器聚焦即注入零宽空格 U+200B 打底
+    //   (语音 IME 视作「前面有字」, 组合安全), 一旦出现真实内容立即经 execCommand('delete')
+    //   摘除零宽字符并校正光标; 失焦仅剩零宽亦摘除(恢复占位提示)。组合(isComposing)中不摘,
+    //   等 compositionend 再摘, 不掐断进行中的语音/拼音。摘除本身也会触发 Slate 重渲染 →
+    //   restartInput, 若在连续键入中立即摘会掐断后续输入 → 摘除按输入静默去抖(700ms 无新
+    //   input 才摘), 输入流不断则一直顺延。幂等(window.__rtViGuard)。
+    static void installVoiceGuard(WebView w) {
+        if (w == null) return;
+        String js = "(function(){if(window.__rtViGuard)return;window.__rtViGuard=1;"
+            + "var Z='\\u200B';"
+            + "function ced(t){return t&&t.closest?t.closest('[contenteditable=true],[contenteditable=\"\"]'):null;}"
+            // Slate 占位提示([data-slate-placeholder])也在 textContent 里 → 算有效文本时必须跳过
+            + "function txt(ed){try{var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n,t='';"
+            + "while((n=w.nextNode())){var p=n.parentElement;"
+            + "if(p&&p.closest&&p.closest('[data-slate-placeholder],[contenteditable=false]'))continue;"
+            + "t+=n.textContent;}return t;}catch(e){return ed.textContent||'';}}"
+            + "function strip(ed){try{var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),nd;"
+            + "while((nd=w.nextNode())){var pe=nd.parentElement;"
+            + "if(pe&&pe.closest&&pe.closest('[data-slate-placeholder],[contenteditable=false]'))continue;"
+            + "var i=nd.textContent.indexOf(Z);if(i<0)continue;"
+            + "var s=getSelection(),sv=null;"
+            + "if(s.rangeCount){var r0=s.getRangeAt(0);sv={n:r0.startContainer,o:r0.startOffset};}"
+            + "var r=document.createRange();r.setStart(nd,i);r.setEnd(nd,i+1);"
+            + "s.removeAllRanges();s.addRange(r);document.execCommand('delete');"
+            + "if(sv&&sv.n===nd){var o=sv.o>i?sv.o-1:sv.o;try{var rr=document.createRange();rr.setStart(nd,Math.min(o,nd.textContent.length));rr.collapse(true);s.removeAllRanges();s.addRange(rr);}catch(e){}}"
+            + "return true;}}catch(e){}return false;}"
+            + "function prime(ed){try{if(txt(ed)!=='')return;"
+            + "if(document.activeElement!==ed&&!ed.contains(document.activeElement))return;"
+            + "var s=getSelection(),r=document.createRange();r.selectNodeContents(ed);r.collapse(true);s.removeAllRanges();s.addRange(r);"
+            + "document.execCommand('insertText',false,Z);}catch(e){}}"
+            + "document.addEventListener('focusin',function(e){var ed=ced(e.target);if(ed)setTimeout(function(){prime(ed);},50);},true);"
+            + "var st=null;function schedStrip(ed){if(st)clearTimeout(st);st=setTimeout(function(){st=null;"
+            + "var t=txt(ed);if(t.indexOf(Z)>=0&&t.replace(Z,'')!=='')strip(ed);},700);}"
+            + "document.addEventListener('input',function(e){var ed=ced(e.target);if(!ed||e.isComposing)return;"
+            + "var t=txt(ed);if(t.indexOf(Z)>=0&&t.replace(Z,'')!=='')schedStrip(ed);},true);"
+            + "document.addEventListener('compositionend',function(e){var ed=ced(e.target);if(!ed)return;"
+            + "var t=txt(ed);if(t.indexOf(Z)>=0&&t.replace(Z,'')!=='')schedStrip(ed);},true);"
+            + "document.addEventListener('focusout',function(e){var ed=ced(e.target);if(!ed)return;"
+            + "if(st){clearTimeout(st);st=null;}var t=txt(ed);"
+            + "if(t===Z||(t.indexOf(Z)>=0&&t.replace(Z,'')!==''))setTimeout(function(){strip(ed);},0);},true);"
+            + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // DownloadListener 收到 blob: → 让当前页 JS 取出内容回传

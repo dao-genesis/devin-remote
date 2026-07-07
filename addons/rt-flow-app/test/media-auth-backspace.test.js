@@ -70,10 +70,23 @@ ok(/chk\(false\);\},700\)/.test(main) && /chk\(true\);\},2100\)/.test(main), "JS
 ok(/if\(e\.isComposing\)return;/.test(main), "JS 看门狗: 拼音/组合输入中不介入");
 ok(!/setComposingRegion\(int start, int end\)/.test(main), "原生 setComposingRegion 已恢复透传 (根因在 JS 层)");
 
+// ②c2 语音输入护栏 (空 Slate 编辑器首段语音卡断 → 零宽字符打底 + 真内容到位即摘)
+ok(/static void installVoiceGuard\(WebView w\)/.test(main), "语音护栏: installVoiceGuard 存在");
+ok(/__rtViGuard/.test(main), "语音护栏: 幂等守卫存在");
+ok(/var Z='\\\\u200B';/.test(main), "语音护栏: 零宽空格 U\+200B 打底");
+ok(/document\.execCommand\('insertText',false,Z\)/.test(main), "语音护栏: 空编辑器聚焦即注入零宽字符");
+ok(/t\.indexOf\(Z\)>=0&&t\.replace\(Z,''\)!==''/.test(main), "语音护栏: 真内容出现即摘零宽字符");
+ok(/'compositionend',function\(e\)\{var ed=ced\(e\.target\)/.test(main), "语音护栏: 组合中不摘, compositionend 后再摘 (不掳断语音/拼音)");
+ok(/\[data-slate-placeholder\],\[contenteditable=false\]/.test(main), "语音护栏: 有效文本跳过 Slate 占位提示 (placeholder 不算内容)");
+ok(/function schedStrip\(ed\)\{if\(st\)clearTimeout\(st\);/.test(main), "语音护栏: 摘除按输入静默去抖 (连续键入中不摘, 不掐断输入流)");
+ok(/\},700\);\}/.test(main), "语音护栏: 去抖静默窗口 700ms");
+ok(/installVoiceGuard\(v\);\s+\/\//.test(main), "语音护栏: onPageFinished 安装");
+ok((tabAct.match(/MainActivity\.installVoiceGuard\(v\);/g) || []).length >= 2, "语音护栏: TabActivity 账号页两处(onPageFinished + SPA 路由)同装");
+
 // ②d 媒体鉴权本源补齐: 非账号标签从页面登录态采收 auth
 ok(/private void harvestPageAuth\(WebView v, Tab tab, String pageUrl\)/.test(main), "harvestPageAuth 存在");
 ok(/harvestPageAuth\(v, tab, u\); \/\/[^\n]*\n\s*warmAttachmentCookie/.test(main) || /harvestPageAuth\(v, tab, u\);/.test(main), "onPageFinished 采收页面登录态");
-ok(/installBackspaceGuard\(v\); installVideoFit\(v\); installMediaRetry\(v\); harvestPageAuth\(v, tab, u\); warmAttachmentCookie/.test(main), "SPA 路由后重采 (doUpdateVisitedHistory)");
+ok(/installBackspaceGuard\(v\); installVoiceGuard\(v\); installVideoFit\(v\); installMediaRetry\(v\); harvestPageAuth\(v, tab, u\); warmAttachmentCookie/.test(main), "SPA 路由后重采 (doUpdateVisitedHistory)");
 ok(/auth1_session/.test(main), "采收源 = 页面 auth1_session 登录态");
 
 // ②e VPN 自然回退 (有则走、死则直连·不强依赖)
