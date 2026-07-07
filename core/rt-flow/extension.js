@@ -16532,6 +16532,7 @@ module.exports = {
   deactivate,
   // 暴露给 harness · 用于真打验证 (生产代码不依赖)
   _internals: {
+    _daoDownloadData, // 近期对话同源数据引擎 · 暴露给 dao-vsix 六大板块(对话备份「近期对话」与悬浮窗一致)
     devinLogin,
     windsurfPostAuth,
     registerUserViaSession,

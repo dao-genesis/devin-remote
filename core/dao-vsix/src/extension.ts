@@ -6320,7 +6320,7 @@ function getDaoCloudMiddlePanelHtml(st: any, soloBoard?: string): string {
     const { loggedIn, email, orgName, orgId, hasWindsurfCreds, apiKeyType, tokenType, canUseApi, port, relay, relayUrl, hostname, injecting, bridge, hostCaps } = st;
     // 归一·分而治之: 单板块模式 — 归一外壳为「六大板块」各开一张独立子网页(各自一个 iframe),
     // 每张只锁定渲染一个板块并隐藏左侧导航条 → 板块不再挤在一个全功能面板里, 真正网页套网页·平级并排。
-    const _solo = ['overview', 'switch', 'bridge', 'backups', 'inject', 'mcp', 'computer'].includes(soloBoard || '') ? (soloBoard as string) : '';
+    const _solo = ['overview', 'switch', 'bridge', 'backups', 'inject', 'mcp'].includes(soloBoard || '') ? (soloBoard as string) : '';
     // 帛书·「道生一，一生二，二生三，三生万物」
     // Overview: Codeium API 数据（已工作 — devin-session-token$ 对 Codeium API 有效）
     // Sessions/Knowledge/Secrets/Integrations: simpleBrowser 打开 app.devin.ai（共享 Electron session）
@@ -6416,7 +6416,7 @@ body.solo .sb{display:none}
 <div class="ni" data-tab="inject" onclick="sw('inject')" title="反向注入 · 全账号批量(Knowledge/Playbook/Secret/MCP/自动化/蓝图 一处整合)">💉</div>
 <!-- ② 收腰归一: 单账号 K/P/S/Git/自动化/蓝图 均并入主页(overview); 全账号批量在反向注入(inject); MCP 仍保留专用面板 -->
 <div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器 · 专用面板">🧩</div>
-<div class="ni" data-tab="computer" onclick="sw('computer')" title="操作电脑本体 · 本机命令/文件/终端(把整个软件当浏览器供 MCP 操作)">🖥️</div>
+
 <div class="sp"></div>
 <div class="ni" onclick="cmd('refresh')" title="Refresh">⟳</div>
 </nav>
@@ -6436,7 +6436,7 @@ body.solo .sb{display:none}
 <div class="tv" id="v-mcp"></div>
 <div class="tv" id="v-bridge"></div>
 <div class="tv" id="v-inject"></div>
-<div class="tv" id="v-computer"></div>
+
 </div>
 <div class="ft" id="ft">
 <span><span class="dot off" id="ds"></span> Server</span>
@@ -6500,7 +6500,6 @@ function sw(t){
   if(t==='switch'){ if(!S._wamReady){ var _sv=document.getElementById('v-switch'); if(_sv&&!document.getElementById('wamFrame'))_sv.innerHTML='<div class="empty"><div class="ic">🔀</div><p style="color:var(--muted)">加载切号面板…</p></div>'; wamKick(); } return; }
   if(t==='bridge'){ rBridgeFull(); return; }
   if(t==='backups'){ rBackups(); return; }
-  if(t==='computer'){ rComputer(); return; }
   if(t!=='overview'&&S.auth.loggedIn){
     const v=document.getElementById('v-'+t);
     if(v&&!v.dataset.loaded){
@@ -6523,7 +6522,7 @@ function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull()}
 // (该占位故意不标记 loaded) — 此处自动重载, 拉取真实数据, 用户无需再次点击。
 function reloadActiveDataTab(){
   var t=S.tab;
-  if(t==='overview'||t==='bridge'||t==='inject'||t==='switch'||t==='backups'||t==='computer')return;
+  if(t==='overview'||t==='bridge'||t==='inject'||t==='switch'||t==='backups')return;
   if(!S.auth.loggedIn||!S.auth.canUseApi)return;
   var v=document.getElementById('v-'+t);
   if(!v||v.dataset.loaded)return;
@@ -6532,40 +6531,7 @@ function reloadActiveDataTab(){
   v.innerHTML='<div class="empty"><div class="ic">'+ic+'</div><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
   cmd('loadTabData',{tab:t});
 }
-// 操作电脑本体 · 把整个软件/IDE 当浏览器供 MCP/用户直接操作本机: 命令/文件/终端/系统打开。
-// (对照手机端 Shizuku/无障碍「操作整机」, 电脑端经 VSCode 扩展宿主直接驱动本机)
-function rComputer(){
-  var v=document.getElementById('v-computer');if(!v)return;
-  if(!v.dataset.init){ v.dataset.init='1'; cmd('compInfo'); }
-  var info=S.comp&&S.comp.info;
-  var infoHtml = info
-    ? ('<div class="card"><div class="cr"><span class="l">主机</span><span class="v">'+esc(info.host||'')+' · '+esc(info.platform||'')+' '+esc(info.arch||'')+'</span></div>'
-        +'<div class="cr"><span class="l">用户</span><span class="v">'+esc(info.user||'')+'</span></div>'
-        +'<div class="cr"><span class="l">工作目录(cwd)</span><span class="v">'+esc(info.cwd||'')+'</span></div>'
-        +'<div class="cr"><span class="l">工作区</span><span class="v">'+esc((info.folders||[]).join(' · ')||'(无)')+'</span></div></div>')
-    : '<div class="empty"><div class="ic">🖥️</div><p style="color:var(--muted)">读取本机信息…</p></div>';
-  var last=S.comp&&S.comp.last;
-  var outHtml = last
-    ? ('<div class="card"><div class="cr"><span class="l">上次命令</span><span class="v">'+esc(last.cmd||'')+(last.code!=null?(' · 退出码 '+last.code):'')+'</span></div>'
-        +'<pre style="white-space:pre-wrap;word-break:break-all;max-height:280px;overflow:auto;background:#1a1a1a;border:1px solid var(--border);border-radius:6px;padding:10px;font-family:monospace;font-size:11.5px;color:'+(last.ok?'#cdd3de':'#ffb4b4')+'">'+esc((last.stdout||'')+((last.stderr)?('\\n'+last.stderr):''))+'</pre></div>')
-    : '';
-  v.innerHTML=''
-    +'<div class="st">🖥️ 操作电脑本体</div>'
-    +'<div class="card" style="font-size:12px;color:var(--muted);line-height:1.6">把整个软件当浏览器: 在此直接驱动本机(运行命令/打开文件/系统资源管理器/集成终端)。'
-      +'与「公网穿透」板块配合, 远端 Devin/MCP 亦可代用户操作本机, 达 MCP 效果。<br>⚠ 命令以 IDE 进程权限在工作目录执行, 请谨慎。</div>'
-    +infoHtml
-    +'<div class="st">▶ 运行命令</div>'
-    +'<div class="card"><textarea id="compCmd" placeholder="如: git status   /   node -v   /   dir(Windows) ls(类Unix)" style="width:100%;height:60px;background:#1a1a1a;border:1px solid var(--border);border-radius:6px;color:var(--fg);padding:8px;font-family:monospace;font-size:12px;resize:vertical"></textarea>'
-      +'<div class="br" style="margin-top:8px"><button class="btn primary" id="compRunBtn">运行</button><button class="btn ghost" id="compTermBtn">送入集成终端</button></div></div>'
-    +outHtml
-    +'<div class="st">📂 文件 / 资源管理器</div>'
-    +'<div class="card"><input id="compPath" placeholder="文件或目录绝对路径" style="width:100%;background:#1a1a1a;border:1px solid var(--border);border-radius:6px;color:var(--fg);padding:7px 9px;font-size:12px">'
-      +'<div class="br" style="margin-top:8px"><button class="btn" id="compOpenBtn">在编辑器打开</button><button class="btn ghost" id="compRevealBtn">系统资源管理器定位</button></div></div>';
-  var rb=document.getElementById('compRunBtn');if(rb)rb.onclick=function(){var c=(document.getElementById('compCmd')||{}).value||'';if(!c.trim()){toast('请输入命令',false);return;}toast('执行中…',true);cmd('compRun',{cmd:c});};
-  var tb=document.getElementById('compTermBtn');if(tb)tb.onclick=function(){var c=(document.getElementById('compCmd')||{}).value||'';if(!c.trim()){toast('请输入命令',false);return;}cmd('compTerminal',{text:c});toast('已送入集成终端',true);};
-  var ob=document.getElementById('compOpenBtn');if(ob)ob.onclick=function(){var p=(document.getElementById('compPath')||{}).value||'';if(!p.trim()){toast('请输入路径',false);return;}cmd('compOpenFile',{path:p});};
-  var vb=document.getElementById('compRevealBtn');if(vb)vb.onclick=function(){var p=(document.getElementById('compPath')||{}).value||'';if(!p.trim()){toast('请输入路径',false);return;}cmd('compReveal',{path:p});};
-}
+
 // 切号模块 (移植自 RT Flow · 全功能面板第2模块) — 账号池列表 + 切换/刷新/清理/出库。
 function rSwitchLoading(){
   var v=document.getElementById('v-switch');if(!v)return;
@@ -6713,12 +6679,7 @@ function rBridgeFull(){
   h+='<div class="br"><button class="btn sm" onclick="cmd(&#39;openBridgeMd&#39;)">📄 打开 MD</button>';
   h+='<button class="btn sm primary" onclick="cmd(&#39;bridgeCopyCloudMd&#39;)">📋 复制云端 Agent MD</button>';
   h+='<button class="btn sm" onclick="cmd(&#39;bridgeInjectKnowledge&#39;)">📚 注入</button></div></div>';
-  // ── 模块4: 能力自测 ──
-  h+='<div class="st" style="margin-top:14px">⚡ 能力自测</div>';
-  h+='<div class="card"><div class="br"><button class="btn sm" onclick="cmd(&#39;bridgeHealth&#39;)">health</button>';
-  h+='<input id="bridgeCmd" value="hostname" placeholder="命令" style="flex:1;min-width:80px;padding:5px 7px;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
-  h+='<button class="btn sm" onclick="bridgeExec()">exec</button></div>';
-  h+='<pre id="bridgeOut" style="white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.25);padding:6px;max-height:180px;overflow:auto;font-size:11px;margin:6px 0 0;border-radius:4px;color:var(--muted)">（结果）</pre></div>';
+
   // ── 末·参考一: 命名隧道 · 固定域名（可选） ──
   h+='<div class="st" style="margin-top:14px">🔑 命名隧道 · 固定域名（可选）</div>';
   h+='<div class="card">';
@@ -6726,14 +6687,19 @@ function rBridgeFull(){
   if(cfOn){
     h+='<div class="cr"><span class="l">CloudFlare</span><span class="v" style="color:var(--success)">✓ 用户通道'+(b.cfEmail?(' · '+esc(b.cfEmail)):'')+(b.named?'（命名隧道·固定域名）':'')+'</span></div>';
     h+='<div style="font-size:10px;color:var(--muted);margin:4px 0">已绑定 CloudFlare 凭证。'+(b.named?'命名隧道令牌已就绪 — 点「重启隧道」即以固定域名启动。':'如需固定公网域名，请在 CloudFlare 创建命名隧道并把 <code>tunnel run --token</code> 令牌填入下方。')+'</div>';
+    h+='<input id="cfKey" type="password" placeholder="更换 Tunnel Token / API Token / Global Key（填入后保存即替换当前凭证）" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
+    h+='<input id="cfEmail" type="email" placeholder="CloudFlare Email（可选）" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
+    h+='<div class="br" style="margin-top:4px"><button class="btn sm primary" onclick="bridgeCfLogin()">💾 保存新 Token</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeStartNamed&#39;)">🔗 用命名隧道(固定域名)启动</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;relayOAuthLogin&#39;)" title="免手搓 Token: 浏览器登录 Cloudflare 一次授权, 后台自动注册 Token 并部署固定 Worker 地址">⚡ OAuth 自动认证(免手搓)</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;openCf&#39;)">🌐 打开 CloudFlare 控制台</button>';
-    h+='<button class="btn sm danger" onclick="if(confirm(&#39;退出账号并清空全部 CloudFlare 凭证残留(含 cert.pem)，回到无账号快速隧道？&#39;))cmd(&#39;bridgeLogout&#39;)">退出账号 / 重置为无账号</button>';
+    h+='<button class="btn sm danger" onclick="if(confirm(&#39;退出账号并清空全部 CloudFlare 凭证残留(含 cert.pem)，回到无账号快速隧道？&#39;))cmd(&#39;bridgeLogout&#39;)">🚪 退出账号 / 重置为无账号</button></div>';
   } else {
     h+='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">默认快速隧道已可用，<b style="color:var(--fg)">无需登录</b>。仅当你想要<b style="color:var(--fg)">固定不变的公网域名</b>时，才需配置 CloudFlare（也可放入 ~/.dao/dao-config.json 的 cfTunnelToken 自动加载）。</div>';
     h+='<input id="cfEmail" type="email" placeholder="CloudFlare Email（可选）" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
     h+='<input id="cfKey" type="password" placeholder="Tunnel Token / API Token / Global Key" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
     h+='<div class="br"><button class="btn sm primary" onclick="bridgeCfLogin()">保存并切到用户通道</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;relayOAuthLogin&#39;)" title="免手搓 Token: 浏览器登录 Cloudflare 一次授权, 后台自动注册 Token 并部署固定 Worker 地址">⚡ OAuth 自动认证(免手搓)</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;bridgeCfBrowserLogin&#39;)" title="用浏览器登录 Cloudflare(可用 GitHub 账号), 需自有域名才有固定域名">🌐 浏览器登录 CF</button></div>';
     h+='<button class="btn sm" onclick="cmd(&#39;openCf&#39;)" style="margin-top:4px">🌐 打开 CloudFlare 控制台</button>';
   }
@@ -6850,6 +6816,26 @@ function bkConvRow(c,i,ci,showAcct){
   h+='<div id="'+cid+'" style="display:none;margin-top:4px"></div></div>';
   return h;
 }
+// 实时条目行(尚无本地备份) — 与悬浮窗同源 dlRecent 数据; 可直接多实例进入官网对话。
+function bkLiveRow(li){
+  var si=bkStatusInfo(li.statusClass||li.status);
+  var rel=bkRel(li.updatedAt);
+  var sid=String(li.sid||'').replace(/^devin-/,'');
+  var h='<div class="card" style="margin-bottom:4px;padding:6px 8px"><div style="padding:6px 2px">';
+  h+='<div style="display:flex;align-items:center;gap:6px;min-width:0">';
+  if(li.accNo&&li.accNo!=='?')h+='<span style="flex:0 0 auto;font-size:10px;font-weight:700;color:var(--accent);background:rgba(88,166,255,.14);border-radius:4px;padding:1px 5px">#'+esc(String(li.accNo))+'</span>';
+  h+='<span style="flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:'+si.c+'"'+(si.t?(' title="'+esc(si.t)+'"'):'')+'></span>';
+  h+='<span style="flex:1 1 auto;font-size:13px;font-weight:600;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(li.title||sid||'(未命名)')+'</span></div>';
+  var sub=[];
+  if(li.email)sub.push(esc(li.email));
+  if(si.t)sub.push('<span style="color:'+si.c+';font-weight:600">'+esc(si.t)+'</span>');
+  if(rel)sub.push(esc(rel));
+  if(sid)sub.push('<span style="color:var(--accent)">'+esc(sid.slice(0,8))+'</span>');
+  h+='<div style="font-size:10px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+sub.join(' · ')+' · 实时</div>';
+  h+='<div class="br" style="margin-top:5px"><button class="btn sm primary" onclick="bkOpenLive(&#39;'+esc(li.email||'')+'&#39;,&#39;'+esc(sid)+'&#39;)" title="多实例浏览器打开此对话官网">🚀 进入</button></div>';
+  h+='</div></div>';return h;
+}
+function bkOpenLive(email,sid){if(!sid)return;toast('多实例打开对话…',true);cmd('openConvMultiBrowser',{email:email||'',devinId:sid})}
 function rBackupsData(tree,err){
   var v=document.getElementById('v-backups');if(!v)return;
   S.backups=tree||{accounts:[]};
@@ -6864,14 +6850,22 @@ function rBackupsData(tree,err){
   h+='<input id="bkSearch" value="'+esc(q)+'" placeholder="🔍 搜索 账号邮箱 / 对话名 / 对话ID" oninput="bkSearchSet(this.value)" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:6px 8px;background:var(--input,rgba(255,255,255,.06));color:var(--fg);border:1px solid var(--border);border-radius:4px;font-size:12px">';
   h+='<div style="font-size:10px;color:var(--muted);margin-bottom:8px;word-break:break-all">根: '+esc(tree.root||'')+'</div>';
   if(view==='recent'){
-    // 跨账号 · 近期对话: 扁平化所有对话, 按 mtime 倒序, 检索过滤后每条带账号+devinId
-    var flat=[];
-    accts.forEach(function(a,i){(a.conversations||[]).forEach(function(c,ci){if(bkMatch(c,a,q))flat.push({c:c,i:i,ci:ci})})});
-    flat.sort(function(x,y){return ((y.c.liveTs||y.c.mtime||0)-(x.c.liveTs||x.c.mtime||0))});
-    var shown=flat.slice(0,200);
-    if(!shown.length){h+='<div class="empty"><div class="ic">🕒</div><p style="color:var(--muted)">'+(q?'无匹配对话':'暂无对话')+'</p></div>';v.innerHTML=h;return}
-    shown.forEach(function(it){h+='<div class="card" style="margin-bottom:4px;padding:6px 8px">'+bkConvRow(it.c,it.i,it.ci,true)+'</div>'});
-    if(flat.length>200)h+='<div style="font-size:10px;color:var(--muted);margin-top:4px">仅显示最近 200 条 (匹配 '+flat.length+')</div>';
+    // 同源: 与悬浮窗「☁ 近期对话」同一数据引擎(dlRecent · 跨账号官网 API 实时聚合) ——
+    //   实时条目为真身(标题/状态/时间), 备份树只补充本地正文/文件能力。
+    if(!S._bkRecentReqTs||Date.now()-S._bkRecentReqTs>20000){S._bkRecentReqTs=Date.now();cmd('loadRecentLive')}
+    var live=S.bkRecentLive||[];
+    var liveMap={};live.forEach(function(li){var k=String(li.sid||'').replace(/^devin-/,'');if(k)liveMap[k]=li});
+    var flat=[];var seen={};
+    accts.forEach(function(a,i){(a.conversations||[]).forEach(function(c,ci){var k=String(c.devinId||'').replace(/^devin-/,'');var li=k?liveMap[k]:null;if(li){if(li.statusClass||li.status)c.status=li.statusClass||li.status;if(li.title)c.title=li.title;if(li.updatedAt)c.liveTs=li.updatedAt;seen[k]=1}if(bkMatch(c,a,q))flat.push({c:c,i:i,ci:ci})})});
+    // 实时有而备份树无的对话 → 以实时行并入(数量与新鲜度与悬浮窗一致)
+    var extra=live.filter(function(li){var k=String(li.sid||'').replace(/^devin-/,'');return k&&!seen[k]&&bkMatch({title:li.title,devinId:k},{email:li.email,accountNo:li.accNo},q)});
+    var rows=[];
+    extra.forEach(function(li){rows.push({ts:li.updatedAt||0,h:bkLiveRow(li)})});
+    flat.forEach(function(it){rows.push({ts:(it.c.liveTs||it.c.mtime||0),h:'<div class="card" style="margin-bottom:4px;padding:6px 8px">'+bkConvRow(it.c,it.i,it.ci,true)+'</div>'})});
+    rows.sort(function(x,y){return (y.ts||0)-(x.ts||0)});
+    if(!rows.length){h+='<div class="empty"><div class="ic">🕒</div><p style="color:var(--muted)">'+(q?'无匹配对话':'暂无对话')+'</p></div>';v.innerHTML=h;return}
+    rows.slice(0,200).forEach(function(r){h+=r.h});
+    if(rows.length>200)h+='<div style="font-size:10px;color:var(--muted);margin-top:4px">仅显示最近 200 条 (匹配 '+rows.length+')</div>';
     v.innerHTML=h;return;
   }
   var anyAcct=false;
@@ -6966,7 +6960,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets()}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='compInfo'){S.comp=S.comp||{};S.comp.info=d.info||null;if(S.tab==='computer')rComputer()}else if(d.type==='compResult'){S.comp=S.comp||{};S.comp.last={cmd:d.cmd,ok:d.ok,code:d.code,stdout:d.stdout,stderr:d.stderr};toast('命令'+(d.ok?'完成':'失败')+(d.code!=null?(' · 退出码 '+d.code):''),d.ok);if(S.tab==='computer')rComputer()}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets()}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -6981,6 +6975,11 @@ function mcpProbe(idx){var m=(window._mcp||[])[idx];if(!m)return;var s=document.
 function mcpProbeAll(){var n=(window._mcp||[]).length;if(!n)return;toast('接测 '+n+' 项…',true);for(var i=0;i<n;i++){(function(j){setTimeout(function(){mcpProbe(j)},j*120)})(i);}}
 function mcpRepairLocal(){toast('修复本机 MCP 中…(自动识别运行时/路径, 已备份)',true);cmd('repairLocalMcp',{});}
 function mcpVerifyLocal(){toast('实测 Devin Desktop MCP 中…',true);cmd('verifyLocalMcp',{});}
+// MCP 工具清单: 真调 tools/list, 内联展开该 MCP 全部可用工具 (再点收起)
+function mcpTools(idx){var m=(window._mcp||[])[idx];if(!m)return;var box=document.getElementById('mcp-tools-'+idx);if(!box)return;if(box.style.display==='block'&&box.getAttribute('data-loaded')){box.style.display='none';return}box.style.display='block';box.innerHTML='<div style="font-size:11px;color:var(--muted)">tools/list 拉取中…</div>';cmd('mcpTools',{idx:idx,spec:mcpSpec(m)});}
+function mcpToolsRender(idx,r){var box=document.getElementById('mcp-tools-'+idx);if(!box)return;box.setAttribute('data-loaded','1');r=r||{};if(!r.ok){box.innerHTML='<div style="font-size:11px;color:var(--danger)">✗ '+esc(r.error||'无法获取工具清单')+'</div>';return}var ts=r.tools||[];var h='<div style="font-size:11px;color:var(--success);margin-bottom:4px">✓ '+ts.length+' 个工具</div><div style="max-height:220px;overflow:auto;background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:4px;padding:6px">';ts.forEach(function(t){h+='<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)"><span style="font-size:11px;font-weight:600;color:var(--accent)">'+esc(t.name||'')+'</span>'+(t.description?('<div style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(t.description)+'">'+esc(String(t.description).slice(0,160))+'</div>'):'')+'</div>'});h+='</div>';box.innerHTML=h;}
+// MCP 密钥/PAT 管理: 用户可直接查看/更换该 MCP 的认证头 (如 GitHub PAT) — 保存后端持久化并可立即重接测
+function mcpEditAuth(idx){var m=(window._mcp||[])[idx];if(!m)return;var cur='';try{cur=(m.headers&&(m.headers.Authorization||m.headers.authorization))||''}catch(e){}var envs=(m.env_variables||[]).map(function(v){return (typeof v==='string')?v:(v&&v.name)||''}).filter(Boolean);sm('🔑 密钥 · '+String(m.name||'').replace(/^★ /,''),'<p style="font-size:11px;color:var(--muted);margin:4px 0">'+(m.transport==='STDIO'?('STDIO 型 · 环境变量: '+(envs.join(', ')||'(无)')):'HTTP 型 · Authorization 头')+'</p><input id="ma1" value="'+esc(cur)+'" placeholder="'+(m.transport==='STDIO'?'VAR=值 (每次一条)':'如: Bearer ghp_xxx / token ghp_xxx')+'" style="width:100%;margin:4px 0"><p style="font-size:10px;color:var(--muted);margin:4px 0">留空=清除。保存后立即对该 MCP 生效(未填时默认沿用切号/反向注入板块里的 PAT)。</p>',function(){var val=document.getElementById('ma1').value.trim();toast('保存密钥…',true);cmd('mcpSetAuth',{idx:idx,id:m.installationId||'',spec:mcpSpec(m),auth:val});})}
 function mcpProbeRender(idx,r){var s=document.getElementById('mcp-probe-'+idx);if(!s)return;r=r||{};var col=r.ok?'var(--success)':(r.status===401||r.status===403||(r.label||'').indexOf('可达')>=0?'var(--warn)':'var(--danger)');s.style.color=col;s.textContent='· '+(r.ok?'✓ ':'✗ ')+(r.label||'')+(r.detail?'':'');s.title=r.detail||'';}
 // MCP 即时搜索/筛选 (纯前端, 不重渲染, 不丢焦点) — 对齐官网市场搜索
 function mcpFilter(q){q=(q||'').toLowerCase().trim();var cards=document.querySelectorAll('.mcp-card');for(var i=0;i<cards.length;i++){var k=cards[i].getAttribute('data-k')||'';var c=cards[i];var srcOk=true;if(!q&&c.className.indexOf('mcp-ide-card')>=0){var cs=c.getAttribute('data-src')||'';srcOk=!window._mcpSrc||window._mcpSrc.indexOf(cs)>=0;}c.style.display=((!q||k.indexOf(q)>=0)&&srcOk)?'':'none'}}
@@ -7077,13 +7076,15 @@ function rT(tab,items,err,fallbackProxy){
       if(m.installed){btns+='<button class="btn sm danger" onclick="mcpAct('+idx+',&#39;uninstall&#39;)">卸载</button>';}
       else{btns+='<button class="btn sm primary" onclick="mcpAct('+idx+',&#39;install&#39;)">装到本账号</button>';}
       btns+='<button class="btn sm" onclick="mcpProbe('+idx+')" title="接测: 实际探测该 MCP 连接是否连通">🔍接测</button>';
+      btns+='<button class="btn sm" onclick="mcpTools('+idx+')" title="查看该 MCP 的全部可用工具(真调 tools/list)">🧰 工具</button>';
+      btns+='<button class="btn sm" onclick="mcpEditAuth('+idx+')" title="查看/更换该 MCP 的 PAT / 密钥(如 GitHub PAT) — 保存后重新接测生效">🔑 密钥</button>';
       btns+='<button class="btn sm" onclick="mcpAct('+idx+',&#39;all&#39;)" title="一键批量装到所有账号(反向注入)">装到所有账号</button>';
       btns+='<button class="btn sm" onclick="mcpAct('+idx+',&#39;profile&#39;)" title="加入反向注入档案 → 可批量注入所有账号">+档案</button>';
       btns+=lkBtn('mcps',String(nm).replace(/^★ /,''));
       var mkey=esc(String(nm+' '+dt).toLowerCase());
       var _ideCls=(it.group==='ide')?' mcp-ide-card':'';
       var _hide=(it.group==='ide'&&it.source&&window._mcpSrc.indexOf(it.source)<0)?' style="display:none"':'';
-      h+='<div class="card mcp-card'+_ideCls+'" data-src="'+esc(it.source||'')+'" data-k="'+mkey+'"'+_hide+'><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+' <span id="mcp-probe-'+idx+'" style="margin-left:6px;color:var(--muted)"></span></span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'<div class="br" style="margin-top:4px">'+btns+'</div></div>';
+      h+='<div class="card mcp-card'+_ideCls+'" data-src="'+esc(it.source||'')+'" data-k="'+mkey+'"'+_hide+'><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px">'+st+' <span id="mcp-probe-'+idx+'" style="margin-left:6px;color:var(--muted)"></span></span></div>'+(dt?'<div style="font-size:10px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(dt)+'</div>':'')+'<div class="br" style="margin-top:4px">'+btns+'</div><div id="mcp-tools-'+idx+'" style="display:none;margin-top:6px"></div></div>';
     });
     // 本机 IDE MCP 默认自动接测 (用户「初始化接测」) — 市场项按需点接测
     setTimeout(function(){try{(window._mcpIde||[]).forEach(function(i){mcpProbe(i)})}catch(e){}},150);
@@ -7313,7 +7314,9 @@ function refreshDaoCloudMiddlePanel() {
     };
     data.bridge = bridgeGetState();
     try { Object.assign(data.bridge, bridgeCfState()); } catch { /* 守柔 */ }
-    try { data.bridge.relay = ws.relayConnected; if (ws.publicUrl) data.bridge.relayUrl = ws.publicUrl; data.bridge.agentCount = ws.relayConnected ? 1 : 0; data.bridge.proxy = bridgeDetectProxy(); } catch { /* 守柔 */ }
+    // 持久通道卡片吃的是 relay 状态【对象】(active/url/oauth/healthy…) — 曾被布尔 ws.relayConnected 覆盖,
+    //   致 OAuth Worker 通道部署后前端恒渲「未打通」空态、无从操作。恒喂 bridgeRelayState() 真身。
+    try { data.bridge.relay = bridgeRelayState(); if (ws.publicUrl) data.bridge.relayUrl = ws.publicUrl; data.bridge.agentCount = ws.relayConnected ? 1 : 0; data.bridge.proxy = bridgeDetectProxy(); } catch { /* 守柔 */ }
     data.hostCaps = detectHostCapabilities();
     // Inject state
     try {
@@ -7331,9 +7334,12 @@ function refreshDaoCloudMiddlePanel() {
                 if (ok) { _bridgeLastAliveMs = Date.now(); _bridgeLivenessFail = 0; refreshDaoCloudMiddlePanel(); }
             }).catch(() => { _injectStatusProbing = false; });
         }
+        // 通道在线 = 快速隧道探活 ∪ 持久 relay(WS 已连即活) — 曾只看隧道探活, 持久通道用户恒被渲成「离线」。
+        let _relayAlive = false; let _relayUrl = '';
+        try { const _rs = bridgeRelayState(); _relayAlive = !!(_rs && _rs.active && (_rs.connected || _rs.healthy)); _relayUrl = (_rs && _rs.url) || ''; } catch { /* 守柔 */ }
         data.injectStatus = {
-            tunnelUrl: bridgeUrl || '',
-            tunnelAlive: _bridgeLastAliveMs > 0 && (Date.now() - _bridgeLastAliveMs) < 90000,
+            tunnelUrl: bridgeUrl || _relayUrl || '',
+            tunnelAlive: (_bridgeLastAliveMs > 0 && (Date.now() - _bridgeLastAliveMs) < 90000) || _relayAlive,
             tunnelLastAlive: _bridgeLastAliveMs || 0,
             tunnelFails: _bridgeLivenessFail,
             lastInjectedUrl: _lastInjectedBridgeUrl || '',
@@ -7351,7 +7357,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'openRoutedPanel', 'compInfo', 'compRun', 'compTerminal', 'compOpenFile', 'compReveal', 'injectDiagnose'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -7377,56 +7383,15 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 reply({ type: 'actionResult', command: 'copyBridgeShell', ok: !!u });
                 break;
             }
-            // ── 操作电脑本体 (把整个软件当浏览器供 MCP/用户驱动本机) ──
-            case 'compInfo': {
-                let cwd = process.cwd();
-                let folders: string[] = [];
-                try { folders = (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath); } catch (e) { /* 守柔 */ }
-                if (folders.length) cwd = folders[0];
-                reply({ type: 'compInfo', info: { host: os.hostname(), platform: process.platform, arch: process.arch, user: (os.userInfo().username || ''), cwd, folders } });
-                break;
-            }
-            case 'compRun': {
-                const command = String(msg.cmd || '').trim();
-                if (!command) { reply({ type: 'compResult', ok: false, cmd: command, code: null, stdout: '', stderr: '空命令' }); break; }
-                let cwd = process.cwd();
-                try { const fl = vscode.workspace.workspaceFolders; if (fl && fl.length) cwd = fl[0].uri.fsPath; } catch (e) { /* 守柔 */ }
-                await new Promise<void>((resolve) => {
-                    childProcess.exec(command, { cwd, timeout: 120000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
-                        const code = err && typeof (err as any).code === 'number' ? (err as any).code : (err ? 1 : 0);
-                        reply({ type: 'compResult', ok: !err, cmd: command, code, stdout: String(stdout || '').slice(0, 200000), stderr: String(stderr || (err ? (err.message || '') : '')).slice(0, 200000) });
-                        resolve();
-                    });
-                });
-                break;
-            }
-            case 'compTerminal': {
-                const text = String(msg.text || '');
+            case 'loadRecentLive': {
+                // 近期对话实时清单 — 与悬浮窗「☁ 近期对话」同一数据引擎(rt-flow _daoDownloadData · dlRecent 跨账号官网 API 实时聚合)。
                 try {
-                    let term = vscode.window.activeTerminal;
-                    if (!term) term = vscode.window.createTerminal('Dao Cloud · 操作电脑');
-                    term.show(true);
-                    if (text) term.sendText(text, true);
-                    reply({ type: 'actionResult', command: 'compTerminal', ok: true });
-                } catch (e: any) { reply({ type: 'actionResult', command: 'compTerminal', ok: false }); }
-                break;
-            }
-            case 'compOpenFile': {
-                const p = String(msg.path || '').trim();
-                let ok = false;
-                try {
-                    const st = fs.statSync(p);
-                    if (st.isDirectory()) { await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(p)); ok = true; }
-                    else { const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(p)); await vscode.window.showTextDocument(doc, { preview: false }); ok = true; }
-                } catch (e: any) { ok = false; }
-                reply({ type: 'actionResult', command: 'compOpenFile', ok });
-                break;
-            }
-            case 'compReveal': {
-                const p = String(msg.path || '').trim();
-                let ok = false;
-                try { await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(p)); ok = true; } catch (e: any) { ok = false; }
-                reply({ type: 'actionResult', command: 'compReveal', ok });
+                    const int: any = _rtflowModule && _rtflowModule._internals;
+                    const fn = int && int._daoDownloadData;
+                    if (typeof fn === 'function') {
+                        await fn({ type: 'dlRecent', perAcc: 12 }, (x: any) => { try { if (x && x.type === 'dlRecentData') reply({ type: 'recentLiveData', list: x.list || [], partial: !!x.partial }); } catch { /* 守柔 */ } });
+                    } else reply({ type: 'recentLiveData', list: [], partial: false });
+                } catch { try { reply({ type: 'recentLiveData', list: [], partial: false }); } catch { /* 守柔 */ } }
                 break;
             }
             // ── 切号模块 (全功能面板第2网页 · 内嵌真 WAM 切号面板 buildHtml) ──
@@ -8217,6 +8182,76 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // 逐项接测(连接验证) — 纯探测, 不改任何状态; 结果按 idx 回填卡片。
                 const res = await daoProbeMcp(msg.spec || {});
                 reply({ type: 'mcpProbeResult', idx: msg.idx, result: res });
+                break;
+            }
+            case 'mcpTools': {
+                // 工具清单: 真调 tools/list — HTTP 型直打端点(直连失败自动补 initialize 重试); STDIO 型真起进程。
+                const spec: any = msg.spec || {};
+                let result: any = { ok: false, tools: [], error: '' };
+                try {
+                    if (String(spec.transport || '').toUpperCase() === 'STDIO' || (!spec.url && spec.command)) {
+                        const r = await daoVerifyMcpStdio(spec, 15000);
+                        result = r.ok ? { ok: true, tools: r.toolDefs || (r.tools || []).map((n: string) => ({ name: n, description: '' })) } : { ok: false, tools: [], error: r.error || 'STDIO 起进程失败' };
+                    } else if (spec.url) {
+                        const hdrs: Record<string, string> = Object.assign({ 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' }, spec.headers || {});
+                        const parseTools = (text: string): any[] | null => {
+                            try { const j = JSON.parse(text); if (j && j.result && Array.isArray(j.result.tools)) return j.result.tools; } catch { /* SSE 形态 */ }
+                            const m2 = String(text || '').match(/data:\s*(\{[\s\S]*\})/);
+                            if (m2) { try { const j = JSON.parse(m2[1]); if (j && j.result && Array.isArray(j.result.tools)) return j.result.tools; } catch { /* 守柔 */ } }
+                            return null;
+                        };
+                        const listBody = { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} };
+                        let r = await devinJsonPost(spec.url, hdrs, listBody, 15000);
+                        let tools = (r && r.status >= 200 && r.status < 300) ? parseTools(r.text) : null;
+                        if (!tools) {
+                            await devinJsonPost(spec.url, hdrs, { jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'dao-panel', version: '1.0' } } }, 15000);
+                            r = await devinJsonPost(spec.url, hdrs, listBody, 15000);
+                            tools = (r && r.status >= 200 && r.status < 300) ? parseTools(r.text) : null;
+                        }
+                        result = tools
+                            ? { ok: true, tools: tools.map((t: any) => ({ name: String(t.name || ''), description: String(t.description || '').slice(0, 300) })) }
+                            : { ok: false, tools: [], error: 'HTTP ' + (r ? r.status : 0) + ((r && r.status === 401) ? ' · 需鉴权(点🔑密钥填 PAT)' : ((r && r.status === 403) ? ' · 鉴权被拒' : ' · 响应无 tools')) };
+                    } else result.error = '缺 url / command';
+                } catch (e: any) { result = { ok: false, tools: [], error: String((e && e.message) || e) }; }
+                reply({ type: 'mcpToolsResult', idx: msg.idx, result });
+                break;
+            }
+            case 'mcpSetAuth': {
+                // 密钥/PAT 管理: 用户直接更换该 MCP 的认证 — 同步写入反向注入档案(持久),
+                //   若该 MCP 已装在本账号(有 installationId) 则卸旧装新即时生效。
+                const spec: any = msg.spec || {};
+                const authVal = String(msg.auth || '').trim();
+                const nm = String(spec.name || spec.slug || '').replace(/^★ /, '');
+                let ok = false; let note = '';
+                try {
+                    const isStdio = String(spec.transport || '').toUpperCase() === 'STDIO';
+                    if (isStdio) {
+                        // STDIO: VAR=值 写入 env_variables
+                        const kv = authVal.match(/^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/);
+                        spec.env_variables = Array.isArray(spec.env_variables) ? spec.env_variables : [];
+                        if (kv) {
+                            spec.env_variables = spec.env_variables.filter((v: any) => (typeof v === 'string' ? v.split('=')[0] : v && v.name) !== kv[1]);
+                            spec.env_variables.push({ name: kv[1], value: kv[2] });
+                        } else if (!authVal) { spec.env_variables = []; }
+                    } else {
+                        spec.headers = spec.headers || {};
+                        if (authVal) spec.headers.Authorization = authVal; else { delete spec.headers.Authorization; delete spec.headers.authorization; }
+                    }
+                    // ① 持久化到反向注入档案(按名匹配) — 后续批量注入全账号亦用新密钥
+                    try {
+                        const p = loadInjectProfile();
+                        const it = (p.mcps || []).find((m2: any) => String(m2.name || m2.slug || '') === nm);
+                        if (it) { if (isStdio) (it as any).env_variables = spec.env_variables; else (it as any).headers = spec.headers; saveInjectProfile(p); note = '已写入反向注入档案'; }
+                    } catch { /* 守柔 */ }
+                    // ② 已装在本账号 → 卸旧装新(官网无 update 端点)
+                    if (msg.id && ws.devinAuth1 && ws.devinOrgId) {
+                        try { await devinDeleteMcp(ws.devinOrgId, String(msg.id), ws.devinAuth1); } catch { /* 守柔 */ }
+                        const r2 = await devinInstallMarketplaceMcp(ws.devinOrgId, spec as McpInstallSpec, ws.devinAuth1);
+                        ok = r2.ok; note = (note ? note + ' · ' : '') + (r2.ok ? '已重装到本账号生效' : ('重装失败: ' + (r2.error || r2.status || '')));
+                    } else ok = true;
+                    vscode.window.showInformationMessage((ok ? '🔑 已更新 MCP 密钥: ' : '⚠ MCP 密钥部分更新: ') + nm + (note ? ' (' + note + ')' : ''));
+                } catch (e: any) { ok = false; vscode.window.showErrorMessage('MCP 密钥更新失败: ' + String((e && e.message) || e)); }
+                refreshReply({ type: 'actionResult', command: 'mcpSetAuth', ok });
                 break;
             }
             case 'repairLocalMcp': {
@@ -11602,7 +11637,7 @@ function daoRepairLocalMcp(opts: { allIdes?: boolean; enable?: boolean; dryRun?:
 }
 
 // 实测·STDIO MCP 真起进程: spawn + initialize + tools/list, 返回真实工具数(有界超时, 必杀进程)。
-function daoVerifyMcpStdio(spec: any, timeoutMs: number): Promise<{ ok: boolean; toolCount: number; tools?: string[]; error?: string }> {
+function daoVerifyMcpStdio(spec: any, timeoutMs: number): Promise<{ ok: boolean; toolCount: number; tools?: string[]; toolDefs?: Array<{ name: string; description: string }>; error?: string }> {
     return new Promise((resolve) => {
         try {
             const cmd = daoWhichCmd(String(spec.command || '')) || String(spec.command || '');
@@ -11624,7 +11659,8 @@ function daoVerifyMcpStdio(spec: any, timeoutMs: number): Promise<{ ok: boolean;
                     let m: any; try { m = JSON.parse(ln); } catch { continue; }
                     if (m.id === 1 && m.result && Array.isArray(m.result.tools)) {
                         const tools = m.result.tools.map((t: any) => String(t.name || ''));
-                        fin({ ok: true, toolCount: tools.length, tools });
+                        const toolDefs = m.result.tools.map((t: any) => ({ name: String(t.name || ''), description: String(t.description || '').slice(0, 300) }));
+                        fin({ ok: true, toolCount: tools.length, tools, toolDefs });
                     }
                 }
             });
