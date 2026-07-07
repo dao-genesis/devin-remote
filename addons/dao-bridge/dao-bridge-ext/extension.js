@@ -18,7 +18,7 @@ const cp = require("child_process");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const TRY_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
-const BRIDGE_VERSION = "3.7.1";
+const BRIDGE_VERSION = "3.12.0";
 
 // 归一 · 反注 MCP 蹭耐用桥隧道: 综合 MCP(mcp_http.py)本机监听 9100, 其自起的快速隧道
 //   既翻倍触发 Cloudflare 限流又死不自愈。故由常驻桥把 /mcp 透明流式反代到本机 MCP,
@@ -1095,6 +1095,13 @@ class WorkspaceServer {
       if (br) setTimeout(async () => { try { await br.resetAccount(); br.stop(); await br.start(); } catch (e) {} }, 200);
       return { status: 200, body: { ok: true, note: "account reset + restart; re-read conn.json" } };
     }
+    // API Token 登录 + 自动开通命名隧道固定域名(闭环持久化)。body: {email?, key} · key=CF API Token / 隧道连接令牌
+    if (pathname === "/api/account/cf-login" && method === "POST") {
+      if (!br) return { status: 503, body: { error: "bridge not ready" } };
+      const r = await br.loginCloudFlare(j.email || "", j.key || j.token || j.apiToken || "");
+      if (r.ok) setTimeout(async () => { try { br.stop(); await br.start(); } catch (e) {} }, 200);
+      return { status: r.ok ? 200 : 400, body: r };
+    }
     if (pathname === "/api/export/refresh" && method === "POST") {
       if (!br) return { status: 503, body: { error: "bridge not ready" } };
       br.writeArtifacts();
@@ -1340,6 +1347,8 @@ class Bridge {
       proxy: this.proxy, attempts: this.attemptLog,
       cfLoggedIn: !!(this.cfCredentials && (this.cfCredentials.apiToken || this.cfCredentials.globalApiKey || this.cfCredentials.tunnelToken)),
       cfEmail: this.cfCredentials ? this.cfCredentials.email || "" : "",
+      cfHostname: (function () { try { return loadDaoTunnelConfig().hostname || ""; } catch (e) { return ""; } })(),
+      hasCfConfig: this._hasCfConfig(),
       agentCount: this.srv.agentRegistry.size,
       bootstrap: this.bootstrapCmd(),
       lastOkAt: this._lastOkAt, healing: this._healing, healthFails: this._healthFails,
@@ -1362,13 +1371,87 @@ class Bridge {
   // 用户输入 email + Global API Key → 验证 → 保存 → 自动打通
   // ═══════════════════════════════════════════════════════════
 
+  // 是否存在任何 CloudFlare 账号/令牌残留(内存凭证 / 落盘凭证 / IDE 设置 / cloudflared cert)。
+  // 「退出账号 / 重置」按钮据此显隐 —— 只要有任何残留就允许退出, 根治「添加出问题后根本退不出」。
+  _hasCfConfig() {
+    try { const c = this.cfCredentials; if (c && (c.apiToken || c.globalApiKey || c.tunnelToken)) return true; } catch (e) {}
+    try { if (fs.existsSync(path.join(daoDir(), "named-tunnel.json"))) return true; } catch (e) {}
+    try { if (fs.existsSync(path.join(daoDir(), "cf-credentials.json"))) return true; } catch (e) {}
+    try { const cfg = vscode.workspace.getConfiguration("daoBridge"); if (String(cfg.get("tunnelToken") || "").trim()) return true; } catch (e) {}
+    try { if (fs.existsSync(path.join(os.homedir(), ".cloudflared", "cert.pem"))) return true; } catch (e) {}
+    return this.mode === "named";
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // API Token → 自动开通命名隧道(固定域名) — 帛书·「道生一, 一生二」
+  // 用户只给一个 Cloudflare API Token, 系统无为而无不为:
+  //   ① 取 account ② 选/建 zone 下子域 ③ 建/复用隧道 ④ 取 connector token
+  //   ⑤ 配 ingress 指向本地端口 ⑥ upsert DNS CNAME → <id>.cfargotunnel.com
+  //   ⑦ 落盘 named-tunnel.json(持久化) → 重启即固定域名, 彻底规避快速隧道频控
+  // 账号下无域名(zone)时: 如实返回 needDomain(API Token 仍已持久化, 加域名后一键成站)。
+  // ═══════════════════════════════════════════════════════════
+  async provisionNamedTunnel(apiToken, wantHostname) {
+    const cfg = vscode.workspace.getConfiguration("daoBridge");
+    const localPort = parseInt(cfg.get("localPort"), 10) || 9910;
+    const acctR = await cfApiRequest("GET", "/accounts", apiToken);
+    const acct = acctR.json && acctR.json.result && acctR.json.result[0];
+    if (!acct || !acct.id) return { ok: false, message: "无法读取 Cloudflare 账号(检查 API Token 权限: Account.Cloudflare Tunnel + Zone.DNS)" };
+    const acctId = acct.id;
+    const zonesR = await cfApiRequest("GET", "/zones", apiToken);
+    const zones = (zonesR.json && zonesR.json.result) || [];
+    let zone = null, hostname = String(wantHostname || "").trim().toLowerCase();
+    if (hostname) zone = zones.find((z) => hostname === z.name || hostname.endsWith("." + z.name)) || null;
+    if (!zone) zone = zones.find((z) => z.status === "active") || zones[0] || null;
+    if (!zone) {
+      return { ok: false, needDomain: true, acctId,
+        message: "API Token 有效并已保存，但你的 Cloudflare 账号下没有任何域名(zone)。命名隧道的『固定域名』必须绑定一个你自己拥有的域名——请先在 Cloudflare 添加一个站点(Add a site)，再点『保存并切到用户通道』即自动开通固定域名。当前继续用零配置快速隧道(可正常穿透)。" };
+    }
+    const hostSlug = (os.hostname() || "dao").toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "dao";
+    if (!hostname) hostname = "dao-" + hostSlug + "." + zone.name;
+    const tunName = "dao-bridge-" + hostSlug;
+    let tunnelId = "";
+    const listR = await cfApiRequest("GET", "/accounts/" + acctId + "/cfd_tunnel?is_deleted=false", apiToken);
+    const existing = ((listR.json && listR.json.result) || []).find((t) => t.name === tunName);
+    if (existing) tunnelId = existing.id;
+    if (!tunnelId) {
+      const cr = await cfApiRequest("POST", "/accounts/" + acctId + "/cfd_tunnel", apiToken, { name: tunName, config_src: "cloudflare" });
+      tunnelId = cr.json && cr.json.result && cr.json.result.id;
+      if (!tunnelId) return { ok: false, message: "创建隧道失败: " + JSON.stringify((cr.json && cr.json.errors) || cr.text || cr.error || "").slice(0, 180) };
+    }
+    const tkR = await cfApiRequest("GET", "/accounts/" + acctId + "/cfd_tunnel/" + tunnelId + "/token", apiToken);
+    const connToken = tkR.json && tkR.json.result;
+    if (!connToken || typeof connToken !== "string") return { ok: false, message: "获取隧道连接令牌失败(权限不足?)" };
+    await cfApiRequest("PUT", "/accounts/" + acctId + "/cfd_tunnel/" + tunnelId + "/configurations", apiToken,
+      { config: { ingress: [{ hostname, service: "http://127.0.0.1:" + localPort }, { service: "http_status:404" }] } });
+    const content = tunnelId + ".cfargotunnel.com";
+    const dnsList = await cfApiRequest("GET", "/zones/" + zone.id + "/dns_records?name=" + encodeURIComponent(hostname), apiToken);
+    const rec = ((dnsList.json && dnsList.json.result) || [])[0];
+    const dnsBody = { type: "CNAME", name: hostname, content, proxied: true, ttl: 1 };
+    if (rec) await cfApiRequest("PUT", "/zones/" + zone.id + "/dns_records/" + rec.id, apiToken, dnsBody);
+    else await cfApiRequest("POST", "/zones/" + zone.id + "/dns_records", apiToken, dnsBody);
+    try {
+      fs.writeFileSync(path.join(daoDir(), "named-tunnel.json"),
+        JSON.stringify({ cfTunnelToken: connToken, cfHostname: hostname, tunnelId, acctId, zoneId: zone.id, apiToken, savedAt: new Date().toISOString() }, null, 2), "utf8");
+    } catch (e) {}
+    return { ok: true, hostname, tunnelId, token: connToken };
+  }
+
   async loginCloudFlare(email, apiKeyOrToken) {
+    const key = String(apiKeyOrToken || "").trim();
     // 尝试作为API Token验证
-    const ok = await verifyCfToken(apiKeyOrToken);
+    const ok = await verifyCfToken(key);
     if (ok) {
-      this.cfCredentials = { email, apiToken: apiKeyOrToken, source: "api-token", savedAt: new Date().toISOString() };
+      this.cfCredentials = { email, apiToken: key, source: "api-token", savedAt: new Date().toISOString() };
       saveCfCredentials(this.cfCredentials);
-      return { ok: true, message: "CloudFlare API Token 验证成功" };
+      // API Token 具备 Tunnel 权限 → 自动开通命名隧道固定域名(闭环持久化)
+      const cfg = vscode.workspace.getConfiguration("daoBridge");
+      const wantHost = String(cfg.get("hostname") || "").trim();
+      let prov;
+      try { prov = await this.provisionNamedTunnel(key, wantHost); }
+      catch (e) { prov = { ok: false, message: String(e && e.message) }; }
+      if (prov.ok) return { ok: true, message: "API Token 验证成功 · 已开通固定域名命名隧道 " + prov.hostname + "（点『重启隧道』或稍候即以固定域名上线）" };
+      if (prov.needDomain) return { ok: true, message: prov.message };
+      return { ok: true, message: "API Token 验证成功且已保存，但自动开通命名隧道未完成：" + prov.message };
     }
     // 尝试作为Global API Key
     const r = await new Promise((resolve) => {
@@ -1396,7 +1479,10 @@ class Bridge {
       try {
         fs.writeFileSync(path.join(daoDir(), "named-tunnel.json"),
           JSON.stringify({ cfTunnelToken: tok, email, savedAt: new Date().toISOString() }, null, 2), "utf8");
-        return { ok: true, message: "已保存命名隧道令牌 — 点击「重启隧道」即以固定域名启动" };
+        // 同步写入内存凭证 → 退出按钮立即可见(闭环, 不再「加了退不出」)
+        this.cfCredentials = { email, tunnelToken: tok, source: "tunnel-token", savedAt: new Date().toISOString() };
+        saveCfCredentials(this.cfCredentials);
+        return { ok: true, message: "已保存命名隧道连接令牌 — 点击「重启隧道」即以固定域名启动" };
       } catch (e) {}
     }
     return { ok: false, message: "CloudFlare 验证失败 — 请检查 email 和 API Key/Token（如仅用快速隧道则无需填写）" };
@@ -1954,9 +2040,12 @@ window.addEventListener('message',(e)=>{const m=e.data;
     document.getElementById('agents').textContent=String(s.agentCount||0);
     document.getElementById('boot').textContent=s.bootstrap||('irm '+(s.url||'<公网URL>')+'/api/bootstrap.ps1 | iex');
     var loggedIn=!!(s.cfLoggedIn||s.mode==='named');
-    document.getElementById('logoutBtn').style.display=loggedIn?'block':'none';
+    var hasCfg=!!(s.hasCfConfig||loggedIn);
+    // 退出/重置按钮: 只要有任何账号/令牌残留即可见(根治「加了token退不出」)
+    document.getElementById('logoutBtn').style.display=hasCfg?'block':'none';
     const cfSt=document.getElementById('cfStatus');
-    if(loggedIn){cfSt.textContent='✓ 用户通道'+(s.cfEmail?(' · '+s.cfEmail):'')+(s.mode==='named'?'（命名隧道运行中）':'');cfSt.style.color='#3fb950';document.getElementById('cfLoginForm').style.display='none';}
+    if(s.mode==='named'){cfSt.textContent='✓ 命名隧道运行中 · 固定域名 '+(s.cfHostname||s.url||'')+(s.cfEmail?(' · '+s.cfEmail):'');cfSt.style.color='#3fb950';document.getElementById('cfLoginForm').style.display='none';}
+    else if(loggedIn){cfSt.textContent='✓ 已保存 CloudFlare 凭证'+(s.cfHostname?('（固定域名 '+s.cfHostname+'，点重启隧道生效）'):'（当前用快速隧道，如需固定域名请在 Cloudflare 添加域名）')+(s.cfEmail?(' · '+s.cfEmail):'');cfSt.style.color='#e8c84a';document.getElementById('cfLoginForm').style.display='none';}
     else{cfSt.textContent='未登录（零配置快速隧道）';cfSt.style.color='';document.getElementById('cfLoginForm').style.display='block';}
   }
   if(m.type==='result'){out.className='';out.textContent='['+m.op+'] '+(m.ok?'✓':'✗')+' '+(m.text||'');}
