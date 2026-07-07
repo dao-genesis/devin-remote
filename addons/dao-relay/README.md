@@ -89,11 +89,41 @@ node provision.mjs <粘贴的CF_API_TOKEN>
 | 端点 | 说明 |
 |---|---|
 | `GET /api/relay/deep-link` | 返回预填权限的 CF Token 创建深链 + 操作指引 |
-| `GET /api/relay/state` | 当前持久通道状态（token 脱敏）、是否已接管 |
+| `GET /api/relay/state` | 当前持久通道状态（token / oauth 令牌脱敏）、是否已接管 |
 | `POST /api/relay/set` `{url}` | 登记持久通道 URL 并**立即置顶接管**（健康检查 + 落盘 + 重连中继） |
+| `POST /api/relay/oauth-login` | 一次登录全自动打通：起本地 8976 回调 → 返回 Cloudflare 登录链接，用户授权后后端自动换 token / 部署 / 落盘 / 置顶 |
+| `POST /api/relay/oauth-refresh` | 用 `refresh_token` 续期 access_token 并重部署（自愈） |
+| `POST /api/relay/oauth-logout` | 撤销 CF 授权 + 清 `~/.dao/relay.json` → 回退快速隧道 / mesh（删除通道 / 切号） |
 
 于是「org 级 MCP 集成配一次永久有效、URL 永不漂、零用户参与」成立——顶层持久通道就绪即走它，
 挂了自动落回快速隧道 / mesh，无为而无不为。
+
+### A″. 一次登录 · 全自动注册 Token（OAuth PKCE · 免手搓·推荐给"人在自己电脑前"的用户）
+
+> 为道日损·再压一层：连「点一次 Create 复制 Token」都省掉。用户只**打开登录链接 → 登录
+> Cloudflare → 点一次授权**，后端即经 **OAuth 2.0 授权码 + PKCE（RFC 7636 S256）** 全自动
+> 换取 `access_token` + `refresh_token`，注册权限、部署 Worker、落盘、置顶接管——**全程无需
+> 手搓任何 Token**。令牌到期用 `refresh_token` 自动续期；用户想删通道 / 换号即撤销授权并清态。
+
+复用 wrangler 官方公共 OAuth 应用（`client_id=54d11594-…`，无需另注册），CF 固定回调
+`http://localhost:8976/oauth/callback`（端口 8976 强制）。单一真源 = `oauth.mjs`（已单测）。
+
+命令行直用：
+
+```bash
+cd addons/dao-relay
+node oauth.mjs login     # 打印登录链接 → 浏览器授权 → 自动部署落盘 (~/.dao/relay.json 含 refresh_token)
+node oauth.mjs refresh   # 用 refresh_token 续期并重部署 (自愈)
+node oauth.mjs logout    # 撤销 CF 授权 + 清态 → 回退快速隧道 / mesh
+```
+
+插件侧同样一键：dao-vsix「内网穿透」板块顶部「⭐ 持久通道 · 一次登录全自动打通」卡片 →
+点「🔐 一次登录·全自动打通」即在浏览器打开授权页（对应 `POST /api/relay/oauth-login`），
+授权后后端全自动打通并置顶；卡片还提供「↻ 续期/重部署」与「🗑 删除通道/切号」。
+
+> ⚠ 场景取舍：OAuth 的 `localhost:8976` 回调落在**发起授权那台机器**的浏览器。用户**人在自己
+> 桌面**时最省事（A″）；若是**云端 Agent 经网页远程**操作用户机，回调会落在远程浏览器不便，
+> 此时用无回调的**预填 Token 深链（A′）**更稳。两条路殊途同归，都落 `~/.dao/relay.json` 被插件置顶采纳。
 
 ### B. 命令行自建（CI / 批量 / 企业）
 
