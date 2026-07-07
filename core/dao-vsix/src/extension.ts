@@ -2601,7 +2601,10 @@ function getMirrorPageHtml(): string {
 //   不另起服务: 蹭常驻桥(DAO Bridge)的耐用隧道 <桥URL>/mcp; 工具实现全部委托
 //   插件已实测的内部处理器(/api/* 与 pcGui* / Chrome CDP), 不重复造轮 (大巧若拙)。
 // ═══════════════════════════════════════════════════════════
-const DAO_CDP_PORT = 9333; // browser_* 专用隔离 Chrome 的远程调试端口 (独立 user-data-dir·并行而不相悖)
+let DAO_CDP_PORT = 9333; // browser_* 专用隔离 Chrome 的远程调试端口 (独立 user-data-dir·并行而不相悖)
+//   注: 为 let — 当自起隔离 Chrome 不可行(如 Devin Desktop VM 上无独立浏览器可拉起)时,
+//   daoCdpEnsureChrome 会「复用」宿主已运行的 Chrome CDP 端点并把本变量指向其端口(下游 daoCdpHttpGet /
+//   /json/list 拿到的 wsUrl 自带正确端口, 故全链路随之切换·无为而无不为)。
 
 function daoMcpSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -2640,9 +2643,9 @@ const PC_UIA_TREE_PS_B64 = 'cGFyYW0oW3N0cmluZ10kdGl0bGU9IiIsW2ludF0kcGlkXz0wLFtp
 const PC_ACTIVATE_PS_B64 = 'cGFyYW0oW3N0cmluZ10kdGl0bGU9IiIsW2ludF0kcGlkXz0wKQ0KJEVycm9yQWN0aW9uUHJlZmVyZW5jZT0nU3RvcCcNCmlmKC1ub3QgKCdEYW9XaW4nIC1hcyBbdHlwZV0pKXsgQWRkLVR5cGUgQCcNCnVzaW5nIFN5c3RlbTt1c2luZyBTeXN0ZW0uUnVudGltZS5JbnRlcm9wU2VydmljZXM7dXNpbmcgU3lzdGVtLlRleHQ7DQpwdWJsaWMgY2xhc3MgRGFvV2luew0KIFtEbGxJbXBvcnQoInVzZXIzMi5kbGwiKV0gcHVibGljIHN0YXRpYyBleHRlcm4gYm9vbCBTZXRGb3JlZ3JvdW5kV2luZG93KEludFB0ciBoKTsNCiBbRGxsSW1wb3J0KCJ1c2VyMzIuZGxsIildIHB1YmxpYyBzdGF0aWMgZXh0ZXJuIGJvb2wgU2hvd1dpbmRvdyhJbnRQdHIgaCxpbnQgbik7DQogW0RsbEltcG9ydCgidXNlcjMyLmRsbCIpXSBwdWJsaWMgc3RhdGljIGV4dGVybiBib29sIElzV2luZG93VmlzaWJsZShJbnRQdHIgaCk7DQogW0RsbEltcG9ydCgidXNlcjMyLmRsbCIpXSBwdWJsaWMgc3RhdGljIGV4dGVybiBpbnQgR2V0V2luZG93VGV4dChJbnRQdHIgaCxTdHJpbmdCdWlsZGVyIHMsaW50IG4pOw0KIFtEbGxJbXBvcnQoInVzZXIzMi5kbGwiKV0gcHVibGljIHN0YXRpYyBleHRlcm4gYm9vbCBFbnVtV2luZG93cyhFbnVtUHJvYyBjYixJbnRQdHIgbCk7DQogW0RsbEltcG9ydCgidXNlcjMyLmRsbCIpXSBwdWJsaWMgc3RhdGljIGV4dGVybiB1aW50IEdldFdpbmRvd1RocmVhZFByb2Nlc3NJZChJbnRQdHIgaCxvdXQgdWludCBwaWQpOw0KIHB1YmxpYyBkZWxlZ2F0ZSBib29sIEVudW1Qcm9jKEludFB0ciBoLEludFB0ciBsKTsNCn0NCidAIH0NCiRmb3VuZD1bSW50UHRyXTo6WmVybzsgJGZvdW5kVGl0bGU9IiINCiRjYj1bRGFvV2luK0VudW1Qcm9jXXsgcGFyYW0oJGgsJGwpDQogIGlmKC1ub3QgW0Rhb1dpbl06OklzV2luZG93VmlzaWJsZSgkaCkpe3JldHVybiAkdHJ1ZX0NCiAgJHNiPU5ldy1PYmplY3QgVGV4dC5TdHJpbmdCdWlsZGVyIDUxMjsgW0Rhb1dpbl06OkdldFdpbmRvd1RleHQoJGgsJHNiLDUxMil8T3V0LU51bGw7ICR0PSRzYi5Ub1N0cmluZygpDQogIGlmKCR0IC1lcSAiIil7cmV0dXJuICR0cnVlfQ0KICAkcD0wOyBbRGFvV2luXTo6R2V0V2luZG93VGhyZWFkUHJvY2Vzc0lkKCRoLFtyZWZdJHApfE91dC1OdWxsDQogIGlmKCgkcGlkXyAtZ3QgMCAtYW5kICRwIC1lcSAkcGlkXykgLW9yICgkdGl0bGUgLW5lICIiIC1hbmQgJHQgLWxpa2UgIiokdGl0bGUqIikpeyAkc2NyaXB0OmZvdW5kPSRoOyAkc2NyaXB0OmZvdW5kVGl0bGU9JHQ7IHJldHVybiAkZmFsc2UgfQ0KICByZXR1cm4gJHRydWUNCn0NCltEYW9XaW5dOjpFbnVtV2luZG93cygkY2IsW0ludFB0cl06Olplcm8pfE91dC1OdWxsDQppZigkZm91bmQgLWVxIFtJbnRQdHJdOjpaZXJvKXsgV3JpdGUtT3V0cHV0ICd7Im9rIjpmYWxzZSwiZXJyb3IiOiJ3aW5kb3cgbm90IGZvdW5kIn0nOyBleGl0IH0NCltEYW9XaW5dOjpTaG93V2luZG93KCRmb3VuZCw5KXxPdXQtTnVsbCAgIyBTV19SRVNUT1JFDQokb2s9W0Rhb1dpbl06OlNldEZvcmVncm91bmRXaW5kb3coJGZvdW5kKQ0KW3BzY3VzdG9tb2JqZWN0XUB7b2s9JG9rO3RpdGxlPSRzY3JpcHQ6Zm91bmRUaXRsZX0gfCBDb252ZXJ0VG8tSnNvbiAtQ29tcHJlc3MNCg==';
 
 // ── browser_* · Chrome DevTools Protocol (CDP) ──
-function daoCdpHttpGet(p) {
+function daoCdpHttpGetOn(port, p) {
     return new Promise((resolve, reject) => {
-        const req = http.get({ host: '127.0.0.1', port: DAO_CDP_PORT, path: p, timeout: 5000 }, (res) => {
+        const req = http.get({ host: '127.0.0.1', port, path: p, timeout: 5000 }, (res) => {
             let buf = ''; res.setEncoding('utf8');
             res.on('data', (d) => buf += d);
             res.on('end', () => { try { resolve(buf ? JSON.parse(buf) : null); } catch (e) { reject(new Error('cdp-http-parse: ' + buf.slice(0, 120))); } });
@@ -2650,6 +2653,29 @@ function daoCdpHttpGet(p) {
         req.on('error', reject);
         req.on('timeout', () => { try { req.destroy(); } catch (e6) { /* 守柔 */ } reject(new Error('cdp-http-timeout')); });
     });
+}
+function daoCdpHttpGet(p) { return daoCdpHttpGetOn(DAO_CDP_PORT, p); }
+// 复用宿主已运行的 Chrome CDP 端点(Devin Desktop 生态: 云端 Chrome 恒以 --remote-debugging-port 常驻)。
+//   候选端口 = env(DAO_CDP_PORT/DEVIN_CDP_PORT) + 从运行中 chrome 进程命令行解析出的 --remote-debugging-port + 常见 29229。
+//   首个 /json/version 通者即复用, 并把 DAO_CDP_PORT 指向它。返回命中端口或 null。
+async function daoCdpTryReuseExisting(): Promise<number | null> {
+    const ports: number[] = [];
+    const pushp = (v) => { const n = parseInt(String(v || ''), 10); if (n && n > 0 && !ports.includes(n) && n !== DAO_CDP_PORT) ports.push(n); };
+    pushp(process.env['DAO_CDP_PORT']); pushp(process.env['DEVIN_CDP_PORT']);
+    try {
+        const cp = require('child_process') as typeof import('child_process');
+        const isWin = process.platform === 'win32';
+        const out = isWin
+            ? cp.execSync('wmic process where "name=\'chrome.exe\' or name=\'msedge.exe\'" get commandline', { encoding: 'utf8', timeout: 4000, windowsHide: true } as any)
+            : cp.execSync("ps -eo args 2>/dev/null | grep -i -- '--remote-debugging-port=' | grep -v grep", { encoding: 'utf8', timeout: 4000, shell: '/bin/sh' } as any);
+        const re = /--remote-debugging-port[=\s]+(\d+)/g; let m;
+        while ((m = re.exec(out)) !== null) pushp(m[1]);
+    } catch { /* 守柔 */ }
+    pushp(29229); // Devin Desktop / 云端 Chrome 默认调试口
+    for (const port of ports) {
+        try { const ver = await daoCdpHttpGetOn(port, '/json/version'); if (ver) return port; } catch { /* 试下一个 */ }
+    }
+    return null;
 }
 
 // 在单个 CDP target(或 browser endpoint) 上顺序执行若干命令, 返回最后一条结果。
@@ -2751,7 +2777,12 @@ function daoCdpBatch(wsUrl, calls, timeoutMs = 20000) {
 async function daoCdpEnsureChrome() {
     try { return await daoCdpHttpGet('/json/version'); } catch (e9) { /* 未起 → 拉起 */ }
     const exe = findBrowserExe();
-    if (!exe) throw new Error('no-chrome-found (browser_* 需本机存在 Chrome/Edge/Chromium)');
+    // 无独立可拉起的浏览器(如 Devin Desktop VM 上仅有 wrapper 脚本/受限沙箱): 复用宿主已运行的 Chrome CDP。
+    if (!exe) {
+        const reused = await daoCdpTryReuseExisting();
+        if (reused) { DAO_CDP_PORT = reused; return await daoCdpHttpGetOn(reused, '/json/version'); }
+        throw new Error('no-chrome-found (browser_* 需本机存在 Chrome/Edge/Chromium, 或已运行带 --remote-debugging-port 的 Chrome 供复用)');
+    }
     const profileDir = path.join(DAO_DIR, 'cdp-profile');
     try { fs.mkdirSync(profileDir, { recursive: true }); } catch (e10) { /* 守柔 */ }
     const args = [
@@ -2760,10 +2791,15 @@ async function daoCdpEnsureChrome() {
         '--user-data-dir=' + profileDir,
         '--no-first-run', '--no-default-browser-check', '--disable-default-apps', '--disable-sync',
         '--disable-features=Translate,msEdgeWelcomePage,msSync',
+        // 非 Windows(Linux 容器/无特权 VM·如 Devin Desktop)常无沙箱内核能力, 缺此则秒退→CDP 永不就绪。
+        ...(process.platform !== 'win32' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
         'about:blank',
     ];
     try { const child = childProcess.spawn(exe, args, { detached: true, stdio: 'ignore' }); child.unref(); } catch (e) { throw new Error('chrome-spawn: ' + (e && e.message)); }
     for (let i = 0; i < 40; i++) { await daoMcpSleep(250); try { return await daoCdpHttpGet('/json/version'); } catch (e11) { /* 等就绪 */ } }
+    // 自起隔离 Chrome 未就绪(权限/沙箱/损坏): 退而复用宿主已运行的 Chrome CDP, 守柔不致全失。
+    const reused = await daoCdpTryReuseExisting();
+    if (reused) { DAO_CDP_PORT = reused; return await daoCdpHttpGetOn(reused, '/json/version'); }
     throw new Error('chrome-cdp-not-ready');
 }
 
@@ -8340,11 +8376,47 @@ let _daoGoodBrowser: string | null | undefined; // undefined=未探, null=皆不
 //   会在 --headless 下非零退出/崩溃, 据此跳过, 不致「点了没反应」。
 function daoProbeBrowser(exe: string): boolean {
     try {
+        if (!daoIsNativeBrowserBinary(exe)) return false; // 拒 shebang 包装脚本(见下)
         const cp = require('child_process') as typeof import('child_process');
         const tmp = path.join(os.tmpdir(), 'dao-bp-probe');
-        cp.execFileSync(exe, ['--headless=new', '--disable-gpu', '--no-first-run', '--user-data-dir=' + tmp, '--dump-dom', 'about:blank'], { timeout: 8000, stdio: ['ignore', 'ignore', 'ignore'], windowsHide: true });
+        // 非 Windows 补 --no-sandbox/--disable-dev-shm-usage: 否则受限 VM(Devin Desktop)上真 Chrome 亦秒退→误判损坏。
+        const sandboxArgs = process.platform !== 'win32' ? ['--no-sandbox', '--disable-dev-shm-usage'] : [];
+        cp.execFileSync(exe, ['--headless=new', '--disable-gpu', '--no-first-run', ...sandboxArgs, '--user-data-dir=' + tmp, '--dump-dom', 'about:blank'], { timeout: 8000, stdio: ['ignore', 'ignore', 'ignore'], windowsHide: true });
         return true; // 退出码 0 → 可用
     } catch { return false; } // 崩溃/超时/非零退出 → 不可用
+}
+// 帛书·「大巧若拙」— 只认「真·浏览器二进制」, 拒 shebang 包装脚本。
+//   踩坑: Devin Desktop VM 的 `/home/ubuntu/.local/bin/google-chrome` 实为一段 `#!/bin/sh` 脚本
+//   (curl PUT 到宿主 Chrome 的 /json/new 开标签), 被 spawn 当 Chrome 拉起时只会开个标签就退出,
+//   --remote-debugging-port 全被无视 → CDP 永不就绪(chrome-cdp-not-ready)。据首字节 ELF/MZ/Mach-O 甄别。
+function daoIsNativeBrowserBinary(exe: string): boolean {
+    try {
+        const fd = fs.openSync(exe, 'r'); const buf = Buffer.alloc(4);
+        const n = fs.readSync(fd, buf, 0, 4, 0); try { fs.closeSync(fd); } catch { /* 守柔 */ }
+        if (n < 2) return false;
+        if (buf[0] === 0x23 && buf[1] === 0x21) return false; // "#!" → 脚本, 拒
+        if (buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46) return true; // ELF (Linux)
+        if (buf[0] === 0x4d && buf[1] === 0x5a) return true; // MZ (Windows PE)
+        if (buf[0] === 0xcf || buf[0] === 0xca || buf[0] === 0xfe) return true; // Mach-O (macOS)
+        // Windows: exe 后缀直接放行(上面 openSync 已证存在)
+        if (process.platform === 'win32' && /\.exe$/i.test(exe)) return true;
+        return false;
+    } catch { return false; }
+}
+// Devin Desktop / 云端环境: 真 Chrome 二进制常在 /opt/.devin/... 且不在 PATH。
+//   从运行中的 chrome 进程 /proc/<pid>/exe 反解出真二进制路径(最可靠·必有一个在跑)。
+function daoLinuxRunningChromeExe(): string | null {
+    try {
+        const cp = require('child_process') as typeof import('child_process');
+        const out = cp.execSync("ps -eo pid=,comm= 2>/dev/null | grep -i chrome | grep -v crashpad | awk '{print $1}'", { encoding: 'utf8', timeout: 4000, shell: '/bin/sh' } as any);
+        for (const pid of out.split(/\s+/).filter(Boolean)) {
+            try {
+                const p = fs.readlinkSync('/proc/' + pid + '/exe');
+                if (p && fs.existsSync(p) && daoIsNativeBrowserBinary(p)) return p;
+            } catch { /* 守柔 */ }
+        }
+    } catch { /* 守柔 */ }
+    return null;
 }
 function findBrowserExe(): string | null {
     if (_daoGoodBrowser !== undefined) return _daoGoodBrowser;
@@ -8372,6 +8444,15 @@ function findBrowserExe(): string | null {
         candidates.push((process.env['ProgramFiles(x86)'] || '') + '\\Microsoft\\Edge\\Application\\msedge.exe');
         candidates.push((process.env['ProgramFiles'] || '') + '\\Microsoft\\Edge\\Application\\msedge.exe');
     } else if (isLinux) {
+        // Devin Desktop / 云端: 真 Chrome 二进制在 /opt/.devin/... 且不在 PATH — 从运行中进程反解, 优先。
+        const running = daoLinuxRunningChromeExe(); if (running) candidates.push(running);
+        // /opt/.devin 下的打包 Chrome(版本目录不定, glob 之)
+        try {
+            const base = '/opt/.devin/chrome/chrome';
+            for (const d of (fs.existsSync(base) ? fs.readdirSync(base) : [])) {
+                candidates.push(path.join(base, d, 'chrome-linux64', 'chrome'));
+            }
+        } catch { /* 守柔 */ }
         candidates.push('/usr/bin/google-chrome');
         candidates.push('/usr/bin/google-chrome-stable');
         candidates.push('/usr/bin/chromium-browser');
@@ -8395,7 +8476,8 @@ function findBrowserExe(): string | null {
     for (const p of candidates) {
         try {
             if (p && fs.existsSync(p)) {
-                if (!firstExisting) firstExisting = p;
+                // firstExisting 仅记「真·二进制」— 绝不回退到 shebang 包装脚本(否则 spawn 只开个标签就退→CDP 不起)。
+                if (!firstExisting && daoIsNativeBrowserBinary(p)) firstExisting = p;
                 if (daoProbeBrowser(p)) { _daoGoodBrowser = p; return p; }
             }
         } catch { /* 守柔 */ }
