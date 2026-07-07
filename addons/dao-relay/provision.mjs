@@ -128,13 +128,17 @@ function saveState(s) {
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 
-// token: Cloudflare API Token(经预填深链创建·贴回)。
-// 返回 { url, subdomain, accountId, savedTo }。副作用: wrangler deploy + 落盘。
-export async function provision(token, { log = console.log } = {}) {
-  if (!token || token.length < 20) throw new Error("需要有效的 Cloudflare API Token(经预填深链创建)");
-  log("① 校验 token…");
-  await verifyToken(token);
-  const accountId = await firstAccountId(token);
+// token: 可部署 Worker 的 Cloudflare Bearer 凭据 —— 既可是「预填深链创建·贴回」的 API Token,
+//   也可是 OAuth 登录(oauth.mjs)拿到的 access_token(两者对 api.cloudflare.com 皆是 Bearer)。
+// opts.skipVerify: OAuth access_token 不走 /user/tokens/verify(那是 API Token 专用), 传 true 跳过。
+// opts.accountId : 自愈重部署时复用已知账号, 省一次 /accounts 拉取。
+// opts.extraState: 合并进落盘状态(如 { auth:"oauth", oauth:{ refreshToken,... } })。
+// 返回 { url, subdomain, accountId, savedTo, ... }。副作用: wrangler deploy + 落盘。
+export async function provision(token, { log = console.log, skipVerify = false, accountId: accId, extraState = {} } = {}) {
+  if (!token || token.length < 20) throw new Error("需要有效的 Cloudflare Bearer 凭据(API Token 或 OAuth access_token)");
+  log("① 校验凭据…");
+  if (!skipVerify) await verifyToken(token);
+  const accountId = accId || await firstAccountId(token);
   log(`② 账号 ${accountId}`);
   const subdomain = await ensureSubdomain(token, accountId);
   const url = relayUrl(subdomain);
@@ -147,11 +151,14 @@ export async function provision(token, { log = console.log } = {}) {
   if (dep.code !== 0) throw new Error(`wrangler deploy 失败(code=${dep.code}): ${(dep.err || dep.out).slice(-800)}`);
   log("⑤ 部署完成, 等边缘传播并健康检查…");
   const ok = await healthOk(url);
-  const state = { url, subdomain, accountId, token, deployedAt: new Date().toISOString(), healthy: ok };
+  const state = { url, subdomain, accountId, token, deployedAt: new Date().toISOString(), healthy: ok, ...extraState };
   const savedTo = saveState(state);
   log(ok ? `✅ 持久通道就绪: ${url}` : `⚠ 已部署但健康检查暂未通过(边缘传播中): ${url}`);
   return { ...state, savedTo };
 }
+
+// 供 oauth.mjs / 自愈流程复用的落盘器与子域登记器。
+export { saveState, ensureSubdomain, firstAccountId, stateFile };
 
 // CLI: node provision.mjs [--deep-link | <token>]
 if (import.meta.url === `file://${process.argv[1]}`) {

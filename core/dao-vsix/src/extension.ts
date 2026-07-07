@@ -1722,6 +1722,74 @@ async function daoRelaySetPersistent(rawUrl: string): Promise<{ ok: boolean; url
     return { ok: true, url, healthy };
 }
 
+// ═══════════════════════════════════════════════════════════
+// 顶层持久通道 · OAuth 一次登录全自动打通(自动注册 CF Token · PKCE, 免手搓)
+//   本源真源 = addons/dao-relay/oauth.mjs(已单测): 生成登录链接 → 本地 8976 收授权码 →
+//   换 access+refresh_token → wrangler deploy → 落 relay.json(含 refresh·自动续期)。
+//   插件仅作编排: 定位模块(动态 import ESM) + 打开登录链接 + 落盘后置顶接管 + 刷新面板。
+//   自愈: refresh 续期重部署; 删除/切号: 撤销授权 + 清态回退 quick tunnel/mesh。
+// ═══════════════════════════════════════════════════════════
+let _daoRelayOAuthMod: any = null;
+async function daoRelayOAuthModule(): Promise<any> {
+    if (_daoRelayOAuthMod) return _daoRelayOAuthMod;
+    const cands = [
+        process.env.DAO_RELAY_DIR ? path.join(process.env.DAO_RELAY_DIR, 'oauth.mjs') : '',
+        path.join(__dirname, '..', '..', '..', 'addons', 'dao-relay', 'oauth.mjs'), // out/ → 仓库根/addons
+        path.join(__dirname, '..', '..', 'addons', 'dao-relay', 'oauth.mjs'),
+        path.join(__dirname, '..', 'dao-relay', 'oauth.mjs'),
+        path.join(DAO_DIR, 'dao-relay', 'oauth.mjs'),                                // 部署到用户机的落点
+    ].filter(Boolean);
+    const found = cands.find((p) => { try { return fs.existsSync(p); } catch { return false; } });
+    if (!found) throw new Error('未找到 dao-relay/oauth.mjs（可设环境变量 DAO_RELAY_DIR 指向 addons/dao-relay）');
+    // 动态 import ESM(用 Function 包裹, 规避打包器把 import() 降级成 require 破坏 ESM 加载)。
+    const dynImport = new Function('u', 'return import(u)') as (u: string) => Promise<any>;
+    _daoRelayOAuthMod = await dynImport(require('url').pathToFileURL(found).href);
+    return _daoRelayOAuthMod;
+}
+
+// 一次登录: 起本地回调服务 → 拿到登录链接即 openExternal + 立刻返回 URL(不阻塞 HTTP);
+// 用户授权后后台自动换令牌/部署/落盘, 完成即置顶接管并刷新面板。
+async function daoRelayOAuthLogin(): Promise<{ ok: boolean; url?: string; error?: string }> {
+    let mod: any;
+    try { mod = await daoRelayOAuthModule(); } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+    return await new Promise((resolve) => {
+        let settled = false;
+        const done = (r: { ok: boolean; url?: string; error?: string }) => { if (!settled) { settled = true; resolve(r); } };
+        const onUrl = (u: string) => { try { vscode.env.openExternal(vscode.Uri.parse(u)); } catch { /* 打开失败不阻塞·用户可手动点 */ } done({ ok: true, url: u }); };
+        mod.loginProvision({ onUrl, log: (m: string) => { try { console.log('[relay-oauth] ' + m); } catch { /* 守柔 */ } } })
+            .then((st: any) => { try { if (st && st.url) daoRelaySetPersistent(st.url); } catch { /* 守柔 */ } try { refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ } })
+            .catch((e: any) => { try { console.log('[relay-oauth] 登录打通失败: ' + (e && e.message || e)); } catch { /* 守柔 */ } done({ ok: false, error: String(e && e.message || e) }); });
+        setTimeout(() => done({ ok: false, error: '生成登录链接超时（本地回调服务未就绪）' }), 90000);
+    });
+}
+
+// 手动续期(自愈按需触发): refresh_token → 新 access → 重部署 → 置顶。
+async function daoRelayOAuthRefresh(): Promise<{ ok: boolean; url?: string; error?: string }> {
+    let mod: any;
+    try { mod = await daoRelayOAuthModule(); } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+    try {
+        const st = await mod.refreshAndRedeploy({ log: (m: string) => { try { console.log('[relay-oauth] ' + m); } catch { /* 守柔 */ } } });
+        try { if (st && st.url) daoRelaySetPersistent(st.url); } catch { /* 守柔 */ }
+        try { refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ }
+        return { ok: true, url: st && st.url };
+    } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+}
+
+// 删除通道 / 切换账号: 撤销 CF 授权(有 refresh 才撤) + 清 relay.json → 断链回退 quick tunnel/mesh。
+async function daoRelayOAuthLogout(): Promise<{ ok: boolean; error?: string }> {
+    let mod: any = null;
+    try { mod = await daoRelayOAuthModule(); } catch { /* 模块缺失也要能清态回退 */ }
+    try {
+        if (mod && mod.deprovision) await mod.deprovision({ log: (m: string) => { try { console.log('[relay-oauth] ' + m); } catch { /* 守柔 */ } } });
+        else { try { fs.unlinkSync(RELAY_STATE_FILE); } catch { /* 本无状态 */ } }
+    } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+    try { if (ws.relayWs) { ws.relayWs.close(); ws.relayWs = null; } } catch { /* 守柔 */ }
+    ws.relayConnected = false; ws.relayConnecting = false;
+    try { connectRelay(ws.port, ws.token); } catch { /* 守柔 */ }
+    try { refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ }
+    return { ok: true };
+}
+
 function daoFetchJson(u: string, timeoutMs: number): Promise<any> {
     return new Promise((resolve, reject) => {
         try {
@@ -3858,12 +3926,19 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             const persist = getPersistentRelayUrl();
             let raw: any = null; try { raw = JSON.parse(fs.readFileSync(RELAY_STATE_FILE, 'utf8')); } catch { /* 无 */ }
             if (raw && raw.token) raw = { ...raw, token: '***' };
+            if (raw && raw.oauth) raw = { ...raw, oauth: { ...raw.oauth, refreshToken: raw.oauth.refreshToken ? '***' : '', accessToken: raw.oauth.accessToken ? '***' : '' } };
             return { ok: true, active: !!persist, url: persist || null, connected: ws.relayConnected, publicUrl: ws.publicUrl, state: raw };
         }
         case '/api/relay/set': {
             const rb: any = JSON.parse(await readBody(req) || '{}');
             return await daoRelaySetPersistent(rb.url);
         }
+        // OAuth 一次登录全自动打通(自动注册 CF Token·PKCE): 返回登录链接即可, 用户授权后后台自动部署落盘。
+        case '/api/relay/oauth-login': { return await daoRelayOAuthLogin(); }
+        // 续期(自愈): refresh_token → 新 access → 重部署置顶。
+        case '/api/relay/oauth-refresh': { return await daoRelayOAuthRefresh(); }
+        // 删除通道/切号: 撤销 CF 授权 + 清态 → 回退 quick tunnel/mesh。
+        case '/api/relay/oauth-logout': { return await daoRelayOAuthLogout(); }
         case '/api/agents': {
             return { agents: [{ id: os.hostname(), hostname: os.hostname(), ip: '127.0.0.1', os: `${os.type()} ${os.release()}`, user: os.userInfo().username, agent_version: '1.0.0', status: 'online', connected_at: new Date(ws.startTime).toISOString(), last_heartbeat: new Date().toISOString(), pending_commands: 0, completed_commands: 0, workspace: vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [], port: ws.port, publicUrl: ws.publicUrl }], count: 1 };
         }
@@ -5566,6 +5641,23 @@ function bridgeReadPublishedConn(): { url: string; token: string; relayUrl?: str
     return best;
 }
 
+// 顶层持久通道状态(喂给 bridge 板块 UI 卡片): 读 relay.json 脱敏摘要(不含任何令牌)。
+function bridgeRelayState(): any {
+    const url = getPersistentRelayUrl();
+    let st: any = null; try { st = JSON.parse(fs.readFileSync(RELAY_STATE_FILE, 'utf8')); } catch { /* 无 */ }
+    return {
+        active: !!url,
+        url: url || '',
+        connected: !!ws.relayConnected,
+        healthy: !!(st && st.healthy),
+        auth: (st && st.auth) || (st && st.token ? 'token' : ''),
+        oauth: !!(st && st.oauth && st.oauth.refreshToken),
+        expiry: (st && st.oauth && st.oauth.expiry) || '',
+        deployedAt: (st && st.deployedAt) || '',
+        subdomain: (st && st.subdomain) || '',
+    };
+}
+
 // Bridge API route handler (exposed via /api/bridge-state)
 // 帛书·「反者道之动」: 进程内隧道优先; 否则采纳常驻桥发布的新鲜连接 → 持久显示已连接。
 function bridgeGetState(): any {
@@ -5576,6 +5668,7 @@ function bridgeGetState(): any {
         root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
         version: EXT_VERSION,
         userStopped: bridgeUserStopped(),
+        relay: bridgeRelayState(),
     };
     if (bridgeUrl) {
         return Object.assign({ connected: true, persistent: false, source: 'inprocess', url: bridgeUrl, token: ws.token || bridgeToken, host: os.hostname(), updated: new Date().toISOString() }, base);
@@ -6545,6 +6638,27 @@ function daoBridgeModuleCard(n,ic,title,desc,how){
     +'<div style="font-size:11px;color:var(--fg);margin:6px 0 4px">'+desc+'</div>'
     +'<div style="font-size:10px;color:var(--muted)">实现：'+how+'</div></div>';
 }
+// 顶层持久通道卡片 · 一次登录全自动打通(自动注册 CF Token·PKCE, 免手搓)。
+// r={active,url,connected,healthy,auth,oauth,expiry,deployedAt,subdomain}
+function rBridgeRelayCard(r){
+  var h='<div class="st" style="margin-top:2px">⭐ 持久通道 · 一次登录全自动打通<span style="font-size:10px;color:var(--muted);font-weight:normal"> · 你自己的固定 Worker 地址·永不漂</span></div>';
+  if(r&&r.active&&r.url){
+    var authTxt=r.oauth?'OAuth 登录(自动续期)':(r.auth==='token'?'贴 Token':'已登记');
+    h+='<div class="card">';
+    h+='<div class="cr"><span class="l">状态</span><span class="v" style="color:'+(r.healthy?'var(--success)':'var(--warn)')+'">'+(r.healthy?'✓ 就绪·置顶接管':'⚠ 已部署·边缘传播中')+(r.connected?' · 已连接':'')+'</span></div>';
+    h+='<div class="cr"><span class="l">恒定地址</span><span class="v" style="font-size:10px;word-break:break-all"><a href="#" onclick="cmd(&#39;copyRelayUrl&#39;);return false" style="color:var(--accent2)">'+esc(r.url)+'</a></span></div>';
+    h+='<div class="cr"><span class="l">授权方式</span><span class="v" style="font-size:10px">'+esc(authTxt)+'</span></div>';
+    if(r.deployedAt)h+='<div class="cr"><span class="l">部署于</span><span class="v" style="font-size:10px">'+esc(r.deployedAt)+'</span></div>';
+    h+='</div>';
+    h+='<div class="br"><button class="btn sm primary" onclick="cmd(&#39;copyRelayUrl&#39;)">📋 复制地址</button>';
+    if(r.oauth)h+='<button class="btn sm" onclick="cmd(&#39;relayOAuthRefresh&#39;)" title="用 refresh_token 续期并重部署(自愈)">↻ 续期/重部署</button>';
+    h+='<button class="btn sm danger" onclick="if(confirm(&#39;撤销 Cloudflare 授权并删除本持久通道，回退到快速隧道/mesh？&#39;))cmd(&#39;relayOAuthLogout&#39;)">🗑 删除通道/切号</button></div>';
+  } else {
+    h+='<div class="card"><div style="font-size:11px;color:var(--muted);margin-bottom:6px">想要<b style="color:var(--fg)">永不漂的固定公网地址</b>？点下面按钮 → 浏览器打开 Cloudflare 登录页 → 点一次授权即可。后端<b style="color:var(--fg)">全自动</b>注册 Token、部署 Worker、落盘并置顶接管，<b style="color:var(--fg)">无需手搓 Token</b>；令牌到期自动续期，出问题自愈。</div>';
+    h+='<button class="btn primary" onclick="cmd(&#39;relayOAuthLogin&#39;)">🔐 一次登录·全自动打通(推荐)</button></div>';
+  }
+  return h;
+}
 // 内网穿透 · DAO Bridge — 与独立穿透插件 1:1: 状态 + 命名隧道/CloudFlare + 导出文档 + 能力自测。
 function rBridgeFull(){
   var v=document.getElementById('v-bridge');if(!v)return;
@@ -6552,6 +6666,8 @@ function rBridgeFull(){
   var on=!!b.url;
   var h='<div class="st">☯ 内网穿透 · DAO Bridge (集成)</div>';
   h+='<div class="card" style="font-size:11px;color:var(--muted);margin-bottom:6px">无名之樸 · 插件启动即自动打通整机公网穿透，<b style="color:var(--fg)">零配置、无需任何账号</b>；云端 Agent 即可远程操作本机。</div>';
+  // ── 顶层持久通道 · 一次登录全自动打通(自动注册 CF Token·PKCE) ──
+  h+=rBridgeRelayCard(b.relay||{});
   // ── 模块1: 实时状态 ──
   if(!on){
     h+='<div class="card"><div class="cr"><span class="l">隧道状态</span><span class="v" style="color:var(--warn)">'+(b.userStopped?'已手动停止 · 自动守护挂起(点▶恢复)':(b.lastErr?esc(b.lastErr):'未连接 · 启动中…'))+'</span></div>';
@@ -7235,7 +7351,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'openRoutedPanel', 'compInfo', 'compRun', 'compTerminal', 'compOpenFile', 'compReveal', 'injectDiagnose'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'openRoutedPanel', 'compInfo', 'compRun', 'compTerminal', 'compOpenFile', 'compReveal', 'injectDiagnose'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -8393,6 +8509,35 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 await bridgeStartTunnel(false);
                 vscode.window.showInformationMessage('DAO Bridge: ' + r.message + ' · 已回到无账号快速隧道');
                 refreshReply({ type: 'actionResult', command: 'bridgeLogout', ok: r.ok });
+                break;
+            }
+            // ── 顶层持久通道 · OAuth 一次登录全自动打通(自动注册 CF Token·PKCE) ──
+            case 'relayOAuthLogin': {
+                vscode.window.showInformationMessage('DAO 持久通道: 正在生成登录链接，浏览器将打开 Cloudflare 授权页，点一次授权即可…');
+                const r = await daoRelayOAuthLogin();
+                if (r.ok && r.url) { try { await vscode.env.clipboard.writeText(r.url); } catch { /* 守柔 */ } vscode.window.showInformationMessage('登录链接已打开(并复制)。授权后后端将全自动部署持久通道并置顶接管。'); }
+                else vscode.window.showErrorMessage('DAO 持久通道登录失败: ' + (r.error || '未知错误'));
+                refreshReply({ type: 'actionResult', command: 'relayOAuthLogin', ok: !!r.ok, url: r.url, error: r.error });
+                break;
+            }
+            case 'relayOAuthRefresh': {
+                vscode.window.showInformationMessage('DAO 持久通道: 正在续期并重部署(自愈)…');
+                const r = await daoRelayOAuthRefresh();
+                vscode.window[r.ok ? 'showInformationMessage' : 'showErrorMessage']('DAO 持久通道续期: ' + (r.ok ? ('已重部署 ' + (r.url || '')) : (r.error || '失败')));
+                refreshReply({ type: 'actionResult', command: 'relayOAuthRefresh', ok: !!r.ok, error: r.error });
+                break;
+            }
+            case 'relayOAuthLogout': {
+                const r = await daoRelayOAuthLogout();
+                vscode.window[r.ok ? 'showInformationMessage' : 'showErrorMessage']('DAO 持久通道: ' + (r.ok ? '已撤销授权并删除通道，回退快速隧道/mesh。' : ('删除失败: ' + (r.error || ''))));
+                refreshReply({ type: 'actionResult', command: 'relayOAuthLogout', ok: !!r.ok, error: r.error });
+                break;
+            }
+            case 'copyRelayUrl': {
+                const url = getPersistentRelayUrl() || '';
+                if (url) await vscode.env.clipboard.writeText(url);
+                vscode.window.showInformationMessage(url ? ('持久通道地址已复制: ' + url) : '暂无持久通道地址');
+                reply({ type: 'actionResult', command: 'copyRelayUrl', ok: !!url });
                 break;
             }
             case 'bridgeHealth': {
