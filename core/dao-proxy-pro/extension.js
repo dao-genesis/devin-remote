@@ -5165,21 +5165,32 @@ function getEaConfigHtml(port, nonce, opts) {
       <pre id="brgTestOut" style="display:none;max-height:200px;overflow:auto;margin:6px 0 0;padding:8px;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));border-radius:4px"></pre>
     </div>
 
-    <!-- 固定域名 (可选·Cloudflare 命名隧道) · 折入模式由「🌐 内网穿透」板块统一管理, 此处隐藏 -->
-    ${foldBridge ? '' : `<details style="margin:4px 2px;border:1px solid rgba(128,128,128,0.18);border-radius:6px;padding:6px 8px">
-      <summary style="font-size:11px;font-weight:600;cursor:pointer;opacity:0.85">固定公网域名 (可选 · Cloudflare 命名隧道)</summary>
+    <!-- 固定公网域名 · 只需一个 Cloudflare API Token(零域名) · 折入模式由「🌐 内网穿透」板块统一管理, 此处隐藏 -->
+    ${foldBridge ? '' : `<details style="margin:4px 2px;border:1px solid rgba(128,128,128,0.18);border-radius:6px;padding:6px 8px" open>
+      <summary style="font-size:11px;font-weight:600;cursor:pointer;opacity:0.85">固定公网域名 · 只需一个 Cloudflare API Token(零域名·永不轮换)</summary>
       <div style="font-size:10px;line-height:1.6;margin-top:6px;opacity:0.8">
-        快速隧道每次重启换 URL。若要<b>固定不变</b>的公网域名，可在 Cloudflare Zero Trust 创建命名隧道，
-        把它的 <b>Tunnel Token</b>(形如 <code>eyJ…</code>) 粘到下面并保存，然后点「启动固定隧道」。
-        <span style="opacity:0.6">此为可选项，非前置条件。</span>
+        快速隧道每次重启换 URL。想要<b>固定不变</b>的公网地址，<b>不必自备域名</b>——只需在
+        <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank">Cloudflare 面板</a> 创建一个 API Token
+        (权限含 <code>Account · Workers Scripts:Edit</code>)，粘到下面点「绑定并固定」。系统会自动把最小中继 Worker
+        部署到<b>你自己</b>的免费 <code>*.workers.dev</code> 子域，得到永久固定的反代公网入口。
+        <span style="opacity:0.6">此为可选项，非前置条件；默认仍走零账号快速隧道。</span>
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px">
-        <input id="brgCfEmail" placeholder="Cloudflare 邮箱 (可选)" style="flex:1;min-width:120px;font-size:11px;padding:2px 6px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-input-background,rgba(0,0,0,0.2));color:var(--vscode-input-foreground,var(--vscode-foreground))">
-        <input id="brgCfKey" type="password" placeholder="Tunnel Token (eyJ…)" style="flex:1.6;min-width:140px;font-size:11px;padding:2px 6px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-input-background,rgba(0,0,0,0.2));color:var(--vscode-input-foreground,var(--vscode-foreground))">
-        <button class="btn add" id="brgCfSave" title="保存 Cloudflare 凭证/命名隧道 Token">保存</button>
-        <button class="btn" id="brgStartNamed" title="用已保存的命名隧道 Token 启动固定域名隧道">▶ 启动固定隧道</button>
-        <button class="btn" id="brgLogout" title="清除已保存的 Cloudflare 凭证/命名隧道">✖ 注销</button>
+        <input id="brgCfToken" type="password" placeholder="Cloudflare API Token" style="flex:2;min-width:160px;font-size:11px;padding:2px 6px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-input-background,rgba(0,0,0,0.2));color:var(--vscode-input-foreground,var(--vscode-foreground))">
+        <button class="btn add" id="brgBindCf" title="用 API Token 自动部署 workers.dev 固定中继(零域名·持久通道)">绑定并固定</button>
+        <button class="btn" id="brgLogout" title="解绑并退出：停中继+清除所有 Cloudflare 凭证(即使数据损坏也可清)">✖ 退出/解绑</button>
       </div>
+      <div id="brgRelayState" style="font-size:10px;opacity:0.7;margin-top:4px"></div>
+      <div id="brgRelayUrl" style="font-size:10px;opacity:0.7;margin-top:2px;word-break:break-all"></div>
+      <details style="margin-top:6px">
+        <summary style="font-size:10px;cursor:pointer;opacity:0.6">高级 · 命名隧道 Tunnel Token (需自备域名)</summary>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px">
+          <input id="brgCfEmail" placeholder="Cloudflare 邮箱 (可选)" style="flex:1;min-width:120px;font-size:11px;padding:2px 6px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-input-background,rgba(0,0,0,0.2));color:var(--vscode-input-foreground,var(--vscode-foreground))">
+          <input id="brgCfKey" type="password" placeholder="Tunnel Token (eyJ…)" style="flex:1.6;min-width:140px;font-size:11px;padding:2px 6px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-input-background,rgba(0,0,0,0.2));color:var(--vscode-input-foreground,var(--vscode-foreground))">
+          <button class="btn add" id="brgCfSave" title="保存 Cloudflare 凭证/命名隧道 Token">保存</button>
+          <button class="btn" id="brgStartNamed" title="用已保存的命名隧道 Token 启动固定域名隧道">▶ 启动固定隧道</button>
+        </div>
+      </details>
       <div id="brgCfState" style="font-size:10px;opacity:0.6;margin-top:4px">未登录 Cloudflare (默认走零账号快速隧道)</div>
     </details>`}
   </div>
@@ -6438,6 +6449,17 @@ function getEaConfigHtml(port, nonce, opts) {
     _brgSet('brgPubMsg', d.publicMessages || '—');
     _brgSet('brgPubModels', d.publicModels || '—');
     _brgSet('brgCfState', d.cfLoggedIn ? ('已保存 Cloudflare 凭证' + (d.cfEmail ? ' (' + d.cfEmail + ')' : '') + (d.named ? ' · 命名隧道 Token 就绪' : '')) : '未登录 Cloudflare (默认走零账号快速隧道)');
+    // workers.dev 固定中继(持久通道)状态
+    var rel = d.relay || {};
+    if (rel.bound) {
+      _brgSet('brgRelayState', (rel.connected ? '● workers.dev 固定中继 · 已上线(持久通道)' : '◌ workers.dev 固定中继 · 连接中' + (rel.lastErr ? ' (' + rel.lastErr + ')' : '')));
+      var rs = _brgEl('brgRelayState'); if (rs) rs.style.color = rel.connected ? '#3fb950' : '#d29922';
+      _brgSet('brgRelayUrl', rel.publicUrl ? ('固定公网入口: ' + rel.publicUrl) : '');
+    } else {
+      _brgSet('brgRelayState', '未绑定 API Token (固定通道未启用)');
+      var rs2 = _brgEl('brgRelayState'); if (rs2) rs2.style.color = '';
+      _brgSet('brgRelayUrl', '');
+    }
     // 公网 apiKey 取自 ④ 反代状态 (仅本机可见)
     if (_rpStatus && _rpStatus.apiKey) _brgSet('brgPubKey', _rpStatus.apiKey);
     else if (_rpStatus && _rpStatus.hasKey) _brgSet('brgPubKey', '(已设置·见④面板复制)');
@@ -6525,7 +6547,16 @@ function getEaConfigHtml(port, nonce, opts) {
       brgStop: function(){ _brgAction('stop'); },
       brgRefreshBtn: function(){ _brgRefresh(); },
       brgStartNamed: function(){ _brgAction('startNamed'); },
-      brgLogout: function(){ _brgAction('logout'); },
+      brgBindCf: function(){
+        var t = (_brgEl('brgCfToken') && _brgEl('brgCfToken').value || '').trim();
+        if (!t) { _brgSet('brgRelayState', '请先粘贴 Cloudflare API Token'); return; }
+        _brgSet('brgRelayState', '◌ 正在部署 workers.dev 固定中继(约 10-20s)…');
+        _brgAction('bindCf', { token: t }).then(function(d){
+          if (d && d.message) _brgSet('brgRelayState', (d.ok ? '' : '✖ ') + d.message);
+          var it = _brgEl('brgCfToken'); if (it) it.value = '';
+        }).catch(function(){});
+      },
+      brgLogout: function(){ _brgAction('logout').then(function(){ _brgSet('brgRelayState', '已退出/解绑'); }); },
       brgCopyUrl: function(){ _brgClip((_brgS && _brgS.url) || ''); },
       brgCopyInfo: _brgCopyInfo,
       brgTestRun: _brgTest,
