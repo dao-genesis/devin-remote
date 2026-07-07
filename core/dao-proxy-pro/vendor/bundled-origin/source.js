@@ -5230,40 +5230,60 @@ function _brgIsPublicUrl(u) {
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false;
   return true;
 }
+function _brgLocalPortOf(c) {
+  // 从连接文件推断该隧道 front 的本地端口(用以辨识「哪条隧道罩着 dao-vsix 归一服务」)
+  if (Number.isFinite(c.port)) return c.port;
+  const lu = String(c.local_url || c.localUrl || "").trim();
+  const m = /:(\d{2,5})(?:\/|$)/.exec(lu);
+  return m ? parseInt(m[1], 10) : 0;
+}
 function _brgReadSharedTunnel() {
   const home = process.env.USERPROFILE || process.env.HOME || "";
   if (!home) return null;
   const now = Date.now();
-  const candidates = [
-    path.join(home, ".dao", "dao-conn-current.json"),
-    path.join(home, ".dao", "bridge", "conn.json"),
+  // dao-vsix 归一服务权威端口: 读 dao-conn-current.json(dao-vsix 自身落盘)。归一折入时反代端点
+  //   随 dao-vsix 同端口(9920)对外, 故只认「front 该端口」的那条公网隧道 —— 机控 addon(另口 15715)
+  //   只代理 /api/*、不 front /v1|/origin/revproxy, 复用它会拿到打不通反代的假公网(道·辨同异)。
+  let vsixPort = 0;
+  try {
+    const cur = JSON.parse(fs.readFileSync(path.join(home, ".dao", "dao-conn-current.json"), "utf8")) || {};
+    vsixPort = _brgLocalPortOf(cur);
+    // dao-vsix 自身 board 隧道活跃时 relayUrl/publicUrl 直接就是权威公网 URL, 最优先
+    for (const cand of [cur.relayUrl, cur.publicUrl, cur.primaryUrl, cur.url]) {
+      if (_brgIsPublicUrl(cand)) {
+        let ageMs = cur.updated ? now - Date.parse(cur.updated) : NaN;
+        if (!(Number.isFinite(ageMs) && ageMs > _BRG_SHARED_FRESH_MS)) {
+          return { url: String(cand).trim(), token: String(cur.token || "").trim(),
+                   source: "dao-vsix", file: "dao-conn-current.json", port: vsixPort,
+                   ageMs: Number.isFinite(ageMs) ? ageMs : 0 };
+        }
+      }
+    }
+  } catch (_) {}
+  // 退而求其次: 扫 bridge/*.json, 只取「front dao-vsix 端口」的公网隧道; 无端口线索时兜底任一公网
+  const files = [
     path.join(home, ".dao", "bridge", "connection.json"),
+    path.join(home, ".dao", "bridge", "conn.json"),
   ];
-  for (const p of candidates) {
+  let fallback = null;
+  for (const p of files) {
     try {
       const c = JSON.parse(fs.readFileSync(p, "utf8")) || {};
-      // 权威公网源: relayUrl(仅公网活跃时写) > primaryUrl/url(回落 localhost) > publicUrl
       let url = "";
       for (const cand of [c.relayUrl, c.publicUrl, c.primaryUrl, c.url]) {
         if (_brgIsPublicUrl(cand)) { url = String(cand).trim(); break; }
       }
       if (!url) continue;
-      let ageMs = Number.isFinite(c.ageMs) ? c.ageMs : NaN;
-      if (!Number.isFinite(ageMs) && c.updated) {
-        const t = Date.parse(c.updated);
-        if (Number.isFinite(t)) ageMs = now - t;
-      }
+      let ageMs = c.updated ? now - Date.parse(c.updated) : NaN;
       if (Number.isFinite(ageMs) && ageMs > _BRG_SHARED_FRESH_MS) continue;
-      return {
-        url,
-        token: String(c.token || "").trim(),
-        source: String(c.source || "dao-vsix").trim(),
-        file: path.basename(p),
-        ageMs: Number.isFinite(ageMs) ? ageMs : 0,
-      };
+      const rec = { url, token: String(c.token || "").trim(),
+                    source: String(c.source || "dao-vsix").trim(), file: path.basename(p),
+                    port: _brgLocalPortOf(c), ageMs: Number.isFinite(ageMs) ? ageMs : 0 };
+      if (vsixPort && rec.port === vsixPort) return rec; // front 归一端口 → 就是它
+      if (!fallback) fallback = rec;
     } catch (_) {}
   }
-  return null;
+  return fallback;
 }
 function _brgStatus(preferShared) {
   const pid = _brgPidAlive();
