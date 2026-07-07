@@ -2776,6 +2776,16 @@ function daoCdpBatch(wsUrl, calls, timeoutMs = 20000) {
     });
 }
 
+// 方向2·融化插件本体为「浏览器 MCP 可驱动的浏览器」: browser_* 的 CDP Chrome 首开即以插件本体的
+//   归一多实例网页 /shell 为主页(而非游离的 about:blank)。于是「浏览器 MCP 的浏览器」= 用户日常在看的
+//   那张插件综合网页(六大板块 + 原生多实例账号页 + 站内搜索经 /__web 直出), 二者本为一体:
+//   - browser_navigate/tabs(new) 新开的标签与 /shell 并列于同一可见窗口 → 用户全程可见 MCP 的每一步;
+//   - /shell 内既有的多实例(各登各号·不相悖)与站内搜索,正是 browser_* 要调度操作的原生实例。
+//   帛书·「道并行而不相悖」: 无为(不另造浏览器)而无不为(插件本体即浏览器)。ws 未起则回落 about:blank。
+function daoBrowserHomeUrl(): string {
+    try { if (ws && ws.port) return 'http://127.0.0.1:' + ws.port + '/shell'; } catch { /* 守柔 */ }
+    return 'about:blank';
+}
 async function daoCdpEnsureChrome() {
     try { return await daoCdpHttpGet('/json/version'); } catch (e9) { /* 未起 → 拉起 */ }
     const exe = findBrowserExe();
@@ -2795,7 +2805,7 @@ async function daoCdpEnsureChrome() {
         '--disable-features=Translate,msEdgeWelcomePage,msSync',
         // 非 Windows(Linux 容器/无特权 VM·如 Devin Desktop)常无沙箱内核能力, 缺此则秒退→CDP 永不就绪。
         ...(process.platform !== 'win32' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
-        'about:blank',
+        daoBrowserHomeUrl(),
     ];
     try { const child = childProcess.spawn(exe, args, { detached: true, stdio: 'ignore' }); child.unref(); } catch (e) { throw new Error('chrome-spawn: ' + (e && e.message)); }
     for (let i = 0; i < 40; i++) { await daoMcpSleep(250); try { return await daoCdpHttpGet('/json/version'); } catch (e11) { /* 等就绪 */ } }
