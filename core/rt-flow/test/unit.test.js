@@ -1026,6 +1026,33 @@ function test(name, fn) {
     }
   });
 
+  // ── 归一外壳 /shell 板块菜单与宿主 _solo 白名单一致 (六大板块·无残留死板块 · 双副本) ──
+  // 病灶(已修): 7e8fc874 删除 dao-vsix「电脑本体」板块(移出 _solo 白名单/导航/渲染器),
+  //   但 rt-flow /shell 的 PAGES/BOARD_META 仍残留 board:computer → 点「操作电脑本体」
+  //   openBoard('computer') 发 cloudInit → 宿主 _solo 不含 computer → 静默回落整块全功能面板
+  //   (标签叫「操作电脑」却渲染六合一) = 名实不符的死菜单。正法: 菜单板块键 ⊆ {home}∪六大板块。
+  console.log("\n[/shell 板块菜单 · 六大板块无残留]");
+  test("/shell: PAGES/BOARD_META 板块键 = {home}∪六大板块, 无死板块 computer (双副本)", () => {
+    const fs = require("fs"), path = require("path");
+    const SOLO = ["overview", "switch", "bridge", "backups", "inject", "mcp"]; // 宿主 _solo 白名单
+    const ALLOWED = new Set(["home", ...SOLO]); // home = 六合一整块(非 solo, 合法回落)
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      const r = rel.join("/");
+      // 严禁死板块 computer 残留在任一副本
+      assert.ok(!/board:computer/.test(src), r + ": 严禁残留死菜单 board:computer (7e8fc874 已删该板块)");
+      assert.ok(!/\bcomputer:\s*\[/.test(src), r + ": 严禁残留 BOARD_META.computer");
+      // PAGES 里所有 board:<key> 必须落在允许集内
+      const pageKeys = [...src.matchAll(/'board:([a-z]+)'/g)].map((m) => m[1]);
+      assert.ok(pageKeys.length >= 6, r + ": PAGES 至少含六大板块入口");
+      for (const k of pageKeys) assert.ok(ALLOWED.has(k), r + ": PAGES 出现非法板块键 board:" + k);
+      // 菜单入口齐全: home(六合一·含 overview) + 其余五大 solo 板块各一入口
+      // (overview 经 home 整块/面板左导航进入, 不单列菜单项)
+      assert.ok(pageKeys.includes("home"), r + ": PAGES 缺六合一主页入口 board:home");
+      for (const k of ["switch", "bridge", "backups", "inject", "mcp"]) assert.ok(pageKeys.includes(k), r + ": PAGES 缺板块入口 board:" + k);
+    }
+  });
+
   // ── 归一外壳 /shell 宿主→页面双通道 (SSE 快路 + 长轮询回退·过任意代理 · 双副本) ──
   // Cloudflare quick tunnel 等代理会整体缓冲 text/event-stream → 公网用户六板永卡"加载中…"。
   // 正法: SSE 失败/3s 无字节即转 /api/shell/poll 长轮询; 每条消息带 _q 序号跨通道去重。
