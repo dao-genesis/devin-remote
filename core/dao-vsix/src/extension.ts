@@ -11787,7 +11787,21 @@ function getBatchInjectConcurrency(): number {
     } catch { /* 守柔 */ }
     return 6;
 }
-async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchProgress> {
+// 单飞守护(re-entrancy guard) — 帛书·「不失其所者久也」: batchInject 全局仅一份 daoBatchProgress,
+//   而调用方有二: /api/devin/batch-inject(经 3833 处 running 守护) 与 池级 reconcile 看门狗
+//   (daoBatchInjectAllAccounts, 直调本函数·绕过 API 守护)。写 inject-profile 会触发 reconcile,
+//   与手动触发的批次并发 → 两跑共抹同一 daoBatchProgress/sigMap, 表象=进度 running 提前 false、
+//   done 停在中途(实测 49/269)。故此处加进程内单飞: 已有在跑即复用其 promise, 杜绝双跑互抹。
+let _batchInjectInflight: Promise<DaoBatchProgress> | null = null;
+function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchProgress> {
+    if (_batchInjectInflight) return _batchInjectInflight;
+    const run = devinBatchInjectRun(accounts);
+    _batchInjectInflight = run;
+    run.then(() => { if (_batchInjectInflight === run) _batchInjectInflight = null; },
+             () => { if (_batchInjectInflight === run) _batchInjectInflight = null; });
+    return run;
+}
+async function devinBatchInjectRun(accounts: DaoBatchAccount[]): Promise<DaoBatchProgress> {
     const url = ws.publicUrl || (ws.port ? 'http://localhost:' + ws.port : '');
     const token = ws.token || bridgeToken || '';
     const rulesText = getDaoRulesText();
