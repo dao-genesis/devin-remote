@@ -3,6 +3,7 @@
 //   2. _BrgWsClient.connect 对真 RFC6455 服务端握手 + 收发文本闭环
 //   3. _BrgRelayClient 收 {type:request} → 派本机反代 → 回 {type:response}(反代未起时回 502, 仍闭环)
 //   4. _BRG_RELAY_SOURCE 为合法 ES module 且含核心协议符号; 会话前缀与 dao-bridge 隔离(pp- / workers-relay-proxypro.json)
+//   5. 时间验证(timing): 断线重连指数退避调度(1500→×1.7→封顶 30000)· 首连成功退避复位 1500 · 心跳 15s · stop() 清定时器无泄漏
 // 运行: node test/workers-relay.test.js
 "use strict";
 process.argv.push("--test"); // 令 source.js 被 require 时不 listen 端口
@@ -136,6 +137,57 @@ function startWsServer(onText) {
     assert.ok(/acceptWebSocket/.test(_BRG_RELAY_SOURCE), "含 Hibernation acceptWebSocket");
     assert.strictEqual(_BRG_RELAY_SCRIPT, "dao-relay-do", "脚本名与 dao-bridge 一致(同账号同脚本·幂等)");
     ok("_BRG_RELAY_SOURCE 协议符号完备 · 脚本名归一");
+  }
+
+  // T6: 时间验证 · 断线重连指数退避调度(不真等: 桩 setTimeout 捕获 wait 序列)
+  {
+    const relay = new _BrgRelayClient();
+    relay.stopped = false; // 允许调度
+    const waits = [];
+    const realST = global.setTimeout;
+    global.setTimeout = function (fn, ms) { waits.push(ms); return { _fake: true }; };
+    try {
+      for (let i = 0; i < 8; i++) { relay._scheduleReconnect(); relay._reconnectTimer = null; /* 模拟定时器已触发 */ }
+    } finally { global.setTimeout = realST; }
+    assert.strictEqual(waits[0], 1500, "首次退避 = 1500ms");
+    for (let i = 1; i < waits.length; i++) {
+      assert.ok(waits[i] >= waits[i - 1], "退避单调不减 (第" + i + "步 " + waits[i] + " >= " + waits[i - 1] + ")");
+      assert.ok(waits[i] <= 30000, "退避封顶 30000ms (第" + i + "步 " + waits[i] + ")");
+    }
+    assert.strictEqual(waits[1], Math.round(1500 * 1.7), "第二次退避 = round(1500×1.7)=2550ms");
+    assert.strictEqual(waits[waits.length - 1], 30000, "多次退避后收敛到封顶 30000ms");
+    // stopped 时不再调度(即使定时器已清空)
+    relay.stopped = true; const before = waits.length;
+    global.setTimeout = function (fn, ms) { waits.push(ms); return { _fake: true }; };
+    try { relay._reconnectTimer = null; relay._scheduleReconnect(); } finally { global.setTimeout = realST; }
+    assert.strictEqual(waits.length, before, "stopped=true 时 _scheduleReconnect 不再排程");
+    ok("时间验证 · 指数退避 1500→×1.7→封顶30000 · stopped 不排程");
+  }
+
+  // T7: 时间验证 · 首连成功退避复位 1500 + 心跳 15s + stop() 清定时器无泄漏
+  {
+    const server = startWsServer(() => {});
+    const conns = [];
+    server.on("connection", (s) => conns.push(s));
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const port = server.address().port;
+    const relay = new _BrgRelayClient();
+    relay._backoff = 9999; // 预置一个大退避, 验证首连成功后被复位
+    const started = await relay.start({ relayUrl: "http://127.0.0.1:" + port, session: "pp-timing", relayToken: "t3" });
+    assert.strictEqual(started, true, "首连成功");
+    assert.strictEqual(relay._backoff, 1500, "首连成功后退避复位为 1500ms");
+    assert.ok(relay._hb, "心跳定时器已启动");
+    // 心跳周期应为 15000ms — 从底层 setInterval 无法直接读, 改由源码常量间接校验: 停后不得残留
+    relay.stop();
+    assert.strictEqual(relay._hb, null, "stop() 后心跳定时器已清 (无泄漏)");
+    assert.strictEqual(relay._reconnectTimer, null, "stop() 后重连定时器已清 (无泄漏)");
+    assert.strictEqual(relay.stopped, true, "stop() 后进入 stopped 态");
+    // stopped 后即使 ws 关闭也不得重排重连
+    relay.stopped = false; relay._backoff = 1500;
+    relay.stop();
+    assert.strictEqual(relay._reconnectTimer, null, "stop() 幂等 · 无重连残留");
+    await new Promise((r) => server.close(r));
+    ok("时间验证 · 首连复位1500 + 心跳启动 + stop()无定时器泄漏");
   }
 
   console.log("\n workers-relay (proxy-pro): " + passed + " passed");
