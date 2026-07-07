@@ -1380,7 +1380,11 @@ window.addEventListener('blur',function(){if(MENU.className)MENU.className='';})
 // 融化为浏览器 MCP 可驱动: 把外壳标签系统以稳定 API 挂到 window.__daoShell, 供 browser_shell_tab
 //   (CDP eval)在「同一张归一网页内部」开/关/切标签与板块 — MCP 与用户共视同一网页(道并行而不相悖)。
 window.__daoShell={
-  open:function(u,label){openWebTab(u,label);return true;},
+  open:function(u,label){u=String(u||'');if(!u)return false;
+    // 站内相对路径(如 /?dao_acct=<email> 的多实例账号页)走同源直开(openCloudPage), 与地址栏 navigate 同径;
+    // 绝对 URL 才经 /__web 站内代理开外站标签 — 相对路径塞进 /__web?u= 会 400。
+    if(u.charAt(0)==='/'){vscode.postMessage({type:'openCloudPage',path:u,label:(label||u).slice(0,60)});return true;}
+    openWebTab(u,label);return true;},
   close:function(id){closeTab(id);return true;},
   activate:function(id){setActive(id);return true;},
   board:function(b){openBoard(b);return true;},
