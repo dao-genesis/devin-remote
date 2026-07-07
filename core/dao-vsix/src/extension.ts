@@ -2776,6 +2776,16 @@ function daoCdpBatch(wsUrl, calls, timeoutMs = 20000) {
     });
 }
 
+// 方向2·融化插件本体为「浏览器 MCP 可驱动的浏览器」: browser_* 的 CDP Chrome 首开即以插件本体的
+//   归一多实例网页 /shell 为主页(而非游离的 about:blank)。于是「浏览器 MCP 的浏览器」= 用户日常在看的
+//   那张插件综合网页(六大板块 + 原生多实例账号页 + 站内搜索经 /__web 直出), 二者本为一体:
+//   - browser_navigate/tabs(new) 新开的标签与 /shell 并列于同一可见窗口 → 用户全程可见 MCP 的每一步;
+//   - /shell 内既有的多实例(各登各号·不相悖)与站内搜索,正是 browser_* 要调度操作的原生实例。
+//   帛书·「道并行而不相悖」: 无为(不另造浏览器)而无不为(插件本体即浏览器)。ws 未起则回落 about:blank。
+function daoBrowserHomeUrl(): string {
+    try { if (ws && ws.port) return 'http://127.0.0.1:' + ws.port + '/shell'; } catch { /* 守柔 */ }
+    return 'about:blank';
+}
 async function daoCdpEnsureChrome() {
     try { return await daoCdpHttpGet('/json/version'); } catch (e9) { /* 未起 → 拉起 */ }
     const exe = findBrowserExe();
@@ -2795,7 +2805,7 @@ async function daoCdpEnsureChrome() {
         '--disable-features=Translate,msEdgeWelcomePage,msSync',
         // 非 Windows(Linux 容器/无特权 VM·如 Devin Desktop)常无沙箱内核能力, 缺此则秒退→CDP 永不就绪。
         ...(process.platform !== 'win32' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
-        'about:blank',
+        daoBrowserHomeUrl(),
     ];
     try { const child = childProcess.spawn(exe, args, { detached: true, stdio: 'ignore' }); child.unref(); } catch (e) { throw new Error('chrome-spawn: ' + (e && e.message)); }
     for (let i = 0; i < 40; i++) { await daoMcpSleep(250); try { return await daoCdpHttpGet('/json/version'); } catch (e11) { /* 等就绪 */ } }
@@ -7194,6 +7204,9 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                                 profile.secrets.push({ name: 'GITHUB_PAT', value: pat });
                                 saveInjectProfile(profile);
                             }
+                            // 起号侧注入的 PAT 同样耐久化 config + 联动官方 GitHub MCP(与面板 ipSetPat 语义对齐)。
+                            try { daoPersistPatToConfig(pat); } catch { /* 守柔 */ }
+                            try { daoSyncGithubMcpIntoProfile(); } catch { /* 守柔 */ }
                         }
                     }
                 } catch { /* 守柔 */ }
@@ -7566,6 +7579,9 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     daoSeeded: cur.daoSeeded,
                 };
                 saveInjectProfile(np);
+                // PAT 耐久化: 面板 ipSetPat/增删密钥写入的 PAT 立即回灌 config(dao.githubPat) 作耐久种子,
+                //   使其跨重载/reconcile 不被抹除(与 daoSyncPatSecretIntoProfile 的加性同步收敛)。
+                try { const pv = String(((np.secrets || []).find(s => s && s.name === DAO_PAT_SECRET_NAME) || {} as any).value || '').trim(); if (pv) daoPersistPatToConfig(pv); } catch { /* 守柔 */ }
                 // PAT↔MCP 联动: 面板改 GITHUB_PAT(ipSetPat/增删密钥)后即刻校正官方 GitHub MCP 钉住条目
                 try { daoSyncGithubMcpIntoProfile(); } catch { /* 守柔 */ }
                 // enabled 且当前已登录 → 立即应用一次到当前 org (自循环起点)
@@ -11781,7 +11797,21 @@ function getBatchInjectConcurrency(): number {
     } catch { /* 守柔 */ }
     return 6;
 }
-async function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchProgress> {
+// 单飞守护(re-entrancy guard) — 帛书·「不失其所者久也」: batchInject 全局仅一份 daoBatchProgress,
+//   而调用方有二: /api/devin/batch-inject(经 3833 处 running 守护) 与 池级 reconcile 看门狗
+//   (daoBatchInjectAllAccounts, 直调本函数·绕过 API 守护)。写 inject-profile 会触发 reconcile,
+//   与手动触发的批次并发 → 两跑共抹同一 daoBatchProgress/sigMap, 表象=进度 running 提前 false、
+//   done 停在中途(实测 49/269)。故此处加进程内单飞: 已有在跑即复用其 promise, 杜绝双跑互抹。
+let _batchInjectInflight: Promise<DaoBatchProgress> | null = null;
+function devinBatchInject(accounts: DaoBatchAccount[]): Promise<DaoBatchProgress> {
+    if (_batchInjectInflight) return _batchInjectInflight;
+    const run = devinBatchInjectRun(accounts);
+    _batchInjectInflight = run;
+    run.then(() => { if (_batchInjectInflight === run) _batchInjectInflight = null; },
+             () => { if (_batchInjectInflight === run) _batchInjectInflight = null; });
+    return run;
+}
+async function devinBatchInjectRun(accounts: DaoBatchAccount[]): Promise<DaoBatchProgress> {
     const url = ws.publicUrl || (ws.port ? 'http://localhost:' + ws.port : '');
     const token = ws.token || bridgeToken || '';
     const rulesText = getDaoRulesText();
@@ -12122,23 +12152,41 @@ function isGitHubPat(s: string): boolean {
 }
 // secret=PAT · 把用户填入的 GitHub PAT(dao.githubPat / DAO_GITHUB_PAT)作为一个 secret 写入注入档案,
 // 经反向注入路径(applyInjectProfileToOrg→devinUpsertSecret)同步到所有账号。
-// 守柔: 非首次限定 — PAT 可在激活后任意时刻填入/更换, 每次激活幂等校正; PAT 为空则移除残条。
+// 守柔·加性同步(2 源归一 · 修 PAT 注入不闭环之根): config(dao.githubPat/env) 是「种子」,
+//   面板 ipSetPat/增删密钥写入的是 profile.secrets(活编辑真源)。旧逻辑「config 空即 splice 掉
+//   profile 的 GITHUB_PAT」会把面板刚设的 PAT 在下次激活/reconcile 时抹除 → PAT 从未真正驻留 →
+//   GitHub MCP 永不联动落地(用户所见「No MCPs」之根因)。故此处只做「有种子则写入/校正 profile」,
+//   config 空时【绝不抹除】面板已写入的 profile PAT;清除 PAT 请经面板 ipRemove 直接编辑 profile。
+//   同时把 profile 侧 PAT 反向「回灌」config 作为耐久种子(promote), 令两源收敛、跨重载不丢。
 function daoSyncPatSecretIntoProfile(): void {
     try {
         const cfg = getDaoConfig();
-        const pat = String(cfg.githubPat || process.env.DAO_GITHUB_PAT || '').trim();
+        const seed = String(cfg.githubPat || process.env.DAO_GITHUB_PAT || '').trim();
         const p = loadInjectProfile();
         const idx = p.secrets.findIndex(s => s && s.name === DAO_PAT_SECRET_NAME);
+        const profilePat = idx >= 0 ? String(p.secrets[idx].value || '').trim() : '';
         let changed = false;
-        if (pat) {
-            if (idx < 0) { p.secrets.push({ name: DAO_PAT_SECRET_NAME, value: pat }); changed = true; }
-            else if (p.secrets[idx].value !== pat) { p.secrets[idx].value = pat; changed = true; }
+        if (seed) {
+            if (idx < 0) { p.secrets.push({ name: DAO_PAT_SECRET_NAME, value: seed }); changed = true; }
+            else if (profilePat !== seed) { p.secrets[idx].value = seed; changed = true; }
             if (!p.enabled) { p.enabled = true; changed = true; }
-        } else if (idx >= 0) {
-            p.secrets.splice(idx, 1); changed = true;
+        } else if (profilePat) {
+            // config/env 无种子, 但面板已写入 PAT → 保留(不抹除), 并回灌为耐久种子。
+            daoPersistPatToConfig(profilePat);
         }
         if (changed) saveInjectProfile(p);
     } catch { /* 道法自然·守柔 */ }
+}
+// 把 PAT 回灌 config(dao.githubPat) 作为跨重载的耐久权威种子 — 令 config 与 profile 两源收敛。
+//   守柔·幂等: 仅在与现值不同时写; 失败静默(只读环境/无 workspace 亦不崩)。
+function daoPersistPatToConfig(pat: string): void {
+    try {
+        const v = String(pat || '').trim();
+        if (!v) return;
+        const cfg = vscode.workspace.getConfiguration('dao');
+        if (String(cfg.get<string>('githubPat', '') || '').trim() === v) return;
+        cfg.update('githubPat', v, vscode.ConfigurationTarget.Global).then(undefined, () => { /* 守柔 */ });
+    } catch { /* 守柔 */ }
 }
 // MCP=GitHub 官方 · PAT↔MCP 联动 — 帛书·「二生三」: secret(PAT) 与 MCP 本一体两面。
 //   有 GITHUB_PAT 即确保注入档案含官方 GitHub MCP(HTTP·https://api.githubcopilot.com/mcp/·Bearer PAT);
