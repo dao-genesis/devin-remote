@@ -18,7 +18,7 @@ const cp = require("child_process");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const TRY_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
-const BRIDGE_VERSION = "3.12.0";
+const BRIDGE_VERSION = "3.13.0";
 
 // 归一 · 反注 MCP 蹭耐用桥隧道: 综合 MCP(mcp_http.py)本机监听 9100, 其自起的快速隧道
 //   既翻倍触发 Cloudflare 限流又死不自愈。故由常驻桥把 /mcp 透明流式反代到本机 MCP,
@@ -743,24 +743,40 @@ class WorkspaceServer {
     });
   }
 
-  // 透明流式反代 /mcp → 本机综合 MCP (mcp_http.py · 127.0.0.1:<mcp_port>)。
-  //   双向 pipe: 请求体 req→上游, 响应 上游→res(JSON 或 SSE 皆原样流式), 不缓冲不改写。
+  // 透明流式反代 /mcp → 本机归一 MCP。响应(JSON 或 SSE)原样流式, 不缓冲不改写;
   //   原样透传 Authorization/Accept/Content-Type/Mcp-Session-Id 等头, 由 MCP 服务端自行鉴权。
+  //   归一·道法自然: 候选上游 = [综合 MCP(mcp_http.py·<mcp_port>) → 二合一本体(dao-vsix·<plugin_port>)]。
+  //   综合 MCP 未起(连接被拒)时**自动回退到插件本体自带 /mcp**(同一 65 工具归一端点), 杜绝「第二条
+  //   脆弱进程」死掉即整条 /mcp 502。请求体先缓冲(MCP 帧皆小 JSON), 便于换端口无损重试; 响应侧仍纯流式。
   proxyMcp(req, res) {
-    const mcpPort = resolveMcpPort();
-    const headers = Object.assign({}, req.headers, { host: "127.0.0.1:" + mcpPort });
-    const up = http.request({ host: "127.0.0.1", port: mcpPort, method: req.method || "GET", path: req.url || "/mcp", headers }, (ur) => {
-      const h = Object.assign({}, ur.headers);
-      h["Access-Control-Allow-Origin"] = "*";
-      h["Access-Control-Expose-Headers"] = "Mcp-Session-Id, mcp-session-id";
-      try { res.writeHead(ur.statusCode || 502, h); } catch (e) { /* 守柔 */ }
-      ur.pipe(res);
+    const candidates = [resolveMcpPort(), resolvePluginPort()].filter((p, i, a) => a.indexOf(p) === i);
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const body = Buffer.concat(chunks);
+      const tryPort = (idx) => {
+        const port = candidates[idx];
+        const headers = Object.assign({}, req.headers, { host: "127.0.0.1:" + port });
+        if (body.length) headers["content-length"] = String(body.length);
+        const up = http.request({ host: "127.0.0.1", port, method: req.method || "GET", path: req.url || "/mcp", headers }, (ur) => {
+          const h = Object.assign({}, ur.headers);
+          h["Access-Control-Allow-Origin"] = "*";
+          h["Access-Control-Expose-Headers"] = "Mcp-Session-Id, mcp-session-id";
+          try { res.writeHead(ur.statusCode || 502, h); } catch (e) { /* 守柔 */ }
+          ur.pipe(res);
+        });
+        up.on("error", (e) => {
+          // 连接级失败(上游未监听) → 尚未回响应头, 可无损换下一候选端口重试。
+          if (!res.headersSent && idx + 1 < candidates.length) return tryPort(idx + 1);
+          if (!res.headersSent) res.writeHead(502, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+          try { res.end(JSON.stringify({ error: "mcp upstream unreachable: " + (e && e.message), ports: candidates, hint: "综合 MCP(mcp_http.py) 与二合一本体(dao-vsix)均未监听 /mcp" })); } catch (e2) { /* 守柔 */ }
+        });
+        if (body.length) up.write(body);
+        up.end();
+      };
+      tryPort(0);
     });
-    up.on("error", (e) => {
-      if (!res.headersSent) res.writeHead(502, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
-      try { res.end(JSON.stringify({ error: "mcp upstream unreachable: " + (e && e.message), port: mcpPort, hint: "start_mcp_stack.ps1 应已在 127.0.0.1:" + mcpPort + " 起 mcp_http.py" })); } catch (e2) { /* 守柔 */ }
-    });
-    req.pipe(up);
+    req.on("error", () => { try { if (!res.headersSent) res.writeHead(400); res.end(); } catch (e) { /* 守柔 */ } });
   }
 
   // 透明流式反代 非桥自有路由 → 二合一插件本体(dao-vsix · 127.0.0.1:<pluginPort>)。
