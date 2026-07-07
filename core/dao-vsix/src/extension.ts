@@ -1832,6 +1832,7 @@ function stopRelay() {
 // ═══════════════════════════════════════════════════════════
 const SIG_DEFAULT_SERVERS = ['https://ntfy.sh', 'https://ntfy.envs.net', 'https://ntfy.adminforge.de', 'https://ntfy.mzte.de'];
 const SIG_CHUNK = 1200;            // ntfy 单消息 ~4KB 上限, 留足余量
+const SIG_RID = crypto.randomBytes(4).toString('hex'); // 本进程响应者 id: 多实例并存时(9920/9921…)同 corr 分片按 w 归组, 杜绝跨实例拼接错乱
 const SIG_REASM_TTL_MS = 120000;   // 分片重组缓存寿命
 const SIG_DEDUP_MAX = 512;         // 已处理 corr LRU 容量(多 broker 去重)
 const SIG_BACKOFF_MIN = 1500;
@@ -1887,7 +1888,7 @@ function sigUnseal(key: Buffer, b64: string): any {
 }
 function sigFrameChunks(corr: string, role: string, payloadB64: string): string[] {
     const n = Math.ceil(payloadB64.length / SIG_CHUNK) || 1; const out: string[] = [];
-    for (let i = 0; i < n; i++) out.push(JSON.stringify({ v: 1, c: corr, r: role, i, n, p: payloadB64.slice(i * SIG_CHUNK, (i + 1) * SIG_CHUNK) }));
+    for (let i = 0; i < n; i++) out.push(JSON.stringify({ v: 1, c: corr, r: role, i, n, w: SIG_RID, p: payloadB64.slice(i * SIG_CHUNK, (i + 1) * SIG_CHUNK) }));
     return out;
 }
 function sigMakeReasm() {
@@ -1895,9 +1896,10 @@ function sigMakeReasm() {
     return (msg: string, onComplete: (c: string, r: string, full: string) => void) => {
         let m: any; try { m = JSON.parse(msg); } catch { return; }
         if (!m || m.v !== 1 || !m.c || typeof m.p !== 'string') return;
-        let e = buf[m.c]; if (!e) e = buf[m.c] = { n: m.n, parts: new Array(m.n), got: 0, role: m.r, ts: Date.now() };
+        const gk = m.c + '|' + (m.w || ''); // 按 (corr, 响应者 id) 归组: 多实例同 corr 分片互不污染
+        let e = buf[gk]; if (!e) e = buf[gk] = { n: m.n, parts: new Array(m.n), got: 0, role: m.r, ts: Date.now() };
         if (e.parts[m.i] === undefined) { e.parts[m.i] = m.p; e.got++; }
-        if (e.got >= e.n) { const full = e.parts.join(''); delete buf[m.c]; onComplete(m.c, m.r, full); }
+        if (e.got >= e.n) { const full = e.parts.join(''); delete buf[gk]; onComplete(m.c, m.r, full); }
         const now = Date.now(); for (const k in buf) if (now - buf[k].ts > SIG_REASM_TTL_MS) delete buf[k];
     };
 }
@@ -1980,6 +1982,20 @@ async function sigServeFrame(corr: string, full: string): Promise<void> {
         if (sigAuthTok) { fakeHeaders['authorization'] = 'Bearer ' + sigAuthTok; delete fakeHeaders['Authorization']; }
         const fakeReq: any = { headers: fakeHeaders, method: descr.method || 'GET', socket: { remoteAddress: 'sig' }, url: descr.path || '/api/health', _relayBody: bodyStr };
         const result = await handleRouteInternal(route, parsedUrl, fakeReq, bridgeToken || ws.token);
+        // 帛书·「为道日损」: 大响应(tools/list ~30KB、截图等)分片过多 → 公共 ntfy 突发限流丢片 → 重组永不齐。
+        //   调用方声明 zc:1(gzip-capable) 时, 对 body 先 gzip 再 base64, 分片数骤降(~30KB→~4KB) → 落在限流内。
+        //   未带 zc(如手机版旧客户端)则原样发送, 完全向后兼容。
+        if (req.zc) {
+            try {
+                const zlib = require('zlib');
+                const raw = Buffer.from(JSON.stringify(result === undefined ? null : result), 'utf8');
+                if (raw.length > 800) {
+                    const z = zlib.gzipSync(raw).toString('base64');
+                    await sigPublishObj('s', corr, { t: 'res', id, status: 200, z });
+                    return;
+                }
+            } catch { /* 守柔·压缩失败退回不压缩 */ }
+        }
         await sigPublishObj('s', corr, { t: 'res', id, status: 200, body: result });
     } catch (err: any) {
         await sigPublishObj('s', corr, { t: 'res', id, status: 500, body: { error: err && err.message ? err.message : String(err) } });
