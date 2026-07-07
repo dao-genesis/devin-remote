@@ -5283,7 +5283,9 @@ function _brgReadSharedTunnel() {
       if (!fallback) fallback = rec;
     } catch (_) {}
   }
-  return fallback;
+  // 已知归一端口却无一条隧道 front 它 → 判定「无共享反代隧道可复用」, 不拿机控 addon(另口)充数。
+  //   仅在无从得知归一端口(读不到 dao-conn-current.json)时, 才退而用任一公网候选。
+  return vsixPort ? null : fallback;
 }
 function _brgStatus(preferShared) {
   const pid = _brgPidAlive();
