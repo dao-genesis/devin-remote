@@ -63,6 +63,38 @@
 
 部署完拿到你自己的 `https://dao-relay-do.<你的子域>.workers.dev`，填进下方任一入口即生效。
 
+### A′. 一次贴 Token · 后端全自动（顶层持久通道 · 最低用户成本）
+
+> 反者道之动：把「登 CF → 建 Token → 装 wrangler → 部署 → 抄 URL 回填」这条长链，
+> 压成**一次动作**——用户只在官网点一次 **Create** 复制一个**预填好权限**的 API Token，
+> 之后后端全链路自动打通、落盘持久化。之所以走「贴 Token」而非 `wrangler login` OAuth：
+> 云端 Agent 经网页远程操作用户机时，OAuth 的 `localhost:8976` 回调会落在**用户远程浏览器**
+> 而非桌面，远程不便；预填 Token 深链**无回调**、一次成型、永不过期，最稳。
+
+一条命令即成（`provision.mjs`）：
+
+```bash
+cd addons/dao-relay
+# ① 先拿预填权限(Workers 脚本编辑 + 账号读)的 Token 创建深链，点开→Create→复制：
+node provision.mjs --deep-link
+# ② 贴回 token，后端自动: 校验→取账号→保证 workers.dev 子域→wrangler deploy→健康检查→落盘：
+node provision.mjs <粘贴的CF_API_TOKEN>
+#    → 得到永不漂的 https://dao-relay-do.<你的子域>.workers.dev, 写入 ~/.dao/relay.json
+```
+
+**插件侧零配置自动采纳**：dao-vsix 的 `getRelayConfig()` 把 `~/.dao/relay.json` 里的持久通道
+**置顶**为出站中继首选，既有 cloudflared 快速隧道 / ntfy mesh 自动降为回退（两者取长补短）。
+插件同时暴露三个端点供 UI/脚本驱动：
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/relay/deep-link` | 返回预填权限的 CF Token 创建深链 + 操作指引 |
+| `GET /api/relay/state` | 当前持久通道状态（token 脱敏）、是否已接管 |
+| `POST /api/relay/set` `{url}` | 登记持久通道 URL 并**立即置顶接管**（健康检查 + 落盘 + 重连中继） |
+
+于是「org 级 MCP 集成配一次永久有效、URL 永不漂、零用户参与」成立——顶层持久通道就绪即走它，
+挂了自动落回快速隧道 / mesh，无为而无不为。
+
 ### B. 命令行自建（CI / 批量 / 企业）
 
 ```bash
