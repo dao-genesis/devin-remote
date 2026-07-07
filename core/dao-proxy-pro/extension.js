@@ -4078,65 +4078,52 @@ function activate(ctx) {
       vscode.window.showInformationMessage(`道Agent v${PKG_VERSION} · ${q}`);
     }
 
-    // 注册命令
-    ctx.subscriptions.push(
-      vscode.commands.registerCommand("daopp.originInvert", cmdInvert),
-      vscode.commands.registerCommand("daopp.originPassthrough", cmdPassthrough),
-      vscode.commands.registerCommand("daopp.toggleMode", cmdToggle),
-      vscode.commands.registerCommand("daopp.openPreview", cmdOpenPreview),
-      vscode.commands.registerCommand("daopp.verifyEndToEnd", cmdVerifyE2E),
-      vscode.commands.registerCommand("daopp.selftest", cmdSelftest),
-      // v9.9.0 · 印 124 · 第一细药 · 外接 api 开关 (默关 · 主公一字开)
-      vscode.commands.registerCommand(
-        "daopp.外接api.toggle",
-        cmdExternalApiToggle,
-      ),
-      // ★ v9.9.90 · 外接api 热配置面板 · 五十七章「我无为也 而民自化」
-      vscode.commands.registerCommand("daopp.eaConfig", cmdEaConfig),
-      // ★ 复原官方直连 (卸载善后/解锚) · 卡死中间态一键自救
-      vscode.commands.registerCommand("daopp.restoreOfficial", cmdRestoreOfficial),
-      // v9.9.29 · 印 160 · 终端会话池 (反者道之动 · 七层污染一招治)
-      vscode.commands.registerCommand("daopp.term.exec", cmdTermExec),
-      vscode.commands.registerCommand("daopp.term.list", cmdTermList),
-      vscode.commands.registerCommand("daopp.term.close", cmdTermClose),
-      // ★ v9.9.260 · 模型解锁 · 执大象 天下往
-      vscode.commands.registerCommand(
-        "daopp.modelUnlock.toggle",
-        cmdModelUnlockToggle,
-      ),
-      vscode.commands.registerCommand(
-        "daopp.modelUnlock.status",
-        cmdModelUnlockStatus,
-      ),
-      // ★ v9.9.322 · 模型反代 · 反者道之动
-      vscode.commands.registerCommand("daopp.revproxy.toggle", cmdRevproxyToggle),
-      vscode.commands.registerCommand("daopp.revproxy.status", cmdRevproxyStatus),
-    );
+    // 注册命令 —— 防御式: 任一注册抛错(如与独立 Proxy Pro / dao-one 内折副本抢注同名 daopp.* 命令)
+    // 不再中断其余贡献点(含后续 webview 视图注册)。三插件共装亦互不 brick。「道并行而不相悖」
+    const safeReg = (fn, label) => {
+      try { ctx.subscriptions.push(fn()); } catch (e) {
+        try { L.warn("register", `跳过 ${label} · ${(e && e.message) || e}`); } catch (_) {}
+      }
+    };
+    safeReg(() => vscode.commands.registerCommand("daopp.originInvert", cmdInvert), "cmd:originInvert");
+    safeReg(() => vscode.commands.registerCommand("daopp.originPassthrough", cmdPassthrough), "cmd:originPassthrough");
+    safeReg(() => vscode.commands.registerCommand("daopp.toggleMode", cmdToggle), "cmd:toggleMode");
+    safeReg(() => vscode.commands.registerCommand("daopp.openPreview", cmdOpenPreview), "cmd:openPreview");
+    safeReg(() => vscode.commands.registerCommand("daopp.verifyEndToEnd", cmdVerifyE2E), "cmd:verifyEndToEnd");
+    safeReg(() => vscode.commands.registerCommand("daopp.selftest", cmdSelftest), "cmd:selftest");
+    // v9.9.0 · 印 124 · 第一细药 · 外接 api 开关 (默关 · 主公一字开)
+    safeReg(() => vscode.commands.registerCommand("daopp.外接api.toggle", cmdExternalApiToggle), "cmd:外接api.toggle");
+    // ★ v9.9.90 · 外接api 热配置面板 · 五十七章「我无为也 而民自化」
+    safeReg(() => vscode.commands.registerCommand("daopp.eaConfig", cmdEaConfig), "cmd:eaConfig");
+    // ★ 复原官方直连 (卸载善后/解锚) · 卡死中间态一键自救
+    safeReg(() => vscode.commands.registerCommand("daopp.restoreOfficial", cmdRestoreOfficial), "cmd:restoreOfficial");
+    // v9.9.29 · 印 160 · 终端会话池 (反者道之动 · 七层污染一招治)
+    safeReg(() => vscode.commands.registerCommand("daopp.term.exec", cmdTermExec), "cmd:term.exec");
+    safeReg(() => vscode.commands.registerCommand("daopp.term.list", cmdTermList), "cmd:term.list");
+    safeReg(() => vscode.commands.registerCommand("daopp.term.close", cmdTermClose), "cmd:term.close");
+    // ★ v9.9.260 · 模型解锁 · 执大象 天下往
+    safeReg(() => vscode.commands.registerCommand("daopp.modelUnlock.toggle", cmdModelUnlockToggle), "cmd:modelUnlock.toggle");
+    safeReg(() => vscode.commands.registerCommand("daopp.modelUnlock.status", cmdModelUnlockStatus), "cmd:modelUnlock.status");
+    // ★ v9.9.322 · 模型反代 · 反者道之动
+    safeReg(() => vscode.commands.registerCommand("daopp.revproxy.toggle", cmdRevproxyToggle), "cmd:revproxy.toggle");
+    safeReg(() => vscode.commands.registerCommand("daopp.revproxy.status", cmdRevproxyStatus), "cmd:revproxy.status");
 
-    // 注册 webview
+    // 注册 webview (同样防御式: 与独立副本抢注同名视图不再 brick 后续)
     _essenceProvider = new EssenceProvider(ctx);
-    ctx.subscriptions.push(
-      vscode.window.registerWebviewViewProvider(
-        "daopp.essence",
-        _essenceProvider,
-        {
-          webviewOptions: { retainContextWhenHidden: true },
-        },
-      ),
-    );
+    safeReg(() => vscode.window.registerWebviewViewProvider(
+      "daopp.essence",
+      _essenceProvider,
+      { webviewOptions: { retainContextWhenHidden: true } },
+    ), "view:daopp.essence");
 
     // ★ 归一·② Proxy Pro: 把「三模块面板」整体作为侧栏视图 dao.router 复用 ——
     //   与中央面板 cmdEaConfig 同源 getEaConfigHtml(源照/渠配/模路·拖排·1:1·实连),零前端重写。
     _eaRouterProvider = new EaRouterProvider(ctx);
-    ctx.subscriptions.push(
-      vscode.window.registerWebviewViewProvider(
-        "daopp.router",
-        _eaRouterProvider,
-        {
-          webviewOptions: { retainContextWhenHidden: true },
-        },
-      ),
-    );
+    safeReg(() => vscode.window.registerWebviewViewProvider(
+      "daopp.router",
+      _eaRouterProvider,
+      { webviewOptions: { retainContextWhenHidden: true } },
+    ), "view:daopp.router");
 
     // ★ 状态栏入口 (右下角) · 仿 rt-flow · 点击开三模块中央面板
     // 五十二章「既得其母 以知其子」· 解「面板无处可开」之疾
