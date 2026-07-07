@@ -187,12 +187,18 @@ function makeEnv(opts) {
   ok(/installKbHelper\(v\);\s*\/\/[^\n]*\n\s*installBackspaceGuard\(v\);/.test(mainSrc), "退格护栏: onPageFinished 安装");
   ok(/installDownloadHook\(v\); installKbHelper\(v\); installBackspaceGuard\(v\);/.test(mainSrc), "退格护栏: SPA 路由后重装 (doUpdateVisitedHistory)");
   ok(/deleteContentForward'&&\(now-lastBk\)<150/.test(mainSrc), "退格护栏: 拦截紧跟退格的 IME 向前删除");
-  ok(/r\.endOffset>sel\.anchorOffset/.test(mainSrc), "退格护栏: 拦截越过光标吞右侧的退格区间");
+  ok(/document\.execCommand\('insertText',false,p\.ch\)/.test(mainSrc), "退格看门狗: 双删检测后原位补回被吞字符");
   ok(/e\.isComposing\)return/.test(mainSrc), "退格护栏: 组合输入(拼音)中不干预");
   // ── 源级护栏: 重加号消幽灵 (doAdd 落 addedAt + 立即镜像金库·不被回拉覆盖) ──
   ok(/addedAt:Date\.now\(\)/.test(switchSrc), "doAdd 落 addedAt (重加号 24h 免移出保护)");
   ok(/saveAcc\(accs\); try\{ mirrorAccountsToVault\(\); \}catch\(e\)\{\}/.test(switchSrc), "doAdd 后立即镜像金库 (重加号不被金库回拉抓回幽灵态)");
   ok(/window\.__rtBsGuard\)return/.test(mainSrc), "退格护栏: 幂等守卫");
+
+  // ── 源级护栏: 拖拽提取 103B 空导出三层防线 (头部-only 拒注入 + 回退链报真错 + 引擎自动登录解锁) ──
+  ok(/!fconv\.contains\("## "\)/.test(mainSrc), "103B防线: engineExtractInject 拒绝仅标题头无消息段的导出");
+  ok(/conv\.isEmpty\(\) \|\| !conv\.contains\("## "\)/.test(mainSrc), "103B防线: onConvExtracted 拒绝头部-only 注入");
+  ok(/__ST=r\.status/.test(mainSrc) && /0事件\(HTTP '\+__ST\+'\)/.test(mainSrc), "103B防线: 回退链 0 事件时回报 HTTP 状态真错");
+  ok(/\(!acc\.auth1\|\|!acc\.orgId\)&&acc\.email&&acc\.password/.test(engineSrc), "103B防线: extractConversation 未解锁号自动登录再取 (额度归零号拖拽可用)");
 
   // ── 源级护栏: ZIP 备份增量同步 (对话有新内容 → 备份自动跟进) ──
   {

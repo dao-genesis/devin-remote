@@ -58,8 +58,17 @@ ok(/beforeLength == 0 && afterLength > 0 && \(now - lastBkAt\) < 250\) return tr
 ok(/KEYCODE_FORWARD_DEL && \(now - lastBkAt\) < 250\) return true;/.test(main), "时间窗: 紧跟退格的 FORWARD_DEL 键事件被吞 (sendKeyEvent 拆单)");
 ok(/KEYCODE_DEL\) \{ lastBkAt = now; \}/.test(main), "时间窗: 退格键事件登记时刻");
 
-// ②c JS 护栏跨节点区间 (contenteditable 富文本: 删除区间终点不在光标同节点也能判越光标)
-ok(/tr\.comparePoint\(sel\.anchorNode,sel\.anchorOffset\)/.test(main), "JS 护栏: 跨节点删除区间用 comparePoint 判越光标");
+// ②c JS 看门狗 (Slate 陈旧快照回滚重放双删 → 事后检测补回 + 双次重定光标)
+ok(/__rtBsGuard/.test(main), "JS 看门狗: 幂等守卫存在");
+ok(/e\.getTargetRanges\(\)\[0\]/.test(main), "JS 看门狗: 按 getTargetRanges 记录删除区间");
+ok(/exp:full\.slice\(0,st\)\+full\.slice\(en\)/.test(main), "JS 看门狗: 记录单删期望文本");
+ok(/cur===p\.exp\.slice\(0,p\.st\)\+p\.exp\.slice\(p\.st\+1\)/.test(main), "JS 看门狗: 检测右侧多吞一字");
+ok(/document\.execCommand\('insertText',false,p\.ch\)/.test(main), "JS 看门狗: insertText 原位补回被吞字符");
+ok(/createTreeWalker\(ed,NodeFilter\.SHOW_TEXT\)/.test(main), "JS 看门狗: TreeWalker 重定光标");
+ok(/setCaret\(p\.ed,p\.st\);\},120\)/.test(main) && /setCaret\(p\.ed,p\.st\);\},350\)/.test(main), "JS 看门狗: 120ms/350ms 双次重定光标 (躲过 Slate 再渲染)");
+ok(/chk\(false\);\},700\)/.test(main) && /chk\(true\);\},2100\)/.test(main), "JS 看门狗: 700/1400/2100ms 三查 (pending 保持到终查)");
+ok(/if\(e\.isComposing\)return;/.test(main), "JS 看门狗: 拼音/组合输入中不介入");
+ok(!/setComposingRegion\(int start, int end\)/.test(main), "原生 setComposingRegion 已恢复透传 (根因在 JS 层)");
 
 // ②d 媒体鉴权本源补齐: 非账号标签从页面登录态采收 auth
 ok(/private void harvestPageAuth\(WebView v, Tab tab, String pageUrl\)/.test(main), "harvestPageAuth 存在");
