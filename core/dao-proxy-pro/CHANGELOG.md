@@ -2,6 +2,18 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.342 · 内网穿透架构大修(移植 dao-bridge 核心) + ⑤ 面板归一折入复用共享隧道
+: 独立版: 把 dao-bridge 底层完整移植入 source.js —— 代理检测(7 端口探活)+注入 cloudflared
+  子进程、二进制 --version 验证、断点续传、CONNECT 代理隧道下载、多镜像回退(6 路)、看门狗
+  (15s)、resetProxy API —— 使 Proxy Pro 单插件即可独立起隧道暴露反代端点公网, 且用独立
+  命名空间(proxypro 8957 · cloudflared 独立)与 dao-vsix(9920)井水不犯河水。
+  归一折入版(dao-one · foldBridge): ⑤ 内网穿透面板不再隐藏、五 tab 全出; 但公网穿透
+  **复用**二合一本源「🌐 内网穿透 · DAO Bridge」的**同一条** cloudflared(道并行而不相悖·
+  不重复造轮子)——`_brgReadSharedTunnel()` 读 dao-vsix 落盘连接文件(~/.dao/dao-conn-current.json
+  等)取共享公网 URL; `_brgStatus(preferShared)` 于折入模式回显该 URL; `/origin/revproxy/tunnel`
+  认 `?shared=1`。折入模式隐藏启停按钮(启停归顶部🌐板块)与 Cloudflare 命名隧道区, 只留「↻ 刷新」,
+  下方状态/公网接入/自测实时映射共享隧道。
+
 v9.9.341 · 视图 ID 归 daopp.* 命名空间(根治与归一内折 Proxy Pro 抢注视图)
 : v9.9.340 并行修复只把命令归了 `daopp.*`，视图仍注册 `dao.essence`/`dao.router` —— 与
   dao-one 内折的 vendor-proxy 抢注同一视图, 后激活方直接 FATAL(`view already registered`),
