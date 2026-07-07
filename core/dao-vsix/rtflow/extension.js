@@ -1377,6 +1377,15 @@ document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleM
 // 点进子网页(iframe)会令父窗口失焦 → window blur 兜底收起(iframe 内点击不冒泡到父文档)。
 document.addEventListener('click',function(e){if(!MENU.className)return;var t=e.target;if(t&&t.closest&&(t.closest('#menu')||t.closest('#bMenu')))return;MENU.className='';},true);
 window.addEventListener('blur',function(){if(MENU.className)MENU.className='';});
+// 融化为浏览器 MCP 可驱动: 把外壳标签系统以稳定 API 挂到 window.__daoShell, 供 browser_shell_tab
+//   (CDP eval)在「同一张归一网页内部」开/关/切标签与板块 — MCP 与用户共视同一网页(道并行而不相悖)。
+window.__daoShell={
+  open:function(u,label){openWebTab(u,label);return true;},
+  close:function(id){closeTab(id);return true;},
+  activate:function(id){setActive(id);return true;},
+  board:function(b){openBoard(b);return true;},
+  list:function(){var r=[];for(var i=0;i<order.length;i++){var id=order[i];var t=tabs[id];r.push({id:id,active:id===active,label:t&&t.btn?String(t.btn.textContent||'').trim().slice(0,80):id,url:(t&&t.url)||''});}return r;}
+};
 document.getElementById('bAdd').onclick=function(e){e.stopPropagation();openWebTab('https://app.devin.ai/','＋登 Devin');};
 document.getElementById('bRefresh').onclick=function(){if(isBoard()){var bt=activeBoardTab();closeTab(boardId(bt));openBoard(bt);return;}var t=tabs[active];if(t){t.frame.setAttribute('src',t.url);setLoading(active,true);}};
 document.getElementById('bHome').onclick=function(){openBoard('home');};

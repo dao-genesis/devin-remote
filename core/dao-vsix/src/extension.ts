@@ -2786,6 +2786,22 @@ function daoBrowserHomeUrl(): string {
     try { if (ws && ws.port) return 'http://127.0.0.1:' + ws.port + '/shell'; } catch { /* 守柔 */ }
     return 'about:blank';
 }
+// 找到(或补开)承载插件归一网页 /shell 的 CDP 页面目标 — browser_shell_tab 的落点。
+async function daoCdpShellTarget() {
+    await daoCdpEnsureChrome();
+    const home = daoBrowserHomeUrl();
+    if (home === 'about:blank') throw new Error('shell-not-available (本地服务未起·无 /shell 可驱动)');
+    const find = async () => {
+        const list = await daoCdpHttpGet('/json/list') || [];
+        return list.find((x) => x.type === 'page' && x.webSocketDebuggerUrl && String(x.url || '').indexOf('/shell') >= 0);
+    };
+    let t = await find();
+    if (t) return t;
+    const ver = await daoCdpHttpGet('/json/version');
+    await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.createTarget', params: { url: home } }]);
+    for (let i = 0; i < 20; i++) { await daoMcpSleep(300); t = await find(); if (t) return t; }
+    throw new Error('shell-target-not-ready');
+}
 async function daoCdpEnsureChrome() {
     try { return await daoCdpHttpGet('/json/version'); } catch (e9) { /* 未起 → 拉起 */ }
     const exe = findBrowserExe();
@@ -2989,6 +3005,7 @@ function daoMcpToolDefs() {
         { name: 'browser_get_html', description: '取页面/元素 HTML(outer 取 outerHTML)', inputSchema: S({ selector: { type: 'string' }, outer: { type: 'boolean' }, max: { type: 'number' }, targetId: { type: 'string' } }) },
         { name: 'browser_console', description: '取页面 console 日志(钩子缓冲·clear 清空)', inputSchema: S({ limit: { type: 'number' }, clear: { type: 'boolean' }, targetId: { type: 'string' } }) },
         { name: 'browser_network', description: '取页面网络请求(fetch/XHR 钩子缓冲·clear 清空)', inputSchema: S({ limit: { type: 'number' }, clear: { type: 'boolean' }, targetId: { type: 'string' } }) },
+        { name: 'browser_shell_tab', description: '归一网页(/shell)「内部」标签调度: 在插件本体的多实例网页里开/关/切标签与六大板块(MCP 与用户共视同一张网页·全程可见)。action=list|open|close|activate|board; open 需 url(+label); close/activate 需 id(见 list); board 需 board key(overview/switch/bridge/backups/inject/mcp/home)', inputSchema: S({ action: { type: 'string', enum: ['list', 'open', 'close', 'activate', 'board'] }, url: { type: 'string' }, label: { type: 'string' }, id: { type: 'string' }, board: { type: 'string' } }) },
         { name: 'browser_tabs', description: '标签页 list/new/select/close', inputSchema: S({ action: { type: 'string', enum: ['list', 'new', 'select', 'close'] }, url: { type: 'string' }, targetId: { type: 'string' } }) },
         { name: 'browser_upload', description: '给文件输入框设置文件(本机绝对路径)', inputSchema: S({ ref: { type: 'string' }, selector: { type: 'string' }, files: { type: 'array' }, file: { type: 'string' }, targetId: { type: 'string' } }) },
         { name: 'browser_drag', description: '拖拽(from*→to*·ref/selector/x,y/nx,ny)', inputSchema: S({ fromRef: { type: 'string' }, fromSelector: { type: 'string' }, fromX: { type: 'number' }, fromY: { type: 'number' }, fromNx: { type: 'number' }, fromNy: { type: 'number' }, toRef: { type: 'string' }, toSelector: { type: 'string' }, toX: { type: 'number' }, toY: { type: 'number' }, toNx: { type: 'number' }, toNy: { type: 'number' }, targetId: { type: 'string' } }) },
@@ -3101,6 +3118,18 @@ async function daoMcpCallTool(name, a) {
                 return daoMcpText({ targetId: tid, url: a.url, emulated: true });
             }
             const r = await daoCdpBatch(ver.webSocketDebuggerUrl, [{ method: 'Target.createTarget', params: { url: a.url } }]); if (r && r.targetId) daoCdpActiveTarget = r.targetId; return daoMcpText({ targetId: r && r.targetId, url: a.url });
+        }
+        case 'browser_shell_tab': {
+            const t = await daoCdpShellTarget();
+            const ready = await daoCdpEvalT(t, '!!window.__daoShell');
+            if (!ready) return daoMcpErr('__daoShell 未就绪 (旧版外壳·请刷新 /shell 页后重试)');
+            const act = String(a.action || 'list');
+            if (act === 'list') return daoMcpText(await daoCdpEvalT(t, 'window.__daoShell.list()'));
+            if (act === 'open') { if (!a.url) return daoMcpErr('url required'); await daoCdpEvalT(t, 'window.__daoShell.open(' + JSON.stringify(String(a.url)) + ',' + JSON.stringify(String(a.label || a.url)) + ')'); await daoMcpSleep(600); return daoMcpText(await daoCdpEvalT(t, 'window.__daoShell.list()')); }
+            if (act === 'close') { if (!a.id) return daoMcpErr('id required'); await daoCdpEvalT(t, 'window.__daoShell.close(' + JSON.stringify(String(a.id)) + ')'); return daoMcpText(await daoCdpEvalT(t, 'window.__daoShell.list()')); }
+            if (act === 'activate') { if (!a.id) return daoMcpErr('id required'); await daoCdpEvalT(t, 'window.__daoShell.activate(' + JSON.stringify(String(a.id)) + ')'); return daoMcpText(await daoCdpEvalT(t, 'window.__daoShell.list()')); }
+            if (act === 'board') { if (!a.board) return daoMcpErr('board required'); await daoCdpEvalT(t, 'window.__daoShell.board(' + JSON.stringify(String(a.board)) + ')'); await daoMcpSleep(600); return daoMcpText(await daoCdpEvalT(t, 'window.__daoShell.list()')); }
+            return daoMcpErr('unknown action: ' + act);
         }
         case 'browser_eval': {
             if (!a.code) return daoMcpErr('code required');
