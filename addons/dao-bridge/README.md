@@ -2,6 +2,8 @@
 
 把**一台本地电脑**通过 **Cloudflare 快速隧道（`*.trycloudflare.com`）**暴露给云端——零账号、零公网 IP、零端口转发。去中心化，不依赖任何中继 Worker。
 
+**双通道并行**：快速隧道兜底（临时 URL）+ **持久 Worker 通道置顶**（固定地址，不随隧道轮换）。持久通道是**独立进程常驻**、**不依赖 IDE**——IDE 不开也能被云端直连。
+
 > 本目录是**纯 Node 独立后端**（无 VS Code 也能跑：NAS / 路由器 / 容器 / CI）。
 > - 想要**随 IDE 自启**的插件形态见 `dao-bridge-ext/`（默认走 Cloudflare 快速隧道，配置账号才走命名隧道）。
 > - Android 形态已迁入 `../rt-flow-app/`（独立 APK）。
@@ -12,7 +14,15 @@
 本机 agent.js ──cloudflared 出站──┘  ──▶ 本机执行 ──▶ 真实 stdout 原路返回
 ```
 
-默认走 Cloudflare 快速隧道（临时 URL，重启会变；插件形态自带看门狗自愈+实时刷新接入文档）。需要稳定 URL 时，配置自己的 Cloudflare 命名隧道。
+默认走 Cloudflare 快速隧道（临时 URL，重启会变；插件形态自带看门狗自愈+实时刷新接入文档）。需要**固定地址**时，挂到自有持久 Worker（`addons/dao-relay`）：
+
+```
+云端 ──HTTPS POST──▶ https://<worker>.workers.dev/relay/<session>   (地址固定·不轮换)
+                          │  Durable Object 按 (session,token) 定址
+本机 agent.js ──出站 WSS /connect?session&token──┘  ──▶ 本机执行 ──▶ 原路返回
+```
+
+持久通道与快速隧道**并行**：任一可达即通。零账号配对——客户端用自己的 `(session,token)` 占用命名空间，公网侧须同时知道相同 `session+token` 才能驱动（详见 `addons/dao-relay`）。
 
 ## 启动(本机)
 
@@ -20,6 +30,9 @@
 # 需要 Node.js 与 cloudflared（PATH 中可用，或用 DAO_CLOUDFLARED 指定路径）
 cd addons/dao-bridge
 .\start.ps1
+
+# 同时挂持久 Worker 通道（固定地址·IDE 无关）：
+.\start.ps1 -RelayUrl https://dao-relay-do.<sub>.workers.dev -Session desktop-master -RelayToken dao-vsix-xxxx
 ```
 
 启动后会拉起 cloudflared 快速隧道，拿到 URL 后打印云端入口：`https://<random>.trycloudflare.com`（Header `Authorization: Bearer <token>`）。token 随机生成、**仅存本机 conn.json、不入库**。
@@ -50,3 +63,8 @@ curl -X POST https://<random>.trycloudflare.com/api/exec-sync \
 | `DAO_ROOT` | 工作根目录 | 用户目录 |
 | `DAO_CLOUDFLARED` | cloudflared 可执行路径 | `cloudflared`（PATH） |
 | `DAO_PROXY` | 出站代理（适配国内网络） | 自动探测 |
+| `DAO_RELAY_URL` | 持久 Worker 通道地址（设即启用，与快速隧道并行） | 空（仅快速隧道） |
+| `DAO_SESSION` | 持久通道 session（公网 `/relay/<session>` 定址） | 主机名 |
+| `DAO_RELAY_TOKEN` | 持久通道配对 token | 同 `DAO_TOKEN` |
+
+持久通道公网入口固定为 `<DAO_RELAY_URL>/relay/<DAO_SESSION>`（POST，Header `Authorization: Bearer <DAO_RELAY_TOKEN>`），协议帧 `{type:'request'|'response', id, path, method, body, status}`。

@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
 const core = require('./core.js');
+const { startRelayConnector } = require('./relay.js');
 
 const DIR = __dirname;
 const CONN = path.join(DIR, 'conn.json');
@@ -20,6 +21,10 @@ function loadConf() {
     root: process.env.DAO_ROOT || c.root || os.homedir(),
     cloudflared: process.env.DAO_CLOUDFLARED || c.cloudflared || 'cloudflared',
     proxy: process.env.DAO_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || c.proxy || '',
+    // 持久 Worker 通道（IDE 无关·固定地址）：设 relayUrl 即启用；session 缺省用主机名。
+    relayUrl: process.env.DAO_RELAY_URL || c.relayUrl || '',
+    session: process.env.DAO_SESSION || c.session || '',
+    relayToken: process.env.DAO_RELAY_TOKEN || c.relayToken || '',
   };
 }
 
@@ -80,11 +85,12 @@ function startQuickTunnel(conf, port, onUrl) {
   const server = await core.startServer(host, { port: conf.port, token: conf.token });
   if (conf.proxy) console.log('[dao-bridge] proxy=' + conf.proxy);
 
+  let relayUrlPublic = '';
   const persist = () => {
     try {
       fs.writeFileSync(CONN, JSON.stringify({
         token: conf.token, port: server.port, root: conf.root, host: os.hostname(),
-        publicUrl, updated: new Date().toISOString(),
+        publicUrl, relayUrl: conf.relayUrl || '', relayPublicUrl: relayUrlPublic, session: conf.session || os.hostname(), updated: new Date().toISOString(),
       }, null, 2));
     } catch {}
   };
@@ -92,14 +98,25 @@ function startQuickTunnel(conf, port, onUrl) {
   const tunnel = startQuickTunnel(conf, server.port, (u) => {
     publicUrl = u;
     persist();
-    console.log('[dao-bridge] 公网入口: ' + u + '  (Authorization: Bearer <token>)');
+    console.log('[dao-bridge] 公网入口(快速隧道·兜底): ' + u + '  (Authorization: Bearer <token>)');
   });
+
+  // 持久 Worker 通道：与快速隧道并行。地址固定、不随隧道轮换，独立进程常驻即 IDE 不开也可达。
+  let relay = { stop() {} };
+  if (conf.relayUrl) {
+    const session = conf.session || os.hostname();
+    relay = startRelayConnector(
+      { relayUrl: conf.relayUrl, session: session, relayToken: conf.relayToken || conf.token, localPort: server.port, localToken: conf.token },
+      (s) => { relayUrlPublic = (s && s.connected) ? (s.publicUrl || '') : ''; persist(); }
+    );
+    console.log('[dao-bridge] 持久通道启用: ' + conf.relayUrl + ' · session=' + session);
+  }
 
   persist();
   setInterval(persist, 5000);
 
   console.log('[dao-bridge] host=' + os.hostname() + ' port=' + server.port);
   console.log('[dao-bridge] cloudflared 快速隧道启动中… 拿到 URL 后即打印公网入口');
-  process.on('SIGINT', () => { tunnel.stop(); process.exit(0); });
+  process.on('SIGINT', () => { try { relay.stop(); } catch (e) {} tunnel.stop(); process.exit(0); });
   process.stdin.resume();
 })();
