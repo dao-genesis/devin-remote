@@ -2194,6 +2194,7 @@ function _ensureTermPool() {
 // HTTP /exec 兜底服务 · :12780 (per-user FNV 偏置 · 多账号自然隔离)
 let _DAO_TERM_HTTP = null;
 let _DAO_TERM_HTTP_PORT = 0;
+let _DAO_TERM_HTTP_SHARED = false; // 端口已被在位 dao term 服务占用 → 复用共享 (道并行而不相悖)
 function _termHttpPort() {
   // 复用 fnv1a 思想 · base 12780
   const u = (os.userInfo().username || "default").toLowerCase();
@@ -2268,7 +2269,27 @@ function _startDaoTermService(ctx) {
   server.listen(port, "127.0.0.1", () => {
     L.info("term", `HTTP /term/* 启 :${port} (localhost only)`);
   });
-  server.on("error", (e) => {
+  server.on("error", async (e) => {
+    // 道并行而不相悖 · 三插件共存时 standalone 与 dao-one/vendor-proxy 会抢同一 per-user 端口。
+    // 与代理口 :8985 同规: EADDRINUSE 时 ping 在位者, 确认是活的 dao term 服务即复用共享 (无为而治),
+    // 不再留下一个 listen 失败的死 server, 也不再刷 WARN。仅端口被非-dao 进程占用时才告警。
+    if (e && (e.code === "EADDRINUSE" || String(e.message || "").includes("EADDRINUSE"))) {
+      const ping = await httpGetJson(`http://127.0.0.1:${port}/term/ping`, 2000).catch(() => null);
+      if (ping && ping.ok) {
+        _DAO_TERM_HTTP_SHARED = true;
+        L.info(
+          "term",
+          `HTTP /term/* :${port} 已在位(v${ping.version || "?"} · sessions=${ping.sessions || 0}) → 复用共享 · 不自起 (无为而治)`,
+        );
+      } else {
+        L.warn(
+          "term",
+          `http server err: ${e.message} · :${port} 被非 dao term 进程占用 · 本实例 term HTTP 让位`,
+        );
+      }
+      _DAO_TERM_HTTP = null;
+      return;
+    }
     L.warn("term", `http server err: ${e.message}`);
   });
   _DAO_TERM_HTTP = server;
@@ -6869,3 +6890,23 @@ async function cmdEaConfig() {
 //   供 dao-one 全能板 (dao-vsix) 内嵌复用 (iframe srcdoc) — 零前端重写。
 function getCachedPort() { return _cachedPort; }
 module.exports = { activate, deactivate, getEaConfigHtml, getCachedPort };
+
+// ── 测试缝(仅 DAO_PP_SELFTEST=1 暴露) · 生产 activate 路径永不触及 ──
+//   验证三插件共存时 term HTTP 兜底口(:12780+偏置)遭遇 EADDRINUSE 的柔弱让位/复用共享。
+if (process.env.DAO_PP_SELFTEST === "1") {
+  module.exports.__test = {
+    _startDaoTermService,
+    _termHttpPort,
+    _ensureTermPool,
+    get termHttp() { return _DAO_TERM_HTTP; },
+    get termShared() { return _DAO_TERM_HTTP_SHARED; },
+    get termPort() { return _DAO_TERM_HTTP_PORT; },
+    _reset() {
+      try { if (_DAO_TERM_HTTP && _DAO_TERM_HTTP.close) _DAO_TERM_HTTP.close(); } catch {}
+      _DAO_TERM_HTTP = null;
+      _DAO_TERM_HTTP_SHARED = false;
+      if (_DAO_TERM_POOL) { try { _DAO_TERM_POOL.closeAll(); } catch {} }
+      _DAO_TERM_POOL = null;
+    },
+  };
+}
