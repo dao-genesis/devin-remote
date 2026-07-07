@@ -552,6 +552,446 @@ async function verifyCfToken(token) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// workers.dev 固定中继 — 帛书·「大道甚夷」
+// 「用户只给一个 Cloudflare API Token, 无需自备/购买域名」的通用固定通道:
+//   把内嵌的最小中继 Worker(与 addons/dao-relay 协议逐字节一致: (session,token) 配对定址、
+//   /connect 出站 WSS、POST /relay/<session> 驱动、{type:request|response|ping|pong})
+//   自动部署到**用户自己的 Cloudflare 账号**, 启用免费 *.workers.dev 子域 →
+//   固定地址 https://<script>.<subdomain>.workers.dev/relay/<session>, 永不轮换。
+// 这是「附加的固定域名选项」: 默认仍是零账号快速隧道(去中心化不变), 仅当用户主动给
+// token 且账号下无域名(zone)时启用 —— 有自有域名者依旧走命名隧道(真域名更优)。
+// ═══════════════════════════════════════════════════════════
+
+const RELAY_SCRIPT_NAME = "dao-relay-do";
+
+function workersRelayPath() { return path.join(daoDir(), "workers-relay.json"); }
+function loadWorkersRelayConfig() {
+  try { return JSON.parse(fs.readFileSync(workersRelayPath(), "utf8")); } catch (e) { return null; }
+}
+function saveWorkersRelayConfig(cfg) {
+  fs.writeFileSync(workersRelayPath(), JSON.stringify(cfg, null, 2), "utf8");
+}
+
+// 内嵌最小中继 Worker 源(单模块·无静态资产·Durable Object Hibernation) —
+// 与 addons/dao-relay/worker.js 的核心协议完全一致(定址 relayKey = session+NUL+token)。
+const RELAY_WORKER_SOURCE = [
+  '"use strict";',
+  'function relayKey(s, t) { return String(s) + "\\u0000" + String(t); }',
+  'function json(b, s) { return new Response(JSON.stringify(b), { status: s || 200, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } }); }',
+  'function bearer(req) { const h = req.headers.get("authorization") || ""; return h.startsWith("Bearer ") ? h.slice(7) : ""; }',
+  'export default {',
+  '  async fetch(req, env) {',
+  '    const url = new URL(req.url);',
+  '    const path = url.pathname;',
+  '    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "authorization,content-type" } });',
+  '    if (path === "/" || path === "/health") return json({ ok: true, service: "dao-relay-min", version: "1.0.0", pairing: "session+token" });',
+  '    if (path === "/connect") {',
+  '      if ((req.headers.get("upgrade") || "").toLowerCase() !== "websocket") return json({ error: "expected websocket" }, 426);',
+  '      const session = url.searchParams.get("session") || "";',
+  '      const t = url.searchParams.get("token") || "";',
+  '      if (!session || !t) return json({ error: "missing session/token" }, 400);',
+  '      if (env.DAO_TOKEN && t !== String(env.DAO_TOKEN)) return json({ error: "unauthorized" }, 401);',
+  '      const id = env.DAO_RELAY.idFromName(relayKey(session, t));',
+  '      return env.DAO_RELAY.get(id).fetch(req);',
+  '    }',
+  '    if (path.startsWith("/relay/")) {',
+  '      if (req.method !== "POST") return json({ error: "POST only", hint: "body={path,method,body} Authorization: Bearer <token>" }, 405);',
+  '      const t = bearer(req);',
+  '      const session = decodeURIComponent(path.slice("/relay/".length));',
+  '      if (!session || !t) return json({ error: "missing session/token" }, 401);',
+  '      if (env.DAO_TOKEN && t !== String(env.DAO_TOKEN)) return json({ error: "unauthorized" }, 401);',
+  '      const id = env.DAO_RELAY.idFromName(relayKey(session, t));',
+  '      return env.DAO_RELAY.get(id).fetch(new Request("https://do/relay", { method: "POST", headers: { "content-type": "application/json" }, body: await req.text() }));',
+  '    }',
+  '    return json({ error: "not found" }, 404);',
+  '  }',
+  '};',
+  'export class DaoRelayDO {',
+  '  constructor(state, env) { this.state = state; this.env = env; this.pending = new Map(); this.seq = 0; this.rl = { windowStart: 0, count: 0 }; }',
+  '  agentSocket() {',
+  '    let list = []; try { list = this.state.getWebSockets() || []; } catch (e) { list = []; }',
+  '    let saw = false;',
+  '    for (let i = list.length - 1; i >= 0; i--) { const ws = list[i]; if (!ws) continue; const rs = ws.readyState; if (rs === 1) return ws; if (rs !== undefined && rs !== null) saw = true; }',
+  '    if (!saw) for (let i = list.length - 1; i >= 0; i--) if (list[i]) return list[i];',
+  '    return null;',
+  '  }',
+  '  async waitForAgent(maxMs) { const start = Date.now(); let a = this.agentSocket(); while (!a && Date.now() - start < maxMs) { await new Promise((r) => setTimeout(r, 150)); a = this.agentSocket(); } return a; }',
+  '  rateOk() { const WIN = 10000, MAX = 120; const now = Date.now(); if (now - this.rl.windowStart > WIN) { this.rl.windowStart = now; this.rl.count = 0; } this.rl.count++; return this.rl.count <= MAX; }',
+  '  async fetch(req) {',
+  '    const url = new URL(req.url);',
+  '    if (url.pathname === "/connect") {',
+  '      const pair = new WebSocketPair();',
+  '      const client = pair[0], server = pair[1];',
+  '      try { for (const ws of (this.state.getWebSockets() || [])) { try { ws.close(1000, "replaced"); } catch (e) {} } } catch (e) {}',
+  '      this.state.acceptWebSocket(server);',
+  '      try { this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair(JSON.stringify({ type: "ping" }), JSON.stringify({ type: "pong" }))); } catch (e) {}',
+  '      return new Response(null, { status: 101, webSocket: client });',
+  '    }',
+  '    let agent = this.agentSocket();',
+  '    if (!agent) { agent = await this.waitForAgent(5000); if (!agent) return json({ error: "no_agent", hint: "no connected agent matches this session+token" }, 502); }',
+  '    if (!this.rateOk()) return json({ error: "rate_limited" }, 429);',
+  '    let frame = {}; try { frame = await req.json(); } catch (e) { frame = {}; }',
+  '    const reqPath = frame.path || "/api/health";',
+  '    const method = frame.method || "GET";',
+  '    const body = frame.body !== undefined ? frame.body : {};',
+  '    const id = "r" + (++this.seq) + "-" + Date.now();',
+  '    const wire = JSON.stringify({ type: "request", id, path: reqPath, method, body });',
+  '    const out = await new Promise((resolve) => {',
+  '      const timer = setTimeout(() => { this.pending.delete(id); resolve({ status: 504, body: { error: "agent_timeout" } }); }, 60000);',
+  '      this.pending.set(id, { resolve, timer });',
+  '      const trySend = (sock, retriesLeft) => {',
+  '        try { sock.send(wire); } catch (e) {',
+  '          if (retriesLeft > 0) { setTimeout(() => { const fresh = this.agentSocket(); if (fresh) trySend(fresh, retriesLeft - 1); else { clearTimeout(timer); this.pending.delete(id); resolve({ status: 503, body: { error: "agent_reconnecting", retryable: true } }); } }, 200); }',
+  '          else { clearTimeout(timer); this.pending.delete(id); resolve({ status: 503, body: { error: "agent_reconnecting", retryable: true } }); }',
+  '        }',
+  '      };',
+  '      trySend(agent, 1);',
+  '    });',
+  '    return json(out.body, out.status || 200);',
+  '  }',
+  '  webSocketMessage(ws, message) {',
+  '    let m; try { const s = (typeof message === "string") ? message : new TextDecoder().decode(message); m = JSON.parse(s); } catch (e) { return; }',
+  '    if (!m || typeof m !== "object") return;',
+  '    if (m.type === "ping") { try { ws.send(JSON.stringify({ type: "pong" })); } catch (e) {} return; }',
+  '    if (m.type === "pong") return;',
+  '    if (m.type === "response" && m.id && this.pending.has(m.id)) { const p = this.pending.get(m.id); this.pending.delete(m.id); clearTimeout(p.timer); p.resolve({ status: m.status || 200, body: m.body }); }',
+  '  }',
+  '  webSocketClose(ws, code, reason) { try { ws.close(code, reason); } catch (e) {} }',
+  '  webSocketError() {}',
+  '}',
+  '',
+].join("\n");
+
+// multipart/form-data 上传 Worker 脚本(metadata + ES module) → Cloudflare API
+function cfApiUploadWorker(acctId, scriptName, apiToken, source, withMigration) {
+  const metadata = {
+    main_module: "worker.js",
+    compatibility_date: "2024-11-01",
+    bindings: [{ type: "durable_object_namespace", name: "DAO_RELAY", class_name: "DaoRelayDO" }],
+  };
+  if (withMigration) metadata.migrations = { new_tag: "v1", new_sqlite_classes: ["DaoRelayDO"] };
+  const boundary = "----daoRelayBoundary" + crypto.randomBytes(12).toString("hex");
+  const body = Buffer.concat([
+    Buffer.from(
+      "--" + boundary + "\r\n" +
+      'Content-Disposition: form-data; name="metadata"; filename="metadata.json"\r\n' +
+      "Content-Type: application/json\r\n\r\n" +
+      JSON.stringify(metadata) + "\r\n" +
+      "--" + boundary + "\r\n" +
+      'Content-Disposition: form-data; name="worker.js"; filename="worker.js"\r\n' +
+      "Content-Type: application/javascript+module\r\n\r\n", "utf8"),
+    Buffer.from(source, "utf8"),
+    Buffer.from("\r\n--" + boundary + "--\r\n", "utf8"),
+  ]);
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: "api.cloudflare.com",
+      path: "/client/v4/accounts/" + acctId + "/workers/scripts/" + scriptName,
+      method: "PUT",
+      headers: {
+        "Authorization": "Bearer " + apiToken,
+        "Content-Type": "multipart/form-data; boundary=" + boundary,
+        "Content-Length": body.length,
+        "User-Agent": UA,
+      },
+    }, (res) => {
+      let d = ""; res.on("data", (c) => (d += c));
+      res.on("end", () => { try { resolve({ status: res.statusCode, json: JSON.parse(d) }); } catch (e) { resolve({ status: res.statusCode, text: d }); } });
+    });
+    req.on("error", (e) => resolve({ status: 0, error: e.message }));
+    req.setTimeout(30000, () => { req.destroy(); resolve({ status: 0, error: "timeout" }); });
+    req.write(body); req.end();
+  });
+}
+
+function cfErrText(r) {
+  try { return JSON.stringify((r.json && r.json.errors) || r.text || r.error || "").slice(0, 220); } catch (e) { return String(r.status); }
+}
+
+// 一个 API Token → 用户自己账号下的固定 workers.dev 中继(零域名·闭环持久化)。
+// 幂等: 重复调用复用既有 session/token 与脚本(仅重新上传最新源)。
+async function provisionWorkersRelay(apiToken) {
+  const acctR = await cfApiRequest("GET", "/accounts", apiToken);
+  const acct = acctR.json && acctR.json.result && acctR.json.result[0];
+  if (!acct || !acct.id) return { ok: false, message: "无法读取 Cloudflare 账号(API Token 需含 Account 读取权限)" };
+  const acctId = acct.id;
+  // ① workers.dev 子域: 读取; 没有则自动注册一个派生名(全局唯一, 失败则请用户在面板注册一次)
+  let sub = "";
+  const subR = await cfApiRequest("GET", "/accounts/" + acctId + "/workers/subdomain", apiToken);
+  if (subR.json && subR.json.result && subR.json.result.subdomain) sub = subR.json.result.subdomain;
+  if (!sub) {
+    const cand = "dao-" + String(acctId).replace(/[^a-z0-9]/gi, "").toLowerCase().slice(0, 14);
+    const mkR = await cfApiRequest("PUT", "/accounts/" + acctId + "/workers/subdomain", apiToken, { subdomain: cand });
+    if (mkR.json && mkR.json.result && mkR.json.result.subdomain) sub = mkR.json.result.subdomain;
+    if (!sub) return { ok: false, needSubdomain: true, message: "账号还没有 workers.dev 子域且自动注册未成: " + cfErrText(mkR) + " — 请在 Cloudflare 面板 Workers 页注册一次子域(免费), 再重试" };
+  }
+  // ② 上传中继 Worker(已存在则不带 DO 迁移; 首次带 new_sqlite_classes)
+  const setR = await cfApiRequest("GET", "/accounts/" + acctId + "/workers/scripts/" + RELAY_SCRIPT_NAME + "/settings", apiToken);
+  const exists = setR.status === 200 && setR.json && setR.json.success;
+  let upR = await cfApiUploadWorker(acctId, RELAY_SCRIPT_NAME, apiToken, RELAY_WORKER_SOURCE, !exists);
+  if (!(upR.status === 200 && upR.json && upR.json.success) && !exists) {
+    // 迁移标签冲突(脚本曾建过)兜底: 不带迁移重传
+    upR = await cfApiUploadWorker(acctId, RELAY_SCRIPT_NAME, apiToken, RELAY_WORKER_SOURCE, false);
+  }
+  if (!(upR.status === 200 && upR.json && upR.json.success)) {
+    return { ok: false, message: "上传中继 Worker 失败(API Token 需含 Workers Scripts:Edit 权限): " + cfErrText(upR) };
+  }
+  // ③ 启用 workers.dev 路由
+  const enR = await cfApiRequest("POST", "/accounts/" + acctId + "/workers/scripts/" + RELAY_SCRIPT_NAME + "/subdomain", apiToken, { enabled: true, previews_enabled: false });
+  if (!(enR.status === 200 && enR.json && enR.json.success)) {
+    return { ok: false, message: "启用 workers.dev 子域路由失败: " + cfErrText(enR) };
+  }
+  const relayUrl = "https://" + RELAY_SCRIPT_NAME + "." + sub + ".workers.dev";
+  // ④ 稳定配对: session 按机器派生、token 随机一次生成, 之后复用(公网地址永不轮换)
+  const prev = loadWorkersRelayConfig() || {};
+  const hostSlug = (os.hostname() || "dao").toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "dao";
+  const session = prev.session || ("dao-" + hostSlug + "-" + crypto.randomBytes(3).toString("hex"));
+  const relayToken = prev.relayToken || ("dao-relay-" + crypto.randomBytes(24).toString("hex"));
+  const cfg = { relayUrl, scriptName: RELAY_SCRIPT_NAME, subdomain: sub, acctId, session, relayToken, apiToken, savedAt: new Date().toISOString() };
+  try { saveWorkersRelayConfig(cfg); } catch (e) {}
+  return { ok: true, relayUrl, session, relayToken, publicUrl: relayUrl + "/relay/" + encodeURIComponent(session) };
+}
+
+// ═══════════════════════════════════════════════════════════
+// 零依赖 WebSocket 客户端(RFC6455·Node 内置 http/tls/net/crypto 手搓)
+// 与 addons/devin-git-auth/engine/wsClient.js 同源精简: 握手校验 + 客户端帧掩码 +
+// 服务端帧解析(text/close/ping/pong·含分片) + HTTP CONNECT 代理 + TLS。
+// ═══════════════════════════════════════════════════════════
+const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+function wsEncodeFrame(opcode, payload) {
+  const mask = crypto.randomBytes(4);
+  const len = payload.length;
+  let header;
+  if (len < 126) { header = Buffer.from([0x80 | opcode, 0x80 | len]); }
+  else if (len < 65536) { header = Buffer.alloc(4); header[0] = 0x80 | opcode; header[1] = 0x80 | 126; header.writeUInt16BE(len, 2); }
+  else { header = Buffer.alloc(10); header[0] = 0x80 | opcode; header[1] = 0x80 | 127; header.writeBigUInt64BE(BigInt(len), 2); }
+  const masked = Buffer.allocUnsafe(len);
+  for (let i = 0; i < len; i++) masked[i] = payload[i] ^ mask[i & 3];
+  return Buffer.concat([header, mask, masked]);
+}
+
+class WsFrameParser {
+  constructor(onText, onClose, sendPong) { this.onText = onText; this.onClose = onClose; this.sendPong = sendPong; this.buf = Buffer.alloc(0); this.fragments = []; }
+  push(chunk) { this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk; this.parse(); }
+  parse() {
+    for (;;) {
+      if (this.buf.length < 2) return;
+      const b0 = this.buf[0], b1 = this.buf[1];
+      const fin = (b0 & 0x80) !== 0;
+      const opcode = b0 & 0x0f;
+      const masked = (b1 & 0x80) !== 0;
+      let len = b1 & 0x7f, offset = 2;
+      if (len === 126) { if (this.buf.length < offset + 2) return; len = this.buf.readUInt16BE(offset); offset += 2; }
+      else if (len === 127) { if (this.buf.length < offset + 8) return; len = Number(this.buf.readBigUInt64BE(offset)); offset += 8; }
+      const maskLen = masked ? 4 : 0;
+      if (this.buf.length < offset + maskLen + len) return;
+      let payload = this.buf.subarray(offset + maskLen, offset + maskLen + len);
+      if (masked) {
+        const mask = this.buf.subarray(offset, offset + 4);
+        const un = Buffer.allocUnsafe(len);
+        for (let i = 0; i < len; i++) un[i] = payload[i] ^ mask[i & 3];
+        payload = un;
+      }
+      this.buf = this.buf.subarray(offset + maskLen + len);
+      if (opcode === 0x8) { this.onClose(); return; }
+      if (opcode === 0x9) { this.sendPong(payload); continue; }
+      if (opcode === 0xa) continue;
+      this.fragments.push(payload);
+      if (fin) { const full = Buffer.concat(this.fragments); this.fragments = []; this.onText(full.toString("utf8")); }
+    }
+  }
+}
+
+class WsClient {
+  constructor() { this.socket = null; this.parser = null; this.handlers = []; this.closeHandlers = []; this.closed = false; }
+  get isOpen() { return !this.closed && !!this.socket && !this.socket.destroyed; }
+  onMessage(cb) { this.handlers.push(cb); }
+  onClose(cb) { this.closeHandlers.push(cb); }
+  _emitClose() { if (this._closeEmitted) return; this._closeEmitted = true; for (const h of this.closeHandlers) { try { h(); } catch (e) {} } }
+  static _openSocket(target, opts, proxyUrl) {
+    const net = require("net"), tls = require("tls");
+    const host = target.hostname;
+    const secure = target.protocol === "wss:";
+    const port = target.port ? Number(target.port) : (secure ? 443 : 80);
+    return new Promise((resolve, reject) => {
+      const onError = (err) => reject(err);
+      const wrapTls = (socket) => {
+        const t = tls.connect({ socket, servername: host, rejectUnauthorized: opts.verify !== false }, () => resolve(t));
+        t.on("error", onError);
+      };
+      if (proxyUrl) {
+        let p; try { p = new URL(proxyUrl); } catch (e) { p = null; }
+        if (p) {
+          const headers = {};
+          if (p.username) headers["proxy-authorization"] = "Basic " + Buffer.from(decodeURIComponent(p.username) + ":" + decodeURIComponent(p.password || "")).toString("base64");
+          const cr = http.request({ host: p.hostname, port: p.port ? Number(p.port) : 80, method: "CONNECT", path: host + ":" + port, headers });
+          cr.setTimeout(opts.timeoutMs || 15000, () => cr.destroy(new Error("代理连接超时")));
+          cr.on("error", onError);
+          cr.on("connect", (res, socket) => {
+            if (res.statusCode !== 200) { socket.destroy(); return reject(new Error("代理 CONNECT 失败: HTTP " + res.statusCode)); }
+            if (secure) wrapTls(socket); else resolve(socket);
+          });
+          cr.end();
+          return;
+        }
+      }
+      if (secure) {
+        const t = tls.connect({ host, port, servername: host, rejectUnauthorized: opts.verify !== false }, () => resolve(t));
+        t.setTimeout(opts.timeoutMs || 15000, () => t.destroy(new Error("连接超时")));
+        t.on("error", onError);
+        return;
+      }
+      const plain = net.connect({ host, port }, () => resolve(plain));
+      plain.setTimeout(opts.timeoutMs || 15000, () => plain.destroy(new Error("连接超时")));
+      plain.on("error", onError);
+    });
+  }
+  static connect(wsUrl, options) {
+    options = options || {};
+    const timeoutMs = options.timeoutMs || 15000;
+    const u = new URL(wsUrl);
+    if (u.protocol !== "wss:" && u.protocol !== "ws:") return Promise.reject(new Error("不支持的 WS 协议: " + u.protocol));
+    const client = new WsClient();
+    const key = crypto.randomBytes(16).toString("base64");
+    const expectAccept = crypto.createHash("sha1").update(key + WS_GUID).digest("base64");
+    return WsClient._openSocket(u, { verify: options.verify, timeoutMs }, options.proxy).then((socket) => new Promise((resolve, reject) => {
+      let settled = false;
+      const fail = (err) => { if (settled) return; settled = true; try { socket.destroy(); } catch (e) {} reject(err); };
+      const timer = setTimeout(() => fail(new Error("WS 握手超时")), timeoutMs);
+      socket.on("error", fail);
+      const reqStr = "GET " + u.pathname + u.search + " HTTP/1.1\r\n" +
+        "Host: " + u.host + "\r\n" +
+        "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+        "Sec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n";
+      socket.write(reqStr);
+      let hb = Buffer.alloc(0);
+      const onHandshake = (chunk) => {
+        hb = Buffer.concat([hb, chunk]);
+        const sep = hb.indexOf("\r\n\r\n");
+        if (sep < 0) return;
+        const headerText = hb.subarray(0, sep).toString("utf8");
+        const rest = hb.subarray(sep + 4);
+        const statusLine = headerText.split("\r\n")[0] || "";
+        if (!/\s101\s/.test(" " + statusLine + " ")) return fail(new Error("WS 握手失败: " + statusLine.slice(0, 120)));
+        const am = /sec-websocket-accept:\s*(\S+)/i.exec(headerText);
+        if (!am || am[1] !== expectAccept) return fail(new Error("WS 握手失败: Sec-WebSocket-Accept 校验不通过"));
+        clearTimeout(timer);
+        settled = true;
+        socket.setTimeout(0);
+        socket.removeListener("data", onHandshake);
+        socket.removeListener("error", fail);
+        client.socket = socket;
+        client.parser = new WsFrameParser(
+          (s) => { for (const h of client.handlers) { try { h(s); } catch (e) {} } },
+          () => client.close(),
+          (payload) => client.rawSend(0xa, payload)
+        );
+        socket.on("data", (c) => { try { client.parser.push(c); } catch (e) {} });
+        socket.on("close", () => { client.closed = true; client._emitClose(); });
+        socket.on("error", () => { client.closed = true; client._emitClose(); });
+        resolve(client);
+        if (rest.length > 0) client.parser.push(rest);
+      };
+      socket.on("data", onHandshake);
+    }));
+  }
+  rawSend(opcode, payload) {
+    if (!this.socket || this.socket.destroyed) return;
+    try { this.socket.write(wsEncodeFrame(opcode, payload)); } catch (e) {}
+  }
+  send(text) { this.rawSend(0x1, Buffer.from(text, "utf8")); }
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.rawSend(0x8, Buffer.alloc(0));
+    try { this.socket && this.socket.destroy(); } catch (e) {}
+    this._emitClose();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// RelayClient — 出站长连中继 Worker: /connect?session&token → 收 {type:request}
+// 派给本地 WorkspaceServer.handleApi → 回 {type:response}。15s 心跳、断线退避重连。
+// 「知道 session+token」即凭证(与 dao-relay 配对模型一致), 故派发按已鉴权处理。
+// ═══════════════════════════════════════════════════════════
+class RelayClient {
+  constructor(bridge) {
+    this.bridge = bridge;
+    this.ws = null;
+    this.cfg = null;
+    this.stopped = true;
+    this.connected = false;
+    this.lastErr = "";
+    this._hb = null;
+    this._reconnectTimer = null;
+    this._backoff = 1500;
+  }
+  // 首连: 成功 resolve(true), 失败 resolve(false)。之后后台自动重连(直到 stop)。
+  start(cfg) {
+    this.cfg = cfg;
+    this.stopped = false;
+    return this._connect();
+  }
+  wsUrl() {
+    const base = String(this.cfg.relayUrl || "").replace(/\/$/, "").replace(/^http/, "ws");
+    return base + "/connect?session=" + encodeURIComponent(this.cfg.session) + "&token=" + encodeURIComponent(this.cfg.relayToken);
+  }
+  async _connect() {
+    if (this.stopped) return false;
+    try {
+      const ws = await WsClient.connect(this.wsUrl(), { proxy: detectProxy(), timeoutMs: 15000 });
+      this.ws = ws;
+      this.connected = true;
+      this.lastErr = "";
+      this._backoff = 1500;
+      ws.onMessage((s) => this._onMessage(s));
+      ws.onClose(() => {
+        this.connected = false;
+        this._clearHb();
+        if (!this.stopped) this._scheduleReconnect();
+        try { this.bridge && this.bridge.notify(); } catch (e) {}
+      });
+      this._clearHb();
+      this._hb = setInterval(() => { try { ws.send(JSON.stringify({ type: "ping" })); } catch (e) {} }, 15000);
+      return true;
+    } catch (e) {
+      this.connected = false;
+      this.lastErr = String((e && e.message) || e);
+      if (!this.stopped) this._scheduleReconnect();
+      return false;
+    }
+  }
+  _scheduleReconnect() {
+    if (this._reconnectTimer || this.stopped) return;
+    const wait = this._backoff;
+    this._backoff = Math.min(Math.round(this._backoff * 1.7), 30000);
+    this._reconnectTimer = setTimeout(() => { this._reconnectTimer = null; this._connect(); }, wait);
+  }
+  async _onMessage(s) {
+    let m; try { m = JSON.parse(s); } catch (e) { return; }
+    if (!m || typeof m !== "object") return;
+    if (m.type === "pong") return;
+    if (m.type === "ping") { try { this.ws.send(JSON.stringify({ type: "pong" })); } catch (e) {} return; }
+    if (m.type === "request") {
+      let out;
+      try { out = await this.bridge.srv.handleApi(m.method || "GET", m.path || "/api/health", m.body || {}, true); }
+      catch (e) { out = { status: 500, body: { error: String(e && e.message) } }; }
+      try { this.ws.send(JSON.stringify({ type: "response", id: m.id, status: (out && out.status) || 200, body: out && out.body })); } catch (e) {}
+    }
+  }
+  _clearHb() { if (this._hb) { clearInterval(this._hb); this._hb = null; } }
+  stop() {
+    this.stopped = true;
+    this.connected = false;
+    this._clearHb();
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+    try { this.ws && this.ws.close(); } catch (e) {}
+    this.ws = null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
 // 工作区本地服务 — CLOUD_AGENT_GUIDE.md 同构架构
 // 帛书·「道生一」— 暴露完整能力给公网
 // ═══════════════════════════════════════════════════════════
@@ -1111,6 +1551,22 @@ class WorkspaceServer {
       if (br) setTimeout(async () => { try { await br.resetAccount(); br.stop(); await br.start(); } catch (e) {} }, 200);
       return { status: 200, body: { ok: true, note: "account reset + restart; re-read conn.json" } };
     }
+    // 反代底层 API: 只给一个 CF API Token → 自动开通固定公网通道(有域名走命名隧道; 无域名自动部署 workers.dev 中继)。
+    if (pathname === "/api/account/bind-cf" && method === "POST") {
+      if (!br) return { status: 503, body: { error: "bridge not ready" } };
+      const token = String((body && (body.apiToken || body.token)) || "").trim();
+      if (!token) return { status: 400, body: { error: "apiToken required" } };
+      const r = await br.loginCloudFlare(String((body && body.email) || ""), token);
+      return { status: r.ok ? 200 : 400, body: Object.assign({}, r, { fixedUrl: br.fixedPublicUrl() }) };
+    }
+    if (pathname === "/api/account/status" && method === "GET") {
+      if (!br) return { status: 503, body: { error: "bridge not ready" } };
+      const c = loadWorkersRelayConfig();
+      return { status: 200, body: {
+        hasCfConfig: br._hasCfConfig(), mode: br.mode, fixedUrl: br.fixedPublicUrl(),
+        relay: c && c.relayUrl ? { url: c.relayUrl + "/relay/" + encodeURIComponent(c.session), connected: !!(br.relay && br.relay.connected) } : null,
+      } };
+    }
     // API Token 登录 + 自动开通命名隧道固定域名(闭环持久化)。body: {email?, key} · key=CF API Token / 隧道连接令牌
     if (pathname === "/api/account/cf-login" && method === "POST") {
       if (!br) return { status: 503, body: { error: "bridge not ready" } };
@@ -1154,6 +1610,7 @@ class Bridge {
     this.attemptLog = [];
     this._starting = false;
     this.cfCredentials = loadCfCredentials();
+    this.relay = new RelayClient(this);
     this.srv._bridgeRef = this;
     // 自愈看门狗状态 — 跨 stop()/start() 存活, 仅 deactivate 才停
     this._wd = null;
@@ -1304,7 +1761,30 @@ class Bridge {
         + (proxy ? " · 已尝试代理 " + proxy : " · 未发现可用代理") + " — 疑似网络/GFW 阻断 Cloudflare 边缘";
       this.writeArtifacts(); this.notify();
       return "";
-    } finally { this._starting = false; }
+    } finally {
+      this._starting = false;
+      // workers.dev 固定中继(可选·持久化): 有配置即出站长连, 提供永不轮换的公网地址,
+      // 与快速隧道并存(道并行而不相悖) —— 快速隧道换址不影响此固定通道。
+      try { this._startRelayIfConfigured(); } catch (e) {}
+    }
+  }
+
+  // 有 ~/.dao/bridge/workers-relay.json 即拉起出站中继客户端(幂等)。
+  _startRelayIfConfigured() {
+    const cfg = loadWorkersRelayConfig();
+    if (!cfg || !cfg.relayUrl || !cfg.session || !cfg.relayToken) return;
+    if (this.relay.connected || (!this.relay.stopped && this.relay.cfg)) return;
+    this.relay.start(cfg).then((ok) => { try { this.notify(); } catch (e) {} });
+  }
+
+  // 固定公网地址(优先命名隧道域名, 其次 workers.dev 中继)。用于 MD / 状态展示。
+  fixedPublicUrl() {
+    try { if (this.mode === "named" && this.url) return this.url; } catch (e) {}
+    try {
+      const c = loadWorkersRelayConfig();
+      if (c && c.relayUrl && c.session) return c.relayUrl + "/relay/" + encodeURIComponent(c.session);
+    } catch (e) {}
+    return "";
   }
 
   // 单次尝试: spawn cloudflared, 等待"已就绪"信号或超时
@@ -1365,6 +1845,14 @@ class Bridge {
       cfEmail: this.cfCredentials ? this.cfCredentials.email || "" : "",
       cfHostname: (function () { try { return loadDaoTunnelConfig().hostname || ""; } catch (e) { return ""; } })(),
       hasCfConfig: this._hasCfConfig(),
+      relay: (function (self) {
+        try {
+          const c = loadWorkersRelayConfig();
+          if (!c || !c.relayUrl) return null;
+          return { url: c.relayUrl + "/relay/" + encodeURIComponent(c.session), connected: !!self.relay.connected, lastErr: self.relay.lastErr || "" };
+        } catch (e) { return null; }
+      })(this),
+      fixedUrl: this.fixedPublicUrl(),
       agentCount: this.srv.agentRegistry.size,
       bootstrap: this.bootstrapCmd(),
       lastOkAt: this._lastOkAt, healing: this._healing, healthFails: this._healthFails,
@@ -1392,6 +1880,7 @@ class Bridge {
   _hasCfConfig() {
     try { const c = this.cfCredentials; if (c && (c.apiToken || c.globalApiKey || c.tunnelToken)) return true; } catch (e) {}
     try { if (fs.existsSync(path.join(daoDir(), "named-tunnel.json"))) return true; } catch (e) {}
+    try { if (fs.existsSync(workersRelayPath())) return true; } catch (e) {}
     try { if (fs.existsSync(path.join(daoDir(), "cf-credentials.json"))) return true; } catch (e) {}
     try { const cfg = vscode.workspace.getConfiguration("daoBridge"); if (String(cfg.get("tunnelToken") || "").trim()) return true; } catch (e) {}
     try { if (fs.existsSync(path.join(os.homedir(), ".cloudflared", "cert.pem"))) return true; } catch (e) {}
@@ -1466,7 +1955,19 @@ class Bridge {
       try { prov = await this.provisionNamedTunnel(key, wantHost); }
       catch (e) { prov = { ok: false, message: String(e && e.message) }; }
       if (prov.ok) return { ok: true, message: "API Token 验证成功 · 已开通固定域名命名隧道 " + prov.hostname + "（点『重启隧道』或稍候即以固定域名上线）" };
-      if (prov.needDomain) return { ok: true, message: prov.message };
+      // 账号下无域名(zone): 无需用户自备域名 —— 自动部署 workers.dev 中继, 得固定 *.workers.dev 地址。
+      if (prov.needDomain) {
+        let rel;
+        try { rel = await provisionWorkersRelay(key); }
+        catch (e) { rel = { ok: false, message: String(e && e.message) }; }
+        if (rel.ok) {
+          try { this.relay.stop(); } catch (e) {}
+          const ok = await this.relay.start(loadWorkersRelayConfig());
+          try { this.notify(); } catch (e) {}
+          return { ok: true, relay: true, message: "API Token 验证成功 · 账号无自有域名，已为你自动部署 workers.dev 固定中继（零域名）：" + rel.publicUrl + (ok ? " · 已上线" : "（连接中，稍候自动就绪）") };
+        }
+        return { ok: true, message: "API Token 已保存。自动开通 workers.dev 固定通道未成：" + rel.message + " · 当前继续用零配置快速隧道(可正常穿透)" };
+      }
       return { ok: true, message: "API Token 验证成功且已保存，但自动开通命名隧道未完成：" + prov.message };
     }
     // 尝试作为Global API Key
@@ -1523,8 +2024,11 @@ class Bridge {
         return true;
       } catch (e) { return false; }
     };
-    // ① dao 自管的命名隧道令牌 / CF 凭证
+    // ① dao 自管的命名隧道令牌 / CF 凭证 / workers.dev 中继配置
+    //    先收掉出站中继长连(否则退出后仍在后台重连), 再备份删除配置 —— 根治「绑了退不出」。
+    try { this.relay && this.relay.stop(); } catch (e) {}
     backup(path.join(daoDir(), "named-tunnel.json"));
+    backup(workersRelayPath());
     backup(path.join(daoDir(), "cf-credentials.json"));
     // ② dao-config.json 里若写了 cfTunnelToken/cfHostname → 抹掉这些字段(保留其余)
     try {
@@ -1643,10 +2147,24 @@ class Bridge {
       "| GET | `/api/export-local-md` | - | 导出本地Agent配置文档 |",
       "| GET | `/api/attempt-log` | - | 隧道回退链诊断 |",
       "| GET/POST | `/api/config` | `{tunnelToken,hostname,localPort,cloudflaredPath}` | 读/写插件配置 |",
+      "| POST | `/api/account/bind-cf` | `{apiToken}` | **只给一个 CF Token→自动开通固定公网地址**(有域名→命名隧道; 无域名→自动部署 workers.dev 中继·零域名) |",
+      "| GET | `/api/account/status` | - | 固定通道状态: `{mode,fixedUrl,relay:{url,connected}}` |",
       "| POST | `/api/bridge/restart` | - | 重启隧道(URL会变,重读conn.json) |",
-      "| POST | `/api/account/logout` | - | 退出账号→无账号快速隧道 |",
+      "| POST | `/api/account/logout` | - | 退出账号→无账号快速隧道(彻底清残·可重绑) |",
       "| POST | `/api/export/refresh` | - | 重生成并落盘两个MD |",
       "| POST | `/api/self/reload` | - | 重载窗口(热加载新插件代码·会打断UI) |",
+      "",
+      "## 固定公网地址(可选·只需一个 CF Token·无需自备域名)",
+      "",
+      "> 默认零配置快速隧道即可用。想要**永不轮换的固定公网地址**时,只需一个 Cloudflare API Token:",
+      "> 系统自动在**你自己的 CF 账号**里开通固定通道 —— 有自有域名走命名隧道,没有域名则自动把最小中继",
+      "> Worker 部署到你账号下的免费 `*.workers.dev`,得固定地址 `https://<script>.<子域>.workers.dev/relay/<session>`。",
+      "> 绑定后可随时 `POST /api/account/logout` 退出并重绑(即使上次绑错也能退)。",
+      "",
+      "```python",
+      'print(api("POST","/api/account/bind-cf",{"apiToken":"<你的CF API Token>"}))  # → {ok,fixedUrl,...}',
+      'print(api("GET","/api/account/status"))  # → {mode,fixedUrl,relay:{url,connected}}',
+      "```",
       "",
       "## Python SDK",
       "",
@@ -1982,6 +2500,7 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <div class="muted" style="margin-top:4px">无名之樸 · 插件启动即自动打通整机公网穿透，<b>零配置、无需任何账号</b>。</div>
 <div class="card">
   <div class="lbl">公网 URL</div><div id="url" class="url">—</div>
+  <div class="lbl" id="fixedLbl" style="display:none">固定地址（不轮换）</div><div id="fixed" class="url" style="display:none">—</div>
   <div class="lbl">工作区</div><div id="ws" class="val">—</div>
   <div class="lbl">端口 / 模式 / 协议</div><div id="mode" class="val">—</div>
   <div class="lbl">代理 / 回退链</div><div id="net" class="val">—</div>
@@ -1993,16 +2512,17 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   </div>
 </div>
 
-<!-- 模块2: CloudFlare 命名隧道 (可选) -->
+<!-- 模块2: CloudFlare 固定通道 (可选·只需 token) -->
 <div class="section">
-<h3>🔑 命名隧道 · 固定域名（可选）</h3>
-<div class="muted">默认快速隧道已可用，<b>无需登录</b>。仅当你想要<b>固定不变的公网域名</b>时，才需配置 CloudFlare 命名隧道令牌（也可放入 <code>~/.dao/dao-config.json</code> 的 <code>cfTunnelToken</code> 自动加载）。</div>
+<h3>🔑 固定公网地址（可选 · 只需一个 CF Token）</h3>
+<div class="muted">默认快速隧道已可用，<b>无需登录</b>。想要<b>固定不变的公网地址</b>时，只需粘贴一个 Cloudflare API Token —— <b>无需自备/购买域名</b>：系统自动在你自己的 CF 账号里开通固定通道（有自有域名走命名隧道；没有域名则自动部署免费 <code>*.workers.dev</code> 中继）。</div>
 <div id="cfStatus" class="muted" style="margin-top:4px">未配置（使用零配置快速隧道）</div>
 <div id="cfLoginForm">
-  <input id="cfEmail" type="email" placeholder="CloudFlare Email（可选）">
-  <input id="cfKey" type="password" placeholder="Tunnel Token / API Token（可选）">
-  <button onclick="send('cfLogin',null,{email:v('cfEmail'),key:v('cfKey')})">保存并切到用户通道</button>
-  <div class="muted" style="margin-top:6px">没有 token？用浏览器登录 Cloudflare（<b>可用 GitHub 账号</b>，需自有域名才有固定域名）：</div>
+  <input id="cfKey" type="password" placeholder="Cloudflare API Token（粘贴即可，无需域名）">
+  <input id="cfEmail" type="email" placeholder="CloudFlare Email（仅 Global API Key 时需要，可留空）">
+  <button onclick="send('cfLogin',null,{email:v('cfEmail'),key:v('cfKey')})">保存并开通固定通道</button>
+  <div class="muted" style="margin-top:6px">Token 需含权限：<code>Account · Workers Scripts:Edit</code>（零域名 workers.dev 中继）或 <code>Account · Cloudflare Tunnel + Zone · DNS</code>（自有域名命名隧道）。</div>
+  <div class="muted" style="margin-top:4px">没有 token？用浏览器登录 Cloudflare（<b>可用 GitHub 账号</b>）：</div>
   <button onclick="send('cfBrowserLogin')">🌐 用浏览器登录 Cloudflare</button>
 </div>
 <button id="logoutBtn" onclick="if(confirm('退出账号并清空全部 Cloudflare 凭证残留(含 cloudflared 登录 cert)，回到无账号快速隧道？'))send('logout')" style="margin-top:6px;background:#a33;display:none">退出账号 / 重置为无账号模式</button>
@@ -2049,6 +2569,9 @@ window.addEventListener('message',(e)=>{const m=e.data;
     document.getElementById('dot').className='dot '+(on?'ok':(s.lastErr?'bad':'pending'));
     document.getElementById('stat').textContent=on?'已打通 · 公网在线':(s.lastErr?(''+s.lastErr):'隧道启动中…');
     document.getElementById('url').textContent=s.url||'—';
+    var fx=s.fixedUrl||'';var fxL=document.getElementById('fixedLbl');var fxV=document.getElementById('fixed');
+    if(fx){fxL.style.display='';fxV.style.display='';fxV.textContent=fx+(s.relay?(s.relay.connected?' · 中继在线':' · 中继连接中'):'');}
+    else{fxL.style.display='none';fxV.style.display='none';}
     document.getElementById('ws').textContent=s.ws?(s.ws.name+' · '+s.ws.root):'—';
     document.getElementById('mode').textContent=':'+s.port+' / '+s.mode+(s.protocol?' / '+s.protocol:'');
     var chain=(s.attempts||[]).map(function(a){return a.mode+'/'+a.proto+(a.ok?'✓':'✗');}).join(' → ');
@@ -2061,6 +2584,7 @@ window.addEventListener('message',(e)=>{const m=e.data;
     document.getElementById('logoutBtn').style.display=hasCfg?'block':'none';
     const cfSt=document.getElementById('cfStatus');
     if(s.mode==='named'){cfSt.textContent='✓ 命名隧道运行中 · 固定域名 '+(s.cfHostname||s.url||'')+(s.cfEmail?(' · '+s.cfEmail):'');cfSt.style.color='#3fb950';document.getElementById('cfLoginForm').style.display='none';}
+    else if(s.relay){cfSt.textContent=(s.relay.connected?'✓ workers.dev 固定中继在线（零域名）· ':'⏳ workers.dev 固定中继连接中 · ')+s.relay.url+(s.relay.lastErr&&!s.relay.connected?(' · '+s.relay.lastErr):'');cfSt.style.color=s.relay.connected?'#3fb950':'#e8c84a';document.getElementById('cfLoginForm').style.display='none';}
     else if(loggedIn){cfSt.textContent='✓ 已保存 CloudFlare 凭证'+(s.cfHostname?('（固定域名 '+s.cfHostname+'，点重启隧道生效）'):'（当前用快速隧道，如需固定域名请在 Cloudflare 添加域名）')+(s.cfEmail?(' · '+s.cfEmail):'');cfSt.style.color='#e8c84a';document.getElementById('cfLoginForm').style.display='none';}
     else{cfSt.textContent='未登录（零配置快速隧道）';cfSt.style.color='';document.getElementById('cfLoginForm').style.display='block';}
   }
@@ -2092,10 +2616,10 @@ function activate(context) {
     _bridge.stop(); await _bridge.start();
     vscode.window.showInformationMessage("DAO Bridge: " + r.message + " · 已回到无账号快速隧道");
   }), "cmd:logout");
-  context.subscriptions.push({ dispose: () => { try { _bridge.stopWatchdog(); } catch (e) {} try { _bridge.stop(); } catch (e) {} } });
+  context.subscriptions.push({ dispose: () => { try { _bridge.stopWatchdog(); } catch (e) {} try { _bridge.relay && _bridge.relay.stop(); } catch (e) {} try { _bridge.stop(); } catch (e) {} } });
   // 自动启动 — 插件激活即穿透; 看门狗常驻自愈, 只要 IDE 在跑就持久有效
   _bridge.startWatchdog();
   _bridge.start().then((url) => { if (url) vscode.window.setStatusBarMessage("DAO Bridge 已打通: " + url, 8000); });
 }
-function deactivate() { try { if (_bridge) { _bridge.stopWatchdog(); _bridge.stop(); } } catch (e) {} }
-module.exports = { activate, deactivate, Bridge, WorkspaceServer, detectProxy, downloadCloudflared, findCloudflared, isRealCloudflared, probeCloudflared, extractCfTgz, cfAssetName, buildExecCommand, buildBootstrap, buildBootstrapSh, platformOf };
+function deactivate() { try { if (_bridge) { _bridge.stopWatchdog(); try { _bridge.relay && _bridge.relay.stop(); } catch (e) {} _bridge.stop(); } } catch (e) {} }
+module.exports = { activate, deactivate, Bridge, WorkspaceServer, detectProxy, downloadCloudflared, findCloudflared, isRealCloudflared, probeCloudflared, extractCfTgz, cfAssetName, buildExecCommand, buildBootstrap, buildBootstrapSh, platformOf, WsClient, RelayClient, provisionWorkersRelay, RELAY_WORKER_SOURCE, RELAY_SCRIPT_NAME, wsEncodeFrame, WsFrameParser };
