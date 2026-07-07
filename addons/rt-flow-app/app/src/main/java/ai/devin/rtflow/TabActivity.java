@@ -100,7 +100,7 @@ public class TabActivity extends AppCompatActivity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setDatabaseEnabled(true);
-        s.setUserAgentString(s.getUserAgentString().replace("; wv", "")); // 去 WebView 标记, 贴近真浏览器
+        s.setUserAgentString(MainActivity.sanitizedUa(s.getUserAgentString())); // 去 WebView/Android 标记(退格根治·与主壳同源)
         // 浏览器同构设置 (与主壳账号标签 makeTab 同源): 缺任一项都会与真浏览器行为分叉
         s.setAllowFileAccess(true);
         s.setSupportZoom(true);

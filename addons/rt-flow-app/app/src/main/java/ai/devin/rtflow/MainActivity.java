@@ -197,6 +197,18 @@ public class MainActivity extends AppCompatActivity {
     //   ② 退格后紧跟(<250ms)纯前向删除(拆单误发·含 KEYCODE_FORWARD_DEL) → 吞掉前向那一半。
     //   注: JS 层对 Slate 输入事件一律直通不拦(见 installBackspaceGuard 说明);
     //   setComposingRegion 保持透传(吞掉会破坏 Gboard 对既有文本的正常重组词)。
+    // 退格根治(本源·UA 层): Devin 网页编辑器 slate-react 靠 UA 嗅探 /Android/ 走「Android 输入路径」
+    //   (MutationObserver 重建 DOM + 模型重放)。该路径在 WebView 里与 IME 直改编辑缓冲叠加 →
+    //   一次退格删两字(左右同删)、光标漂移、restoreDOM 闪回。UA 去掉 Android 标记后 Slate 走标准
+    //   beforeinput 路径: preventDefault + 单一模型操作, 实测一次退格恰删一字、光标准确、键盘不收。
+    //   一行归真, 无需任何 JS 拦截 —— 大道至简。
+    static String sanitizedUa(String ua) {
+        if (ua == null) return null;
+        return ua.replace("; wv", "")
+                 .replaceFirst("\\(Linux; Android [^)]*\\)", "(X11; Linux x86_64)")
+                 .replace(" Mobile Safari/", " Safari/");
+    }
+
     static class GuardedWebView extends WebView {
         GuardedWebView(Context c) { super(c); }
         long lastBkAt = 0;   // 最近一次退格(左删/DEL 键)的时刻 —— 紧跟其后的前向删除判为 IME 误发
@@ -1128,7 +1140,7 @@ public class MainActivity extends AppCompatActivity {
             // 远程网页端取帧投屏, 无需把它提到手机前台 (故多端各看各页·并行不相犯)。板块 UI 轻量, 软件层无感。
             web.setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null);
         } else {
-            st.setUserAgentString(st.getUserAgentString().replace("; wv", "")); // 贴近真浏览器
+            st.setUserAgentString(sanitizedUa(st.getUserAgentString())); // 贴近真浏览器 + 去 Android 标记(退格根治)
             web.addJavascriptInterface(new AutofillBridge(web), "__dcaf"); // 登录账密自动保存/填充 (Chrome 式无感)
             web.addJavascriptInterface(new TranslateBridge(web), "__dcTr"); // 整页翻译 (Edge 引擎, 原生桥绕过页面 CSP/跨域)
             web.addJavascriptInterface(new UserScriptBridge(web), "__dcus"); // 用户脚本引擎 (油猴兼容: GM_* + 跨域 xhr 经原生桥)
@@ -2502,7 +2514,7 @@ public class MainActivity extends AppCompatActivity {
         t.desktop = !t.desktop;
         WebSettings st = t.web.getSettings();
         if (t.desktop) { st.setUserAgentString(DESKTOP_UA); st.setUseWideViewPort(true); st.setLoadWithOverviewMode(true); toast("已切桌面版"); }
-        else { st.setUserAgentString(null); toast("已切移动版"); }
+        else { st.setUserAgentString(null); st.setUserAgentString(sanitizedUa(st.getUserAgentString())); toast("已切移动版"); }
         t.web.reload();
     }
     private void toggleNight() {
