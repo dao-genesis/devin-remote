@@ -1,6 +1,6 @@
 {
-  "versionCode": 268,
-  "versionName": "0.37.164",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.164/DevinCloud-mobile-v0.37.164.apk",
-  "notes": "v0.37.164 · 正本清源双修: ① 归零号提取103B空文件根治 —— auth1 过期致事件流/消息全 401, 旧逻辑吞成 ok:true 空 md 并缓存复用; 今 401/403 即用账密重登自愈再取, 仍失败如实报错, 空 md(无消息段)备份不再注入、改走网络重取。② 通知/额度自动刷新根治 —— 常驻引擎离屏 WebView 计时器被系统节流/冻结致 convwatch·额度轮形同虚设; 今由 RelayService 原生 Handler 周期外驱(evaluateJavascript 不受节流), 息屏/后台恒可靠, 另加单轮挂死看门狗"
+  "versionCode": 269,
+  "versionName": "0.37.165",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.165/DevinCloud-mobile-v0.37.165.apk",
+  "notes": "v0.37.165 · 双根治: ① 「解析软件包时出现问题」装不上 —— minSdk>=24 时构建默认只带 v2 签名, 不少国产 ROM 侧载仍要求 v1(JAR) 签名 → 三代签名(v1+v2+v3)全量开启, 任何机型侧载/应用内更新均可装。② 退格左右同删根治(轻量版) —— 原生 InputConnection 夹断 deleteSurroundingText(before>0,after>0) 只留左删 + 吞拆单前向删除, JS 层兜底越光标退格区间; 全程零同步取文零延迟, 组词/拼音直通, 无旧版重护栏的卡顿与光标错位"
 }

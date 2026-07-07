@@ -37,7 +37,7 @@ ok(/var QKEY = "rtflow\.convwatch\.quota"/.test(engineSrc) && /var QLKEY = "rtfl
    "源级: 额度耗尽/即将耗尽各持独立按账号节流存储");
 ok(/s\.reason === "quota"\) \{ cur\[sid\] = \{ phase: "quota"/.test(engineSrc),
    "源级: 额度耗尽 sid 仍登记 cur(phase=quota) → 不被误判「已结束」");
-ok(/try \{ quotaWatch\(quotaByAcct, quotaTitleByAcct, now\); \} catch/.test(engineSrc) && /try \{ quotaLowWatch\(accs, titleByAcct, now\); \} catch/.test(engineSrc),
+ok(/try \{ quotaWatch\(quotaByAcct, quotaTitleByAcct, now\); \} catch/.test(engineSrc) && /try \{ quotaLowWatch\(loadAcc\(\)\.filter\(function\(x\)\{ return x\.auth1 && x\.orgId; \}\), titleByAcct, now\); \} catch/.test(engineSrc),
    "源级: tick 每轮触发 quotaWatch + quotaLowWatch(均带本轮对话名映射)");
 
 // ── 源级护栏: 额度类通知主体优先用「该号对话名」, 仅全新零对话账号才回退账号名 (用户要求) ──

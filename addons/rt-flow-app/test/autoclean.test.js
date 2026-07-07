@@ -183,7 +183,7 @@ function makeEnv(opts) {
     ok(new RegExp("@JavascriptInterface public (String|boolean) " + m + "\\(").test(relaySrc), "RelayService 引擎桥: " + m);
   }
   // ── 源级护栏: 退格护栏 (左右两侧同删修复) ──
-  ok(/private void installBackspaceGuard\(WebView w\)/.test(mainSrc), "MainActivity 有 installBackspaceGuard");
+  ok(/static void installBackspaceGuard\(WebView w\)/.test(mainSrc), "MainActivity 有 installBackspaceGuard (static: TabActivity 同源复用)");
   ok(/installKbHelper\(v\);\s*\/\/[^\n]*\n\s*installBackspaceGuard\(v\);/.test(mainSrc), "退格护栏: onPageFinished 安装");
   ok(/installDownloadHook\(v\); installKbHelper\(v\); installBackspaceGuard\(v\);/.test(mainSrc), "退格护栏: SPA 路由后重装 (doUpdateVisitedHistory)");
   ok(/deleteContentForward'&&\(now-lastBk\)<150/.test(mainSrc), "退格护栏: 拦截紧跟退格的 IME 向前删除");
