@@ -102,6 +102,19 @@ async function daoRefreshCurrent(): Promise<any> {
 }
 const GLOBAL_CONFIG_FILE = path.join(DAO_DIR, 'dao-config.json');  // CF全局凭证
 const CONFIG_FILE = GLOBAL_CONFIG_FILE;  // 别名 — 道法自然：一即一切
+// 顶层持久通道 · addons/dao-relay/provision.mjs 落盘于此:
+//   用户一次登录(贴一个预填深链创建的 CF API Token) → 后端自动 wrangler deploy →
+//   得永不漂的 https://dao-relay-do.<子域>.workers.dev, 写入本文件 {url,...}。
+//   getRelayConfig 把它**置顶**为出站中继首选 → org MCP/公网入站配一次永久有效;
+//   既有 quick tunnel / ntfy mesh 仍作回退, 两者取长补短。
+const RELAY_STATE_FILE = path.join(DAO_DIR, 'relay.json');
+function getPersistentRelayUrl(): string {
+    try {
+        const s = JSON.parse(fs.readFileSync(RELAY_STATE_FILE, 'utf8'));
+        if (s && typeof s.url === 'string' && /^https?:\/\//.test(s.url)) return s.url.replace(/\/$/, '');
+    } catch { /* 守柔: 未注册持久通道则无 */ }
+    return '';
+}
 const INST_FILE = path.join(DAO_DIR, 'dao-instances.json');
 // 绝利一源 · 帛书「道生一」— 备份引擎单一来源: 直接复用内联 rt-flow 的 devin_cloud.js,
 // 全功能面板 Session/备份板块不再另起炉灶, 与 rt-flow 备份成果同源呈现 (问题②③)。
@@ -1648,17 +1661,79 @@ export function deactivate() {
 // ═══════════════════════════════════════════════════════════
 
 function getRelayConfig(): { urls: string[] } {
+    // 顶层持久通道置顶(用户自建的永不漂 Worker)，其余作回退，两者取长补短。
+    const head: string[] = [];
+    const persist = getPersistentRelayUrl();
+    if (persist) head.push(persist);
     const cfg = getDaoConfig();
     if (cfg.relayUrl) {
-        return { urls: cfg.relayUrl.split(',').map((u: string) => u.trim()).filter(Boolean) };
+        return { urls: dedupeUrls([...head, ...cfg.relayUrl.split(',').map((u: string) => u.trim()).filter(Boolean)]) };
     }
     try {
         const f = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-        if (f.relayUrl) return { urls: f.relayUrl.split(',').map((u: string) => u.trim()).filter(Boolean) };
-        if (f.relayUrls?.length) return { urls: f.relayUrls };
+        if (f.relayUrl) return { urls: dedupeUrls([...head, ...f.relayUrl.split(',').map((u: string) => u.trim()).filter(Boolean)]) };
+        if (f.relayUrls?.length) return { urls: dedupeUrls([...head, ...f.relayUrls]) };
     } catch {}
-    // 道法自然：无中继配置 → 返回空，仅本地运行
-    return { urls: [] };
+    // 道法自然：仅持久通道(若有)，否则空 → 仅本地运行
+    return { urls: dedupeUrls(head) };
+}
+
+function dedupeUrls(urls: string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const u of urls) {
+        const k = u.replace(/\/$/, '');
+        if (k && !seen.has(k)) { seen.add(k); out.push(u); }
+    }
+    return out;
+}
+
+// 顶层持久通道 · 预填 Token 创建深链: 打开即已勾好本通道所需最小权限, 用户点一次
+// Create 复制 token 即可, 免手搓权限、免读文档 (与 addons/dao-relay/provision.mjs 同源)。
+function daoRelayTokenDeepLink(name = 'dao-relay'): string {
+    const perms = [
+        { key: 'workers_scripts', type: 'edit' },
+        { key: 'workers_kv_storage', type: 'edit' },
+        { key: 'account_settings', type: 'read' },
+    ];
+    const q = new URLSearchParams({ permissionGroupKeys: JSON.stringify(perms), name, accountId: '*', zoneId: 'all' });
+    return 'https://dash.cloudflare.com/profile/api-tokens?' + q.toString();
+}
+
+// 登记/更新持久通道 URL 并立即切换出站中继到它 (置顶·既有隧道/mesh 作回退)。
+async function daoRelaySetPersistent(rawUrl: string): Promise<{ ok: boolean; url?: string; healthy?: boolean; error?: string }> {
+    const url = String(rawUrl || '').trim().replace(/\/$/, '');
+    if (!/^https:\/\/[^\s]+/.test(url)) return { ok: false, error: 'need https url' };
+    let healthy = false;
+    try {
+        const r = await daoFetchJson(url + '/health', 8000);
+        healthy = !!(r && r.status === 'ok');
+    } catch { /* 边缘传播中·先登记后自愈 */ }
+    try {
+        let prev: any = {};
+        try { prev = JSON.parse(fs.readFileSync(RELAY_STATE_FILE, 'utf8')); } catch { /* 首次 */ }
+        fs.mkdirSync(DAO_DIR, { recursive: true });
+        fs.writeFileSync(RELAY_STATE_FILE, JSON.stringify({ ...prev, url, healthy, registeredAt: new Date().toISOString() }, null, 2), 'utf8');
+    } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+    // 断开现连 → 下一轮 connectRelay 即把持久通道置顶接管。
+    try { if (ws.relayWs) { ws.relayWs.close(); ws.relayWs = null; } } catch { /* 守柔 */ }
+    ws.relayConnected = false; ws.relayConnecting = false;
+    try { connectRelay(ws.port, ws.token); } catch { /* 守柔 */ }
+    return { ok: true, url, healthy };
+}
+
+function daoFetchJson(u: string, timeoutMs: number): Promise<any> {
+    return new Promise((resolve, reject) => {
+        try {
+            const lib = u.startsWith('https') ? https : http;
+            const req = lib.request(u, { method: 'GET', timeout: timeoutMs }, (r: any) => {
+                let b = ''; r.on('data', (d: any) => (b += d.toString()));
+                r.on('end', () => { try { resolve(JSON.parse(b)); } catch { resolve(b); } });
+            });
+            req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+            req.end();
+        } catch (e) { reject(e); }
+    });
 }
 
 function connectRelay(port: number, token: string) {
@@ -2215,7 +2290,7 @@ function isAppProxyPassthrough(route: string): boolean {
             '/api/terminal', '/api/diagnostics', '/api/definitions', '/api/references', '/api/symbols',
             '/api/git/', '/api/agents', '/api/commands', '/api/tools', '/api/devin', '/api/workspaces',
             '/api/agent-doc', '/api/manifest', '/api/bridge-state', '/api/next', '/api/signal-info',
-            '/api/signal-start', '/api/signal-stop', '/api/cap', '/api/input'];
+            '/api/signal-start', '/api/signal-stop', '/api/cap', '/api/input', '/api/relay'];
         return !daoApiPrefixes.some(p => route === p || route.startsWith(p + '/') || route === p.replace(/\/$/, ''));
     }
     // 帛书·「执天之行」官网根挂载: dao 自身 HTTP 仅占用 /api/*, 故其余所有根路径
@@ -3766,6 +3841,28 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         }
         case '/api/bridge-state': {
             return bridgeGetState();
+        }
+        // ═══════════════════════════════════════════════════════════
+        // 顶层持久通道 · 一次登录 → 后端全自动打通(dao-relay 自建 Worker)
+        //   /api/relay/deep-link  GET  → 预填权限的 CF Token 创建深链(点一次 Create 即得)
+        //   /api/relay/state      GET  → 当前持久通道状态(token 脱敏)
+        //   /api/relay/set        POST → {url} 登记持久通道并置顶接管(既有隧道/mesh 作回退)
+        // 重活(token→wrangler deploy→URL)由 addons/dao-relay/provision.mjs 完成后落盘,
+        // 插件即经 getRelayConfig 置顶自动采纳; /set 供远端 UI/脚本直接登记 URL。
+        // ═══════════════════════════════════════════════════════════
+        case '/api/relay/deep-link': {
+            return { ok: true, url: daoRelayTokenDeepLink(), perms: ['workers_scripts:edit', 'workers_kv_storage:edit', 'account_settings:read'],
+                howto: '点开链接 → Continue to summary → Create Token → 复制 → 用 provision.mjs <token> 部署, 或把已部署的 workers.dev 地址 POST 到 /api/relay/set' };
+        }
+        case '/api/relay/state': {
+            const persist = getPersistentRelayUrl();
+            let raw: any = null; try { raw = JSON.parse(fs.readFileSync(RELAY_STATE_FILE, 'utf8')); } catch { /* 无 */ }
+            if (raw && raw.token) raw = { ...raw, token: '***' };
+            return { ok: true, active: !!persist, url: persist || null, connected: ws.relayConnected, publicUrl: ws.publicUrl, state: raw };
+        }
+        case '/api/relay/set': {
+            const rb: any = JSON.parse(await readBody(req) || '{}');
+            return await daoRelaySetPersistent(rb.url);
         }
         case '/api/agents': {
             return { agents: [{ id: os.hostname(), hostname: os.hostname(), ip: '127.0.0.1', os: `${os.type()} ${os.release()}`, user: os.userInfo().username, agent_version: '1.0.0', status: 'online', connected_at: new Date(ws.startTime).toISOString(), last_heartbeat: new Date().toISOString(), pending_commands: 0, completed_commands: 0, workspace: vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [], port: ws.port, publicUrl: ws.publicUrl }], count: 1 };
