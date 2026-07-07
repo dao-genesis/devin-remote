@@ -3210,6 +3210,14 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void vibrate(int ms) { MainActivity.this.doVibrate(ms > 0 ? ms : 30); }
         // 全服通近期对话: 长按某行 → 起全局拖拽 (该对话 accJson+sid), 拖到任意网页松手注入两形态文件
         @JavascriptInterface public void startConvDrag(String accJson, String sid) { main.post(() -> MainActivity.this.beginConvDrag(accJson, sid)); }
+        /** 面板快路径回灌: fastPanelExtractInject 在全服通 WebView 内取到「完整对话MD」后经此回原生。 */
+        @JavascriptInterface public void convMdResult(String reqId, String title, String md) {
+            main.post(() -> MainActivity.this.onFastConvMd(reqId, title, md));
+        }
+        /** 「⬆ 传到当前页」APK 原生直投: 把对话 MD (base64) 注入当前活动 Devin 标签页中央的上传/拖放区。 */
+        @JavascriptInterface public void deliverConvToPage(String name, String b64) {
+            main.post(() -> MainActivity.this.deliverConvToActivePage(name, b64));
+        }
         /** 全量备份落地: Documents/DevinCloud/backups/<账号文件夹>/<name> (脱离沙箱, 卸载/重装不丢)。 */
         @JavascriptInterface public boolean vaultSaveBackup(String folder, String name, String content) {
             return MainActivity.this.vaultSaveBackup(folder, name, content);
@@ -3662,99 +3670,64 @@ public class MainActivity extends AppCompatActivity {
             + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
-    // 退格护栏(JS 看门狗): Devin 网页 Slate 编辑器在安卓 IME 句中退格后, 以陈旧 DOM 快照回滚
-    //   重放删除 → 多吞光标右侧一字(左右各少一字的「双删」真根因, AVD+真 Gboard 稳定复现)。
-    //   IME 直改编辑缓冲不可 preventDefault, Slate 状态又不可外部直改 → 唯一可靠修法 = 事后看门狗:
-    //   ① beforeinput(deleteContentBackward) 时按 getTargetRanges 记下 全文/删除区间/单删期望文本;
-    //   ② 700/1400/2100ms 三查(pending 保持到终查, 双删可晚至 ~900ms 才发生): 若实文比期望又少了
-    //     删除点右侧那一字 → execCommand insertText 原位补回;
-    //   ③ 补回后 120ms/350ms 两次 TreeWalker 重定光标到删除点(躲过 Slate 再渲染重置选区)。
-    //   另: 紧跟退格(<150ms)的 IME 向前删除一律拦下(手机键盘无 Del 键, 必为输入法误发)。
+    // 退格根治(源级, 非看门狗): 双删真根因 = 同一次退格被处理两遍 ——
+    //   ① 浏览器默认动作删一字(IME 直改编辑缓冲, DOM 即刻少一字);
+    //   ② Slate 安卓输入管理器在 beforeinput(deleteContentBackward) 里又调度一次延迟
+    //     deleteBackward(节流窗 ~1s 后 flush), 以陈旧快照再删一字 → 「先删一字, ~900ms 后又吞一字」。
+    //   (AVD+真 Gboard 实验确证: 捕获层对 Slate 的 beforeinput 做 stopImmediatePropagation、
+    //    只留默认动作 → 单删且模型经 MutationObserver 正常归账, 后续键入位置正确。)
+    //   修法 = 捕获层拦下 Slate 对该事件的处理(不 preventDefault, 默认删除照常发生),
+    //   Slate 的 MutationObserver 把这次 DOM 变化归账进模型 —— 一次退格只发生一次删除,
+    //   错误本身从触发链上消失, 无需任何事后补字/光标恢复。
+    //   另: 紧跟退格(<150ms)的 IME 向前删除一律拦下(手机键盘无 Del 键, 必为输入法拆单误发)。
     //   仅处理系统真实事件(isTrusted), 拼音/组合输入中(isComposing)不介入。幂等(window.__rtBsGuard)。
     static void installBackspaceGuard(WebView w) {
         if (w == null) return;
         String js = "(function(){if(window.__rtBsGuard)return;window.__rtBsGuard=1;"
-            + "var lastBk=0,pend=null;"
-            + "function txt(ed){return (ed.innerText||'').replace(/\\n+$/,'');}"
-            + "function gOff(ed,node,off){var r=document.createRange();r.selectNodeContents(ed);try{r.setEnd(node,off);}catch(e){return -1;}return r.toString().length;}"
-            + "function setCaret(ed,k){try{var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),nd;"
-            + "while((nd=w.nextNode())){var L=nd.textContent.length;if(k<=L){var s=getSelection(),r=document.createRange();r.setStart(nd,k);r.collapse(true);s.removeAllRanges();s.addRange(r);return true;}k-=L;}}catch(e){}return false;}"
-            + "function chk(fin){var p=pend;if(!p)return;"
-            + "try{var cur=txt(p.ed);"
-            + "if(cur!==p.exp&&p.ch&&cur===p.exp.slice(0,p.st)+p.exp.slice(p.st+1)){"
-            + "setCaret(p.ed,p.st);document.execCommand('insertText',false,p.ch);"
-            + "setTimeout(function(){setCaret(p.ed,p.st);},120);"
-            + "setTimeout(function(){setCaret(p.ed,p.st);},350);"
-            + "pend=null;return;}"
-            + "}catch(e){}"
-            + "if(fin)pend=null;}"
+            + "var lastBk=0;"
+            + "function sed(t){return t&&t.closest?t.closest('[data-slate-editor=true],[contenteditable=true],[contenteditable=\"\"]'):null;}"
             + "document.addEventListener('beforeinput',function(e){"
             + "if(!e.isTrusted)return;"
-            + "var t=e.target;if(!t)return;"
+            + "var ed=sed(e.target);if(!ed)return;"
             + "var now=Date.now();"
             + "if(e.inputType==='deleteContentBackward'){lastBk=now;"
             + "if(e.isComposing)return;"
-            + "var ed=t.closest?t.closest('[contenteditable=true],[contenteditable=\"\"]'):null;"
-            + "if(!ed||!e.getTargetRanges)return;"
-            + "try{var r=e.getTargetRanges()[0];if(!r)return;"
-            + "var st=gOff(ed,r.startContainer,r.startOffset),en=gOff(ed,r.endContainer,r.endOffset);"
-            + "if(st<0||en<=st)return;"
-            + "var full=txt(ed);"
-            + "pend={ed:ed,st:st,exp:full.slice(0,st)+full.slice(en),ch:full.slice(en,en+1),t:now};"
-            + "setTimeout(function(){chk(false);},700);"
-            + "setTimeout(function(){chk(false);},1400);"
-            + "setTimeout(function(){chk(true);},2100);"
-            + "}catch(_){}"
+            + "e.stopImmediatePropagation();"
             + "return;}"
             + "if(e.inputType==='deleteContentForward'&&(now-lastBk)<150){"
             + "e.preventDefault();e.stopImmediatePropagation();return;}"
-            + "pend=null;"
             + "},true);})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
-    // 语音输入护栏: Devin 网页 Slate 编辑器为空时, 语音 IME 的首段 setComposingText 触发
-    //   Slate 重挂节点 → restartInput 掐断语音会话(只出第一个字即卡断); 编辑器开头已有任意字符
-    //   时则完全正常(官方浏览器同现, 网页通病)。修法 = 空编辑器聚焦即注入零宽空格 U+200B 打底
-    //   (语音 IME 视作「前面有字」, 组合安全), 一旦出现真实内容立即经 execCommand('delete')
-    //   摘除零宽字符并校正光标; 失焦仅剩零宽亦摘除(恢复占位提示)。组合(isComposing)中不摘,
-    //   等 compositionend 再摘, 不掐断进行中的语音/拼音。摘除本身也会触发 Slate 重渲染 →
-    //   restartInput, 若在连续键入中立即摘会掐断后续输入 → 摘除按输入静默去抖(700ms 无新
-    //   input 才摘), 输入流不断则一直顺延。幂等(window.__rtViGuard)。
+    // 语音输入根治(源级, 不再零宽打底): 空 Slate 编辑器首段语音只出一字即卡断的真根因,
+    //   与退格双删同一机制 —— Slate 安卓输入管理器处理空编辑器上的首段组合插入
+    //   (beforeinput insertCompositionText/insertText) 时重挂节点 → restartInput 掐断
+    //   进行中的 IME 语音会话; 编辑器开头已有字符时不重挂故正常。旧修法(U+200B 打底+去抖摘除)
+    //   本身就是对 Slate DOM 的外部改写, 反而制造陈旧快照(退格双删的诱因之一), 属亡羊补牢。
+    //   修法 = 同退格一路: 从空编辑器起始的整段组合期间, 捕获层对 Slate 的 beforeinput 做
+    //   stopImmediatePropagation(不 preventDefault) —— 浏览器默认动作照常落字, IME 会话
+    //   不被 restartInput 掐断, Slate 的 MutationObserver 把落字归账进模型; compositionend
+    //   后回归 Slate 常规处理。非组合的直敲首字(insertText)同理拦一次。幂等(window.__rtViGuard)。
     static void installVoiceGuard(WebView w) {
         if (w == null) return;
         String js = "(function(){if(window.__rtViGuard)return;window.__rtViGuard=1;"
-            + "var Z='\\u200B';"
-            + "function ced(t){return t&&t.closest?t.closest('[contenteditable=true],[contenteditable=\"\"]'):null;}"
-            // Slate 占位提示([data-slate-placeholder])也在 textContent 里 → 算有效文本时必须跳过
-            + "function txt(ed){try{var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n,t='';"
+            + "function ced(t){return t&&t.closest?t.closest('[data-slate-editor=true],[contenteditable=true],[contenteditable=\"\"]'):null;}"
+            // Slate 占位提示([data-slate-placeholder])也在 textContent 里 → 判空时必须跳过
+            + "function empty(ed){try{var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n;"
             + "while((n=w.nextNode())){var p=n.parentElement;"
             + "if(p&&p.closest&&p.closest('[data-slate-placeholder],[contenteditable=false]'))continue;"
-            + "t+=n.textContent;}return t;}catch(e){return ed.textContent||'';}}"
-            + "function strip(ed){try{var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),nd;"
-            + "while((nd=w.nextNode())){var pe=nd.parentElement;"
-            + "if(pe&&pe.closest&&pe.closest('[data-slate-placeholder],[contenteditable=false]'))continue;"
-            + "var i=nd.textContent.indexOf(Z);if(i<0)continue;"
-            + "var s=getSelection(),sv=null;"
-            + "if(s.rangeCount){var r0=s.getRangeAt(0);sv={n:r0.startContainer,o:r0.startOffset};}"
-            + "var r=document.createRange();r.setStart(nd,i);r.setEnd(nd,i+1);"
-            + "s.removeAllRanges();s.addRange(r);document.execCommand('delete');"
-            + "if(sv&&sv.n===nd){var o=sv.o>i?sv.o-1:sv.o;try{var rr=document.createRange();rr.setStart(nd,Math.min(o,nd.textContent.length));rr.collapse(true);s.removeAllRanges();s.addRange(rr);}catch(e){}}"
-            + "return true;}}catch(e){}return false;}"
-            + "function prime(ed){try{if(txt(ed)!=='')return;"
-            + "if(document.activeElement!==ed&&!ed.contains(document.activeElement))return;"
-            + "var s=getSelection(),r=document.createRange();r.selectNodeContents(ed);r.collapse(true);s.removeAllRanges();s.addRange(r);"
-            + "document.execCommand('insertText',false,Z);}catch(e){}}"
-            + "document.addEventListener('focusin',function(e){var ed=ced(e.target);if(ed)setTimeout(function(){prime(ed);},50);},true);"
-            + "var st=null;function schedStrip(ed){if(st)clearTimeout(st);st=setTimeout(function(){st=null;"
-            + "var t=txt(ed);if(t.indexOf(Z)>=0&&t.replace(Z,'')!=='')strip(ed);},700);}"
-            + "document.addEventListener('input',function(e){var ed=ced(e.target);if(!ed||e.isComposing)return;"
-            + "var t=txt(ed);if(t.indexOf(Z)>=0&&t.replace(Z,'')!=='')schedStrip(ed);},true);"
-            + "document.addEventListener('compositionend',function(e){var ed=ced(e.target);if(!ed)return;"
-            + "var t=txt(ed);if(t.indexOf(Z)>=0&&t.replace(Z,'')!=='')schedStrip(ed);},true);"
-            + "document.addEventListener('focusout',function(e){var ed=ced(e.target);if(!ed)return;"
-            + "if(st){clearTimeout(st);st=null;}var t=txt(ed);"
-            + "if(t===Z||(t.indexOf(Z)>=0&&t.replace(Z,'')!==''))setTimeout(function(){strip(ed);},0);},true);"
-            + "})();";
+            + "if(n.textContent.replace(/[\\u200B\\uFEFF]/g,'')!=='')return false;}return true;}"
+            + "catch(e){return (ed.textContent||'')==='';}}"
+            + "var hold=null;"
+            + "document.addEventListener('compositionstart',function(e){var ed=ced(e.target);hold=(ed&&empty(ed))?ed:null;},true);"
+            + "document.addEventListener('compositionend',function(e){hold=null;},true);"
+            + "document.addEventListener('beforeinput',function(e){"
+            + "if(!e.isTrusted)return;"
+            + "var ed=ced(e.target);if(!ed)return;"
+            + "var it=e.inputType||'';"
+            + "if(hold===ed&&(it==='insertCompositionText'||it==='deleteCompositionText'||it==='insertText')){e.stopImmediatePropagation();return;}"
+            + "if(it==='insertText'&&!e.isComposing&&empty(ed)){e.stopImmediatePropagation();}"
+            + "},true);})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // DownloadListener 收到 blob: → 让当前页 JS 取出内容回传
@@ -4765,14 +4738,81 @@ public class MainActivity extends AppCompatActivity {
         engineExtractInject(email, sid, accJson, targetWeb, x, y, () -> { toast("引擎取数空, 回退页内提取…"); runInTabConvExtract(fsw, sid, ftarget, fx, fy, accJson); });
     }
 
-    /** 经引擎(软件本体 RelayService)对 email+sid 取数, 注入目标页两形态:
-     *  有产出文件 → 文件夹(ZIP·对话md+工作日志+files/) + 取数指引MD; 无产出 → 完整对话MD + 取数指引MD。
-     *  email 空 / 引擎离线 / 取数空 → 执行 fallback (回退链路或报错)。 */
+    /** 统一取数注入链(拖拽/传到当前页共用, 与「下载MD」同路): ①本地备份秒注入 →
+     *  ②全服通面板快路径(DaoCloud.exportSession, 与下载MD按钮同一取数, 快而准) →
+     *  ③引擎(软件本体 RelayService)取数 → ④fallback (页内提取或报错)。 */
     private void engineExtractInject(final String email, final String sid, final String accJson,
                                      final WebView target, final float x, final float y, final Runnable fallback) {
         new Thread(() -> {
             // 秒拖: 该对话已本地备份 → 直接读盘注入两形态, 不联网 (覆盖 全服通拖拽 与 页→页拖拽)
             if (tryLocalBackupInject(email, accJson, sid, target, x, y)) return;
+            main.post(() -> fastPanelExtractInject(sid, accJson, target, x, y,
+                    () -> engineRpcExtractInject(email, sid, accJson, target, x, y, fallback)));
+        }).start();
+    }
+
+    // ── 面板快路径: 在全服通 WebView 内经 DaoCloud.exportSession 取「完整对话MD」──
+    //    与「⬇ MD」下载按钮完全同源同路, 结果经 Bridge.convMdResult 回灌后注入两形态。
+    private int fastConvSeq = 0;
+    private String fastConvReqId; private WebView fastConvTarget; private float fastConvX, fastConvY;
+    private String fastConvAccJson, fastConvSid; private Runnable fastConvFallback;
+    private void fastPanelExtractInject(final String sid, final String accJson,
+                                        final WebView target, final float x, final float y, final Runnable fallback) {
+        if (daoWeb == null) { if (fallback != null) fallback.run(); return; }
+        String accLit = "null";
+        if (accJson != null && !accJson.isEmpty()) { try { accLit = new JSONObject(accJson).toString(); } catch (Exception ignored) {} }
+        final String rid = "fc" + (++fastConvSeq);
+        fastConvReqId = rid; fastConvTarget = target; fastConvX = x; fastConvY = y;
+        fastConvAccJson = accJson; fastConvSid = sid; fastConvFallback = fallback;
+        String s = sid.replace("\\", "\\\\").replace("'", "\\'");
+        String js = "(function(){try{var acc=" + accLit + ";var sid='" + s + "';"
+            + "function done(t,m){try{Native.convMdResult('" + rid + "',t||'',m||'');}catch(e){}}"
+            + "if(!acc||!acc.email){var R=window.REC||[];for(var i=0;i<R.length;i++){if(R[i].sid===sid||'devin-'+R[i].sid===sid||R[i].sid==='devin-'+sid){acc=R[i].acc;break;}}}"
+            + "if(!acc||!window.DaoCloud||!DaoCloud.exportSession){done('','');return;}"
+            + "DaoCloud.exportSession(acc,sid,'conversation').then(function(r){done((r&&r.title)||'',(r&&r.ok&&r.md)||'');})"
+            + ".catch(function(e){done('','');});"
+            + "}catch(e){try{Native.convMdResult('" + rid + "','','');}catch(_){}}})();";
+        try { daoWeb.evaluateJavascript(js, null); } catch (Exception e) { fastConvReqId = null; if (fallback != null) fallback.run(); return; }
+        main.postDelayed(() -> { if (rid.equals(fastConvReqId)) { fastConvReqId = null; Runnable fb = fastConvFallback; fastConvFallback = null; if (fb != null) fb.run(); } }, 25000);
+    }
+    /** 面板快路径回灌: md 含正文 → 注入 对话MD+取数指引 两形态; 空/仅标题头 → 走下一级回退。 */
+    private void onFastConvMd(String reqId, String title, String md) {
+        if (reqId == null || !reqId.equals(fastConvReqId)) return;
+        fastConvReqId = null;
+        final WebView target = fastConvTarget; final float x = fastConvX, y = fastConvY;
+        final String sid = fastConvSid, accJson = fastConvAccJson;
+        final Runnable fb = fastConvFallback; fastConvFallback = null;
+        if (md == null || md.isEmpty() || !md.contains("## ")) { if (fb != null) fb.run(); return; }
+        String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
+        String guide = buildAccessGuideMd(accJson, sid, (title == null || title.isEmpty()) ? sid : title);
+        java.util.List<String[]> files = new java.util.ArrayList<>();
+        files.add(new String[]{ base + "-conversation.md", b64Utf8(md) });
+        files.add(new String[]{ base + "-files-access.md", b64Utf8(guide) });
+        dropB64FilesIntoPage(target, x, y, files);
+        toast("已导入 对话MD + 取数指引");
+    }
+    /** 「⬆ 传到当前页」APK 原生直投: MD(base64) 注入当前活动网页标签中央的上传/拖放区。 */
+    private void deliverConvToActivePage(String name, String b64) {
+        if (name == null || name.isEmpty() || b64 == null || b64.isEmpty()) { toast("投递内容为空"); return; }
+        WebView web = null;
+        if (active >= 0 && active < tabs.size()) {
+            Tab t = tabs.get(active);
+            if (t != null && t.web != null && !t.internal) web = t.web;
+        }
+        if (web == null) { for (Tab t : tabs) { if (t != null && t.web != null && !t.internal) { web = t.web; break; } } }
+        if (web == null) { toast("无打开的 Devin 页面, 无法投递"); return; }
+        java.util.List<String[]> files = new java.util.ArrayList<>();
+        files.add(new String[]{ name, b64 });
+        dropB64FilesIntoPage(web, web.getWidth() / 2f, web.getHeight() / 2f, files);
+        toast("已投递到当前页上传框");
+    }
+
+    /** 引擎(软件本体 RelayService)取数, 注入目标页两形态:
+     *  有产出文件 → 文件夹(ZIP·对话md+工作日志+files/) + 取数指引MD; 无产出 → 完整对话MD + 取数指引MD。
+     *  email 空 / 引擎离线 / 取数空 → 执行 fallback (回退链路或报错)。 */
+    private void engineRpcExtractInject(final String email, final String sid, final String accJson,
+                                        final WebView target, final float x, final float y, final Runnable fallback) {
+        new Thread(() -> {
             final RelayService rs = RelayService.instance;
             if (email == null || email.isEmpty() || rs == null) { main.post(() -> { if (fallback != null) fallback.run(); }); return; }
             String conv = "", title = sid, zipB64 = "", zipName = ""; int zipFileCount = 0;

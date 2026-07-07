@@ -346,6 +346,8 @@ async function uploadConv(idx){
     if(!r||!r.ok){ toast("提取失败: "+((r&&r.error)||""),true); return; }
     var fn=safeName((it.title||it.sid))+".md";
     var b64; try{ b64=btoa(unescape(encodeURIComponent(r.md||""))); }catch(e){ b64=""; }
+    // APK: 原生直投当前活动 Devin 标签的上传框 (与「⬇ MD」同一取数, 快而准); 网页端走父页 postMessage
+    if(!IS_WEB && N.deliverConvToPage){ N.deliverConvToPage(fn, b64); return; }
     parent.postMessage({ __rtflow:"daoUploadFile", name:fn, mime:"text/markdown", b64:b64,
                          meta:{ kind:"conv", sid:it.sid, title:it.title } }, "*");
     toast("已投递到当前页上传框（若无 Devin 标签将提示）");

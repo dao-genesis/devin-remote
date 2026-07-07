@@ -187,7 +187,7 @@ function makeEnv(opts) {
   ok(/installKbHelper\(v\);\s*\/\/[^\n]*\n\s*installBackspaceGuard\(v\);/.test(mainSrc), "退格护栏: onPageFinished 安装");
   ok(/installDownloadHook\(v\); installKbHelper\(v\); installBackspaceGuard\(v\);/.test(mainSrc), "退格护栏: SPA 路由后重装 (doUpdateVisitedHistory)");
   ok(/deleteContentForward'&&\(now-lastBk\)<150/.test(mainSrc), "退格护栏: 拦截紧跟退格的 IME 向前删除");
-  ok(/document\.execCommand\('insertText',false,p\.ch\)/.test(mainSrc), "退格看门狗: 双删检测后原位补回被吞字符");
+  ok(/deleteContentBackward'\)\{lastBk=now;/.test(mainSrc) && /stopImmediatePropagation/.test(mainSrc), "退格根治: 拦下 Slate 对 beforeinput 的处理 (源级, 无事后补字)");
   ok(/e\.isComposing\)return/.test(mainSrc), "退格护栏: 组合输入(拼音)中不干预");
   // ── 源级护栏: 重加号消幽灵 (doAdd 落 addedAt + 立即镜像金库·不被回拉覆盖) ──
   ok(/addedAt:Date\.now\(\)/.test(switchSrc), "doAdd 落 addedAt (重加号 24h 免移出保护)");

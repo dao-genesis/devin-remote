@@ -58,30 +58,49 @@ ok(/beforeLength == 0 && afterLength > 0 && \(now - lastBkAt\) < 250\) return tr
 ok(/KEYCODE_FORWARD_DEL && \(now - lastBkAt\) < 250\) return true;/.test(main), "时间窗: 紧跟退格的 FORWARD_DEL 键事件被吞 (sendKeyEvent 拆单)");
 ok(/KEYCODE_DEL\) \{ lastBkAt = now; \}/.test(main), "时间窗: 退格键事件登记时刻");
 
-// ②c JS 看门狗 (Slate 陈旧快照回滚重放双删 → 事后检测补回 + 双次重定光标)
-ok(/__rtBsGuard/.test(main), "JS 看门狗: 幂等守卫存在");
-ok(/e\.getTargetRanges\(\)\[0\]/.test(main), "JS 看门狗: 按 getTargetRanges 记录删除区间");
-ok(/exp:full\.slice\(0,st\)\+full\.slice\(en\)/.test(main), "JS 看门狗: 记录单删期望文本");
-ok(/cur===p\.exp\.slice\(0,p\.st\)\+p\.exp\.slice\(p\.st\+1\)/.test(main), "JS 看门狗: 检测右侧多吞一字");
-ok(/document\.execCommand\('insertText',false,p\.ch\)/.test(main), "JS 看门狗: insertText 原位补回被吞字符");
-ok(/createTreeWalker\(ed,NodeFilter\.SHOW_TEXT\)/.test(main), "JS 看门狗: TreeWalker 重定光标");
-ok(/setCaret\(p\.ed,p\.st\);\},120\)/.test(main) && /setCaret\(p\.ed,p\.st\);\},350\)/.test(main), "JS 看门狗: 120ms/350ms 双次重定光标 (躲过 Slate 再渲染)");
-ok(/chk\(false\);\},700\)/.test(main) && /chk\(true\);\},2100\)/.test(main), "JS 看门狗: 700/1400/2100ms 三查 (pending 保持到终查)");
-ok(/if\(e\.isComposing\)return;/.test(main), "JS 看门狗: 拼音/组合输入中不介入");
+// ②c JS 根治 (源级拦截, 非看门狗): 同一次退格被 浏览器默认动作 + Slate 处理两遍 → 双删。
+//     修法 = 捕获层 stopImmediatePropagation 拦下 Slate 对 beforeinput(deleteContentBackward)
+//     的处理(不 preventDefault, 默认删除照常), Slate MutationObserver 归账 → 只删一次。
+ok(/__rtBsGuard/.test(main), "退格根治: 幂等守卫存在");
+ok(/document\.addEventListener\('beforeinput'/.test(main), "退格根治: 捕获层 beforeinput 监听");
+ok(/if\(!e\.isTrusted\)return;/.test(main), "退格根治: 只处理系统真实事件");
+ok(/\[data-slate-editor=true\],\[contenteditable=true\]/.test(main), "退格根治: 限 Slate/contenteditable 编辑器");
+ok(/e\.inputType==='deleteContentBackward'/.test(main), "退格根治: 针对 deleteContentBackward");
+ok(/deleteContentBackward'\)\{lastBk=now;[\s\S]{0,80}?e\.stopImmediatePropagation\(\);/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: stopImmediatePropagation 拦下 Slate 处理");
+ok(!/preventDefault\(\);e\.stopImmediatePropagation\(\);return;\}"\s*\+\s*"return;\}/.test(main) && /deleteContentBackward[\s\S]{0,200}stopImmediatePropagation/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: 退格不 preventDefault (默认删除照常发生)");
+ok(/if\(e\.isComposing\)return;/.test(main), "退格根治: 拼音/组合输入中不介入");
+ok(/deleteContentForward'&&\(now-lastBk\)<150/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: 紧跟退格的 IME 前向删除拦下 (拆单误发)");
+// 旧看门狗(事后补字+重定光标)必须彻底移除 —— 不在错误上打补丁
+ok(!/getTargetRanges\(\)\[0\]/.test(main), "退格根治: 旧看门狗 getTargetRanges 快照已移除");
+ok(!/setCaret\(p\.ed,p\.st\)/.test(main), "退格根治: 旧看门狗事后重定光标已移除");
+ok(!/chk\(false\);\},700\)/.test(main), "退格根治: 旧看门狗 700/1400/2100ms 三查已移除");
 ok(!/setComposingRegion\(int start, int end\)/.test(main), "原生 setComposingRegion 已恢复透传 (根因在 JS 层)");
 
-// ②c2 语音输入护栏 (空 Slate 编辑器首段语音卡断 → 零宽字符打底 + 真内容到位即摘)
-ok(/static void installVoiceGuard\(WebView w\)/.test(main), "语音护栏: installVoiceGuard 存在");
-ok(/__rtViGuard/.test(main), "语音护栏: 幂等守卫存在");
-ok(/var Z='\\\\u200B';/.test(main), "语音护栏: 零宽空格 U\+200B 打底");
-ok(/document\.execCommand\('insertText',false,Z\)/.test(main), "语音护栏: 空编辑器聚焦即注入零宽字符");
-ok(/t\.indexOf\(Z\)>=0&&t\.replace\(Z,''\)!==''/.test(main), "语音护栏: 真内容出现即摘零宽字符");
-ok(/'compositionend',function\(e\)\{var ed=ced\(e\.target\)/.test(main), "语音护栏: 组合中不摘, compositionend 后再摘 (不掳断语音/拼音)");
-ok(/\[data-slate-placeholder\],\[contenteditable=false\]/.test(main), "语音护栏: 有效文本跳过 Slate 占位提示 (placeholder 不算内容)");
-ok(/function schedStrip\(ed\)\{if\(st\)clearTimeout\(st\);/.test(main), "语音护栏: 摘除按输入静默去抖 (连续键入中不摘, 不掐断输入流)");
-ok(/\},700\);\}/.test(main), "语音护栏: 去抖静默窗口 700ms");
-ok(/installVoiceGuard\(v\);\s+\/\//.test(main), "语音护栏: onPageFinished 安装");
-ok((tabAct.match(/MainActivity\.installVoiceGuard\(v\);/g) || []).length >= 2, "语音护栏: TabActivity 账号页两处(onPageFinished + SPA 路由)同装");
+// ②c2 语音输入根治 (空 Slate 编辑器首段组合被 Slate 处理 → 重挂+restartInput 掐断 IME;
+//      修法 = 同退格一路: 空编辑器起始的整段组合期间拦下 Slate 的 beforeinput, 不再零宽打底)
+ok(/static void installVoiceGuard\(WebView w\)/.test(main), "语音根治: installVoiceGuard 存在");
+ok(/__rtViGuard/.test(main), "语音根治: 幂等守卫存在");
+ok(/'compositionstart',function\(e\)\{var ed=ced\(e\.target\);hold=\(ed&&empty\(ed\)\)\?ed:null;/.test(main), "语音根治: 空编辑器 compositionstart 进入拦截期");
+ok(/'compositionend',function\(e\)\{hold=null;/.test(main), "语音根治: compositionend 回归 Slate 常规处理");
+ok(/hold===ed&&\(it==='insertCompositionText'\|\|it==='deleteCompositionText'\|\|it==='insertText'\)\)\{e\.stopImmediatePropagation\(\);/.test(main), "语音根治: 拦截期内 stopImmediatePropagation (默认落字照常·IME 不被 restartInput 掐断)");
+ok(/it==='insertText'&&!e\.isComposing&&empty\(ed\)\)\{e\.stopImmediatePropagation\(\);/.test(main), "语音根治: 非组合直敲首字同理拦一次");
+ok(/\[data-slate-placeholder\],\[contenteditable=false\]/.test(main), "语音根治: 判空跳过 Slate 占位提示 (placeholder 不算内容)");
+// 旧零宽打底方案(外部改写 Slate DOM → 陈旧快照诱因)必须彻底移除
+ok(!/var Z='\\\\u200B';/.test(main), "语音根治: 旧零宽字符打底已移除");
+ok(!/function schedStrip/.test(main), "语音根治: 旧去抖摘除逻辑已移除");
+ok(/installVoiceGuard\(v\);\s+\/\//.test(main) || /installVoiceGuard\(v\);/.test(main), "语音根治: onPageFinished 安装");
+ok((tabAct.match(/MainActivity\.installVoiceGuard\(v\);/g) || []).length >= 2, "语音根治: TabActivity 账号页两处(onPageFinished + SPA 路由)同装");
+
+// ②c3 取数统一 (拖拽/传到当前页 统一到「下载MD」同源快路径)
+const daopan = fs.readFileSync(path.join(ROOT, "app/src/main/assets/engine/daopan.html"), "utf8");
+ok(/private void fastPanelExtractInject\(/.test(main), "取数统一: fastPanelExtractInject 存在");
+ok(/DaoCloud\.exportSession\(acc,sid,'conversation'\)/.test(main), "取数统一: 面板快路径走 DaoCloud.exportSession (与下载MD同源)");
+ok(/public void convMdResult\(String reqId, String title, String md\)/.test(main), "取数统一: Bridge.convMdResult 回灌通道");
+ok(/fastPanelExtractInject\(sid, accJson, target, x, y,[\s\S]{0,120}engineRpcExtractInject/.test(main), "取数统一: 链路 本地备份→面板快路径→引擎→fallback");
+ok(/tryLocalBackupInject\(email, accJson, sid, target, x, y\)/.test(main), "取数统一: 本地备份秒注入仍为第一优先");
+ok(/public void deliverConvToPage\(String name, String b64\)/.test(main), "取数统一: Bridge.deliverConvToPage 原生直投");
+ok(/private void deliverConvToActivePage\(String name, String b64\)/.test(main), "取数统一: 直投当前活动标签实现");
+ok(/if\(!IS_WEB && N\.deliverConvToPage\)\{ N\.deliverConvToPage\(fn, b64\); return; \}/.test(daopan), "取数统一: daopan 传到当前页 APK 端原生直投");
 
 // ②d 媒体鉴权本源补齐: 非账号标签从页面登录态采收 auth
 ok(/private void harvestPageAuth\(WebView v, Tab tab, String pageUrl\)/.test(main), "harvestPageAuth 存在");
