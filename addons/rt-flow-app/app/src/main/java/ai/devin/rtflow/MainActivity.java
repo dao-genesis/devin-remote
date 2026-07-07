@@ -190,27 +190,49 @@ public class MainActivity extends AppCompatActivity {
         String orgId = "";          // 该标签绑定账号的 org id
     }
 
-    // 输入直通(回归本源): IME→编辑器 全部原样放行, 不拦截、不挂起、不改写。
-    //   仅对「删除类」调用留一行轻量参数日志(无同步取文·零往返·零延迟), 供 logcat -s DAO_IME 溯源。
+    // 退格根治(原生 InputConnection 层·轻量版): 部分输入法按一次退格会同时删除光标左右两侧字符。
+    //   这类删除由 IME 直改编辑缓冲, 不经可取消的 JS beforeinput 事件, 只能在原生层夹断。全程无同步
+    //   取文(getExtractedText/getTextBeforeCursor 一概不调), 零往返零延迟, 拼音/组词直通:
+    //   ① deleteSurroundingText(before>0, after>0) 单调用左右同删 → after 归 0 只保留左删。
+    //   ② 退格后紧跟(<250ms)纯前向删除(拆单误发·含 KEYCODE_FORWARD_DEL) → 吞掉前向那一半。
+    //   ③ setComposingRegion 直接吞掉(返 true 不下发): Gboard 类输入法用「陈旧 ExtractedText 快照」
+    //     对既有文本重进组词(光标移位/退格后重组), 快照落后于编辑器真实内容 → 随后 setComposingText
+    //     以旧文覆写造成双删/错删。正常打字组词由 IME 自起 composing 段, 不经 setComposingRegion,
+    //     吞掉后拼音/联想/滑行输入均不受影响, 只断「对既有文本回溯重组」这一坏路径。
     static class GuardedWebView extends WebView {
         GuardedWebView(Context c) { super(c); }
+        long lastBkAt = 0;   // 最近一次退格(左删/DEL 键)的时刻 —— 紧跟其后的前向删除判为 IME 误发
         @Override public android.view.inputmethod.InputConnection onCreateInputConnection(EditorInfo outAttrs) {
             android.view.inputmethod.InputConnection ic = super.onCreateInputConnection(outAttrs);
             if (ic == null) return null;
             return new android.view.inputmethod.InputConnectionWrapper(ic, true) {
-                @Override public boolean deleteSurroundingText(int b, int a) {
-                    android.util.Log.i("DAO_IME", "del(" + b + "," + a + ")");
-                    return super.deleteSurroundingText(b, a);
+                @Override public boolean deleteSurroundingText(int beforeLength, int afterLength) {
+                    long now = android.os.SystemClock.uptimeMillis();
+                    if (beforeLength > 0) lastBkAt = now;
+                    if (beforeLength > 0 && afterLength > 0) afterLength = 0;
+                    // 纯前向删除紧跟退格(<250ms): 手机键盘无 Del 键, 必为输入法拆单误发 → 吞掉
+                    if (beforeLength == 0 && afterLength > 0 && (now - lastBkAt) < 250) return true;
+                    return super.deleteSurroundingText(beforeLength, afterLength);
                 }
-                @Override public boolean deleteSurroundingTextInCodePoints(int b, int a) {
-                    android.util.Log.i("DAO_IME", "del(" + b + "," + a + ",cp)");
-                    return super.deleteSurroundingTextInCodePoints(b, a);
+                @Override public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
+                    long now = android.os.SystemClock.uptimeMillis();
+                    if (beforeLength > 0) lastBkAt = now;
+                    if (beforeLength > 0 && afterLength > 0) afterLength = 0;
+                    if (beforeLength == 0 && afterLength > 0 && (now - lastBkAt) < 250) return true;
+                    return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
                 }
-                @Override public boolean sendKeyEvent(android.view.KeyEvent e) {
-                    if (e != null && e.getAction() == android.view.KeyEvent.ACTION_DOWN
-                            && (e.getKeyCode() == android.view.KeyEvent.KEYCODE_DEL || e.getKeyCode() == android.view.KeyEvent.KEYCODE_FORWARD_DEL))
-                        android.util.Log.i("DAO_IME", "key(" + e.getKeyCode() + ")");
-                    return super.sendKeyEvent(e);
+                @Override public boolean sendKeyEvent(android.view.KeyEvent event) {
+                    if (event != null) {
+                        long now = android.os.SystemClock.uptimeMillis();
+                        int kc = event.getKeyCode();
+                        if (kc == android.view.KeyEvent.KEYCODE_DEL) { lastBkAt = now; }
+                        else if (kc == android.view.KeyEvent.KEYCODE_FORWARD_DEL && (now - lastBkAt) < 250) return true;
+                    }
+                    return super.sendKeyEvent(event);
+                }
+                @Override public boolean setComposingRegion(int start, int end) {
+                    android.util.Log.i("DAO_IME", "scr(" + start + "," + end + ") 吞掉·断陈旧快照重组");
+                    return true;
                 }
             };
         }
@@ -3644,22 +3666,35 @@ public class MainActivity extends AppCompatActivity {
             + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
-    // 输入直通(回归本源): 不再有任何 beforeinput 拦截/改写(拦截式护栏实测造成卡顿·光标错位·弹跳)。
-    //   仅保留捕获阶段纯旁观取证日志, 供 logcat 对照原生 DAO_IME 溯源。
+    // 退格护栏(JS 兜底层): 部分输入法在富文本编辑器(contenteditable)里按一次退格, 会把光标
+    //   左右两侧的字符同时删掉 —— 表现为 IME 在 deleteContentBackward 之外额外发出一个
+    //   deleteContentForward, 或单个退格的目标区间越过光标吞掉右侧字符。此护栏在 document
+    //   捕获阶段兜底: ① 紧跟退格(<150ms)的 IME 向前删除一律拦下(手机键盘本无 Del 键, 该事件
+    //   必为输入法误发); ② 单个退格的目标区间越过光标 → 拦下改为只删左侧。仅处理系统真实事件
+    //   (isTrusted) 且不干预拼音/组合输入中(isComposing)。幂等(window.__rtBsGuard 守卫)。
     static void installBackspaceGuard(WebView w) {
         if (w == null) return;
-        String js = ""
-            // JS 层输入取证(主壳标签页也覆盖): 捕获阶段旁观记录 keydown/beforeinput/input/composition,
-            //   console.log → logcat 'chromium' 直取, 与原生 DAO_IME 日志对照即可定位双删发生层次。只旁观不拦截。
-            + "(function(){if(window.__daoImeTr)return;window.__daoImeTr=1;"
-            + "function st(t){try{if(t&&(t.tagName==='TEXTAREA'||t.tagName==='INPUT'))return ' sel='+t.selectionStart+','+t.selectionEnd+' len='+(t.value||'').length+' ar='+JSON.stringify((t.value||'').slice(Math.max(0,(t.selectionStart||0)-2),(t.selectionEnd||0)+2));"
-            + "var s=window.getSelection&&window.getSelection();if(s&&s.rangeCount){var r=s.getRangeAt(0);return ' ce.off='+r.startOffset+','+r.endOffset+' nlen='+((r.startContainer&&r.startContainer.textContent)||'').length;}}catch(e){}return '';}"
-            + "function lg(k,e){try{console.log('DAOIMEJS '+k+' t='+((e.target&&e.target.tagName)||'')+' it='+(e.inputType||'')+' d='+JSON.stringify(e.data==null?null:(''+e.data).slice(-8))+' k='+(e.key||'')+' c='+(e.isComposing?1:0)+st(e.target));}catch(x){}}"
-            + "document.addEventListener('keydown',function(e){lg('kd',e);},true);"
-            + "document.addEventListener('beforeinput',function(e){lg('bi',e);},true);"
-            + "document.addEventListener('input',function(e){lg('in',e);},true);"
-            + "document.addEventListener('compositionupdate',function(e){lg('cu',e);},true);"
-            + "document.addEventListener('compositionend',function(e){lg('ce',e);},true);})();";
+        String js = "(function(){if(window.__rtBsGuard)return;window.__rtBsGuard=1;"
+            + "var lastBk=0;"
+            + "document.addEventListener('beforeinput',function(e){"
+            + "if(!e.isTrusted||e.isComposing)return;"
+            + "var t=e.target;if(!t)return;"
+            + "var ce=!!t.isContentEditable;"
+            + "if(!ce&&!/^(input|textarea)$/i.test(t.tagName||''))return;"
+            + "var now=Date.now();"
+            + "if(e.inputType==='deleteContentBackward'){lastBk=now;"
+            + "if(!ce||!e.getTargetRanges)return;"
+            + "try{var sel=window.getSelection();"
+            + "if(sel&&sel.isCollapsed&&sel.anchorNode){var r=e.getTargetRanges()[0];"
+            + "if(r){var over=false;"
+            + "if(r.endContainer===sel.anchorNode){over=r.endOffset>sel.anchorOffset;}"
+            + "else{var tr=document.createRange();tr.setStart(r.startContainer,r.startOffset);tr.setEnd(r.endContainer,r.endOffset);"
+            + "try{over=tr.comparePoint(sel.anchorNode,sel.anchorOffset)===0&&!(r.endContainer===sel.anchorNode&&r.endOffset===sel.anchorOffset);}catch(__){}}"
+            + "if(over){e.preventDefault();e.stopImmediatePropagation();document.execCommand('delete');return;}}}}catch(_){}"
+            + "return;}"
+            + "if(e.inputType==='deleteContentForward'&&(now-lastBk)<150){"
+            + "e.preventDefault();e.stopImmediatePropagation();}"
+            + "},true);})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // DownloadListener 收到 blob: → 让当前页 JS 取出内容回传

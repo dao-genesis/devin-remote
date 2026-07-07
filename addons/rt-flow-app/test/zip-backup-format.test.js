@@ -74,7 +74,7 @@ ok(!!DC && typeof DC.buildZipAsync === "function" && typeof DC.zipReadText === "
 
   // 源级护栏 · switch.html 备份写入端
   const bk = autocleanSrc.slice(autocleanSrc.indexOf("async function backupSessionFull"), autocleanSrc.indexOf("async function fullBackupAccount"));
-  ok(/exportSessionZip\(a, ?sid\)/.test(bk), "backupSessionFull 单管线: 一次 exportSessionZip 取全 (不再 md 与 ZIP 各下一遍)");
+  ok(/exportSessionZip\(a, ?sid[,)]/.test(bk), "backupSessionFull 单管线: 一次 exportSessionZip 取全 (不再 md 与 ZIP 各下一遍)");
   ok(/if \(zipOk\)/.test(bk) && /vaultDeleteBackup\(folder, ?"conv-" ?\+ ?sid ?\+ ?"\.md"\)/.test(bk), "单包落地后清除旧散文件 conv-/指引- (归纳整理)");
   ok(/if \(c && c\.ok\) \{ evCnt = c\.events \|\| 0; convOk =/.test(bk), "ZIP 失败回退老散文件写法 (绝不丢备份)");
 

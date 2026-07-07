@@ -23,7 +23,7 @@ ok(/authMediaResponse\(tab, req\)/.test(main), "shouldInterceptRequest 接入 au
 ok(/path\.startsWith\("\/attachments\/"\)/.test(main), "只代取 /attachments/ 路径");
 ok(/"Bearer " \+ auth1/.test(main), "代取时补 Authorization Bearer");
 ok(/static WebResourceResponse authMediaResponseFor\(String auth1, String orgId, WebResourceRequest req\)/.test(main), "代取抽为静态共用 (主壳/TabActivity 同源)");
-ok(/getCookie\("https:\/\/app\.devin\.ai\/"\)/.test(main), "代取转发 CookieManager Cookie (attachments_token 真鉴权)");
+ok(/CookieManager\.getInstance\(\)\.getCookie\(url\)/.test(main), "代取转发 CookieManager Cookie (attachments_token 真鉴权)");
 ok(/set-attachment-cookie/.test(main), "401 铸造 attachments_token (set-attachment-cookie)");
 ok(/mintAttachmentCookie\(auth1, orgId\)\) c = fetchAttachment/.test(main), "401 铸造后重试一次 (自愈)");
 ok(/lk\.equals\("cookie"\)/.test(main), "Cookie 不盲转发 (30x 后不外泄给对象存储)");
@@ -64,7 +64,7 @@ ok(/tr\.comparePoint\(sel\.anchorNode,sel\.anchorOffset\)/.test(main), "JS 护�
 // ②d 媒体鉴权本源补齐: 非账号标签从页面登录态采收 auth
 ok(/private void harvestPageAuth\(WebView v, Tab tab, String pageUrl\)/.test(main), "harvestPageAuth 存在");
 ok(/harvestPageAuth\(v, tab, u\); \/\/[^\n]*\n\s*warmAttachmentCookie/.test(main) || /harvestPageAuth\(v, tab, u\);/.test(main), "onPageFinished 采收页面登录态");
-ok(/installBackspaceGuard\(v\); harvestPageAuth\(v, tab, u\); warmAttachmentCookie/.test(main), "SPA 路由后重采 (doUpdateVisitedHistory)");
+ok(/installBackspaceGuard\(v\); installVideoFit\(v\); installMediaRetry\(v\); harvestPageAuth\(v, tab, u\); warmAttachmentCookie/.test(main), "SPA 路由后重采 (doUpdateVisitedHistory)");
 ok(/auth1_session/.test(main), "采收源 = 页面 auth1_session 登录态");
 
 // ②e VPN 自然回退 (有则走、死则直连·不强依赖)

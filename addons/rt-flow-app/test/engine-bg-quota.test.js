@@ -89,7 +89,7 @@ function makeModule() {
     ok(m.refreshed.slice(before.length).some((id) => !before.includes(id) || id === "id0"), "下一轮轮转到不同空闲号 (全池周期覆盖)");
   }
   // ── 场景 5: 源级护栏 ──
-  ok(/try \{ await bgQuotaTick\(r\.sessions, accs\); \} catch\(e\)\{\}/.test(engineSrc), "engine tick 每轮调 bgQuotaTick (与对话追踪同拍)");
+  ok(/try \{ await bgQuotaTick\(\(r&&r\.sessions\)\|\|\[\], accs\); \} catch\(e\)\{\}/.test(engineSrc), "engine tick 每轮调 bgQuotaTick (与对话追踪同拍)");
   ok(/@JavascriptInterface public void setTabDollars\(String accountId, String dollars\) \{\s*\n\s*MainActivity m = MainActivity\.sInstance; if \(m != null\) m\.ipcSetTabDollars\(accountId, dollars\);/.test(relaySrc), "RelayService 桥转发 setTabDollars → MainActivity.ipcSetTabDollars");
   ok(/m\.ipcSetTabStatus\(accountId, convName, status\);/.test(relaySrc), "RelayService 桥转发 setTabStatus → MainActivity.ipcSetTabStatus");
   ok(/public void ipcSetTabDollars\(String accountId, String dollars\)/.test(mainSrc), "MainActivity 具公开 ipcSetTabDollars");

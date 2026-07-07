@@ -10,8 +10,8 @@ android {
         applicationId "ai.devin.rtflow"
         minSdk 24
         targetSdk 34
-        versionCode 268
-        versionName "0.37.164"
+        versionCode 269
+        versionName "0.37.165"
         // 仅打包已交叉编译 cloudflared 的两种 ABI (覆盖现代真机 arm64 + 模拟器 x86_64)
         ndk { abiFilters 'arm64-v8a', 'x86_64' }
     }
@@ -24,6 +24,11 @@ android {
             storePassword "devincloud"
             keyAlias "devincloud"
             keyPassword "devincloud"
+            // minSdk>=24 时 AGP 默认关掉 v1(JAR)签名只留 v2 —— 不少国产 ROM 侧载仍校验 v1,
+            // 缺 v1 即报「解析软件包时出现问题」装不上 → 三代签名全量显式开启。
+            enableV1Signing true
+            enableV2Signing true
+            enableV3Signing true
         }
     }
     buildTypes {
