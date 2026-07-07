@@ -195,10 +195,9 @@ public class MainActivity extends AppCompatActivity {
     //   取文(getExtractedText/getTextBeforeCursor 一概不调), 零往返零延迟, 拼音/组词直通:
     //   ① deleteSurroundingText(before>0, after>0) 单调用左右同删 → after 归 0 只保留左删。
     //   ② 退格后紧跟(<250ms)纯前向删除(拆单误发·含 KEYCODE_FORWARD_DEL) → 吞掉前向那一半。
-    //   ③ setComposingRegion 直接吞掉(返 true 不下发): Gboard 类输入法用「陈旧 ExtractedText 快照」
-    //     对既有文本重进组词(光标移位/退格后重组), 快照落后于编辑器真实内容 → 随后 setComposingText
-    //     以旧文覆写造成双删/错删。正常打字组词由 IME 自起 composing 段, 不经 setComposingRegion,
-    //     吞掉后拼音/联想/滑行输入均不受影响, 只断「对既有文本回溯重组」这一坏路径。
+    //   注: Devin 网页 Slate 编辑器句中退格双删的真根因在 JS 层(Slate 以陈旧 DOM 快照回滚重放,
+    //   多吞光标右侧一字), 原生层不可见不可拦 → 由 installBackspaceGuard 的 JS 看门狗修复;
+    //   setComposingRegion 保持透传(吞掉会破坏 Gboard 对既有文本的正常重组词)。
     static class GuardedWebView extends WebView {
         GuardedWebView(Context c) { super(c); }
         long lastBkAt = 0;   // 最近一次退格(左删/DEL 键)的时刻 —— 紧跟其后的前向删除判为 IME 误发
@@ -229,10 +228,6 @@ public class MainActivity extends AppCompatActivity {
                         else if (kc == android.view.KeyEvent.KEYCODE_FORWARD_DEL && (now - lastBkAt) < 250) return true;
                     }
                     return super.sendKeyEvent(event);
-                }
-                @Override public boolean setComposingRegion(int start, int end) {
-                    android.util.Log.i("DAO_IME", "scr(" + start + "," + end + ") 吞掉·断陈旧快照重组");
-                    return true;
                 }
             };
         }
@@ -3666,34 +3661,53 @@ public class MainActivity extends AppCompatActivity {
             + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
-    // 退格护栏(JS 兜底层): 部分输入法在富文本编辑器(contenteditable)里按一次退格, 会把光标
-    //   左右两侧的字符同时删掉 —— 表现为 IME 在 deleteContentBackward 之外额外发出一个
-    //   deleteContentForward, 或单个退格的目标区间越过光标吞掉右侧字符。此护栏在 document
-    //   捕获阶段兜底: ① 紧跟退格(<150ms)的 IME 向前删除一律拦下(手机键盘本无 Del 键, 该事件
-    //   必为输入法误发); ② 单个退格的目标区间越过光标 → 拦下改为只删左侧。仅处理系统真实事件
-    //   (isTrusted) 且不干预拼音/组合输入中(isComposing)。幂等(window.__rtBsGuard 守卫)。
+    // 退格护栏(JS 看门狗): Devin 网页 Slate 编辑器在安卓 IME 句中退格后, 以陈旧 DOM 快照回滚
+    //   重放删除 → 多吞光标右侧一字(左右各少一字的「双删」真根因, AVD+真 Gboard 稳定复现)。
+    //   IME 直改编辑缓冲不可 preventDefault, Slate 状态又不可外部直改 → 唯一可靠修法 = 事后看门狗:
+    //   ① beforeinput(deleteContentBackward) 时按 getTargetRanges 记下 全文/删除区间/单删期望文本;
+    //   ② 700/1400/2100ms 三查(pending 保持到终查, 双删可晚至 ~900ms 才发生): 若实文比期望又少了
+    //     删除点右侧那一字 → execCommand insertText 原位补回;
+    //   ③ 补回后 120ms/350ms 两次 TreeWalker 重定光标到删除点(躲过 Slate 再渲染重置选区)。
+    //   另: 紧跟退格(<150ms)的 IME 向前删除一律拦下(手机键盘无 Del 键, 必为输入法误发)。
+    //   仅处理系统真实事件(isTrusted), 拼音/组合输入中(isComposing)不介入。幂等(window.__rtBsGuard)。
     static void installBackspaceGuard(WebView w) {
         if (w == null) return;
         String js = "(function(){if(window.__rtBsGuard)return;window.__rtBsGuard=1;"
-            + "var lastBk=0;"
+            + "var lastBk=0,pend=null;"
+            + "function txt(ed){return (ed.innerText||'').replace(/\\n+$/,'');}"
+            + "function gOff(ed,node,off){var r=document.createRange();r.selectNodeContents(ed);try{r.setEnd(node,off);}catch(e){return -1;}return r.toString().length;}"
+            + "function setCaret(ed,k){try{var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),nd;"
+            + "while((nd=w.nextNode())){var L=nd.textContent.length;if(k<=L){var s=getSelection(),r=document.createRange();r.setStart(nd,k);r.collapse(true);s.removeAllRanges();s.addRange(r);return true;}k-=L;}}catch(e){}return false;}"
+            + "function chk(fin){var p=pend;if(!p)return;"
+            + "try{var cur=txt(p.ed);"
+            + "if(cur!==p.exp&&p.ch&&cur===p.exp.slice(0,p.st)+p.exp.slice(p.st+1)){"
+            + "setCaret(p.ed,p.st);document.execCommand('insertText',false,p.ch);"
+            + "setTimeout(function(){setCaret(p.ed,p.st);},120);"
+            + "setTimeout(function(){setCaret(p.ed,p.st);},350);"
+            + "pend=null;return;}"
+            + "}catch(e){}"
+            + "if(fin)pend=null;}"
             + "document.addEventListener('beforeinput',function(e){"
-            + "if(!e.isTrusted||e.isComposing)return;"
+            + "if(!e.isTrusted)return;"
             + "var t=e.target;if(!t)return;"
-            + "var ce=!!t.isContentEditable;"
-            + "if(!ce&&!/^(input|textarea)$/i.test(t.tagName||''))return;"
             + "var now=Date.now();"
             + "if(e.inputType==='deleteContentBackward'){lastBk=now;"
-            + "if(!ce||!e.getTargetRanges)return;"
-            + "try{var sel=window.getSelection();"
-            + "if(sel&&sel.isCollapsed&&sel.anchorNode){var r=e.getTargetRanges()[0];"
-            + "if(r){var over=false;"
-            + "if(r.endContainer===sel.anchorNode){over=r.endOffset>sel.anchorOffset;}"
-            + "else{var tr=document.createRange();tr.setStart(r.startContainer,r.startOffset);tr.setEnd(r.endContainer,r.endOffset);"
-            + "try{over=tr.comparePoint(sel.anchorNode,sel.anchorOffset)===0&&!(r.endContainer===sel.anchorNode&&r.endOffset===sel.anchorOffset);}catch(__){}}"
-            + "if(over){e.preventDefault();e.stopImmediatePropagation();document.execCommand('delete');return;}}}}catch(_){}"
+            + "if(e.isComposing)return;"
+            + "var ed=t.closest?t.closest('[contenteditable=true],[contenteditable=\"\"]'):null;"
+            + "if(!ed||!e.getTargetRanges)return;"
+            + "try{var r=e.getTargetRanges()[0];if(!r)return;"
+            + "var st=gOff(ed,r.startContainer,r.startOffset),en=gOff(ed,r.endContainer,r.endOffset);"
+            + "if(st<0||en<=st)return;"
+            + "var full=txt(ed);"
+            + "pend={ed:ed,st:st,exp:full.slice(0,st)+full.slice(en),ch:full.slice(en,en+1),t:now};"
+            + "setTimeout(function(){chk(false);},700);"
+            + "setTimeout(function(){chk(false);},1400);"
+            + "setTimeout(function(){chk(true);},2100);"
+            + "}catch(_){}"
             + "return;}"
             + "if(e.inputType==='deleteContentForward'&&(now-lastBk)<150){"
-            + "e.preventDefault();e.stopImmediatePropagation();}"
+            + "e.preventDefault();e.stopImmediatePropagation();return;}"
+            + "pend=null;"
             + "},true);})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
@@ -4737,7 +4751,8 @@ public class MainActivity extends AppCompatActivity {
             final String fconv = conv, ftitle = title, fzipB64 = zipB64, fzipName = zipName;
             final int fzfc = zipFileCount;
             main.post(() -> {
-                boolean noText = (fconv == null || fconv.isEmpty());
+                // 仅有标题头无消息段(~103B 空导出, 常因该号 auth 过期/未解锁) 视同取数空 → 走回退/报错, 绝不注入
+                boolean noText = (fconv == null || fconv.isEmpty() || !fconv.contains("## "));
                 boolean noZip = (fzipB64 == null || fzipB64.isEmpty());
                 if (noText && noZip) { if (fallback != null) fallback.run(); return; }
                 String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
@@ -4878,8 +4893,11 @@ public class MainActivity extends AppCompatActivity {
             + "try{var o=JSON.parse(raw.slice(i,j));if(o.result&&o.result.length)o.result.forEach(add);else if(o.type)add(o);}catch(e){}i=j;}"
             + "else{var le=raw.indexOf('\\n',i);var end=le===-1?n:le;var line=raw.slice(i,end).trim();i=end+1;if(line.indexOf('data:')===0){var ds=line.slice(5).trim();if(ds&&ds!=='[DONE]'){try{var o2=JSON.parse(ds);if(o2.result&&o2.result.length)o2.result.forEach(add);else if(o2.type)add(o2);}catch(e){}}}}}"
             + "var arr=order.map(function(k){return merged[k];});arr.sort(function(a,b){return (a.created_at_ms||0)-(b.created_at_ms||0);});return arr;}"
-            + "fetch('/api/events/'+SID+'/stream',{headers:H({Accept:'text/event-stream'}),credentials:'include'}).then(function(r){return r.text();}).then(function(raw){"
+            + "var __ST=0;"
+            + "fetch('/api/events/'+SID+'/stream',{headers:H({Accept:'text/event-stream'}),credentials:'include'}).then(function(r){__ST=r.status;return r.text();}).then(function(raw){"
             + "var evs=pe(raw);"
+            + "if(!evs.length){var em='0事件(HTTP '+__ST+')'+((__ST===401||__ST===403)?' 该账号登录态过期或无权限, 请先在切号面板解锁该账号':'');"
+            + "try{RTDL.convExtracted(JSON.stringify({sid:SID,error:em}));}catch(e){}return;}"
             + "return fetch('/api/sessions/'+SID,{headers:H({}),credentials:'include'}).then(function(r){return r.ok?r.json():{};}).catch(function(){return {};}).then(function(d){"
             + "var title=(d&&d.title)||SID;"
             + "var c=['# 对话: '+title,'','- Session: `'+SID+'`','- 事件数: '+evs.length,''];"
@@ -4903,7 +4921,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             JSONObject o = new JSONObject(json);
             String conv = o.optString("conv", "");
-            if (conv.isEmpty()) { toast("提取失败: " + o.optString("error", "无对话内容")); return; }
+            if (conv.isEmpty() || !conv.contains("## ")) { toast("提取失败: " + o.optString("error", "无对话内容(0事件), 未注入空文档")); return; }
             String sid = o.optString("sid", "session");
             String title = o.optString("title", sid);
             String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");

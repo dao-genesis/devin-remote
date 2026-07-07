@@ -260,6 +260,10 @@
     //  一次拿齐: 元数据 + 完整对话 md + 工作日志 md + 文件清单 + (可选)落盘到共享保险箱
     extractConversation: async function(a){
       var acc=findAcc(a.id||a.email); if(!acc) return {ok:false,error:"无此账号 (先 addAccount/login)"};
+      // 未解锁(含额度归零号 auth 过期)且库中有密码 → 先自动登录解锁再取 (登录不消耗额度), 根治拖拽提取空导出
+      if((!acc.auth1||!acc.orgId)&&acc.email&&acc.password){
+        try{ await DaoCore.loginAndStore(acc.email, acc.password); acc=findAcc(a.id||a.email)||acc; }catch(e){}
+      }
       if(!acc.auth1||!acc.orgId) return {ok:false,error:"该账号需先登录 (login) 解锁 auth1; 登录不消耗额度, 额度耗尽也能登录读取历史"};
       var sid=a.sid||a.sessionId; if(!sid) return {ok:false,error:"需 sid (会话ID; 可先 listSessions 取)"};
       var out={ok:true, account:acc.email, orgId:acc.orgId, sessionId:sid};
