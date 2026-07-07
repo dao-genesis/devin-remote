@@ -1199,6 +1199,12 @@ class WorkspaceServer {
         const headers = Object.assign({}, req.headers, { host: "127.0.0.1:" + port });
         if (body.length) headers["content-length"] = String(body.length);
         const up = http.request({ host: "127.0.0.1", port, method: req.method || "GET", path: req.url || "/mcp", headers }, (ur) => {
+          // 上游返回 5xx 且尚有候选 → 消费掉坏响应, 无损换下一端口重试(杜绝「mcp_http.py 在监听
+          //   但返回坏响应」时吞掉本该由二合一本体成功响应的请求)。
+          if (ur.statusCode >= 500 && idx + 1 < candidates.length) {
+            ur.resume();
+            return tryPort(idx + 1);
+          }
           const h = Object.assign({}, ur.headers);
           h["Access-Control-Allow-Origin"] = "*";
           h["Access-Control-Expose-Headers"] = "Mcp-Session-Id, mcp-session-id";
