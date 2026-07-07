@@ -58,32 +58,36 @@ ok(/beforeLength == 0 && afterLength > 0 && \(now - lastBkAt\) < 250\) return tr
 ok(/KEYCODE_FORWARD_DEL && \(now - lastBkAt\) < 250\) return true;/.test(main), "时间窗: 紧跟退格的 FORWARD_DEL 键事件被吞 (sendKeyEvent 拆单)");
 ok(/KEYCODE_DEL\) \{ lastBkAt = now; \}/.test(main), "时间窗: 退格键事件登记时刻");
 
-// ②c JS 根治 (源级拦截, 非看门狗): 同一次退格被 浏览器默认动作 + Slate 处理两遍 → 双删。
-//     修法 = 捕获层 stopImmediatePropagation 拦下 Slate 对 beforeinput(deleteContentBackward)
-//     的处理(不 preventDefault, 默认删除照常), Slate MutationObserver 归账 → 只删一次。
-ok(/__rtBsGuard/.test(main), "退格根治: 幂等守卫存在");
+// ②c JS 根治 v2 (源级·AVD 实验矩阵定谳):
+//     不拦=双删; 只 preventDefault=零删; 只 sIP=单删但 Slate 盲区重排把光标甩到末尾。
+//     定式 = sIP 保单删 + 光标归位(退格前记 off-1; 重排甩尾即归位; 连退前先归位再放行)。
+ok(/__rtBsGuard2/.test(main), "退格根治: 幂等守卫 v2 存在");
 ok(/document\.addEventListener\('beforeinput'/.test(main), "退格根治: 捕获层 beforeinput 监听");
 ok(/if\(!e\.isTrusted\)return;/.test(main), "退格根治: 只处理系统真实事件");
 ok(/\[data-slate-editor=true\],\[contenteditable=true\]/.test(main), "退格根治: 限 Slate/contenteditable 编辑器");
-ok(/e\.inputType==='deleteContentBackward'/.test(main), "退格根治: 针对 deleteContentBackward");
-ok(/deleteContentBackward'\)\{lastBk=now;[\s\S]{0,80}?e\.stopImmediatePropagation\(\);/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: stopImmediatePropagation 拦下 Slate 处理");
-ok(!/preventDefault\(\);e\.stopImmediatePropagation\(\);return;\}"\s*\+\s*"return;\}/.test(main) && /deleteContentBackward[\s\S]{0,200}stopImmediatePropagation/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: 退格不 preventDefault (默认删除照常发生)");
-ok(/if\(e\.isComposing\)return;/.test(main), "退格根治: 拼音/组合输入中不介入");
-ok(/deleteContentForward'&&\(now-lastBk\)<150/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: 紧跟退格的 IME 前向删除拦下 (拆单误发)");
-// 旧看门狗(事后补字+重定光标)必须彻底移除 —— 不在错误上打补丁
+ok(/e\.inputType==='deleteContentBackward'&&!e\.isComposing/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: 针对 deleteContentBackward 且组合输入中不介入");
+ok(/deleteContentBackward'&&!e\.isComposing\)\{[\s\S]{0,200}?e\.stopImmediatePropagation\(\);/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: stopImmediatePropagation 保单删 (删除单一来源=默认动作)");
+ok(/keep=\(o>0\)\?\{ed:ed,off:o-1,until:Date\.now\(\)\+1500\}:null;/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: 退格前登记光标应在处(off-1·1.5s窗)");
+ok(/'selectionchange',function\(\)\{[\s\S]{0,300}?if\(o===L&&keep\.off<L\)setOff\(ed,keep\.off\);/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: Slate 重排甩尾 → selectionchange 即刻归位");
+ok(/if\(keep&&keep\.ed===ed&&o===L&&keep\.off<L\)\{setOff\(ed,keep\.off\);o=keep\.off;\}/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: 连退时默认动作前先归位 (连退恒删对位)");
+ok(/'pointerdown',function\(\)\{keep=null;\}/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: 用户主动点击即撤归位窗 (不干扰正常操作)");
+ok(/NotFoundError'\)return c;/.test(main.replace(/"\s*\+\s*"/g, "")), "崩页兜底: removeChild NotFoundError 防线");
+ok(/Node\.prototype\.insertBefore=function/.test(main.replace(/"\s*\+\s*"/g, "")), "崩页兜底: insertBefore NotFoundError 防线");
+// 旧看门狗(事后补字)与旧 v1 盲拦(光标跳末尾回归源)必须彻底移除
 ok(!/getTargetRanges\(\)\[0\]/.test(main), "退格根治: 旧看门狗 getTargetRanges 快照已移除");
 ok(!/setCaret\(p\.ed,p\.st\)/.test(main), "退格根治: 旧看门狗事后重定光标已移除");
 ok(!/chk\(false\);\},700\)/.test(main), "退格根治: 旧看门狗 700/1400/2100ms 三查已移除");
+ok(!/deleteContentForward'&&\(now-lastBk\)<150/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: v1 前向删除时间窗拦截已移除 (原生 InputConnection 层已够)");
 ok(!/setComposingRegion\(int start, int end\)/.test(main), "原生 setComposingRegion 已恢复透传 (根因在 JS 层)");
 
 // ②c2 语音输入根治 (空 Slate 编辑器首段组合被 Slate 处理 → 重挂+restartInput 掐断 IME;
 //      修法 = 同退格一路: 空编辑器起始的整段组合期间拦下 Slate 的 beforeinput, 不再零宽打底)
 ok(/static void installVoiceGuard\(WebView w\)/.test(main), "语音根治: installVoiceGuard 存在");
-ok(/__rtViGuard/.test(main), "语音根治: 幂等守卫存在");
+ok(/__rtViGuard2/.test(main), "语音根治: 幂等守卫 v2 存在");
 ok(/'compositionstart',function\(e\)\{var ed=ced\(e\.target\);hold=\(ed&&empty\(ed\)\)\?ed:null;/.test(main), "语音根治: 空编辑器 compositionstart 进入拦截期");
 ok(/'compositionend',function\(e\)\{hold=null;/.test(main), "语音根治: compositionend 回归 Slate 常规处理");
-ok(/hold===ed&&\(it==='insertCompositionText'\|\|it==='deleteCompositionText'\|\|it==='insertText'\)\)\{e\.stopImmediatePropagation\(\);/.test(main), "语音根治: 拦截期内 stopImmediatePropagation (默认落字照常·IME 不被 restartInput 掐断)");
-ok(/it==='insertText'&&!e\.isComposing&&empty\(ed\)\)\{e\.stopImmediatePropagation\(\);/.test(main), "语音根治: 非组合直敲首字同理拦一次");
+ok(/hold===ed&&\(it==='insertCompositionText'\|\|it==='deleteCompositionText'\|\|\(it==='insertText'&&e\.isComposing\)\)\)\{e\.stopImmediatePropagation\(\);/.test(main), "语音根治: 拦截期内仅组合事件 stopImmediatePropagation (默认落字照常·IME 不被 restartInput 掐断)");
+ok(!/it==='insertText'&&!e\.isComposing/.test(main), "语音根治 v2: 非组合直敲首字拦截已撤除 (模型脱钩→崩页主诱因)");
 ok(/\[data-slate-placeholder\],\[contenteditable=false\]/.test(main), "语音根治: 判空跳过 Slate 占位提示 (placeholder 不算内容)");
 // 旧零宽打底方案(外部改写 Slate DOM → 陈旧快照诱因)必须彻底移除
 ok(!/var Z='\\\\u200B';/.test(main), "语音根治: 旧零宽字符打底已移除");
