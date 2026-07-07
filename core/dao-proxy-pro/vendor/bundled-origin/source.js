@@ -307,7 +307,7 @@ function _originGetProxyAgent(isHttps) {
 const PORT = parseInt(process.env.ORIGIN_PORT || "8889", 10);
 // v9.6.1 · 反者道之动 · 远曰反 · 回归 v9.1.2 之全前端按钮 (七按钮: 道/官/实/原/编/复/卸 + dots/customBadge)
 // 以 v9.1.2 本源哲学为锚 · 守大常不动 · 五细节皆成: isAlreadyInverted · _rawTape+all_fields · 部署不 kill · 前端按钮回归
-const ORIGIN_VERSION_BASE = "v9.9.339"; // v9.9.339 · 反者道之动·补全(外接api 路由流式亦撤秒数硬限·dao_router 两处 provider 请求 setTimeout(0)+keepalive·revproxy setTimeout(0)+keepalive·routed 模型长推理不再 120s 掐断·AI 自然而止) · v9.9.338 · 反者道之动(撤销一切秒数硬限·两处 H2 stream 超时归零·H1 requestTimeout=0·唯下游离场才回收·AI 自然而止·道并行而不相悖) · v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
+const ORIGIN_VERSION_BASE = "v9.9.342"; // v9.9.342 · 内网穿透大修(移植 dao-bridge 核心: 代理探测7端口+注入·二进制--version验证·断点续传·CONNECT代理隧道下载·6路镜像回退·看门狗15s·resetProxy·命名空间隔离 cloudflared-proxypro.*) · v9.9.339 · 反者道之动·补全(外接api 路由流式亦撤秒数硬限·dao_router 两处 provider 请求 setTimeout(0)+keepalive·revproxy setTimeout(0)+keepalive·routed 模型长推理不再 120s 掐断·AI 自然而止) · v9.9.338 · 反者道之动(撤销一切秒数硬限·两处 H2 stream 超时归零·H1 requestTimeout=0·唯下游离场才回收·AI 自然而止·道并行而不相悖) · v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
 // 印 153 · 唯变所适 · 软编码归宗 · 二十五章「逝曰远 远曰反」· 七十六章「兵强则不胜」
 // 病: 多 ext-host 共端口 :8937 · 旧版 in-process proxy 持续 listen · self_file 锁死旧版目录
 //     → 即便装毕新版 vsix · /ping 仍返 v9.9.19/v9.9.20 之 self_file · canon_name 走旧映射
@@ -5211,17 +5211,104 @@ function _brgResetAccount() {
   } catch (_) {}
   return { ok: true };
 }
-function _brgStatus() {
+// ═══ 归一(dao-one)折入复用: 读取二合一本源 dao-vsix 已发布的共享隧道 ═══
+// 道并行而不相悖 — dao-one 中「🌐 内网穿透」板块起的单条 cloudflared 已把本反代端点
+//   (/v1/*、/origin/revproxy/*) 一并暴露公网, 故 Proxy Pro ⑤ 面板无需重复起隧道,
+//   直接读 dao-vsix 落盘的权威连接文件, 复用同一条公网 URL。
+const _BRG_SHARED_FRESH_MS = 15 * 60 * 1000;
+// 仅「真·公网 URL」才算共享隧道可复用 —— 本地回环(localhost/127.*/0.0.0.0/内网私网段)不是公网,
+//   dao-vsix 隧道未起时 dao-conn-current.json 的 url 会回落成 http://localhost:9920, 不可当公网复用。
+//   dao-vsix saveConnection(): publicUrl 存在时才写 relayUrl, 且 url=publicUrl; 未起时 url=localhost。
+//   故权威公网源优先取 relayUrl, 再取 url/primaryUrl, 并强校验非回环、非私网。
+function _brgIsPublicUrl(u) {
+  const m = /^https?:\/\/([^/:]+)/i.exec(String(u || "").trim());
+  if (!m) return false;
+  const h = m[1].toLowerCase();
+  if (h === "localhost" || h === "0.0.0.0" || h === "::1") return false;
+  if (/^127\./.test(h)) return false;
+  if (/^10\./.test(h) || /^192\.168\./.test(h)) return false;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false;
+  return true;
+}
+function _brgLocalPortOf(c) {
+  // 从连接文件推断该隧道 front 的本地端口(用以辨识「哪条隧道罩着 dao-vsix 归一服务」)
+  if (Number.isFinite(c.port)) return c.port;
+  const lu = String(c.local_url || c.localUrl || "").trim();
+  const m = /:(\d{2,5})(?:\/|$)/.exec(lu);
+  return m ? parseInt(m[1], 10) : 0;
+}
+function _brgReadSharedTunnel() {
+  const home = process.env.USERPROFILE || process.env.HOME || "";
+  if (!home) return null;
+  const now = Date.now();
+  // dao-vsix 归一服务权威端口: 读 dao-conn-current.json(dao-vsix 自身落盘)。归一折入时反代端点
+  //   随 dao-vsix 同端口(9920)对外, 故只认「front 该端口」的那条公网隧道 —— 机控 addon(另口 15715)
+  //   只代理 /api/*、不 front /v1|/origin/revproxy, 复用它会拿到打不通反代的假公网(道·辨同异)。
+  let vsixPort = 0;
+  try {
+    const cur = JSON.parse(fs.readFileSync(path.join(home, ".dao", "dao-conn-current.json"), "utf8")) || {};
+    vsixPort = _brgLocalPortOf(cur);
+    // dao-vsix 自身 board 隧道活跃时 relayUrl/publicUrl 直接就是权威公网 URL, 最优先
+    for (const cand of [cur.relayUrl, cur.publicUrl, cur.primaryUrl, cur.url]) {
+      if (_brgIsPublicUrl(cand)) {
+        let ageMs = cur.updated ? now - Date.parse(cur.updated) : NaN;
+        if (!(Number.isFinite(ageMs) && ageMs > _BRG_SHARED_FRESH_MS)) {
+          return { url: String(cand).trim(), token: String(cur.token || "").trim(),
+                   source: "dao-vsix", file: "dao-conn-current.json", port: vsixPort,
+                   ageMs: Number.isFinite(ageMs) ? ageMs : 0 };
+        }
+      }
+    }
+  } catch (_) {}
+  // 退而求其次: 扫 bridge/*.json, 只取「front dao-vsix 端口」的公网隧道; 无端口线索时兜底任一公网
+  const files = [
+    path.join(home, ".dao", "bridge", "connection.json"),
+    path.join(home, ".dao", "bridge", "conn.json"),
+  ];
+  let fallback = null;
+  for (const p of files) {
+    try {
+      const c = JSON.parse(fs.readFileSync(p, "utf8")) || {};
+      let url = "";
+      for (const cand of [c.relayUrl, c.publicUrl, c.primaryUrl, c.url]) {
+        if (_brgIsPublicUrl(cand)) { url = String(cand).trim(); break; }
+      }
+      if (!url) continue;
+      let ageMs = c.updated ? now - Date.parse(c.updated) : NaN;
+      if (Number.isFinite(ageMs) && ageMs > _BRG_SHARED_FRESH_MS) continue;
+      const rec = { url, token: String(c.token || "").trim(),
+                    source: String(c.source || "dao-vsix").trim(), file: path.basename(p),
+                    port: _brgLocalPortOf(c), ageMs: Number.isFinite(ageMs) ? ageMs : 0 };
+      if (vsixPort && rec.port === vsixPort) return rec; // front 归一端口 → 就是它
+      if (!fallback) fallback = rec;
+    } catch (_) {}
+  }
+  // 已知归一端口却无一条隧道 front 它 → 判定「无共享反代隧道可复用」, 不拿机控 addon(另口)充数。
+  //   仅在无从得知归一端口(读不到 dao-conn-current.json)时, 才退而用任一公网候选。
+  return vsixPort ? null : fallback;
+}
+function _brgStatus(preferShared) {
   const pid = _brgPidAlive();
-  const url = _brgReadUrlFromLog();
+  let url = _brgReadUrlFromLog();
   if (url) _brgUrl = url;
   const cf = _brgCfState();
-  const running = !!(pid || _brgProc);
+  let running = !!(pid || _brgProc);
   const proxy = _brgDetectProxy();
+  // 折入模式: 本插件未自起隧道时, 复用 dao-vsix 共享隧道的公网 URL(不重复造轮子)
+  const shared = _brgReadSharedTunnel();
+  let sharedActive = false;
+  if (preferShared && !url && shared && shared.url) {
+    url = shared.url;
+    sharedActive = true;
+    running = true;
+  }
   return {
     ok: true,
     running,
     connecting: running && !url,
+    shared: sharedActive,
+    sharedUrl: shared ? shared.url : "",
+    sharedSource: shared ? shared.source : "",
     url: url || "",
     named: cf.named,
     localPort: _actualPort,
@@ -8180,8 +8267,9 @@ async function _maybeRevproxy(req, res) {
   // 内网穿透 · DAO Bridge: 状态自省 + 启停控制 (把反代端点直暴公网)
   if (u.pathname === "/origin/revproxy/tunnel") {
     res.setHeader("Content-Type", "application/json");
+    const preferShared = u.searchParams && u.searchParams.get("shared") === "1";
     if (req.method === "GET") {
-      res.end(JSON.stringify(_brgStatus()));
+      res.end(JSON.stringify(_brgStatus(preferShared)));
       return true;
     }
     if (req.method === "POST") {
@@ -8206,7 +8294,7 @@ async function _maybeRevproxy(req, res) {
           res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
         } else if (action === "stop") {
           _brgStopTunnel();
-          res.end(JSON.stringify(Object.assign({ ok: true }, _brgStatus())));
+          res.end(JSON.stringify(Object.assign({ ok: true }, _brgStatus(preferShared))));
         } else if (action === "cfLogin") {
           const r = _brgCfLogin(body.email || "", body.key || "");
           res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
@@ -8215,7 +8303,7 @@ async function _maybeRevproxy(req, res) {
           res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
         } else if (action === "resetProxy") {
           _brgProxyCache = null;
-          res.end(JSON.stringify(Object.assign({ ok: true, proxy: _brgDetectProxy() }, _brgStatus())));
+          res.end(JSON.stringify(Object.assign({ ok: true, proxy: _brgDetectProxy() }, _brgStatus(preferShared))));
         } else {
           res.statusCode = 400;
           res.end(JSON.stringify({ ok: false, error: "unknown action" }));

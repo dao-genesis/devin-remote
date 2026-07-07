@@ -4940,7 +4940,7 @@ function getEaConfigHtml(port, nonce, opts) {
     <button class="dao-tab" data-pane="paneProvider">② 渠道配置</button>
     <button class="dao-tab" data-pane="paneRouter">③ 模型路由</button>
     <button class="dao-tab" data-pane="paneRevproxy">④ 模型反代</button>
-    ${foldBridge ? '' : '<button class="dao-tab" data-pane="paneBridge">⑤ 内网穿透</button>'}
+    <button class="dao-tab" data-pane="paneBridge">⑤ 内网穿透</button>
   </div>
 
   <!-- ① 本源观照 (IDE 左侧复刻 · 道/官/编 + 经文 + 本源体池 · 与左侧完全一致) -->
@@ -5102,13 +5102,10 @@ function getEaConfigHtml(port, nonce, opts) {
   </div>
 
   <!-- ⑤ 内网穿透 · DAO Bridge (反者道之动 · 把反代端点直暴公网 · 零账号去中心化 · 公网直调反带模型) -->
-  <div class="dao-pane" id="paneBridge">${foldBridge ? `
-    <div style="padding:14px 10px;font-size:12px;line-height:1.9;opacity:0.9">
-      <div style="font-weight:600;margin-bottom:6px">☯ 内网穿透已归一</div>
-      归一插件(dao-one)中，本模块的公网穿透复用二合一本源的「🌐 内网穿透 · DAO Bridge」板块——同一条 cloudflared 隧道经<b>单隧道直达</b>已把反代端点(<code>/v1/*</code> 与 <code>/origin/revproxy/*</code>)一并暴露公网，无需再单独起隧道。请到全能板顶部的「🌐 内网穿透」板块启动隧道并复制公网 Base URL。
-      <span style="opacity:0.55">道并行而不相悖 · 不重复造轮子。</span>
-    </div>
-  ` : `
+  <div class="dao-pane" id="paneBridge">
+    ${foldBridge ? `<div style="background:rgba(88,166,255,0.10);border:1px solid rgba(88,166,255,0.28);border-radius:6px;padding:8px 10px;margin:4px 2px;font-size:11px;line-height:1.7;opacity:0.95">
+      <b>☯ 归一复用</b> · 本板块公网穿透<b>复用</b>二合一本源「🌐 内网穿透 · DAO Bridge」的<b>同一条</b> cloudflared 隧道——它经<b>单隧道直达</b>已把反代端点(<code>/v1/*</code>、<code>/origin/revproxy/*</code>)一并暴露公网，故此处<b>不另起</b>第二条隧道。隧道<b>启停</b>请到顶部「🌐 内网穿透」板块；下方状态/公网接入/自测<b>实时映射</b>该共享隧道。<span style="opacity:0.6">道并行而不相悖 · 不重复造轮子。</span>
+    </div>` : ''}
     <div style="display:flex;align-items:center;gap:8px;padding:6px 2px;border-bottom:1px solid rgba(128,128,128,0.18);flex-wrap:wrap">
       <span style="font-weight:600;font-size:12px">☯ 内网穿透 · DAO Bridge</span>
       <span id="brgStat" style="font-size:10px;opacity:0.65;margin-left:auto">加载中…</span>
@@ -5127,9 +5124,10 @@ function getEaConfigHtml(port, nonce, opts) {
         <span id="brgState" style="font-size:11px;color:var(--vscode-descriptionForeground,#999)">未连接</span>
         <span id="brgMode" style="font-size:10px;opacity:0.6"></span>
         <span style="margin-left:auto"></span>
-        <button class="btn add" id="brgStart" title="启动快速隧道(零账号) · 把反代端点暴露公网">▶ 启动隧道</button>
+        ${foldBridge ? `<span style="font-size:10px;opacity:0.6">启停在顶部「🌐 内网穿透」板块</span>
+        <button class="btn" id="brgRefreshBtn" title="刷新共享隧道状态">↻ 刷新</button>` : `<button class="btn add" id="brgStart" title="启动快速隧道(零账号) · 把反代端点暴露公网">▶ 启动隧道</button>
         <button class="btn" id="brgRestart" title="重启隧道(换新公网URL)">↻ 重启</button>
-        <button class="btn" id="brgStop" title="停止隧道 · 关闭公网暴露">■ 停止</button>
+        <button class="btn" id="brgStop" title="停止隧道 · 关闭公网暴露">■ 停止</button>`}
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px">
         <span style="font-weight:600;font-size:11px">公网 URL</span>
@@ -5167,8 +5165,8 @@ function getEaConfigHtml(port, nonce, opts) {
       <pre id="brgTestOut" style="display:none;max-height:200px;overflow:auto;margin:6px 0 0;padding:8px;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--vscode-textCodeBlock-background,rgba(0,0,0,0.18));border-radius:4px"></pre>
     </div>
 
-    <!-- 固定域名 (可选·Cloudflare 命名隧道) -->
-    <details style="margin:4px 2px;border:1px solid rgba(128,128,128,0.18);border-radius:6px;padding:6px 8px">
+    <!-- 固定域名 (可选·Cloudflare 命名隧道) · 折入模式由「🌐 内网穿透」板块统一管理, 此处隐藏 -->
+    ${foldBridge ? '' : `<details style="margin:4px 2px;border:1px solid rgba(128,128,128,0.18);border-radius:6px;padding:6px 8px">
       <summary style="font-size:11px;font-weight:600;cursor:pointer;opacity:0.85">固定公网域名 (可选 · Cloudflare 命名隧道)</summary>
       <div style="font-size:10px;line-height:1.6;margin-top:6px;opacity:0.8">
         快速隧道每次重启换 URL。若要<b>固定不变</b>的公网域名，可在 Cloudflare Zero Trust 创建命名隧道，
@@ -5183,8 +5181,8 @@ function getEaConfigHtml(port, nonce, opts) {
         <button class="btn" id="brgLogout" title="清除已保存的 Cloudflare 凭证/命名隧道">✖ 注销</button>
       </div>
       <div id="brgCfState" style="font-size:10px;opacity:0.6;margin-top:4px">未登录 Cloudflare (默认走零账号快速隧道)</div>
-    </details>
-  `}</div>
+    </details>`}
+  </div>
 
   <!-- 路由编辑弹窗 -->
   <div class="route-modal" id="routeModal">
@@ -5232,6 +5230,10 @@ function getEaConfigHtml(port, nonce, opts) {
   'use strict';
   var _PORT = ${proxyPort};
   var _BASE = 'http://127.0.0.1:' + _PORT;
+  // 归一(dao-one)折入模式: ⑤ 内网穿透复用二合一本源「🌐 内网穿透」板块的同一条共享隧道,
+  //   不重复起第二条 cloudflared (道并行而不相悖)。带 ?shared=1 让后端优先回显共享隧道公网 URL。
+  var _FOLD = ${foldBridge ? 'true' : 'false'};
+  var _BRG_TP = '/origin/revproxy/tunnel' + (_FOLD ? '?shared=1' : '');
 
   function fJson(p, opts) {
     opts = opts || {};
@@ -6427,7 +6429,7 @@ function getEaConfigHtml(port, nonce, opts) {
       else if (running) { state.textContent = '◌ 连接中…'; state.style.color = '#d29922'; }
       else { state.textContent = '○ 未连接'; state.style.color = ''; }
     }
-    _brgSet('brgMode', running ? (d.named ? '命名隧道·固定域名' : '快速隧道·零账号') : '');
+    _brgSet('brgMode', running ? (d.shared ? '复用归一🌐板块共享隧道' : (d.named ? '命名隧道·固定域名' : '快速隧道·零账号')) : '');
     _brgSet('brgStat', running ? (url ? '● 公网已暴露' : '◌ 隧道启动中') : '○ 未启动');
     _brgSet('brgUrl', url || '—');
     _brgSet('brgBound', '本地反代端口: ' + (d.boundPort || d.localPort || '—') + (d.bin ? ' · cloudflared: 已就绪' : ' · cloudflared: 未安装(启动时自动拉取)'));
@@ -6446,14 +6448,14 @@ function getEaConfigHtml(port, nonce, opts) {
   function _brgRefresh() {
     // 顺带取一次反代状态以拿 apiKey
     fJson('/origin/revproxy/status').then(function(rp){ _rpStatus = rp || _rpStatus; }).catch(function(){})
-      .then(function(){ return fJson('/origin/revproxy/tunnel'); })
+      .then(function(){ return fJson(_BRG_TP); })
       .then(function(d){ _brgApply(d); })
       .catch(function(e){ _brgSet('brgStat', '状态获取失败: ' + e.message); });
   }
   function _brgStartPoll() {
     if (_brgPoll) return;
     _brgPoll = setInterval(function(){
-      fJson('/origin/revproxy/tunnel').then(function(d){
+      fJson(_BRG_TP).then(function(d){
         _brgApply(d);
         if (d && d.url) _brgStopPoll();
       }).catch(function(){});
@@ -6463,7 +6465,7 @@ function getEaConfigHtml(port, nonce, opts) {
   function _brgAction(action, extra) {
     var body = Object.assign({ action: action }, extra || {});
     _brgSet('brgStat', '执行 ' + action + '…');
-    return fPost('/origin/revproxy/tunnel', body).then(function(d){ _brgApply(d); return d; })
+    return fPost(_BRG_TP, body).then(function(d){ _brgApply(d); return d; })
       .catch(function(e){ _brgSet('brgStat', action + ' 失败: ' + e.message); throw e; });
   }
   function _brgClip(t) { try { navigator.clipboard.writeText(t); _brgSet('brgStat', '已复制'); } catch (e) {} }
@@ -6521,6 +6523,7 @@ function getEaConfigHtml(port, nonce, opts) {
       brgStart: function(){ _brgAction('start'); },
       brgRestart: function(){ _brgAction('restart'); },
       brgStop: function(){ _brgAction('stop'); },
+      brgRefreshBtn: function(){ _brgRefresh(); },
       brgStartNamed: function(){ _brgAction('startNamed'); },
       brgLogout: function(){ _brgAction('logout'); },
       brgCopyUrl: function(){ _brgClip((_brgS && _brgS.url) || ''); },
