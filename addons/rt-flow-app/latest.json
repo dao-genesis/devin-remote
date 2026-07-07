@@ -1,6 +1,6 @@
 {
-  "versionCode": 269,
-  "versionName": "0.37.165",
-  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.165/DevinCloud-mobile-v0.37.165.apk",
-  "notes": "v0.37.165 · 双根治: ① 「解析软件包时出现问题」装不上 —— minSdk>=24 时构建默认只带 v2 签名, 不少国产 ROM 侧载仍要求 v1(JAR) 签名 → 三代签名(v1+v2+v3)全量开启, 任何机型侧载/应用内更新均可装。② 退格左右同删根治(轻量版) —— 原生 InputConnection 夹断 deleteSurroundingText(before>0,after>0) 只留左删 + 吞拆单前向删除, JS 层兜底越光标退格区间; 全程零同步取文零延迟, 组词/拼音直通, 无旧版重护栏的卡顿与光标错位"
+  "versionCode": 270,
+  "versionName": "0.37.166",
+  "url": "https://github.com/zhouyoukang1234-spec/devin-remote/releases/download/rtflow-v0.37.166/DevinCloud-mobile-v0.37.166.apk",
+  "notes": "v0.37.166 · 自动发版"
 }
