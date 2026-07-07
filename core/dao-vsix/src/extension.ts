@@ -7194,6 +7194,9 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                                 profile.secrets.push({ name: 'GITHUB_PAT', value: pat });
                                 saveInjectProfile(profile);
                             }
+                            // 起号侧注入的 PAT 同样耐久化 config + 联动官方 GitHub MCP(与面板 ipSetPat 语义对齐)。
+                            try { daoPersistPatToConfig(pat); } catch { /* 守柔 */ }
+                            try { daoSyncGithubMcpIntoProfile(); } catch { /* 守柔 */ }
                         }
                     }
                 } catch { /* 守柔 */ }
@@ -7566,6 +7569,9 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     daoSeeded: cur.daoSeeded,
                 };
                 saveInjectProfile(np);
+                // PAT 耐久化: 面板 ipSetPat/增删密钥写入的 PAT 立即回灌 config(dao.githubPat) 作耐久种子,
+                //   使其跨重载/reconcile 不被抹除(与 daoSyncPatSecretIntoProfile 的加性同步收敛)。
+                try { const pv = String(((np.secrets || []).find(s => s && s.name === DAO_PAT_SECRET_NAME) || {} as any).value || '').trim(); if (pv) daoPersistPatToConfig(pv); } catch { /* 守柔 */ }
                 // PAT↔MCP 联动: 面板改 GITHUB_PAT(ipSetPat/增删密钥)后即刻校正官方 GitHub MCP 钉住条目
                 try { daoSyncGithubMcpIntoProfile(); } catch { /* 守柔 */ }
                 // enabled 且当前已登录 → 立即应用一次到当前 org (自循环起点)
@@ -12122,23 +12128,41 @@ function isGitHubPat(s: string): boolean {
 }
 // secret=PAT · 把用户填入的 GitHub PAT(dao.githubPat / DAO_GITHUB_PAT)作为一个 secret 写入注入档案,
 // 经反向注入路径(applyInjectProfileToOrg→devinUpsertSecret)同步到所有账号。
-// 守柔: 非首次限定 — PAT 可在激活后任意时刻填入/更换, 每次激活幂等校正; PAT 为空则移除残条。
+// 守柔·加性同步(2 源归一 · 修 PAT 注入不闭环之根): config(dao.githubPat/env) 是「种子」,
+//   面板 ipSetPat/增删密钥写入的是 profile.secrets(活编辑真源)。旧逻辑「config 空即 splice 掉
+//   profile 的 GITHUB_PAT」会把面板刚设的 PAT 在下次激活/reconcile 时抹除 → PAT 从未真正驻留 →
+//   GitHub MCP 永不联动落地(用户所见「No MCPs」之根因)。故此处只做「有种子则写入/校正 profile」,
+//   config 空时【绝不抹除】面板已写入的 profile PAT;清除 PAT 请经面板 ipRemove 直接编辑 profile。
+//   同时把 profile 侧 PAT 反向「回灌」config 作为耐久种子(promote), 令两源收敛、跨重载不丢。
 function daoSyncPatSecretIntoProfile(): void {
     try {
         const cfg = getDaoConfig();
-        const pat = String(cfg.githubPat || process.env.DAO_GITHUB_PAT || '').trim();
+        const seed = String(cfg.githubPat || process.env.DAO_GITHUB_PAT || '').trim();
         const p = loadInjectProfile();
         const idx = p.secrets.findIndex(s => s && s.name === DAO_PAT_SECRET_NAME);
+        const profilePat = idx >= 0 ? String(p.secrets[idx].value || '').trim() : '';
         let changed = false;
-        if (pat) {
-            if (idx < 0) { p.secrets.push({ name: DAO_PAT_SECRET_NAME, value: pat }); changed = true; }
-            else if (p.secrets[idx].value !== pat) { p.secrets[idx].value = pat; changed = true; }
+        if (seed) {
+            if (idx < 0) { p.secrets.push({ name: DAO_PAT_SECRET_NAME, value: seed }); changed = true; }
+            else if (profilePat !== seed) { p.secrets[idx].value = seed; changed = true; }
             if (!p.enabled) { p.enabled = true; changed = true; }
-        } else if (idx >= 0) {
-            p.secrets.splice(idx, 1); changed = true;
+        } else if (profilePat) {
+            // config/env 无种子, 但面板已写入 PAT → 保留(不抹除), 并回灌为耐久种子。
+            daoPersistPatToConfig(profilePat);
         }
         if (changed) saveInjectProfile(p);
     } catch { /* 道法自然·守柔 */ }
+}
+// 把 PAT 回灌 config(dao.githubPat) 作为跨重载的耐久权威种子 — 令 config 与 profile 两源收敛。
+//   守柔·幂等: 仅在与现值不同时写; 失败静默(只读环境/无 workspace 亦不崩)。
+function daoPersistPatToConfig(pat: string): void {
+    try {
+        const v = String(pat || '').trim();
+        if (!v) return;
+        const cfg = vscode.workspace.getConfiguration('dao');
+        if (String(cfg.get<string>('githubPat', '') || '').trim() === v) return;
+        cfg.update('githubPat', v, vscode.ConfigurationTarget.Global).then(undefined, () => { /* 守柔 */ });
+    } catch { /* 守柔 */ }
 }
 // MCP=GitHub 官方 · PAT↔MCP 联动 — 帛书·「二生三」: secret(PAT) 与 MCP 本一体两面。
 //   有 GITHUB_PAT 即确保注入档案含官方 GitHub MCP(HTTP·https://api.githubcopilot.com/mcp/·Bearer PAT);
