@@ -5216,6 +5216,20 @@ function _brgResetAccount() {
 //   (/v1/*、/origin/revproxy/*) 一并暴露公网, 故 Proxy Pro ⑤ 面板无需重复起隧道,
 //   直接读 dao-vsix 落盘的权威连接文件, 复用同一条公网 URL。
 const _BRG_SHARED_FRESH_MS = 15 * 60 * 1000;
+// 仅「真·公网 URL」才算共享隧道可复用 —— 本地回环(localhost/127.*/0.0.0.0/内网私网段)不是公网,
+//   dao-vsix 隧道未起时 dao-conn-current.json 的 url 会回落成 http://localhost:9920, 不可当公网复用。
+//   dao-vsix saveConnection(): publicUrl 存在时才写 relayUrl, 且 url=publicUrl; 未起时 url=localhost。
+//   故权威公网源优先取 relayUrl, 再取 url/primaryUrl, 并强校验非回环、非私网。
+function _brgIsPublicUrl(u) {
+  const m = /^https?:\/\/([^/:]+)/i.exec(String(u || "").trim());
+  if (!m) return false;
+  const h = m[1].toLowerCase();
+  if (h === "localhost" || h === "0.0.0.0" || h === "::1") return false;
+  if (/^127\./.test(h)) return false;
+  if (/^10\./.test(h) || /^192\.168\./.test(h)) return false;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false;
+  return true;
+}
 function _brgReadSharedTunnel() {
   const home = process.env.USERPROFILE || process.env.HOME || "";
   if (!home) return null;
@@ -5228,8 +5242,12 @@ function _brgReadSharedTunnel() {
   for (const p of candidates) {
     try {
       const c = JSON.parse(fs.readFileSync(p, "utf8")) || {};
-      const url = String(c.url || c.relayUrl || "").trim();
-      if (!url || !/^https?:\/\//i.test(url)) continue;
+      // 权威公网源: relayUrl(仅公网活跃时写) > primaryUrl/url(回落 localhost) > publicUrl
+      let url = "";
+      for (const cand of [c.relayUrl, c.publicUrl, c.primaryUrl, c.url]) {
+        if (_brgIsPublicUrl(cand)) { url = String(cand).trim(); break; }
+      }
+      if (!url) continue;
       let ageMs = Number.isFinite(c.ageMs) ? c.ageMs : NaN;
       if (!Number.isFinite(ageMs) && c.updated) {
         const t = Date.parse(c.updated);
