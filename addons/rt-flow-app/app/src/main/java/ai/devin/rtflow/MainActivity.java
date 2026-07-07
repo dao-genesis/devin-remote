@@ -1789,9 +1789,14 @@ public class MainActivity extends AppCompatActivity {
                 String email = a.optString("email", id);
                 // 标签标题优先显示该账号最活跃对话名 + 实时状态点 (运行/卡顿/结束)
                 String emailLc = email.toLowerCase();
+                // 最左账号池序号【N】(切号板块列表同序·紧凑小占位)
+                Integer no = a.has("no") ? a.optInt("no", 0) : null;
+                if (no == null || no <= 0) no = sAcctNo.get(id.toLowerCase());
+                if (no == null) no = sAcctNo.get(emailLc);
+                String nop = (no != null && no > 0) ? (no + "\u00B7") : "";
                 String money = sTabDollars.get(id);
                 if (money == null) money = sTabDollars.get(emailLc);
-                String pre = (money != null && !money.isEmpty()) ? money + " " : "";
+                String pre = nop + ((money != null && !money.isEmpty()) ? money + " " : "");
                 String[] sta = sTabStatus.get(id);
                 if (sta == null) sta = sTabStatus.get(email);
                 if (sta == null) sta = sTabStatus.get(emailLc);
@@ -2038,6 +2043,35 @@ public class MainActivity extends AppCompatActivity {
         try { sw.evaluateJavascript("try{forceRefreshNow(" + arg + ")}catch(e){}", null); } catch (Exception ignored) {}
     }
 
+    // ── 账号池序号表(id/email(小写) → 切号板块列表序号 i+1): 页签最左显示【N】小号序号 ──
+    private final java.util.Map<String, Integer> sAcctNo = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 从切号引擎的账号池(localStorage rtflow.accounts)同步 账号→序号 表 (随心跳每~6s一次·变化才重绘)。 */
+    private void refreshAcctNos() {
+        WebView sw = switchWeb();
+        if (sw == null) return;
+        String js = "(function(){try{var a=JSON.parse(localStorage.getItem('rtflow.accounts')||'[]');var o={};"
+            + "for(var i=0;i<a.length;i++){var k=(a[i].id||'').toLowerCase(),e=(a[i].email||'').toLowerCase();"
+            + "if(k)o[k]=i+1;if(e)o[e]=i+1;}return JSON.stringify(o);}catch(x){return '{}';}})()";
+        try {
+            sw.evaluateJavascript(js, val -> {
+                try {
+                    if (val == null || val.length() < 4) return;
+                    String s = val;
+                    if (s.startsWith("\"")) s = new org.json.JSONTokener(s).nextValue().toString();
+                    JSONObject o = new JSONObject(s);
+                    boolean ch = false;
+                    java.util.Iterator<String> it = o.keys();
+                    while (it.hasNext()) {
+                        String k = it.next(); int n = o.optInt(k, 0); if (n <= 0) continue;
+                        Integer old = sAcctNo.put(k, n);
+                        if (old == null || old != n) ch = true;
+                    }
+                    if (ch) scheduleRenderTabStrip();
+                } catch (Exception ignored) {}
+            });
+        } catch (Exception ignored) {}
+    }
+
     /** 把「当前已打开为标签的账号集合」推给切号引擎 → 这些号即使切号板块在后台也保持实时识别(状态+额度)，
      *  确保顶部标签「不管有没有对话都实时显示金额」。只涉及用户正开着的少数号·轻量, 全量122号轮仍受门控省网络。 */
     private void pushOpenAcctsToSwitch() {
@@ -2055,6 +2089,7 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception ignored) {}
         }
         try { sw.evaluateJavascript("try{setOpenAccts(" + arr.toString() + ")}catch(e){}", null); } catch (Exception ignored) {}
+        refreshAcctNos();
     }
 
     // ── 顶部页签美金表持久化: 进程被杀/重建/标签恢复后即时回显上次金额, 不必等引擎重探 ──────────
@@ -3670,33 +3705,55 @@ public class MainActivity extends AppCompatActivity {
             + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
-    // 退格根治(源级, 非看门狗): 双删真根因 = 同一次退格被处理两遍 ——
-    //   ① 浏览器默认动作删一字(IME 直改编辑缓冲, DOM 即刻少一字);
-    //   ② Slate 安卓输入管理器在 beforeinput(deleteContentBackward) 里又调度一次延迟
-    //     deleteBackward(节流窗 ~1s 后 flush), 以陈旧快照再删一字 → 「先删一字, ~900ms 后又吞一字」。
-    //   (AVD+真 Gboard 实验确证: 捕获层对 Slate 的 beforeinput 做 stopImmediatePropagation、
-    //    只留默认动作 → 单删且模型经 MutationObserver 正常归账, 后续键入位置正确。)
-    //   修法 = 捕获层拦下 Slate 对该事件的处理(不 preventDefault, 默认删除照常发生),
-    //   Slate 的 MutationObserver 把这次 DOM 变化归账进模型 —— 一次退格只发生一次删除,
-    //   错误本身从触发链上消失, 无需任何事后补字/光标恢复。
-    //   另: 紧跟退格(<150ms)的 IME 向前删除一律拦下(手机键盘无 Del 键, 必为输入法拆单误发)。
-    //   仅处理系统真实事件(isTrusted), 拼音/组合输入中(isComposing)不介入。幂等(window.__rtBsGuard)。
+    // 退格根治 v2(源级·AVD 实验矩阵定谳):
+    //   实验事实(CDP 可信事件·真实 app.devin.ai Slate 编辑器):
+    //   · 不拦: 一次退格删两字(默认动作删一字 + Slate 归账再删一字) —— 原始双删病根;
+    //   · 只 preventDefault(掐默认动作): Slate 在安卓上依赖 DOM 变更归账 → 一个字都不删;
+    //   · 只 stopImmediatePropagation(拦 Slate·留默认动作): 恒单删, 但 Slate 对这次
+    //     "盲区变更"做整体重排, 把光标甩到整段末尾(v0.37.168 回归: 光标跳末尾/键盘收回)。
+    //   ⇒ 定式 = sIP 保单删(删除只有一个来源=默认动作), 加「光标归位」补全 Slate 盲区:
+    //     退格前记住 光标应在处(off-1); Slate 重排若把选区甩到末尾, selectionchange 即刻归位;
+    //     若归位前又来一次退格(连退), 在默认动作前先归位再放行 → 连退恒删对位。
+    //     用户主动点击(pointerdown)/其它输入即撤销归位窗(1.5s), 不干扰正常操作。
+    //   另: React removeChild/insertBefore NotFoundError 兜底(输入法/翻译类外改 DOM 触发的
+    //   整页白屏崩溃防线, 与 Google Translate 崩 React 同型)。幂等(window.__rtBsGuard2)。
     static void installBackspaceGuard(WebView w) {
         if (w == null) return;
-        String js = "(function(){if(window.__rtBsGuard)return;window.__rtBsGuard=1;"
-            + "var lastBk=0;"
+        String js = "(function(){if(window.__rtBsGuard2)return;window.__rtBsGuard2=1;"
+            + "if(!window.__rtDomSafe){window.__rtDomSafe=1;"
+            + "var rc=Node.prototype.removeChild,ib=Node.prototype.insertBefore;"
+            + "Node.prototype.removeChild=function(c){try{return rc.apply(this,arguments);}catch(e){if(e&&e.name==='NotFoundError')return c;throw e;}};"
+            + "Node.prototype.insertBefore=function(n,r){try{return ib.apply(this,arguments);}catch(e){if(e&&e.name==='NotFoundError')return this.appendChild(n);throw e;}};}"
+            + "var keep=null;"
             + "function sed(t){return t&&t.closest?t.closest('[data-slate-editor=true],[contenteditable=true],[contenteditable=\"\"]'):null;}"
+            + "function skip(p){return p&&p.closest&&p.closest('[data-slate-placeholder],[contenteditable=false]');}"
+            + "function offOf(ed){var s=getSelection();if(!s.rangeCount||!ed.contains(s.anchorNode))return -1;"
+            + "var r=document.createRange();r.selectNodeContents(ed);r.setEnd(s.anchorNode,s.anchorOffset);return r.toString().length;}"
+            + "function lenOf(ed){var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n,L=0;"
+            + "while((n=w.nextNode())){if(skip(n.parentElement))continue;L+=n.textContent.length;}return L;}"
+            + "function setOff(ed,off){var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n,need=off;"
+            + "while((n=w.nextNode())){if(skip(n.parentElement))continue;"
+            + "if(n.textContent.length>=need){try{var s=getSelection(),r=document.createRange();r.setStart(n,need);r.collapse(true);s.removeAllRanges();s.addRange(r);}catch(e){}return true;}"
+            + "need-=n.textContent.length;}return false;}"
+            + "document.addEventListener('pointerdown',function(){keep=null;},true);"
             + "document.addEventListener('beforeinput',function(e){"
             + "if(!e.isTrusted)return;"
-            + "var ed=sed(e.target);if(!ed)return;"
-            + "var now=Date.now();"
-            + "if(e.inputType==='deleteContentBackward'){lastBk=now;"
-            + "if(e.isComposing)return;"
+            + "var ed=sed(e.target);if(!ed){keep=null;return;}"
+            + "if(e.inputType==='deleteContentBackward'&&!e.isComposing){"
+            + "var L=lenOf(ed),o=offOf(ed);"
+            + "if(keep&&keep.ed===ed&&o===L&&keep.off<L){setOff(ed,keep.off);o=keep.off;}"
             + "e.stopImmediatePropagation();"
+            + "keep=(o>0)?{ed:ed,off:o-1,until:Date.now()+1500}:null;"
             + "return;}"
-            + "if(e.inputType==='deleteContentForward'&&(now-lastBk)<150){"
-            + "e.preventDefault();e.stopImmediatePropagation();return;}"
-            + "},true);})();";
+            + "keep=null;"
+            + "},true);"
+            + "document.addEventListener('selectionchange',function(){"
+            + "if(!keep)return;"
+            + "if(Date.now()>keep.until){keep=null;return;}"
+            + "var ed=keep.ed;if(!ed.isConnected){keep=null;return;}"
+            + "var L=lenOf(ed),o=offOf(ed);"
+            + "if(o===L&&keep.off<L)setOff(ed,keep.off);"
+            + "});})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // 语音输入根治(源级, 不再零宽打底): 空 Slate 编辑器首段语音只出一字即卡断的真根因,
@@ -3707,10 +3764,13 @@ public class MainActivity extends AppCompatActivity {
     //   修法 = 同退格一路: 从空编辑器起始的整段组合期间, 捕获层对 Slate 的 beforeinput 做
     //   stopImmediatePropagation(不 preventDefault) —— 浏览器默认动作照常落字, IME 会话
     //   不被 restartInput 掐断, Slate 的 MutationObserver 把落字归账进模型; compositionend
-    //   后回归 Slate 常规处理。非组合的直敲首字(insertText)同理拦一次。幂等(window.__rtViGuard)。
+    //   后回归 Slate 常规处理。
+    //   v2: 撤除对非组合直敲首字(insertText)的拦截 —— 该拦截让每个新输入框的第一个字
+    //   都绕开 Slate 模型, 模型与 DOM 脱钩面过大(v0.37.168 崩页加频的主诱因), 且直敲
+    //   本就不经 IME 组合会话、无 restartInput 掐断问题, 无需拦。幂等(window.__rtViGuard2)。
     static void installVoiceGuard(WebView w) {
         if (w == null) return;
-        String js = "(function(){if(window.__rtViGuard)return;window.__rtViGuard=1;"
+        String js = "(function(){if(window.__rtViGuard2)return;window.__rtViGuard2=1;"
             + "function ced(t){return t&&t.closest?t.closest('[data-slate-editor=true],[contenteditable=true],[contenteditable=\"\"]'):null;}"
             // Slate 占位提示([data-slate-placeholder])也在 textContent 里 → 判空时必须跳过
             + "function empty(ed){try{var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n;"
@@ -3725,8 +3785,7 @@ public class MainActivity extends AppCompatActivity {
             + "if(!e.isTrusted)return;"
             + "var ed=ced(e.target);if(!ed)return;"
             + "var it=e.inputType||'';"
-            + "if(hold===ed&&(it==='insertCompositionText'||it==='deleteCompositionText'||it==='insertText')){e.stopImmediatePropagation();return;}"
-            + "if(it==='insertText'&&!e.isComposing&&empty(ed)){e.stopImmediatePropagation();}"
+            + "if(hold===ed&&(it==='insertCompositionText'||it==='deleteCompositionText'||(it==='insertText'&&e.isComposing))){e.stopImmediatePropagation();return;}"
             + "},true);})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
@@ -4773,7 +4832,8 @@ public class MainActivity extends AppCompatActivity {
             + ".catch(function(e){done('','');});"
             + "}catch(e){try{Native.convMdResult('" + rid + "','','');}catch(_){}}})();";
         try { daoWeb.evaluateJavascript(js, null); } catch (Exception e) { fastConvReqId = null; if (fallback != null) fallback.run(); return; }
-        main.postDelayed(() -> { if (rid.equals(fastConvReqId)) { fastConvReqId = null; Runnable fb = fastConvFallback; fastConvFallback = null; if (fb != null) fb.run(); } }, 25000);
+        // 快路径限时 9s: 取不回即让位下一级(引擎/页内提取), 不让用户长等无反馈
+        main.postDelayed(() -> { if (rid.equals(fastConvReqId)) { fastConvReqId = null; Runnable fb = fastConvFallback; fastConvFallback = null; if (fb != null) fb.run(); } }, 9000);
     }
     /** 面板快路径回灌: md 含正文 → 注入 对话MD+取数指引 两形态; 空/仅标题头 → 走下一级回退。 */
     private void onFastConvMd(String reqId, String title, String md) {
