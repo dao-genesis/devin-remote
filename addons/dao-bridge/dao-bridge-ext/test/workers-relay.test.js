@@ -151,6 +151,51 @@ function startWsServer(onText) {
     ok("RELAY_WORKER_SOURCE 协议符号完备");
   }
 
+  // T6: 时间验证 · 断线重连指数退避调度(桩 setTimeout 捕获 wait 序列, 不真等)
+  {
+    const relay = new RelayClient({ notify() {} });
+    relay.stopped = false;
+    const waits = [];
+    const realST = global.setTimeout;
+    global.setTimeout = function (fn, ms) { waits.push(ms); return { _fake: true }; };
+    try {
+      for (let i = 0; i < 8; i++) { relay._scheduleReconnect(); relay._reconnectTimer = null; }
+    } finally { global.setTimeout = realST; }
+    assert.strictEqual(waits[0], 1500, "首次退避 = 1500ms");
+    assert.strictEqual(waits[1], Math.round(1500 * 1.7), "第二次退避 = round(1500×1.7)=2550ms");
+    for (let i = 1; i < waits.length; i++) {
+      assert.ok(waits[i] >= waits[i - 1], "退避单调不减 (第" + i + "步)");
+      assert.ok(waits[i] <= 30000, "退避封顶 30000ms (第" + i + "步 " + waits[i] + ")");
+    }
+    assert.strictEqual(waits[waits.length - 1], 30000, "多次退避收敛到封顶 30000ms");
+    relay.stopped = true; const before = waits.length;
+    global.setTimeout = function (fn, ms) { waits.push(ms); return { _fake: true }; };
+    try { relay._reconnectTimer = null; relay._scheduleReconnect(); } finally { global.setTimeout = realST; }
+    assert.strictEqual(waits.length, before, "stopped=true 时不再排程");
+    ok("时间验证 · 指数退避 1500→×1.7→封顶30000 · stopped 不排程");
+  }
+
+  // T7: 时间验证 · 首连成功退避复位 1500 + 心跳启动 + stop() 清定时器无泄漏
+  {
+    const server = startWsServer(() => {});
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const port = server.address().port;
+    const relay = new RelayClient({ notify() {} });
+    relay._backoff = 9999;
+    const started = await relay.start({ relayUrl: "http://127.0.0.1:" + port, session: "s3", relayToken: "t3" });
+    assert.strictEqual(started, true, "首连成功");
+    assert.strictEqual(relay._backoff, 1500, "首连成功后退避复位为 1500ms");
+    assert.ok(relay._hb, "心跳定时器已启动");
+    relay.stop();
+    assert.strictEqual(relay._hb, null, "stop() 后心跳定时器已清 (无泄漏)");
+    assert.strictEqual(relay._reconnectTimer, null, "stop() 后重连定时器已清 (无泄漏)");
+    assert.strictEqual(relay.stopped, true, "stop() 后进入 stopped 态");
+    relay.stopped = false; relay._backoff = 1500; relay.stop();
+    assert.strictEqual(relay._reconnectTimer, null, "stop() 幂等 · 无重连残留");
+    await new Promise((r) => server.close(r));
+    ok("时间验证 · 首连复位1500 + 心跳启动 + stop()无定时器泄漏");
+  }
+
   console.log("\n workers-relay: " + passed + " passed");
   process.exit(0);
 })().catch((e) => { console.error(" FAIL", e && e.stack || e); process.exit(1); });
