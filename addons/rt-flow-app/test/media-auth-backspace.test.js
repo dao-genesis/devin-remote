@@ -58,27 +58,24 @@ ok(/beforeLength == 0 && afterLength > 0 && \(now - lastBkAt\) < 250\) return tr
 ok(/KEYCODE_FORWARD_DEL && \(now - lastBkAt\) < 250\) return true;/.test(main), "时间窗: 紧跟退格的 FORWARD_DEL 键事件被吞 (sendKeyEvent 拆单)");
 ok(/KEYCODE_DEL\) \{ lastBkAt = now; \}/.test(main), "时间窗: 退格键事件登记时刻");
 
-// ②c JS 根治 v2 (源级·AVD 实验矩阵定谳):
-//     不拦=双删; 只 preventDefault=零删; 只 sIP=单删但 Slate 盲区重排把光标甩到末尾。
-//     定式 = sIP 保单删 + 光标归位(退格前记 off-1; 重排甩尾即归位; 连退前先归位再放行)。
-ok(/__rtBsGuard2/.test(main), "退格根治: 幂等守卫 v2 存在");
-ok(/document\.addEventListener\('beforeinput'/.test(main), "退格根治: 捕获层 beforeinput 监听");
-ok(/if\(!e\.isTrusted\)return;/.test(main), "退格根治: 只处理系统真实事件");
-ok(/\[data-slate-editor=true\],\[contenteditable=true\]/.test(main), "退格根治: 限 Slate/contenteditable 编辑器");
-ok(/e\.inputType==='deleteContentBackward'&&!e\.isComposing/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: 针对 deleteContentBackward 且组合输入中不介入");
-ok(/deleteContentBackward'&&!e\.isComposing\)\{[\s\S]{0,200}?e\.stopImmediatePropagation\(\);/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: stopImmediatePropagation 保单删 (删除单一来源=默认动作)");
-ok(/keep=\(o>0\)\?\{ed:ed,off:o-1,until:Date\.now\(\)\+1500\}:null;/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: 退格前登记光标应在处(off-1·1.5s窗)");
-ok(/'selectionchange',function\(\)\{[\s\S]{0,300}?if\(o===L&&keep\.off<L\)setOff\(ed,keep\.off\);/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: Slate 重排甩尾 → selectionchange 即刻归位");
-ok(/if\(keep&&keep\.ed===ed&&o===L&&keep\.off<L\)\{setOff\(ed,keep\.off\);o=keep\.off;\}/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: 连退时默认动作前先归位 (连退恒删对位)");
-ok(/'pointerdown',function\(\)\{keep=null;\}/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: 用户主动点击即撤归位窗 (不干扰正常操作)");
+// ②c JS 回归本源 v3 (大道至简): JS 层对输入事件一律直通不拦 ——
+//     v2 的 sIP+光标归位使 Slate 模型与 DOM 脱钩, normalize 整体回滚把整段文字连附件
+//     一并删除 + restartInput 收键盘, 比原病灶更重。左右同删真根源在 IME 层, 已由
+//     原生 GuardedWebView 钳制根治。JS 层只保留白屏兜底(与输入无关)。
+ok(/__rtBsGuard3/.test(main), "退格回归本源: 幂等守卫 v3 存在");
+ok(!/__rtBsGuard2/.test(main), "退格回归本源: v2 sIP+归位方案已整体移除");
+const bsGuard = main.slice(main.indexOf("installBackspaceGuard(WebView w)"), main.indexOf("// 语音输入根治"));
+ok(!/beforeinput/.test(bsGuard), "退格回归本源: 退格护栏内无任何 beforeinput 拦截");
+ok(!/selectionchange/.test(bsGuard), "退格回归本源: 无 selectionchange 光标干预");
+ok(!/stopImmediatePropagation/.test(bsGuard), "退格回归本源: 无 stopImmediatePropagation");
 ok(/NotFoundError'\)return c;/.test(main.replace(/"\s*\+\s*"/g, "")), "崩页兜底: removeChild NotFoundError 防线");
 ok(/Node\.prototype\.insertBefore=function/.test(main.replace(/"\s*\+\s*"/g, "")), "崩页兜底: insertBefore NotFoundError 防线");
 // 旧看门狗(事后补字)与旧 v1 盲拦(光标跳末尾回归源)必须彻底移除
-ok(!/getTargetRanges\(\)\[0\]/.test(main), "退格根治: 旧看门狗 getTargetRanges 快照已移除");
-ok(!/setCaret\(p\.ed,p\.st\)/.test(main), "退格根治: 旧看门狗事后重定光标已移除");
-ok(!/chk\(false\);\},700\)/.test(main), "退格根治: 旧看门狗 700/1400/2100ms 三查已移除");
-ok(!/deleteContentForward'&&\(now-lastBk\)<150/.test(main.replace(/"\s*\+\s*"/g, "")), "退格根治: v1 前向删除时间窗拦截已移除 (原生 InputConnection 层已够)");
-ok(!/setComposingRegion\(int start, int end\)/.test(main), "原生 setComposingRegion 已恢复透传 (根因在 JS 层)");
+ok(!/getTargetRanges\(\)\[0\]/.test(main), "退格回归本源: 旧看门狗 getTargetRanges 快照已移除");
+ok(!/setCaret\(p\.ed,p\.st\)/.test(main), "退格回归本源: 旧看门狗事后重定光标已移除");
+ok(!/chk\(false\);\},700\)/.test(main), "退格回归本源: 旧看门狗 700/1400/2100ms 三查已移除");
+ok(!/deleteContentForward'&&\(now-lastBk\)<150/.test(main.replace(/"\s*\+\s*"/g, "")), "退格回归本源: v1 前向删除时间窗拦截已移除 (原生 InputConnection 层已够)");
+ok(!/setComposingRegion\(int start, int end\)/.test(main), "原生 setComposingRegion 已恢复透传 (退格钳制只在 deleteSurroundingText)");
 
 // ②c2 语音输入根治 (空 Slate 编辑器首段组合被 Slate 处理 → 重挂+restartInput 掐断 IME;
 //      修法 = 同退格一路: 空编辑器起始的整段组合期间拦下 Slate 的 beforeinput, 不再零宽打底)
@@ -104,7 +101,9 @@ ok(/fastPanelExtractInject\(sid, accJson, target, x, y,[\s\S]{0,120}engineRpcExt
 ok(/tryLocalBackupInject\(email, accJson, sid, target, x, y\)/.test(main), "取数统一: 本地备份秒注入仍为第一优先");
 ok(/public void deliverConvToPage\(String name, String b64\)/.test(main), "取数统一: Bridge.deliverConvToPage 原生直投");
 ok(/private void deliverConvToActivePage\(String name, String b64\)/.test(main), "取数统一: 直投当前活动标签实现");
-ok(/if\(!IS_WEB && N\.deliverConvToPage\)\{ N\.deliverConvToPage\(fn, b64\); return; \}/.test(daopan), "取数统一: daopan 传到当前页 APK 端原生直投");
+ok(/public void deliverConvFilesToPage\(String filesJson\)/.test(main), "取数统一: Bridge.deliverConvFilesToPage 两形态直投");
+ok(/if\(!IS_WEB && N\.deliverConvFilesToPage\)\{ N\.deliverConvFilesToPage\(JSON\.stringify\(files\)\); return; \}/.test(daopan), "取数统一: daopan 传到当前页 = 对话MD+取数指引两形态直投");
+ok(/Native\.accessGuideMd\(JSON\.stringify\(it\.acc\), it\.sid/.test(daopan), "取数统一: 传到当前页同投取数指引 (提取失败亦至少投指引)");
 
 // ②d 媒体鉴权本源补齐: 非账号标签从页面登录态采收 auth
 ok(/private void harvestPageAuth\(WebView v, Tab tab, String pageUrl\)/.test(main), "harvestPageAuth 存在");

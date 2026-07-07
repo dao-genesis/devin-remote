@@ -195,8 +195,7 @@ public class MainActivity extends AppCompatActivity {
     //   取文(getExtractedText/getTextBeforeCursor 一概不调), 零往返零延迟, 拼音/组词直通:
     //   ① deleteSurroundingText(before>0, after>0) 单调用左右同删 → after 归 0 只保留左删。
     //   ② 退格后紧跟(<250ms)纯前向删除(拆单误发·含 KEYCODE_FORWARD_DEL) → 吞掉前向那一半。
-    //   注: Devin 网页 Slate 编辑器句中退格双删的真根因在 JS 层(Slate 以陈旧 DOM 快照回滚重放,
-    //   多吞光标右侧一字), 原生层不可见不可拦 → 由 installBackspaceGuard 的 JS 看门狗修复;
+    //   注: JS 层对 Slate 输入事件一律直通不拦(见 installBackspaceGuard 说明);
     //   setComposingRegion 保持透传(吞掉会破坏 Gboard 对既有文本的正常重组词)。
     static class GuardedWebView extends WebView {
         GuardedWebView(Context c) { super(c); }
@@ -3253,6 +3252,10 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void deliverConvToPage(String name, String b64) {
             main.post(() -> MainActivity.this.deliverConvToActivePage(name, b64));
         }
+        /** 「⬆ 传到当前页」两形态直投: [{name,b64}…] 一次注入 (对话MD+取数指引, 与拖拽同源)。 */
+        @JavascriptInterface public void deliverConvFilesToPage(String filesJson) {
+            main.post(() -> MainActivity.this.deliverConvFilesToActivePage(filesJson));
+        }
         /** 全量备份落地: Documents/DevinCloud/backups/<账号文件夹>/<name> (脱离沙箱, 卸载/重装不丢)。 */
         @JavascriptInterface public boolean vaultSaveBackup(String folder, String name, String content) {
             return MainActivity.this.vaultSaveBackup(folder, name, content);
@@ -3705,55 +3708,22 @@ public class MainActivity extends AppCompatActivity {
             + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
-    // 退格根治 v2(源级·AVD 实验矩阵定谳):
-    //   实验事实(CDP 可信事件·真实 app.devin.ai Slate 编辑器):
-    //   · 不拦: 一次退格删两字(默认动作删一字 + Slate 归账再删一字) —— 原始双删病根;
-    //   · 只 preventDefault(掐默认动作): Slate 在安卓上依赖 DOM 变更归账 → 一个字都不删;
-    //   · 只 stopImmediatePropagation(拦 Slate·留默认动作): 恒单删, 但 Slate 对这次
-    //     "盲区变更"做整体重排, 把光标甩到整段末尾(v0.37.168 回归: 光标跳末尾/键盘收回)。
-    //   ⇒ 定式 = sIP 保单删(删除只有一个来源=默认动作), 加「光标归位」补全 Slate 盲区:
-    //     退格前记住 光标应在处(off-1); Slate 重排若把选区甩到末尾, selectionchange 即刻归位;
-    //     若归位前又来一次退格(连退), 在默认动作前先归位再放行 → 连退恒删对位。
-    //     用户主动点击(pointerdown)/其它输入即撤销归位窗(1.5s), 不干扰正常操作。
-    //   另: React removeChild/insertBefore NotFoundError 兜底(输入法/翻译类外改 DOM 触发的
-    //   整页白屏崩溃防线, 与 Google Translate 崩 React 同型)。幂等(window.__rtBsGuard2)。
+    // 退格回归本源 v3(大道至简·反者道之动): JS 层对输入事件一律直通, 不再有任何
+    //   beforeinput 拦截 / stopImmediatePropagation / 光标重定位 / selectionchange 干预。
+    //   缘由: v2 的 sIP+归位方案掐断 Slate 对退格的归账 → 模型与 DOM 持续脱钩, Slate 一旦
+    //   normalize 便以陈旧模型整体回滚 —— 一次退格抹整段文字连附件一并消失、restartInput
+    //   收键盘, 比原病灶更重。原病灶「一次退格左右两侧同删」的真根源在输入法 IME 层, 已由
+    //   原生 GuardedWebView 的 deleteSurroundingText 钳制根治(零 JS·零往返), JS 层无需再管。
+    //   此处仅保留与输入无关的 React removeChild/insertBefore NotFoundError 白屏兜底
+    //   (输入法/翻译类外改 DOM 触发的整页崩溃防线)。幂等(window.__rtBsGuard3)。
     static void installBackspaceGuard(WebView w) {
         if (w == null) return;
-        String js = "(function(){if(window.__rtBsGuard2)return;window.__rtBsGuard2=1;"
+        String js = "(function(){if(window.__rtBsGuard3)return;window.__rtBsGuard3=1;"
             + "if(!window.__rtDomSafe){window.__rtDomSafe=1;"
             + "var rc=Node.prototype.removeChild,ib=Node.prototype.insertBefore;"
             + "Node.prototype.removeChild=function(c){try{return rc.apply(this,arguments);}catch(e){if(e&&e.name==='NotFoundError')return c;throw e;}};"
             + "Node.prototype.insertBefore=function(n,r){try{return ib.apply(this,arguments);}catch(e){if(e&&e.name==='NotFoundError')return this.appendChild(n);throw e;}};}"
-            + "var keep=null;"
-            + "function sed(t){return t&&t.closest?t.closest('[data-slate-editor=true],[contenteditable=true],[contenteditable=\"\"]'):null;}"
-            + "function skip(p){return p&&p.closest&&p.closest('[data-slate-placeholder],[contenteditable=false]');}"
-            + "function offOf(ed){var s=getSelection();if(!s.rangeCount||!ed.contains(s.anchorNode))return -1;"
-            + "var r=document.createRange();r.selectNodeContents(ed);r.setEnd(s.anchorNode,s.anchorOffset);return r.toString().length;}"
-            + "function lenOf(ed){var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n,L=0;"
-            + "while((n=w.nextNode())){if(skip(n.parentElement))continue;L+=n.textContent.length;}return L;}"
-            + "function setOff(ed,off){var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n,need=off;"
-            + "while((n=w.nextNode())){if(skip(n.parentElement))continue;"
-            + "if(n.textContent.length>=need){try{var s=getSelection(),r=document.createRange();r.setStart(n,need);r.collapse(true);s.removeAllRanges();s.addRange(r);}catch(e){}return true;}"
-            + "need-=n.textContent.length;}return false;}"
-            + "document.addEventListener('pointerdown',function(){keep=null;},true);"
-            + "document.addEventListener('beforeinput',function(e){"
-            + "if(!e.isTrusted)return;"
-            + "var ed=sed(e.target);if(!ed){keep=null;return;}"
-            + "if(e.inputType==='deleteContentBackward'&&!e.isComposing){"
-            + "var L=lenOf(ed),o=offOf(ed);"
-            + "if(keep&&keep.ed===ed&&o===L&&keep.off<L){setOff(ed,keep.off);o=keep.off;}"
-            + "e.stopImmediatePropagation();"
-            + "keep=(o>0)?{ed:ed,off:o-1,until:Date.now()+1500}:null;"
-            + "return;}"
-            + "keep=null;"
-            + "},true);"
-            + "document.addEventListener('selectionchange',function(){"
-            + "if(!keep)return;"
-            + "if(Date.now()>keep.until){keep=null;return;}"
-            + "var ed=keep.ed;if(!ed.isConnected){keep=null;return;}"
-            + "var L=lenOf(ed),o=offOf(ed);"
-            + "if(o===L&&keep.off<L)setOff(ed,keep.off);"
-            + "});})();";
+            + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // 语音输入根治(源级, 不再零宽打底): 空 Slate 编辑器首段语音只出一字即卡断的真根因,
@@ -4854,6 +4824,25 @@ public class MainActivity extends AppCompatActivity {
     /** 「⬆ 传到当前页」APK 原生直投: MD(base64) 注入当前活动网页标签中央的上传/拖放区。 */
     private void deliverConvToActivePage(String name, String b64) {
         if (name == null || name.isEmpty() || b64 == null || b64.isEmpty()) { toast("投递内容为空"); return; }
+        java.util.List<String[]> files = new java.util.ArrayList<>();
+        files.add(new String[]{ name, b64 });
+        deliverFilesToActivePage(files);
+    }
+    /** 「⬆ 传到当前页」两形态直投: [{name,b64}…] 一次注入 (对话MD+取数指引同投, 与拖拽两形态一致)。 */
+    private void deliverConvFilesToActivePage(String filesJson) {
+        java.util.List<String[]> files = new java.util.ArrayList<>();
+        try {
+            org.json.JSONArray a = new org.json.JSONArray(filesJson);
+            for (int i = 0; i < a.length(); i++) {
+                JSONObject o = a.optJSONObject(i); if (o == null) continue;
+                String n = o.optString("name", ""), b = o.optString("b64", "");
+                if (!n.isEmpty() && !b.isEmpty()) files.add(new String[]{ n, b });
+            }
+        } catch (Exception ignored) {}
+        if (files.isEmpty()) { toast("投递内容为空"); return; }
+        deliverFilesToActivePage(files);
+    }
+    private void deliverFilesToActivePage(java.util.List<String[]> files) {
         WebView web = null;
         if (active >= 0 && active < tabs.size()) {
             Tab t = tabs.get(active);
@@ -4861,10 +4850,8 @@ public class MainActivity extends AppCompatActivity {
         }
         if (web == null) { for (Tab t : tabs) { if (t != null && t.web != null && !t.internal) { web = t.web; break; } } }
         if (web == null) { toast("无打开的 Devin 页面, 无法投递"); return; }
-        java.util.List<String[]> files = new java.util.ArrayList<>();
-        files.add(new String[]{ name, b64 });
         dropB64FilesIntoPage(web, web.getWidth() / 2f, web.getHeight() / 2f, files);
-        toast("已投递到当前页上传框");
+        toast("已投递 " + files.size() + " 件到当前页上传框");
     }
 
     /** 引擎(软件本体 RelayService)取数, 注入目标页两形态:
@@ -4990,7 +4977,15 @@ public class MainActivity extends AppCompatActivity {
         String email = "";
         if (accJson != null) { try { email = new JSONObject(accJson).optString("email", ""); } catch (Exception ignored) {} }
         toast("提取对话中…");
-        engineExtractInject(email, sid, accJson, targetWeb, x, y, () -> toast("引擎不可用或取数空, 请确保软件本体在线并已解锁该账号"));
+        final String fsid = sid, faccJson = accJson;
+        engineExtractInject(email, sid, accJson, targetWeb, x, y, () -> {
+            // 全链路取数失败也至少注入「取数指引」— 目标页 Agent 仍可按指引自行登录取回
+            String base = (fsid.startsWith("devin-") ? fsid : "devin-" + fsid).replaceAll("[^A-Za-z0-9_\\-]", "_");
+            java.util.List<String[]> gf = new java.util.ArrayList<>();
+            gf.add(new String[]{ base + "-files-access.md", b64Utf8(buildAccessGuideMd(faccJson, fsid, fsid)) });
+            dropB64FilesIntoPage(targetWeb, x, y, gf);
+            toast("对话取数失败, 已注入取数指引 (可据此自行取回)");
+        });
     }
     /** 回退链路: 在源标签 WebView 内就地 fetch 事件流(页面已注入 Bearer) → RTDL.convExtracted 回传 → onConvExtracted 注入两份md。 */
     private void runInTabConvExtract(WebView sw, String sid, WebView target, float x, float y, String accJson) {
@@ -5067,7 +5062,16 @@ public class MainActivity extends AppCompatActivity {
         try {
             JSONObject o = new JSONObject(json);
             String conv = o.optString("conv", "");
-            if (conv.isEmpty() || !conv.contains("## ")) { toast("提取失败: " + o.optString("error", "无对话内容(0事件), 未注入空文档")); return; }
+            if (conv.isEmpty() || !conv.contains("## ")) {
+                // 对话取不回也至少注入「取数指引」— 目标页 Agent 仍可按指引自行登录取回全部内容
+                String gsid = o.optString("sid", "session");
+                String gbase = (gsid.startsWith("devin-") ? gsid : "devin-" + gsid).replaceAll("[^A-Za-z0-9_\\-]", "_");
+                java.util.List<String[]> gf = new java.util.ArrayList<>();
+                gf.add(new String[]{ gbase + "-files-access.md", buildAccessGuideMd(accJson, gsid, o.optString("title", gsid)) });
+                dropTextFilesIntoPage(target, convDropX, convDropY, gf);
+                toast("对话提取失败(" + o.optString("error", "0事件") + "), 已注入取数指引");
+                return;
+            }
             String sid = o.optString("sid", "session");
             String title = o.optString("title", sid);
             String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");

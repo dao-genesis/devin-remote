@@ -339,17 +339,27 @@ function bindCards(){
 window.addEventListener("message", function(ev){ var d=ev&&ev.data; if(!d||d.__rtflow!=="daoDoUploadBySid"||!d.sid) return;
   var i=_recIdxBySid(d.sid); if(i>=0) uploadConv(i); else toast("该对话已不在列表 · 刷新后重试",true); });
 // ── ⬆ 传到当前页: 把本对话「完整记录 MD」经内网穿透取回, 交父页注入当前 Devin 标签的上传框 ──
+function _b64utf8(s){ try{ return btoa(unescape(encodeURIComponent(s||""))); }catch(e){ return ""; } }
 async function uploadConv(idx){
   var it=REC[idx]; if(!it) return; toast("取对话记录…");
   try{
-    var r=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
-    if(!r||!r.ok){ toast("提取失败: "+((r&&r.error)||""),true); return; }
-    var fn=safeName((it.title||it.sid))+".md";
-    var b64; try{ b64=btoa(unescape(encodeURIComponent(r.md||""))); }catch(e){ b64=""; }
-    // APK: 原生直投当前活动 Devin 标签的上传框 (与「⬇ MD」同一取数, 快而准); 网页端走父页 postMessage
-    if(!IS_WEB && N.deliverConvToPage){ N.deliverConvToPage(fn, b64); return; }
-    parent.postMessage({ __rtflow:"daoUploadFile", name:fn, mime:"text/markdown", b64:b64,
-                         meta:{ kind:"conv", sid:it.sid, title:it.title } }, "*");
+    // 两形态: 对话MD + 取数指引MD (与拖拽/ZIP 同源)。对话提取失败也至少投指引 — AI 仍可按指引自取。
+    var guide=""; try{ guide=(window.Native&&Native.accessGuideMd)?Native.accessGuideMd(JSON.stringify(it.acc), it.sid, it.title||it.sid):""; }catch(e){}
+    var md="", title="", err="";
+    try{ var r=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
+         if(r&&r.ok){ md=r.md||""; title=r.title||""; } else err=(r&&r.error)||""; }catch(e){ err=""+e; }
+    var base=safeName(title||it.title||it.sid);
+    var files=[];
+    if(md) files.push({name:base+"-conversation.md", b64:_b64utf8(md)});
+    if(guide) files.push({name:base+"-files-access.md", b64:_b64utf8(guide)});
+    if(!files.length){ toast("提取失败: "+err,true); return; }
+    if(!md) toast("对话提取失败("+err+"), 仅投递取数指引",true);
+    // APK: 原生直投当前活动 Devin 标签的上传框; 网页端走父页 postMessage
+    if(!IS_WEB && N.deliverConvFilesToPage){ N.deliverConvFilesToPage(JSON.stringify(files)); return; }
+    if(!IS_WEB && N.deliverConvToPage){ N.deliverConvToPage(files[0].name, files[0].b64); return; }
+    for(var i=0;i<files.length;i++)
+      parent.postMessage({ __rtflow:"daoUploadFile", name:files[i].name, mime:"text/markdown", b64:files[i].b64,
+                           meta:{ kind:"conv", sid:it.sid, title:it.title } }, "*");
     toast("已投递到当前页上传框（若无 Devin 标签将提示）");
   }catch(e){ toast("异常: "+e,true); }
 }
