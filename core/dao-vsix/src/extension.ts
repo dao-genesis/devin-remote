@@ -2340,7 +2340,7 @@ function _refreshProxyPort(): void {
         if (idx >= PROXY_PORTS.length) {
             // 全部端口未中 → 退查 Windows 系统代理注册表(异步 exec, 不阻塞)
             try {
-                require('child_process').exec('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer', { timeout: 2500 }, (e: any, out: string) => {
+                require('child_process').exec('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer', { timeout: 2500, windowsHide: true }, (e: any, out: string) => {
                     const m = !e && out ? out.match(/ProxyServer\s+REG_SZ\s+(?:socks5?=|https?:\/\/)?(?:127\.0\.0\.1|localhost):(\d+)/i) : null;
                     finishProbe(m ? parseInt(m[1]) : 0);
                 });
@@ -4896,12 +4896,93 @@ async function bridgeVerifyCfToken(token: string): Promise<boolean> {
         req.on('error', () => resolve(false)); req.setTimeout(15000, () => { req.destroy(); resolve(false); }); req.end();
     });
 }
-// CF 登录: API Token → Global API Key → 命名隧道令牌(长 base64/JWT, 持久化供固定域名)。与独立插件 loginCloudFlare 同构。
+// CF API 请求封装(移植自独立 dao-bridge cfApiRequest) — 统一 /client/v4 + Bearer + 超时。
+function bridgeCfApiRequest(method: string, apiPath: string, token: string, body?: any): Promise<{ status: number; json?: any; text?: string; error?: string }> {
+    return new Promise((resolve) => {
+        const https = require('https');
+        const data = body ? JSON.stringify(body) : null;
+        const req = https.request({
+            hostname: 'api.cloudflare.com', path: '/client/v4' + apiPath, method,
+            headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', 'User-Agent': 'dao-vsix/' + EXT_VERSION },
+        }, (res: any) => {
+            let d = ''; res.on('data', (c: any) => d += c);
+            res.on('end', () => { try { resolve({ status: res.statusCode, json: JSON.parse(d) }); } catch { resolve({ status: res.statusCode, text: d }); } });
+        });
+        req.on('error', (e: any) => resolve({ status: 0, error: String(e && e.message) }));
+        req.setTimeout(20000, () => { req.destroy(); resolve({ status: 0, error: 'timeout' }); });
+        if (data) req.write(data); req.end();
+    });
+}
+
+// 命名隧道固定域名 — 从 named-tunnel.json 读回(供 URL 直显与重启复用)。
+function bridgeReadNamedHost(): string {
+    try { const j = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, 'named-tunnel.json'), 'utf8')); return String(j.cfHostname || j.hostname || '').trim(); } catch { return ''; }
+}
+
+// API Token → 自动开通命名隧道(固定域名) — 移植自独立 dao-bridge provisionNamedTunnel。
+//   ① 取 account ② 选 zone ③ 建/复用隧道 ④ 取 connector token ⑤ 配 ingress 指向本地端口
+//   ⑥ upsert DNS CNAME → <id>.cfargotunnel.com ⑦ 落盘 named-tunnel.json + tunnel-token(持久化)
+//   账号下无域名(zone)时: 如实返回 needDomain(API Token 仍已持久化, 加域名后重试即成)。
+async function bridgeProvisionNamedTunnel(apiToken: string, wantHostname?: string): Promise<{ ok: boolean; needDomain?: boolean; hostname?: string; tunnelId?: string; token?: string; message?: string }> {
+    let localPort = ws.port || DEFAULT_PORT;
+    try { const lp = await bridgeLeaderOriginPort(); if (lp) localPort = lp; } catch { /* 守柔 */ }
+    const acctR = await bridgeCfApiRequest('GET', '/accounts', apiToken);
+    const acct = acctR.json && acctR.json.result && acctR.json.result[0];
+    if (!acct || !acct.id) return { ok: false, message: '无法读取 Cloudflare 账号(API Token 需含 Account.Cloudflare Tunnel + Zone.DNS 权限)' };
+    const acctId = acct.id;
+    const zonesR = await bridgeCfApiRequest('GET', '/zones', apiToken);
+    const zones = (zonesR.json && zonesR.json.result) || [];
+    let zone: any = null; let hostname = String(wantHostname || '').trim().toLowerCase();
+    if (hostname) zone = zones.find((z: any) => hostname === z.name || hostname.endsWith('.' + z.name)) || null;
+    if (!zone) zone = zones.find((z: any) => z.status === 'active') || zones[0] || null;
+    if (!zone) return { ok: false, needDomain: true, message: 'API Token 有效并已保存, 但账号下没有任何域名(zone)。固定域名需绑定你自己的域名 — 请先在 Cloudflare「Add a site」添加域名后重试。当前继续用零配置快速隧道(可正常穿透)。' };
+    const hostSlug = (os.hostname() || 'dao').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'dao';
+    if (!hostname) hostname = 'dao-' + hostSlug + '.' + zone.name;
+    const tunName = 'dao-bridge-' + hostSlug;
+    let tunnelId = '';
+    const listR = await bridgeCfApiRequest('GET', '/accounts/' + acctId + '/cfd_tunnel?is_deleted=false', apiToken);
+    const existing = ((listR.json && listR.json.result) || []).find((t: any) => t.name === tunName);
+    if (existing) tunnelId = existing.id;
+    if (!tunnelId) {
+        const cr = await bridgeCfApiRequest('POST', '/accounts/' + acctId + '/cfd_tunnel', apiToken, { name: tunName, config_src: 'cloudflare' });
+        tunnelId = cr.json && cr.json.result && cr.json.result.id;
+        if (!tunnelId) return { ok: false, message: '创建隧道失败: ' + JSON.stringify((cr.json && cr.json.errors) || cr.text || '').slice(0, 180) };
+    }
+    const tkR = await bridgeCfApiRequest('GET', '/accounts/' + acctId + '/cfd_tunnel/' + tunnelId + '/token', apiToken);
+    const connToken = tkR.json && tkR.json.result;
+    if (!connToken || typeof connToken !== 'string') return { ok: false, message: '获取隧道连接令牌失败(API Token 权限不足?)' };
+    await bridgeCfApiRequest('PUT', '/accounts/' + acctId + '/cfd_tunnel/' + tunnelId + '/configurations', apiToken,
+        { config: { ingress: [{ hostname, service: 'http://127.0.0.1:' + localPort }, { service: 'http_status:404' }] } });
+    const content = tunnelId + '.cfargotunnel.com';
+    const dnsList = await bridgeCfApiRequest('GET', '/zones/' + zone.id + '/dns_records?name=' + encodeURIComponent(hostname), apiToken);
+    const rec = ((dnsList.json && dnsList.json.result) || [])[0];
+    const dnsBody = { type: 'CNAME', name: hostname, content, proxied: true, ttl: 1 };
+    if (rec) await bridgeCfApiRequest('PUT', '/zones/' + zone.id + '/dns_records/' + rec.id, apiToken, dnsBody);
+    else await bridgeCfApiRequest('POST', '/zones/' + zone.id + '/dns_records', apiToken, dnsBody);
+    try {
+        bridgeEnsureDir();
+        fs.writeFileSync(path.join(BRIDGE_DIR, 'named-tunnel.json'),
+            JSON.stringify({ cfTunnelToken: connToken, cfHostname: hostname, tunnelId, acctId, zoneId: zone.id, apiToken, savedAt: new Date().toISOString() }, null, 2), 'utf8');
+    } catch { /* 守柔 */ }
+    bridgeSaveNamedToken(connToken);
+    return { ok: true, hostname, tunnelId, token: connToken };
+}
+
+// CF 登录: API Token → 自动开通固定域名命名隧道 → Global API Key → 命名隧道令牌(长 base64/JWT)。与独立插件 loginCloudFlare 同构。
 async function bridgeCfLogin(email: string, apiKeyOrToken: string): Promise<{ ok: boolean; message: string }> {
     const token = String(apiKeyOrToken || '').trim();
     if (token && await bridgeVerifyCfToken(token)) {
         bridgeSaveCfCredentials({ email, apiToken: token, source: 'api-token', savedAt: new Date().toISOString() });
-        return { ok: true, message: 'CloudFlare API Token 验证成功' };
+        // API Token 具备 Tunnel 权限 → 自动开通固定域名命名隧道(闭环持久化), 随即以命名隧道重启上线。
+        let prov: any;
+        try { prov = await bridgeProvisionNamedTunnel(token, email && email.indexOf('.') > 0 && email.indexOf('@') < 0 ? email : ''); }
+        catch (e: any) { prov = { ok: false, message: String(e && e.message) }; }
+        if (prov && prov.ok) {
+            try { await bridgeStartTunnel(true, true); } catch { /* 守柔 */ }
+            return { ok: true, message: 'API Token 验证成功 · 已开通固定域名命名隧道 ' + prov.hostname + '(永不飘移, 正在以固定域名上线)' };
+        }
+        if (prov && prov.needDomain) return { ok: true, message: prov.message };
+        return { ok: true, message: 'API Token 验证成功且已保存, 但自动开通命名隧道未完成: ' + (prov && prov.message || '未知') + ' · 当前继续用零配置快速隧道' };
     }
     const r: any = await new Promise((resolve) => {
         const https = require('https');
@@ -5007,7 +5088,7 @@ function bridgeFindCloudflared(): string {
     //    上层却报「隧道已启动」(臆造成功)。改为按平台解析, 找不到则返回空串由调用方诚实报错。
     try {
         if (isWin) {
-            const lines = execSync('where cloudflared', { encoding: 'utf8', timeout: 5000 }).trim().split('\n');
+            const lines = execSync('where cloudflared', { encoding: 'utf8', timeout: 5000, windowsHide: true }).trim().split('\n');
             for (const l of lines) { const p = l.trim(); if (p && /\.exe$/i.test(p) && fs.existsSync(p)) return p; }
         } else {
             const p = execSync('command -v cloudflared', { encoding: 'utf8', timeout: 5000 }).trim();
@@ -5140,6 +5221,7 @@ async function bridgeStartTunnel(named: boolean, manual = false): Promise<{ ok: 
     let args: string[];
     if (named) {
         const tok = bridgeReadNamedToken();
+        if (!tok) { return { ok: false, reason: 'no-named-token' }; }
         args = ['tunnel', 'run', '--token', tok];
     } else {
         args = ['tunnel', '--url', localUrl, '--no-autoupdate'];
@@ -5151,9 +5233,9 @@ async function bridgeStartTunnel(named: boolean, manual = false): Promise<{ ok: 
     let out = 'ignore';
     try { out = fs.openSync(CF_LOG, 'a') as any; } catch {}
     try {
-        bridgeProc = spawn(cfPath, args, { stdio: ['ignore', out, out], detached: true });
+        bridgeProc = spawn(cfPath, args, { stdio: ['ignore', out, out], detached: true, windowsHide: true });
     } catch {
-        try { bridgeProc = spawn(cfPath, args, { stdio: 'ignore', detached: true }); }
+        try { bridgeProc = spawn(cfPath, args, { stdio: 'ignore', detached: true, windowsHide: true }); }
         catch { bridgeProc = null; }
     }
     // ENOENT 等 spawn 失败在 *nix 多以异步 'error' 事件呈现(pid 为空)。挂监听避免未捕获 'error' 掀翻宿主,
@@ -5166,10 +5248,23 @@ async function bridgeStartTunnel(named: boolean, manual = false): Promise<{ ok: 
     try { cfWriteBoundPort(targetPort); } catch (e161b) { /* 守柔 */ }
     _cfLastStartMs = Date.now();
     try { bridgeProc.unref(); } catch {}
-    bridgeStartUrlPoll();
+    // 命名隧道无 trycloudflare URL 可从日志读取 — 公网地址即固定域名, 直接落定并广播/反注。
+    if (named) {
+        const nh = bridgeReadNamedHost();
+        if (nh) {
+            bridgeUrl = 'https://' + nh;
+            try { bridgeSaveConnJson(); } catch { /* 守柔 */ }
+            try { bridgeWriteArtifacts(); } catch { /* 守柔 */ }
+            try { _lastBridgeReinjectSig = ''; } catch { /* 守柔 */ }
+            try { bridgeScheduleReinject('named-tunnel-up'); } catch { /* 守柔 */ }
+            try { refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ }
+        }
+    } else {
+        bridgeStartUrlPoll();
+    }
     bridgeProc.on('error', () => { bridgeProc = null; refreshDaoCloudMiddlePanel(); });
     bridgeProc.on('exit', () => { bridgeProc = null; refreshDaoCloudMiddlePanel(); });
-    return { ok: true };
+    return { ok: true, url: named ? bridgeUrl : undefined };
 }
 
 function bridgeStopTunnel(manual = false) {
@@ -5226,7 +5321,7 @@ function selfUpdateFindCli(): string {
     const finder = process.platform === 'win32' ? 'where' : 'which';
     for (const name of names) {
         try {
-            const lines = execSync(`${finder} ${name}`, { encoding: 'utf8', timeout: 5000 }).trim().split('\n');
+            const lines = execSync(`${finder} ${name}`, { encoding: 'utf8', timeout: 5000, windowsHide: true }).trim().split('\n');
             for (const l of lines) { const p = l.trim(); if (p && fs.existsSync(p)) return p; }
         } catch {}
     }
@@ -5295,7 +5390,7 @@ async function bridgeSelfUpdateCheck(): Promise<void> {
         if (!cli) { daoLoopLog('update', '自更新: 未找到 IDE CLI'); return; }
         daoLoopLog('update', `自更新: 安装 v${latVer} via ${path.basename(cli)}`);
         const { execSync } = require('child_process');
-        try { execSync(`"${cli}" --install-extension "${vsixPath}" --force`, { encoding: 'utf8', timeout: 60000 }); } catch (e: any) { daoLoopLog('update', `自更新: 安装失败 ${e.message || e}`); return; }
+        try { execSync(`"${cli}" --install-extension "${vsixPath}" --force`, { encoding: 'utf8', timeout: 60000, windowsHide: true }); } catch (e: any) { daoLoopLog('update', `自更新: 安装失败 ${e.message || e}`); return; }
         daoLoopLog('update', `自更新: v${latVer} 安装成功→等待重载`);
         vscode.window.showInformationMessage(`DAO 插件已更新到 v${latVer}（当前 v${EXT_VERSION}），重载窗口即生效。`, '立即重载', '稍后').then((c) => { if (c === '立即重载') vscode.commands.executeCommand('workbench.action.reloadWindow'); });
         try { for (const f of fs.readdirSync(SELF_UPDATE_DIR)) { if (f.endsWith('.vsix') && f !== path.basename(vsixPath)) try { fs.unlinkSync(path.join(SELF_UPDATE_DIR, f)); } catch {} } } catch {}
@@ -7028,12 +7123,15 @@ function mcpRepairLocal(){toast('修复本机 MCP 中…(自动识别运行时/�
 function mcpVerifyLocal(){toast('实测 Devin Desktop MCP 中…',true);cmd('verifyLocalMcp',{});}
 // 直装本机 MCP: 把当前 IDE(Devin Desktop 等)内部 MCP 一键直装到本账号(跳过已装/缺密钥项), 装毕自动接测。
 function mcpNeedsKey(m){try{if(m.transport==='STDIO'){var evs=m.env_variables||[];for(var i=0;i<evs.length;i++){var v=evs[i];if(typeof v==='string'){if(v.indexOf('=')<0)return true;}else if(v&&v.name&&!(v.value||v.default))return true;}return false;}return !!m.requiresOauth;}catch(e){return false;}}
-function mcpInstallLocalAll(auto){var list=(window._mcpIde||[]).map(function(i){return {i:i,m:(window._mcp||[])[i]};}).filter(function(x){return x.m&&!x.m.installed&&!mcpNeedsKey(x.m);});
-  if(!list.length){if(!auto)toast('本机 MCP 均已装到本账号(或需先配密钥)',true);return;}
-  toast('⚡ 直装本机 '+list.length+' 个 MCP 到本账号…',true);
+// 来源闸门: 默认自动直装(auto)只认 Devin Desktop 本体内 MCP(一般用户本源 IDE), 绝不全 IDE 铺开;
+//   手动「⚡ 直装」按当前选中来源(_mcpSrc, 默认亦为 Devin Desktop)。preset 无 ideSource → auto 时不裹入。
+function mcpInstallSrcOk(m,auto){var s=(m&&m.ideSource)||'';if(auto)return s==='Devin Desktop';var sel=window._mcpSrc||[];return sel.length?sel.indexOf(s)>=0:(s==='Devin Desktop');}
+function mcpInstallLocalAll(auto){var list=(window._mcpIde||[]).map(function(i){return {i:i,m:(window._mcp||[])[i]};}).filter(function(x){return x.m&&!x.m.installed&&!mcpNeedsKey(x.m)&&mcpInstallSrcOk(x.m,auto);});
+  if(!list.length){if(!auto)toast('当前来源的本机 MCP 均已装到本账号(或需先配密钥)',true);return;}
+  toast('⚡ 直装 Devin Desktop '+list.length+' 个 MCP 到本账号…',true);
   list.forEach(function(x,j){setTimeout(function(){cmd('mcpMarketInstall',{spec:mcpSpec(x.m)});},j*400);});
   setTimeout(function(){try{list.forEach(function(x){mcpProbe(x.i);});}catch(e){}},list.length*400+1500);}
-// 默认自动直装(每账号一次): MCP 板块打开时把本机 IDE MCP 自动装到当前账号, 免手点。
+// 默认自动直装(每账号一次): MCP 板块打开时把 Devin Desktop 本体内 MCP 自动装到当前账号, 免手点。
 function mcpAutoInstallLocal(){try{var em=(S.auth&&S.auth.email)||'';if(!em)return;var k='dao_mcp_autoinst_'+em;if(localStorage.getItem(k))return;localStorage.setItem(k,String(Date.now()));mcpInstallLocalAll(true);}catch(e){}}
 // MCP 工具清单: 真调 tools/list, 内联展开该 MCP 全部可用工具 (再点收起)
 function mcpTools(idx){var m=(window._mcp||[])[idx];if(!m)return;var box=document.getElementById('mcp-tools-'+idx);if(!box)return;if(box.style.display==='block'&&box.getAttribute('data-loaded')){box.style.display='none';return}box.style.display='block';box.innerHTML='<div style="font-size:11px;color:var(--muted)">tools/list 拉取中…</div>';cmd('mcpTools',{idx:idx,spec:mcpSpec(m)});}
@@ -7113,7 +7211,7 @@ function rT(tab,items,err,fallbackProxy){
     // 官网 MCP 整图给到本地: 已装(★)+ 全市场目录; 每项可「装到本账号 / +档案(批量注入) / 卸载」
     // 对齐官网: 顶部「+ 自定义 MCP」(直接装到本账号) + 搜索/筛选框 (名称/简介即时过滤)。
     window._mcp=[];window._mcpIde=[];
-    h+='<div class="br" style="margin-bottom:6px"><button class="btn sm primary" onclick="mcpAddCustom()">+ 自定义 MCP</button><button class="btn sm" onclick="mcpProbeAll()" title="逐项接测所有 MCP 连接(连通性验证)">🔍 全部接测</button><button class="btn sm" onclick="mcpRepairLocal()" title="一键修复本机 MCP: 自动识别 node 运行时与模块路径、修正命令并启用(先备份, 通用·强鲁棒)。重载窗口后生效" style="background:#b8860b;color:#fff">🔧 一键修复本机 MCP</button><button class="btn sm" onclick="mcpVerifyLocal()" title="实测使用: 真起进程 initialize+tools/list 拿真实工具数" style="background:#1a7f5a;color:#fff">🧪 实测使用</button><button class="btn sm" onclick="mcpInstallLocalAll()" title="把本机 IDE(Devin Desktop 等)内部 MCP 一键直装到本账号 — 跳过已装与缺密钥项, 装毕自动接测" style="background:#0e639c;color:#fff">⚡ 直装本机 MCP</button></div>';
+    h+='<div class="br" style="margin-bottom:6px"><button class="btn sm primary" onclick="mcpAddCustom()">+ 自定义 MCP</button><button class="btn sm" onclick="mcpProbeAll()" title="逐项接测所有 MCP 连接(连通性验证)">🔍 全部接测</button><button class="btn sm" onclick="mcpRepairLocal()" title="一键修复本机 MCP: 自动识别 node 运行时与模块路径、修正命令并启用(先备份, 通用·强鲁棒)。重载窗口后生效" style="background:#b8860b;color:#fff">🔧 一键修复本机 MCP</button><button class="btn sm" onclick="mcpVerifyLocal()" title="实测使用: 真起进程 initialize+tools/list 拿真实工具数" style="background:#1a7f5a;color:#fff">🧪 实测使用</button><button class="btn sm" onclick="mcpInstallLocalAll()" title="把 Devin Desktop(或当前选中来源)内部 MCP 一键直装到本账号 — 跳过已装与缺密钥项, 装毕自动接测" style="background:#0e639c;color:#fff">⚡ 直装 Devin Desktop MCP</button></div>';
     h+='<input id="mcpq" placeholder="🔍 搜索 MCP (名称 / 简介)" oninput="mcpFilter(this.value)" style="width:100%;margin:0 0 8px;padding:6px 8px;box-sizing:border-box;background:var(--card,#222);color:var(--fg);border:1px solid var(--border);border-radius:4px">';
     var _curG='';
     var _ideSrcs=[];items.forEach(function(x){if(x.group==='ide'&&x.source&&_ideSrcs.indexOf(x.source)<0)_ideSrcs.push(x.source);});
@@ -8469,11 +8567,26 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             case 'bridgeStartNamed': {
-                const token = await vscode.window.showInputBox({ prompt: '命名隧道 Token (cloudflared tunnel run --token)', placeHolder: 'eyJ...' });
+                // 已开通(provision 落盘 tunnel-token)则直接以固定域名启动; 未开通再提示手搓令牌。
+                let token = bridgeReadNamedToken();
+                if (!token) {
+                    const cred = bridgeLoadCfCredentials();
+                    if (cred && cred.apiToken) {
+                        const prov = await bridgeProvisionNamedTunnel(cred.apiToken);
+                        if (prov.ok) token = prov.token || bridgeReadNamedToken();
+                        else if (prov.message) vscode.window.showWarningMessage('命名隧道: ' + prov.message);
+                    }
+                }
+                if (!token) {
+                    token = await vscode.window.showInputBox({ prompt: '命名隧道 Token (cloudflared tunnel run --token)', placeHolder: 'eyJ...' }) || '';
+                    if (token) bridgeSaveNamedToken(token);
+                }
                 if (token) {
-                    bridgeSaveNamedToken(token);
-                    await bridgeStartTunnel(true, true);
-                    refreshReply({ type: 'actionResult', command: 'bridgeStartNamed', ok: true });
+                    const r = await bridgeStartTunnel(true, true);
+                    vscode.window.showInformationMessage(r.ok ? ('命名隧道已启动' + (bridgeReadNamedHost() ? (' · 固定域名 https://' + bridgeReadNamedHost()) : '')) : ('命名隧道启动失败: ' + (r.reason || '未知')));
+                    refreshReply({ type: 'actionResult', command: 'bridgeStartNamed', ok: r.ok });
+                } else {
+                    refreshReply({ type: 'actionResult', command: 'bridgeStartNamed', ok: false });
                 }
                 break;
             }
@@ -10169,7 +10282,7 @@ try:
 except: pass`;
             fs.writeFileSync(tmpScript, pyCode, 'utf8');
             const { execFileSync } = require('child_process') as typeof import('child_process');
-            const result = execFileSync('python', [tmpScript], { encoding: 'utf8', timeout: 5000 });
+            const result = execFileSync('python', [tmpScript], { encoding: 'utf8', timeout: 5000, windowsHide: true });
             if (result) {
                 const parsed = JSON.parse(result);
                 if (parsed.apiKey) {
@@ -11623,7 +11736,7 @@ function daoNpmGlobalRoots(): string[] {
     const home = os.homedir();
     const out: string[] = [];
     const push = (p: string) => { try { if (p && fs.existsSync(p) && out.indexOf(p) < 0) out.push(p); } catch { /* 守柔 */ } };
-    try { const r = require('child_process').execSync('npm root -g', { encoding: 'utf8', timeout: 6000 }).trim(); push(r); } catch { /* 守柔 */ }
+    try { const r = require('child_process').execSync('npm root -g', { encoding: 'utf8', timeout: 6000, windowsHide: true }).trim(); push(r); } catch { /* 守柔 */ }
     if (process.platform === 'win32') {
         push(path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'npm', 'node_modules'));
         push('C:\\Program Files\\nodejs\\node_modules');
@@ -11731,7 +11844,7 @@ function daoVerifyMcpStdio(spec: any, timeoutMs: number): Promise<{ ok: boolean;
             const se = spec.env || spec.env_variables || {};
             if (se && typeof se === 'object') for (const k of Object.keys(se)) env[k] = String(se[k] != null ? se[k] : '');
             const cp = require('child_process');
-            const p = cp.spawn(cmd, args, { env });
+            const p = cp.spawn(cmd, args, { env, windowsHide: true });
             let buf = ''; let done = false;
             const fin = (r: any) => { if (done) return; done = true; try { p.kill(); } catch { /* 守柔 */ } resolve(r); };
             p.stdout.on('data', (d: Buffer) => {
