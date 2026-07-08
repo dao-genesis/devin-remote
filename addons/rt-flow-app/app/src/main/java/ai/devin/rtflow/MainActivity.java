@@ -187,17 +187,17 @@ public class MainActivity extends AppCompatActivity {
         String orgId = "";          // 该标签绑定账号的 org id
     }
 
-    // 退格根治(原生 InputConnection 层·轻量版): 部分输入法按一次退格会同时删除光标左右两侧字符。
-    //   这类删除由 IME 直改编辑缓冲, 不经可取消的 JS beforeinput 事件, 只能在原生层夹断。全程无同步
-    //   取文(getExtractedText/getTextBeforeCursor 一概不调), 零往返零延迟, 拼音/组词直通:
-    //   ① deleteSurroundingText(before>0, after>0) 单调用左右同删 → after 归 0 只保留左删。
-    //   ② 退格后紧跟(<250ms)纯前向删除(拆单误发·含 KEYCODE_FORWARD_DEL) → 吞掉前向那一半。
-    //   注: JS 层对 Slate 输入事件一律直通不拦(见 installBackspaceGuard 说明);
-    //   setComposingRegion 保持透传(吞掉会破坏 Gboard 对既有文本的正常重组词)。
+    // 退格「左右同删」正解在 JS 层(见 installBackspaceGuard): AVD+受控测试输入法全链路实证,
+    //   IME 发出的从来都是干净的 deleteSurroundingText(1,0) —— 原生层看不到任何前向删除。
+    //   双删发生在页面内: Chromium 把删除落为不可取消的 beforeinput(deleteContentBackward)
+    //   并直改 DOM, Slate 的 Android 路径既经 MutationObserver 对账收编了这次 DOM 变更,
+    //   又把 beforeinput 调度成一次模型删除 → 同一记退格被记账两次, 第二刀落在光标右侧。
+    //   历代原生钳制(after 归 0/吞前向删/restartInput 对账)全部建立在错误假说上, 已撤除;
+    //   restartInput 反而掐断组合会话·收键盘, 正是 v8.1「彻底退化」之源。
     // UA 保持真实 Android 移动端(仅去 "; wv" WebView 标记贴近真浏览器)。Slate 的 Android 输入路径
     //   (composition/MutationObserver 协同)正是为移动 IME 设计的: 伪装桌面 UA 会让 Slate 走
     //   preventDefault+beforeinput 桌面路径, 与 Gboard 组词直改缓冲彻底脱节 → 打字错位丢字、
-    //   长按退格无效、主线程秒级长任务(实测 AVD 复现)。IME 左右同删由下方原生钳制兜底即可。
+    //   长按退格无效、主线程秒级长任务(实测 AVD 复现)。
     static String sanitizedUa(String ua) {
         if (ua == null) return null;
         return ua.replace("; wv", "");
@@ -212,29 +212,13 @@ public class MainActivity extends AppCompatActivity {
     //   继续发来的全量累积串若以孤儿前缀开头 → 只把「余量」交给编辑器(孤儿已在文中, 不删不动,
     //   组合区只承载余量)。全程 IME 管道内操作, 零 JS·零合成事件·不触碰 Slate、不删已落文字
     //   (删空会再次触发 Slate 空/非空重挂 → restartInput 死循环, 实测验证)。
-    // 持久化补全(退格钳制"几分钟后失效"之根): 每当本层吞掉/改写一次 IME 操作(钳左右同删、
-    //   吞前向删、剥孤儿前缀), IME 自身的文本账本即与编辑器真相脱钩; Gboard 一类输入法后续
-    //   按陈账计算组合区/删除区 → 越删越乱(表象=左右同删复发·乱退格), 直到整页刷新(restartInput)
-    //   才校正。修法 = 谁改写谁对账: 每次改写后在组合安全点(无活跃组合时)restartInput 让 IME
-    //   重读编辑器真相; 无会话可掐, 不收键盘, 账本即时归真 → 钳制永续。
+    //   注: 这里只应对 Chromium 自发的 restartInput; 本层自身绝不调 restartInput(见上)。
+    //   删除类操作(deleteSurroundingText/sendKeyEvent 等)一律原样透传。
     static class GuardedWebView extends WebView {
         GuardedWebView(Context c) { super(c); }
         String activeComp = null;   // 当前 IC 组合区内的(已剥前缀的)文本
         String orphanPrefix = "";   // 历次 restartInput 累计被就地提交的孤儿前缀
         long orphanAt = 0;          // 孤儿记账时刻(账本只在紧随重建的短窗内有效)
-        boolean icAltered = false;  // 本层改写过 IME 操作 → IME 账本已脱钩, 待对账
-        void resyncIme() {          // 组合安全点对账: 无活跃组合才 restartInput(不掐会话·不收键盘)
-            post(() -> {
-                if (activeComp != null && !activeComp.isEmpty()) return;
-                if (!icAltered) return;
-                icAltered = false;
-                try {
-                    android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager)
-                        getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-                    if (imm != null) imm.restartInput(GuardedWebView.this);
-                } catch (Exception ignored) {}
-            });
-        }
         @Override public android.view.inputmethod.InputConnection onCreateInputConnection(EditorInfo outAttrs) {
             android.view.inputmethod.InputConnection ic = super.onCreateInputConnection(outAttrs);
             if (ic == null) return null;
@@ -247,7 +231,7 @@ public class MainActivity extends AppCompatActivity {
                         // 注: 不可经 getTextBeforeCursor 验孤儿落地 —— restartInput 后渲染进程
                         // 异步, 此刻读到的是陈文本(实测), 会误弃账。时效窗 + 前缀双条件已足够安全。
                         boolean fresh = System.currentTimeMillis() - orphanAt < 5000;   // 只救紧随重建的组合流
-                        if (fresh && s.startsWith(orphanPrefix)) { s = s.substring(orphanPrefix.length()); icAltered = true; }
+                        if (fresh && s.startsWith(orphanPrefix)) { s = s.substring(orphanPrefix.length()); }
                         else orphanPrefix = "";   // 过期/非前缀 → 立即弃账, 绝不误剥后续输入
                     }
                     return s;
@@ -260,46 +244,11 @@ public class MainActivity extends AppCompatActivity {
                 @Override public boolean commitText(CharSequence text, int newCursorPosition) {
                     String s = strip(text);
                     activeComp = null; orphanPrefix = "";
-                    boolean r = super.commitText(s, newCursorPosition);
-                    resyncIme();
-                    return r;
+                    return super.commitText(s, newCursorPosition);
                 }
                 @Override public boolean finishComposingText() {
                     activeComp = null; orphanPrefix = "";
-                    boolean r = super.finishComposingText();
-                    resyncIme();
-                    return r;
-                }
-                // 左右同删的原生钳制(单一真源): 手机软键盘没有 Del 键 → IME 经 InputConnection 发出的
-                // 一切「前向删除」都不是用户意图, 只可能是输入法把一次退格拆单/合并误发的产物。
-                // ① 同一调用左右同删(before>0 && after>0) → 只保留左删;
-                // ② 纯前向删除(before==0 && after>0) → 无条件吞掉(不再限 250ms 时间窗:
-                //    拆单顺序可能是「先前向后退格」, 时间窗对这种倒序无效, 正是左右同删屡修不绝之因);
-                // ③ IME 经 sendKeyEvent 模拟的 FORWARD_DEL 同理吞掉(实体外接键盘的 Del 走
-                //    Activity dispatchKeyEvent, 不经 InputConnection, 不受影响)。
-                @Override public boolean deleteSurroundingText(int beforeLength, int afterLength) {
-                    if (afterLength > 0) {
-                        icAltered = true;
-                        if (beforeLength <= 0) { resyncIme(); return true; }
-                        afterLength = 0;
-                    }
-                    boolean r = super.deleteSurroundingText(beforeLength, afterLength);
-                    if (icAltered) resyncIme();
-                    return r;
-                }
-                @Override public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
-                    if (afterLength > 0) {
-                        icAltered = true;
-                        if (beforeLength <= 0) { resyncIme(); return true; }
-                        afterLength = 0;
-                    }
-                    boolean r = super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
-                    if (icAltered) resyncIme();
-                    return r;
-                }
-                @Override public boolean sendKeyEvent(android.view.KeyEvent event) {
-                    if (event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_FORWARD_DEL) { icAltered = true; resyncIme(); return true; }
-                    return super.sendKeyEvent(event);
+                    return super.finishComposingText();
                 }
             };
         }
@@ -3780,17 +3729,25 @@ public class MainActivity extends AppCompatActivity {
             + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
-    // 退格回归本源 v3(大道至简·反者道之动): JS 层对输入事件一律直通, 不再有任何
-    //   beforeinput 拦截 / stopImmediatePropagation / 光标重定位 / selectionchange 干预。
-    //   缘由: v2 的 sIP+归位方案掐断 Slate 对退格的归账 → 模型与 DOM 持续脱钩, Slate 一旦
-    //   normalize 便以陈旧模型整体回滚 —— 一次退格抹整段文字连附件一并消失、restartInput
-    //   收键盘, 比原病灶更重。原病灶「一次退格左右两侧同删」的真根源在输入法 IME 层, 已由
-    //   原生 GuardedWebView 的 deleteSurroundingText 钳制根治(零 JS·零往返), JS 层无需再管。
-    //   此处仅保留与输入无关的 React removeChild/insertBefore NotFoundError 白屏兜底
-    //   (输入法/翻译类外改 DOM 触发的整页崩溃防线)。幂等(window.__rtBsGuard3)。
+    // 退格根治 v4(AVD+受控测试输入法+CDP 全链路实证的唯一真根源): 一次退格左右两侧同删
+    //   = Slate Android 路径对同一记删除的「双重记账」。链路: IME 发 deleteSurroundingText(1,0)
+    //   → Chromium 落为不可取消的 beforeinput(deleteContentBackward) 并直改 DOM(删左侧字符)
+    //   → Slate 的 MutationObserver 对账把这次 DOM 变更收编进模型(第一次记账·正确)
+    //   → Slate 的 beforeinput 处理器又调度一次模型删除(第二次记账) → 第二刀落在光标右侧。
+    //   修法(最小干预): document 捕获阶段对 deleteContentBackward/Forward 一律
+    //   stopImmediatePropagation —— 浏览器原生 DOM 删除照常发生, Slate 经 MutationObserver
+    //   对账收编(单次·正确), 只是不再收到 beforeinput、不再重复调度模型删除。
+    //   AVD 实测: 中英文提交/拼音组合/连续退格/中段退格全部单删且模型与 DOM 一致。
+    //   (v2 之败在于同时拦 input+光标归位, 掐断了 MutationObserver 对账; 此处只拦 beforeinput,
+    //   对账链路完整保留。)另保留 React removeChild/insertBefore NotFoundError 白屏兜底。
+    //   幂等(window.__rtBsGuard4)。
     static void installBackspaceGuard(WebView w) {
         if (w == null) return;
-        String js = "(function(){if(window.__rtBsGuard3)return;window.__rtBsGuard3=1;"
+        String js = "(function(){if(window.__rtBsGuard4)return;window.__rtBsGuard4=1;"
+            + "document.addEventListener('beforeinput',function(e){"
+            + "var t=e.inputType;if(t!=='deleteContentBackward'&&t!=='deleteContentForward')return;"
+            + "var a=e.target;if(!(a&&a.getAttribute&&a.getAttribute('data-slate-editor')==='true'))return;"
+            + "e.stopImmediatePropagation();},true);"
             + "if(!window.__rtDomSafe){window.__rtDomSafe=1;"
             + "var rc=Node.prototype.removeChild,ib=Node.prototype.insertBefore;"
             + "Node.prototype.removeChild=function(c){try{return rc.apply(this,arguments);}catch(e){if(e&&e.name==='NotFoundError')return c;throw e;}};"
@@ -4593,10 +4550,17 @@ public class MainActivity extends AppCompatActivity {
         try {
             Uri u = resolveOpenUri(path, uri); if (u == null) { toast("文件已不存在"); return; }
             Intent i = new Intent(Intent.ACTION_SEND);
-            i.setType((mime == null || mime.isEmpty()) ? "*/*" : mime);
+            String mt = (mime == null || mime.isEmpty()) ? "*/*" : mime;
+            i.setType(mt);
             i.putExtra(Intent.EXTRA_STREAM, u);
+            i.putExtra(Intent.EXTRA_SUBJECT, new File(path).getName());
+            // ClipData: 部分分享目标(微信/QQ 等)经 ClipData 而非 EXTRA_STREAM 取流,
+            // 且 Uri 读权限授予只对 ClipData 内的 Uri 生效 → 缺它则目标拿不到文件
+            i.setClipData(android.content.ClipData.newUri(getContentResolver(), "share", u));
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(Intent.createChooser(i, "分享到").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Intent ch = Intent.createChooser(i, "分享到");
+            ch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(ch);
         } catch (Exception e) { toast("无法分享"); }
     }
     private void openWithChooser(String path, String uri, String mime) {
