@@ -38,19 +38,35 @@ function resolveMcpPort() {
   return port;
 }
 
-// 归一·全功能公网可达: 二合一插件本体(dao-vsix)全功能 API 端口 — 由本体写入 plugin-api.json。
-//   桥把非自有路由透明反代到此端口, 令 /shell 六大板块 + /api/devin/* + /api/tools 等经单隧道直达。
+// 归一·全功能公网可达: 二合一插件本体(dao-vsix)全功能 API 端口 —— 桥把非自有路由透明反代到此端口,
+//   令 /shell 六大板块 + /api/devin/* + /api/tools 等经单隧道直达。
+// 帛书·「得一」单一权威: 端口以 **dao-conn-current.json**(本体按 epoch 选出的 leader·已裁死 pid + /api/health
+//   实探证活·端口最小者恒为 leader)为准, 而非 race-prone 的 plugin-api.json —— 后者被每个窗口(leader/follower/
+//   次账号)无条件 last-writer-wins 覆写(bridgePublishPluginApi 写 ws.port), 一个 follower(如 9922·次账号 v1.0.0)
+//   末尾落笔即把桥的反代落点劫持离开真 leader(9920) → 公网 /shell 401、/mcp 502。故权威序:
+//   dao-conn-current.json(leader) → plugin-api.json(兼容旧本体) → 9920 默认。
 let _pluginPortCache = { port: 9920, at: 0 };
-function resolvePluginPort() {
-  const now = Date.now();
-  if (now - _pluginPortCache.at < 5000) return _pluginPortCache.port;
-  let port = 9920;
+function readLeaderPluginPort() {
+  // ① leader 权威: ~/.dao/dao-conn-current.json 的 port(epoch 选举 + 健康实探的单一真相)。
+  try {
+    const cf = path.join(os.homedir(), ".dao", "dao-conn-current.json");
+    const j = JSON.parse(fs.readFileSync(cf, "utf8"));
+    const p = parseInt(j.port, 10);
+    if (p > 0 && p < 65536) return p;
+  } catch (e) { /* 守柔 · 无 leader 权威则回落 */ }
+  // ② 兼容回落: 旧本体未维护 current 时读 plugin-api.json(race-prone·仅作兜底)。
   try {
     const f = path.join(os.homedir(), ".dao", "bridge", "plugin-api.json");
     const j = JSON.parse(fs.readFileSync(f, "utf8"));
     const p = parseInt(j.port, 10);
-    if (p > 0 && p < 65536) port = p;
+    if (p > 0 && p < 65536) return p;
   } catch (e) { /* 守柔 · 缺省 9920 */ }
+  return 9920;
+}
+function resolvePluginPort() {
+  const now = Date.now();
+  if (now - _pluginPortCache.at < 5000) return _pluginPortCache.port;
+  const port = readLeaderPluginPort();
   _pluginPortCache = { port, at: now };
   return port;
 }
@@ -2628,4 +2644,4 @@ function activate(context) {
   _bridge.start().then((url) => { if (url) vscode.window.setStatusBarMessage("DAO Bridge 已打通: " + url, 8000); });
 }
 function deactivate() { try { if (_bridge) { _bridge.stopWatchdog(); try { _bridge.relay && _bridge.relay.stop(); } catch (e) {} _bridge.stop(); } } catch (e) {} }
-module.exports = { activate, deactivate, Bridge, WorkspaceServer, detectProxy, downloadCloudflared, findCloudflared, isRealCloudflared, probeCloudflared, extractCfTgz, cfAssetName, buildExecCommand, buildBootstrap, buildBootstrapSh, platformOf, WsClient, RelayClient, provisionWorkersRelay, RELAY_WORKER_SOURCE, RELAY_SCRIPT_NAME, wsEncodeFrame, WsFrameParser };
+module.exports = { activate, deactivate, Bridge, WorkspaceServer, detectProxy, downloadCloudflared, findCloudflared, isRealCloudflared, probeCloudflared, extractCfTgz, cfAssetName, buildExecCommand, buildBootstrap, buildBootstrapSh, platformOf, WsClient, RelayClient, provisionWorkersRelay, RELAY_WORKER_SOURCE, RELAY_SCRIPT_NAME, wsEncodeFrame, WsFrameParser, readLeaderPluginPort, resolvePluginPort };
