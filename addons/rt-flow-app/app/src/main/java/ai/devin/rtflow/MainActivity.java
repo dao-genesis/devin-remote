@@ -3750,34 +3750,33 @@ public class MainActivity extends AppCompatActivity {
     //   归账法: compositionend 后延时看占位是否仍在(仍在=模型确未归账), 是则把整段组合文本以
     //   合成 beforeinput(insertText) 重放给 Slate(非 trusted·本护栏不拦) → 模型落账、React 重渲,
     //   DOM 与模型合一; 占位已消(Slate 自己归了账)则不重放, 绝不双写。幂等(window.__rtViGuard3)。
+    //   v4(真机闭环回归·大道至简): 撤除对 beforeinput 的一切拦截 —— AVD 真机对照实测(有/无 v3
+    //   护栏行为完全一致)证明: 组合期把 insertCompositionText 全程吞掉, 在会火 beforeinput 的
+    //   IME(手机语音听写=一整段长组合)上让 Slate 模型全程饿着 → 占位与文字长时间重叠、文字不在
+    //   模型里无法框选、组合中途任一退格触发 normalize 以空模型整体回滚(全文归零)。三症皆此一因。
+    //   保留两件与正常行为无冲突的事: ①组合期 CSS 隐藏占位(只改样式不动 DOM·不触发 Slate 重挂,
+    //   消除重叠且不掐 IME 会话) ②compositionend 后 120ms 归账兜底(占位仍在=模型确未归账才重放,
+    //   Slate 自己归了账则绝不双写)。
     static void installVoiceGuard(WebView w) {
         if (w == null) return;
-        String js = "(function(){if(window.__rtViGuard3)return;window.__rtViGuard3=1;"
+        String js = "(function(){if(window.__rtViGuard4)return;window.__rtViGuard4=1;"
             + "function ced(t){return t&&t.closest?t.closest('[data-slate-editor=true],[contenteditable=true],[contenteditable=\"\"]'):null;}"
-            // Slate 占位提示([data-slate-placeholder])也在 textContent 里 → 判空时必须跳过
-            + "function empty(ed){try{var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n;"
-            + "while((n=w.nextNode())){var p=n.parentElement;"
-            + "if(p&&p.closest&&p.closest('[data-slate-placeholder],[contenteditable=false]'))continue;"
-            + "if(n.textContent.replace(/[\\u200B\\uFEFF]/g,'')!=='')return false;}return true;}"
-            + "catch(e){return (ed.textContent||'')==='';}}"
             + "var hold=null,buf='';"
-            + "document.addEventListener('compositionstart',function(e){var ed=ced(e.target);hold=(ed&&empty(ed))?ed:null;buf='';},true);"
+            + "function ph(ed){return ed?ed.querySelector('[data-slate-placeholder]'):null;}"
+            + "document.addEventListener('compositionstart',function(e){var ed=ced(e.target);hold=ed||null;buf='';"
+            + "var p=ph(ed);if(p)p.style.visibility='hidden';},true);"
+            + "document.addEventListener('compositionupdate',function(e){if(hold)buf=String(e.data||'');},true);"
             + "document.addEventListener('compositionend',function(e){var ed=hold;hold=null;if(!ed)return;"
+            + "var p=ph(ed);if(p)p.style.visibility='';"
             + "var txt=String(e.data!=null&&e.data!==''?e.data:buf)||'';if(!txt)return;"
             // 延时归账: 给 Slate 自身(MutationObserver)一拍归账机会; 占位仍在=模型确未归账才重放
             + "setTimeout(function(){try{"
             + "if(!ed.isConnected)return;"
-            + "if(!ed.querySelector('[data-slate-placeholder]'))return;"
+            + "if(!ph(ed))return;"
             + "var ev=new InputEvent('beforeinput',{inputType:'insertText',data:txt,bubbles:true,cancelable:true});"
             + "var tgt=(document.activeElement&&ed.contains(document.activeElement))?document.activeElement:ed;"
             + "tgt.dispatchEvent(ev);"
-            + "}catch(x){}},120);},true);"
-            + "document.addEventListener('beforeinput',function(e){"
-            + "if(!e.isTrusted)return;"
-            + "var ed=ced(e.target);if(!ed)return;"
-            + "var it=e.inputType||'';"
-            + "if(hold===ed&&(it==='insertCompositionText'||it==='deleteCompositionText'||(it==='insertText'&&e.isComposing))){if(it==='insertCompositionText')buf=String(e.data||'');e.stopImmediatePropagation();return;}"
-            + "},true);})();";
+            + "}catch(x){}},120);},true);})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // DownloadListener 收到 blob: → 让当前页 JS 取出内容回传
@@ -4813,21 +4812,32 @@ public class MainActivity extends AppCompatActivity {
     private String fastConvAccJson, fastConvSid; private Runnable fastConvFallback;
     private void fastPanelExtractInject(final String sid, final String accJson,
                                         final WebView target, final float x, final float y, final Runnable fallback) {
+        final boolean justBuilt = (daoWeb == null);
+        if (justBuilt) buildDaoPanel();   // 懒建取数载体(不上屏不可见): 没开过全服通悬浮窗时, 联网取数腿也得在
         if (daoWeb == null) { if (fallback != null) fallback.run(); return; }
         String accLit = "null";
         if (accJson != null && !accJson.isEmpty()) { try { accLit = new JSONObject(accJson).toString(); } catch (Exception ignored) {} }
         final String rid = "fc" + (++fastConvSeq);
         fastConvReqId = rid; fastConvTarget = target; fastConvX = x; fastConvY = y;
         fastConvAccJson = accJson; fastConvSid = sid; fastConvFallback = fallback;
-        String s = sid.replace("\\", "\\\\").replace("'", "\\'");
-        String js = "(function(){try{var acc=" + accLit + ";var sid='" + s + "';"
+        // exportSession 只认全形 devin-<id>; 对话页 URL(/sessions/<裸id>)提取到的是裸 id → 统一补全
+        final String sidFull = sid.startsWith("devin-") ? sid : "devin-" + sid;
+        String s = sidFull.replace("\\", "\\\\").replace("'", "\\'");
+        String js = "(function(){try{var acc=" + accLit + ";var sid='" + s + "';var tries=0;"
             + "function done(t,m){try{Native.convMdResult('" + rid + "',t||'',m||'');}catch(e){}}"
+            + "(function go(){"
+            + "if(!window.DaoCloud||!DaoCloud.exportSession){if(++tries<40){setTimeout(go,500);}else{done('','');}return;}"
             + "if(!acc||!acc.email){var R=window.REC||[];for(var i=0;i<R.length;i++){if(R[i].sid===sid||'devin-'+R[i].sid===sid||R[i].sid==='devin-'+sid){acc=R[i].acc;break;}}}"
-            + "if(!acc||!window.DaoCloud||!DaoCloud.exportSession){done('','');return;}"
+            + "if(!acc){try{var A=JSON.parse(localStorage.getItem('rtflow.accounts')||'[]');if(A.length===1)acc=A[0];}catch(e){}}"
+            + "if(!acc){done('','');return;}"
             + "DaoCloud.exportSession(acc,sid,'conversation').then(function(r){done((r&&r.title)||'',(r&&r.ok&&r.md)||'');})"
             + ".catch(function(e){done('','');});"
+            + "})();"
             + "}catch(e){try{Native.convMdResult('" + rid + "','','');}catch(_){}}})();";
-        try { daoWeb.evaluateJavascript(js, null); } catch (Exception e) { fastConvReqId = null; if (fallback != null) fallback.run(); return; }
+        final String fjs = js;
+        // 刚懒建的载体需等首次文档提交后再注入(提交前 eval 落在空白文档会丢); JS 侧自轮询 DaoCloud 就绪
+        Runnable evalRun = () -> { try { daoWeb.evaluateJavascript(fjs, null); } catch (Exception e) { if (rid.equals(fastConvReqId)) { fastConvReqId = null; Runnable fb = fastConvFallback; fastConvFallback = null; if (fb != null) fb.run(); } } };
+        if (justBuilt) main.postDelayed(evalRun, 2500); else evalRun.run();
         // 快路径限时 25s: 已是唯一联网取数腿(与↓MD同源), 给足大对话导出时间; 超时才落取数指引兜底
         main.postDelayed(() -> { if (rid.equals(fastConvReqId)) { fastConvReqId = null; Runnable fb = fastConvFallback; fastConvFallback = null; if (fb != null) fb.run(); } }, 25000);
     }

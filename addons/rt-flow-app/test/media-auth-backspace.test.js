@@ -77,20 +77,20 @@ ok(!/chk\(false\);\},700\)/.test(main), "退格回归本源: 旧看门狗 700/14
 ok(!/deleteContentForward'&&\(now-lastBk\)<150/.test(main.replace(/"\s*\+\s*"/g, "")), "退格回归本源: v1 前向删除时间窗拦截已移除 (原生 InputConnection 层已够)");
 ok(!/setComposingRegion\(int start, int end\)/.test(main), "原生 setComposingRegion 已恢复透传 (退格钳制只在 deleteSurroundingText)");
 
-// ②c2 语音输入根治 (空 Slate 编辑器首段组合被 Slate 处理 → 重挂+restartInput 掐断 IME;
-//      修法 = 同退格一路: 空编辑器起始的整段组合期间拦下 Slate 的 beforeinput, 不再零宽打底)
+// ②c2 语音输入根治 v4 (真机闭环回归·大道至简): 撤除 beforeinput 一切拦截 ——
+//      v3 组合期吞事件让 Slate 模型全程饿着 → 占位重叠/无法框选/退格全文归零 三症同因。
+//      仅保留: ①组合期 CSS 隐藏占位(不动 DOM·不触发重挂) ②compositionend 归账兜底(不双写)。
 ok(/static void installVoiceGuard\(WebView w\)/.test(main), "语音根治: installVoiceGuard 存在");
-ok(/__rtViGuard3/.test(main), "语音根治: 幂等守卫 v3 存在");
-ok(/'compositionstart',function\(e\)\{var ed=ced\(e\.target\);hold=\(ed&&empty\(ed\)\)\?ed:null;/.test(main), "语音根治: 空编辑器 compositionstart 进入拦截期");
-ok(/'compositionend',function\(e\)\{var ed=hold;hold=null;/.test(main), "语音根治: compositionend 退出拦截期");
-// v3 归账: compositionend 后延时看占位是否仍在(模型未归账) → 合成 beforeinput(insertText) 重放给 Slate
-//   (根治 v2 只拦不归账: 占位与语音文字重叠、文字不在模型里无法框选、退格触发 normalize 全文归零)
-ok(/setTimeout\(function\(\)\{try\{/.test(main) && /\[data-slate-placeholder\]'\)\)return;/.test(main), "语音根治 v3: 占位仍在才重放(已归账不双写)");
-ok(/new InputEvent\('beforeinput',\{inputType:'insertText',data:txt,bubbles:true,cancelable:true\}\)/.test(main), "语音根治 v3: 合成 beforeinput(insertText) 归账回 Slate 模型");
-ok(/if\(!e\.isTrusted\)return;/.test(main), "语音根治 v3: 合成事件(非 trusted)不被本护栏拦截");
-ok(/hold===ed&&\(it==='insertCompositionText'\|\|it==='deleteCompositionText'\|\|\(it==='insertText'&&e\.isComposing\)\)\)\{if\(it==='insertCompositionText'\)buf=String\(e\.data\|\|''\);e\.stopImmediatePropagation\(\);/.test(main), "语音根治: 拦截期内仅组合事件 stopImmediatePropagation + 缓存组合文本(供归账)");
+ok(/__rtViGuard4/.test(main), "语音根治: 幂等守卫 v4 存在");
+const viGuard = main.slice(main.indexOf("static void installVoiceGuard"), main.indexOf("// DownloadListener"));
+ok(!/stopImmediatePropagation/.test(viGuard), "语音根治 v4: 无任何 stopImmediatePropagation(组合事件对 Slate 直通)");
+ok(!/'beforeinput',function/.test(viGuard.replace(/"\s*\+\s*"/g, "")), "语音根治 v4: 不再挂 beforeinput 拦截监听");
+ok(/p\.style\.visibility='hidden'/.test(viGuard), "语音根治 v4: 组合期仅 CSS 隐藏占位(消除重叠·不掐 IME)");
+ok(/'compositionend',function\(e\)\{var ed=hold;hold=null;/.test(main), "语音根治: compositionend 归位");
+ok(/setTimeout\(function\(\)\{try\{/.test(main) && /if\(!ph\(ed\)\)return;/.test(viGuard.replace(/"\s*\+\s*"/g, "")), "语音根治: 占位仍在才重放(已归账不双写)");
+ok(/new InputEvent\('beforeinput',\{inputType:'insertText',data:txt,bubbles:true,cancelable:true\}\)/.test(main), "语音根治: 合成 beforeinput(insertText) 归账兜底");
+ok(/'compositionupdate',function\(e\)\{if\(hold\)buf=String\(e\.data\|\|''\);/.test(main), "语音根治 v4: 组合文本经 compositionupdate 缓存(供归账兜底)");
 ok(!/it==='insertText'&&!e\.isComposing/.test(main), "语音根治 v2: 非组合直敲首字拦截已撤除 (模型脱钩→崩页主诱因)");
-ok(/\[data-slate-placeholder\],\[contenteditable=false\]/.test(main), "语音根治: 判空跳过 Slate 占位提示 (placeholder 不算内容)");
 // 旧零宽打底方案(外部改写 Slate DOM → 陈旧快照诱因)必须彻底移除
 ok(!/var Z='\\\\u200B';/.test(main), "语音根治: 旧零宽字符打底已移除");
 ok(!/function schedStrip/.test(main), "语音根治: 旧去抖摘除逻辑已移除");
