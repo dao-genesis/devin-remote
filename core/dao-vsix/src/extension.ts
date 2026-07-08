@@ -4869,7 +4869,9 @@ function bridgeEnsureDir() { fs.mkdirSync(BRIDGE_DIR, { recursive: true }); }
 function cfReadUrlFromLog(): string {
     try {
         const txt = fs.readFileSync(CF_LOG, 'utf8');
-        const matches = txt.match(/https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/g);
+        // 守柔·合法主机名: 子域标签须以字母/数字起止, 不得以连字符开头(否则 DNS 恒不解析)。
+        //   曾见日志行折行/半写捕获出 `https://-perception-...` 这类畸形址被发布→公网端点永久死锁。
+        const matches = txt.match(/https:\/\/(?!api\.)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.trycloudflare\.com/g);
         if (matches && matches.length) return matches[matches.length - 1];
     } catch {}
     return '';
