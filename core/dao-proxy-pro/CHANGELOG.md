@@ -2,6 +2,11 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.343 · 根治 Windows 黑窗闪现(windowsHide 补齐)
+: `_readSystemProxy()` 的 `reg query` execSync(经 cmd.exe)、独立版 `_brgProbeLocalProxy()`
+  7 端口 `Test-NetConnection` spawnSync(一轮最多闪 7 个 powershell 窗)、`where cloudflared`
+  execSync 均缺 `windowsHide:true` → 台式机经常性黑窗弹出。全部补齐并配 stdio 静默。
+
 v9.9.342 · 内网穿透架构大修(移植 dao-bridge 核心) + ⑤ 面板归一折入复用共享隧道
 : 独立版: 把 dao-bridge 底层完整移植入 source.js —— 代理检测(7 端口探活)+注入 cloudflared
   子进程、二进制 --version 验证、断点续传、CONNECT 代理隧道下载、多镜像回退(6 路)、看门狗
