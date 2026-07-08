@@ -222,19 +222,61 @@ const webProxyHttpAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 1000
 //   多站会话各归其源、并行不悖。上限保平(超额淘汰最旧源) → 守柔不涨爆内存。
 const webProxyCookieJar = new Map<string, Map<string, string>>();
 const WEB_COOKIE_ORIGIN_MAX = 128;
+// 帛书·「善抱者不脱」: Cookie 罐落盘持久化 → 窗口/插件重载后浏览站登录态自动续接
+//   (旧病灶: 纯内存 Map, 一重载即全丢 → 用户所述「登录凭证不保存·一刷新就掉登录」)。
+const WEB_COOKIE_FILE = path.join(DAO_DIR, 'web-cookies.json');
+let _webCookieSaveTimer: any = null;
+let _webCookieLoaded = false;
+function webProxyLoadCookies(): void {
+    if (_webCookieLoaded) return;
+    _webCookieLoaded = true;
+    try {
+        const raw = fs.readFileSync(WEB_COOKIE_FILE, 'utf8');
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj === 'object') {
+            for (const origin of Object.keys(obj)) {
+                const kv = obj[origin];
+                if (!kv || typeof kv !== 'object') continue;
+                const jar = new Map<string, string>();
+                for (const k of Object.keys(kv)) { if (typeof kv[k] === 'string') jar.set(k, kv[k]); }
+                if (jar.size) webProxyCookieJar.set(origin, jar);
+            }
+        }
+    } catch { /* 守柔: 无文件/损坏即空罐起步 */ }
+}
+function webProxyPersistCookies(): void {
+    if (_webCookieSaveTimer) return;
+    _webCookieSaveTimer = setTimeout(() => {
+        _webCookieSaveTimer = null;
+        try {
+            const obj: any = {};
+            for (const [origin, jar] of webProxyCookieJar.entries()) {
+                if (!jar || !jar.size) continue;
+                const kv: any = {};
+                for (const [k, v] of jar.entries()) kv[k] = v;
+                obj[origin] = kv;
+            }
+            fs.mkdirSync(DAO_DIR, { recursive: true });
+            fs.writeFileSync(WEB_COOKIE_FILE, JSON.stringify(obj), 'utf8');
+        } catch { /* 守柔 */ }
+    }, 1500);
+}
 function webProxyCookieHeader(origin: string): string {
+    webProxyLoadCookies();
     const jar = webProxyCookieJar.get(origin);
     if (!jar || !jar.size) return '';
     return Array.from(jar.entries()).map(([k, v]) => k + '=' + v).join('; ');
 }
 function webProxyStoreCookies(origin: string, setCookie: any): void {
     if (!setCookie) return;
+    webProxyLoadCookies();
     const arr = Array.isArray(setCookie) ? setCookie : [setCookie];
     let jar = webProxyCookieJar.get(origin);
     if (!jar) {
         if (webProxyCookieJar.size >= WEB_COOKIE_ORIGIN_MAX) { const k0 = webProxyCookieJar.keys().next().value; if (k0 !== undefined) webProxyCookieJar.delete(k0); }
         jar = new Map(); webProxyCookieJar.set(origin, jar);
     }
+    let changed = false;
     for (const sc of arr) {
         const first = String(sc).split(';')[0];
         const eq = first.indexOf('=');
@@ -243,8 +285,9 @@ function webProxyStoreCookies(origin: string, setCookie: any): void {
         const val = first.slice(eq + 1).trim();
         const expired = /(?:^|;)\s*max-age\s*=\s*0(?:;|$)/i.test(String(sc)) || /expires=[^;]*1970/i.test(String(sc));
         if (!name) continue;
-        if (expired || val === '') jar.delete(name); else jar.set(name, val);
+        if (expired || val === '') { if (jar.delete(name)) changed = true; } else { if (jar.get(name) !== val) { jar.set(name, val); changed = true; } }
     }
+    if (changed) webProxyPersistCookies();
 }
 // 执今之道见小曰明 — Vite 内容哈希静态资源(/assets/*)缓存 (内存 L1 + 磁盘 L2)
 // 哈希变则键变 → 永不陈旧; 免重复穿隧道 → 二次导航秒开。
