@@ -10,9 +10,9 @@
 //   6) 源级护栏: engine.html 与 switch.html 皆引入 autoclean.js 并接入同一流水线;
 //      engine tick 调 bgAutoCleanTick (常驻后台·不受切号板可见性门控);
 //      RelayService 桥暴露 vaultReadBackup/vaultSaveBackup/vaultSaveBackupB64/vaultDeleteBackup/netInfo;
-//   7) 退格护栏 (左右两侧同删修复): MainActivity 有 installBackspaceGuard 且在
-//      onPageFinished + doUpdateVisitedHistory(SPA 路由) 两处安装; 护栏拦 IME 误发的
-//      deleteContentForward 与越过光标的目标区间, 不干预组合输入 (isComposing)。
+//   7) 退格护栏 v4 (左右两侧同删修复·AVD 实证): MainActivity 有 installBackspaceGuard 且在
+//      onPageFinished + doUpdateVisitedHistory(SPA 路由) 两处安装; 护栏在捕获层对 slate
+//      编辑器的 deleteContentBackward/Forward stopImmediatePropagation 拦下 Slate 二次记账。
 // 无框架: 直接 node test/autoclean.test.js, 退出码非 0 即失败。
 const fs = require("fs");
 const path = require("path");
@@ -188,13 +188,14 @@ function makeEnv(opts) {
   ok(/installDownloadHook\(v\); installKbHelper\(v\); installBackspaceGuard\(v\);/.test(mainSrc), "退格护栏: SPA 路由后重装 (doUpdateVisitedHistory)");
   {
     const bsg = mainSrc.slice(mainSrc.indexOf("installBackspaceGuard(WebView w)"), mainSrc.indexOf("// 语音输入根治"));
-    ok(!/beforeinput|selectionchange|stopImmediatePropagation/.test(bsg), "退格回归本源 v3: JS 层直通不拦 (无 beforeinput/selectionchange/sIP)");
-    ok(/NotFoundError/.test(bsg), "退格回归本源 v3: 仅保留白屏兜底");
+    ok(/beforeinput/.test(bsg) && /stopImmediatePropagation/.test(bsg) && /data-slate-editor/.test(bsg), "退格根治 v4: 捕获层 sIP 拦下 slate 删除类 beforeinput (Slate 二次记账)");
+    ok(!/selectionchange/.test(bsg), "退格根治 v4: 无 selectionchange 光标干预");
+    ok(/NotFoundError/.test(bsg), "退格根治 v4: 保留白屏兜底");
   }
   // ── 源级护栏: 重加号消幽灵 (doAdd 落 addedAt + 立即镜像金库·不被回拉覆盖) ──
   ok(/addedAt:Date\.now\(\)/.test(switchSrc), "doAdd 落 addedAt (重加号 24h 免移出保护)");
   ok(/saveAcc\(accs\); try\{ mirrorAccountsToVault\(\); \}catch\(e\)\{\}/.test(switchSrc), "doAdd 后立即镜像金库 (重加号不被金库回拉抓回幽灵态)");
-  ok(/window\.__rtBsGuard3\)return/.test(mainSrc), "退格护栏: 幂等守卫 v3");
+  ok(/window\.__rtBsGuard4\)return/.test(mainSrc), "退格护栏: 幂等守卫 v4");
 
   // ── 源级护栏: 拖拽提取取数链归一 (与「下MD」同源同路 + 头部-only 拒注入 + 旧降级腿已移除 + 引擎自动登录解锁) ──
   ok(/fastPanelExtractInject\(sid, accJson, target, x, y, fallback\)/.test(mainSrc), "取数归一: engineExtractInject 只走 本地备份→面板快路径(与下MD同源)");

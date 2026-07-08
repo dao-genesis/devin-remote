@@ -1,8 +1,10 @@
 // 媒体鉴权代取 + 退格根治 源级护栏:
 //   ① <img>/<video> 等媒体元素原生加载不带 Authorization → app.devin.ai/attachments/ 恒 401
 //      → 原生层 authMediaResponse 代取(补 Bearer / 转发 Range / 30x 手动跟随且凭据只发 app.devin.ai)
-//   ② 三星等输入法一次退格调 deleteSurroundingText(before>0, after>0) 左右同删 → 原生
-//      InputConnection 层夹断(after 归 0), 且标签 WebView 实际使用 GuardedWebView
+//   ② 左右同删真根源(AVD+CDP 实证): Chromium 已按 IME 请求改 DOM, Slate 的 beforeinput
+//      处理器又对同一记退格再调度一次模型删除(双重记账), 第二刀落在光标右侧 →
+//      JS 捕获层 stopImmediatePropagation 拦下 deleteContentBackward/Forward,
+//      让 Slate 只经 MutationObserver 单次对账; 原生层不再钳制/不再 restartInput
 //   ③ 视频全屏 onShowCustomView/onHideCustomView 承接 + 返回键退全屏
 const fs = require("fs");
 const path = require("path");
@@ -40,40 +42,33 @@ ok(/MainActivity\.authMediaResponseFor\(fToken, fOrg, req\)/.test(tabAct), "TabA
 ok(/new MainActivity\.GuardedWebView\(this\)/.test(tabAct), "TabActivity 使用 GuardedWebView (退格护栏同源)");
 ok(/MainActivity\.warmAttachmentCookie\(fToken, fOrg, u\)/.test(tabAct), "TabActivity 预铸附件 Cookie");
 
-// ② 退格根治 (原生 InputConnection 夹断)
+// ② 退格根治 v4 (AVD+TestIme+CDP 实证): 双重记账在 JS 层, 不在 IME/原生层。
+//    Chromium 收到 deleteSurroundingText(1,0) 即改 DOM(删左一字), 同时派发 beforeinput
+//    (deleteContentBackward); Slate Android 路径的 beforeinput 处理器再调度一次模型删除,
+//    第二刀落在光标右侧 → 左右同删。修法 = document 捕获层对 slate 编辑器的
+//    deleteContentBackward/Forward stopImmediatePropagation, DOM 变更仍由 Chromium 落地,
+//    Slate 经 MutationObserver 单次对账。原生层一切钳制/吞删/restartInput 全部撤除
+//    (v8.1 的 resyncIme=restartInput 掐断 IME 会话·打字/删除全面退化之根)。
 ok(/class GuardedWebView extends WebView/.test(main), "GuardedWebView 存在");
 ok(/new GuardedWebView\(this\)/.test(main), "makeTab 实际使用 GuardedWebView");
-const clamps = main.match(/if \(afterLength > 0\) \{\s*\n\s*icAltered = true;\s*\n\s*if \(beforeLength <= 0\) \{ resyncIme\(\); return true; \}\s*\n\s*afterLength = 0;/g) || [];
-ok(clamps.length >= 2, "deleteSurroundingText / InCodePoints 双双夹断 (found " + clamps.length + ")");
-ok(/onCreateInputConnection\(EditorInfo outAttrs\)/.test(main), "夹断落在 onCreateInputConnection 包装层");
+const gwvSrc = main.slice(main.indexOf("class GuardedWebView"), main.indexOf("void applyImmersive"));
+ok(!/super\.deleteSurroundingText|boolean deleteSurroundingText/.test(gwvSrc), "原生层: deleteSurroundingText 钳制已整体撤除 (实证根因不在此)");
+ok(!/resyncIme|\.restartInput\(/.test(gwvSrc), "原生层: resyncIme/restartInput 对账已整体撤除 (掐 IME 会话之根)");
+ok(!/icAltered/.test(gwvSrc), "原生层: icAltered 脱钩标记已撤除");
+ok(!/KEYCODE_FORWARD_DEL/.test(gwvSrc), "原生层: FORWARD_DEL 吞键已撤除");
+ok(!/lastBkAt/.test(main), "旧 250ms 时间窗机制保持移除 (倒序拆单之漏根除)");
 
-// 夹断语义 (JS 等价复算): 左右同删 → 只删左; 纯前向删除 → 整体吞掉(手机软键盘无 Del 键);
-// 纯左删原样。不再用 250ms 时间窗: 拆单可能「先前向后退格」, 时间窗对倒序无效。
-function clamp(before, after) { if (after > 0) { if (before <= 0) return null; after = 0; } return [before, after]; }
-ok(String(clamp(1, 1)) === "1,0", "夹断: (1,1) → (1,0) 一次退格只删左侧");
-ok(String(clamp(1, 0)) === "1,0", "夹断: (1,0) 原样 (正常退格)");
-ok(clamp(0, 1) === null, "夹断: (0,1) 纯前向删除整体吞掉 (IME 拆单无论顺序皆被拦)");
-
-// ②b 前向删除无条件拦断 (旧 250ms 时间窗对「先前向后退格」倒序拆单无效 → 已整体撤除改无条件)
-ok(/if \(beforeLength <= 0\) \{ resyncIme\(\); return true; \}/.test(main), "纯前向 deleteSurroundingText 无条件吞掉(吞后对账)");
-ok(/KEYCODE_FORWARD_DEL\) \{ icAltered = true; resyncIme\(\); return true; \}/.test(main), "IME 模拟的 FORWARD_DEL 键事件无条件吞掉(吞后对账)");
-// ②b2 持久化对账 (v8.1): 每次吞/改写 IME 操作后在组合安全点 restartInput 让 IME 重读编辑器真相,
-//      IME 账本不再随时间脱钩 → 钳制永续(根治「几分钟后左右同删复发」)。
-ok(/boolean icAltered = false;/.test(main), "持久化: icAltered 脱钩标记存在");
-ok(/void resyncIme\(\)/.test(main) && /imm\.restartInput\(GuardedWebView\.this\)/.test(main), "持久化: resyncIme 经 IMM.restartInput 对账(不收键盘)");
-ok(/if \(activeComp != null && !activeComp\.isEmpty\(\)\) return;/.test(main), "持久化: 仅组合安全点对账(绝不掠断进行中的语音/拼音会话)");
-ok(!/lastBkAt/.test(main), "旧 250ms 时间窗机制已整体移除 (倒序拆单之漏根除)");
-
-// ②c JS 回归本源 v3 (大道至简): JS 层对输入事件一律直通不拦 ——
-//     v2 的 sIP+光标归位使 Slate 模型与 DOM 脱钩, normalize 整体回滚把整段文字连附件
-//     一并删除 + restartInput 收键盘, 比原病灶更重。左右同删真根源在 IME 层, 已由
-//     原生 GuardedWebView 钳制根治。JS 层只保留白屏兜底(与输入无关)。
-ok(/__rtBsGuard3/.test(main), "退格回归本源: 幂等守卫 v3 存在");
-ok(!/__rtBsGuard2/.test(main), "退格回归本源: v2 sIP+归位方案已整体移除");
+ok(/__rtBsGuard4/.test(main), "退格根治 v4: 幂等守卫存在");
+ok(!/__rtBsGuard3/.test(main) && !/__rtBsGuard2/.test(main), "退格根治 v4: v2/v3 旧守卫已整体移除");
 const bsGuard = main.slice(main.indexOf("installBackspaceGuard(WebView w)"), main.indexOf("// 语音守卫已整体撤除"));
-ok(!/beforeinput/.test(bsGuard), "退格回归本源: 退格护栏内无任何 beforeinput 拦截");
-ok(!/selectionchange/.test(bsGuard), "退格回归本源: 无 selectionchange 光标干预");
-ok(!/stopImmediatePropagation/.test(bsGuard), "退格回归本源: 无 stopImmediatePropagation");
+const bsFlat = bsGuard.replace(/"\s*\+\s*"/g, "");
+ok(/addEventListener\('beforeinput'/.test(bsFlat), "退格根治 v4: 捕获层监听 beforeinput");
+ok(/deleteContentBackward/.test(bsFlat) && /deleteContentForward/.test(bsFlat), "退格根治 v4: 只拦删除类 inputType (其余直通)");
+ok(/data-slate-editor/.test(bsFlat), "退格根治 v4: 只对 slate 编辑器生效 (普通输入框不受影响)");
+ok(/stopImmediatePropagation/.test(bsFlat), "退格根治 v4: sIP 拦下 Slate 二次记账 (DOM 删除由 Chromium 落地·MutationObserver 单次对账)");
+ok(/,true\);/.test(bsFlat), "退格根治 v4: 捕获阶段安装 (先于 Slate 处理器)");
+ok(!/selectionchange/.test(bsGuard), "退格根治 v4: 无 selectionchange 光标干预");
+ok(!/execCommand|dispatchEvent/.test(bsFlat), "退格根治 v4: 零主动写入/零合成事件 (不掐 IME 会话)");
 ok(/NotFoundError'\)return c;/.test(main.replace(/"\s*\+\s*"/g, "")), "崩页兜底: removeChild NotFoundError 防线");
 ok(/Node\.prototype\.insertBefore=function/.test(main.replace(/"\s*\+\s*"/g, "")), "崩页兜底: insertBefore NotFoundError 防线");
 // 旧看门狗(事后补字)与旧 v1 盲拦(光标跳末尾回归源)必须彻底移除
@@ -103,11 +98,11 @@ ok(!/function schedStrip/.test(main), "语音根治: 旧去抖摘除逻辑已移
 //      层记孤儿前缀、对后续全量串只透传余量; 绝不删已落文字(删空会再触发重挂 → 死循环)。
 ok(/String orphanPrefix = ""/.test(main), "孤儿修复: orphanPrefix 账本存在");
 ok(/orphanPrefix = orphanPrefix \+ activeComp/.test(main), "孤儿修复: IC 重建时累计被就地提交的组合");
-ok(/if \(fresh && s\.startsWith\(orphanPrefix\)\) \{ s = s\.substring\(orphanPrefix\.length\(\)\); icAltered = true; \}/.test(main), "孤儿修复: 全量累积串只透传余量(时效窗内·剥后对账)");
+ok(/if \(fresh && s\.startsWith\(orphanPrefix\)\) \{ s = s\.substring\(orphanPrefix\.length\(\)\); \}/.test(main), "孤儿修复: 全量累积串只透传余量(时效窗内)");
 ok(/else orphanPrefix = "";/.test(main), "孤儿修复: 过期/非前缀即弃账(不误剥用户新输入)");
 const gwv = main.slice(main.indexOf("class GuardedWebView"), main.indexOf("void applyImmersive"));
 ok(!/deleteSurroundingText\(orphanPrefix/.test(gwv) && !/super\.deleteSurroundingText\(p\.length/.test(gwv), "孤儿修复: 不删已落文字(防空/非空重挂死循环·实测验证)");
-ok(/activeComp = null; orphanPrefix = "";\s*\n\s*boolean r = super\.finishComposingText/.test(main), "孤儿修复: finishComposingText 清账(随后对账)");
+ok(/finishComposingText\(\) \{\s*\n\s*activeComp = null; orphanPrefix = "";/.test(main), "孤儿修复: finishComposingText 清账");
 
 // ②c3 取数统一 (拖拽/传到当前页 统一到「下载MD」同源快路径)
 const daopan = fs.readFileSync(path.join(ROOT, "app/src/main/assets/engine/daopan.html"), "utf8");
