@@ -436,6 +436,7 @@ class WorkspaceState {
     relayConnected: boolean = false;
     relayConnecting: boolean = false;
     relayReconnectTimer: any = null;
+    relayConnectWatchdog: any = null;
     relaySessionId: string = '';
     publicUrl: string | null = null;
     // Devin — 每窗口独立账号
@@ -1879,6 +1880,21 @@ function daoFetchJson(u: string, timeoutMs: number): Promise<any> {
 function connectRelay(port: number, token: string) {
     if (ws.relayConnected || ws.relayConnecting) return;
     ws.relayConnecting = true;
+    // 守柔·自愈: 若单次连接的异步路径(代理隧道/握手)久悬不决而既不 open 亦不 fail,
+    //   relayConnecting 会被永久钉死 → 之后所有重连早退。看门狗到点强制复位并重试。
+    if (ws.relayConnectWatchdog) { clearTimeout(ws.relayConnectWatchdog); }
+    ws.relayConnectWatchdog = setTimeout(() => {
+        ws.relayConnectWatchdog = null;
+        if (!ws.relayConnected) {
+            ws.relayConnecting = false;
+            if (!ws.relayReconnectTimer) {
+                ws.relayReconnectTimer = setTimeout(() => {
+                    ws.relayReconnectTimer = null;
+                    if (!ws.relayConnected) connectRelay(port, token);
+                }, 3000);
+            }
+        }
+    }, 20000);
     const relayCfg = getRelayConfig();
     const urls = relayCfg.urls;
     if (urls.length === 0) {
@@ -1955,6 +1971,7 @@ function setupRelayHandlers(relaySocket: any, relayUrl: string, sessionId: strin
     relaySocket.on('open', () => {
         ws.relayConnected = true;
         ws.relayConnecting = false;
+        if (ws.relayConnectWatchdog) { clearTimeout(ws.relayConnectWatchdog); ws.relayConnectWatchdog = null; }
         ws.relayWs = relaySocket;
         lastPongTime = Date.now();
         const relayPublicUrl = relayUrl.replace(/\/$/, '') + '/relay/' + sessionId;
@@ -2038,6 +2055,7 @@ function stopRelay() {
     ws.relayConnecting = false;
     ws.publicUrl = null;
     if (ws.relayReconnectTimer) { clearTimeout(ws.relayReconnectTimer); ws.relayReconnectTimer = null; }
+    if (ws.relayConnectWatchdog) { clearTimeout(ws.relayConnectWatchdog); ws.relayConnectWatchdog = null; }
 }
 
 // ═══════════════════════════════════════════════════════════
