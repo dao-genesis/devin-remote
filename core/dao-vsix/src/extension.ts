@@ -11508,6 +11508,26 @@ function daoIdeMcpCandidates(): IdeMcpCandidate[] {
     ];
 }
 
+// 帛书·「少则得·多则惑」— MCP 呈现/注入时剥离宿主管路环境变量(非密钥)。
+//   本机 IDE 的 mcp_config 里 env 常掺 NODE_PATH/NO_PROXY/DAO_MCP_PROXY/代理 等**宿主本地管路**,
+//   它们只对「本机起进程」有意义, 对云端账号/密钥展示全是噪声 → 用户误以为 Playwright 之类
+//   本无密钥的 MCP「也要配一堆密钥」(实为管路项)。故对外呈现 env_variables 时仅留**真·配置/密钥**,
+//   宿主管路一律隐去; 本机接测仍用未过滤的原始 env(NODE_PATH 等本机运行必需)。
+const MCP_HOST_PLUMBING_ENV = new Set<string>([
+    'node_path', 'node_options', 'nodepath', 'path', 'pythonpath', 'pythonhome',
+    'no_proxy', 'http_proxy', 'https_proxy', 'all_proxy', 'ftp_proxy',
+    'dao_mcp_proxy', 'electron_run_as_node', 'npm_config_prefix', 'npm_config_cache',
+]);
+function mcpStripHostEnv(env: any): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (env && typeof env === 'object') {
+        for (const k of Object.keys(env)) {
+            if (MCP_HOST_PLUMBING_ENV.has(String(k).toLowerCase())) continue;
+            out[k] = String(env[k] != null ? env[k] : '');
+        }
+    }
+    return out;
+}
 function scanIdeMcps(): IdeMcpEntry[] {
     // 软编码候选路径 — 存在即扫, 不存在则跳; 用户亦可在 ~/.dao/ide-mcp.json 手动补充。
     const candidates = daoIdeMcpCandidates();
@@ -11821,7 +11841,7 @@ async function daoReplyMcpTab(reply: (m: any) => void): Promise<void> {
         const mcpObj: any = {
             name: e.name, slug: e.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
             transport: e.transport, detail,
-            command: e.command, args: e.args, env_variables: e.env, url: e.url, headers: e.headers,
+            command: e.command, args: e.args, env_variables: mcpStripHostEnv(e.env), url: e.url, headers: e.headers,
             installation_scope: 'org', installed: isInstalled, ideSource: e.source, disabled: e.disabled,
         };
         // 名前缀: ★=云端已装 / ⊘=IDE 内已禁用 — 与各 IDE 内显示一一对应
