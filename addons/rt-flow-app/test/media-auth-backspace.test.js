@@ -78,29 +78,31 @@ ok(!/chk\(false\);\},700\)/.test(main), "退格回归本源: 旧看门狗 700/14
 ok(!/deleteContentForward'&&\(now-lastBk\)<150/.test(main.replace(/"\s*\+\s*"/g, "")), "退格回归本源: v1 前向删除时间窗拦截已移除 (原生 InputConnection 层已够)");
 ok(!/setComposingRegion\(int start, int end\)/.test(main), "原生 setComposingRegion 已恢复透传 (退格钳制只在 deleteSurroundingText)");
 
-// ②c2 语音输入根治 v6 (种子法·顺势而为·零拦截):
-//      真机实测 v5 吞首记后 Slate 组合状态错位(连续语音只上屏头两字后卡死)。
-//      v6 改为不拦任何事件: 空框+占位时经 Slate 自身管道(合成 beforeinput·insertText)
-//      预植零宽种子 Z → 占位摘除/重挂在组合开始之前完成, restartInput 不再掐断语音会话;
-//      真内容落定后同管道摘种 + fin() 持续轮询钉光标回末尾。
+// ②c2 语音输入根治 v7 (种子法·execCommand 精确播/摘种·零拦截):
+//      真机录屏实证 v6 合成 beforeinput 摘种误删句首真字(合成事件无 targetRanges,
+//      Slate 按自身模型选区删, DOM 选中的 Z 尚未同步进模型)。v7 改 document.execCommand:
+//      浏览器原生编辑管道按真实 DOM 选区落实编辑并发带 targetRanges 的 beforeinput →
+//      摘种只可能删 Z 本身; 另加摘后校验回注。
 ok(/static void installVoiceGuard\(WebView w\)/.test(main), "语音根治: installVoiceGuard 存在");
-ok(/__rtViGuard6/.test(main), "语音根治: 幂等守卫 v6 存在");
-ok(!/__rtViGuard5/.test(main), "语音根治: v5 吞首记方案已整体移除");
+ok(/__rtViGuard7/.test(main), "语音根治: 幂等守卫 v7 存在");
+ok(!/__rtViGuard5/.test(main) && !/window\.__rtViGuard6\)return/.test(main.replace(/"\s*\+\s*"/g, "")), "语音根治: v5/v6 旧方案已整体移除");
 const viGuard = main.slice(main.indexOf("static void installVoiceGuard"), main.indexOf("// DownloadListener"));
 const viFlat = viGuard.replace(/"\s*\+\s*"/g, "");
-ok(!/stopImmediatePropagation/.test(viFlat), "语音根治 v6: 零拦截(无 stopImmediatePropagation)");
-ok(!/preventDefault/.test(viFlat), "语音根治 v6: 不 preventDefault(浏览器默认动作照常落字)");
-ok(/var Z='\\\\u200B'/.test(viGuard), "语音根治 v6: 零宽种子 Z 存在");
-ok(/inputType:'insertText',data:Z/.test(viFlat), "语音根治 v6: 播种经合成 beforeinput(insertText) 走 Slate 自身管道(非外部改 DOM)");
-ok(/if\(zNode\(ed\)\|\|!ph\(ed\)\)return;/.test(viFlat), "语音根治 v6: 只在空框+占位时播种(已有内容/已有种不重播)");
-ok(/function comp\(\)\{return compOn&&\(Date\.now\(\)-compT\)<4000;\}/.test(viFlat), "语音根治 v6: 组合态自过期(4s·防 IME 弃组合永久卡死守卫)");
-ok(/setInterval\(function\(\)\{try\{if\(comp\(\)\)return;seedTry\(\);/.test(viFlat), "语音根治 v6: 心跳补种");
-ok(/document\.addEventListener\('selectionchange',lazySeed\)/.test(viFlat) && /document\.addEventListener\('keyup',lazySeed,true\)/.test(viFlat), "语音根治 v6: 事件驱动多路补种(定时器死也能活)");
-ok(/inputType:'deleteContentBackward'/.test(viFlat), "语音根治 v6: 摘种经同管道 deleteContentBackward(不造陈旧快照)");
-ok(/g2\.toString\(\)===Z/.test(viFlat), "语音根治 v6: 摘种前验证选区确为 Z(不误删真内容)");
-ok(/function fin\(\)/.test(viFlat) && /setTimeout\(function\(\)\{res\(m\+1\);\},250\)/.test(viFlat), "语音根治 v6: fin 持续轮询(250ms×8)钉光标回末尾(防 Qhello 开头落字)");
-ok(/atHead=\(g\.collapsed&&rp\.toString\(\)\.replace\(ZR,''\)===''\)\?1:0/.test(viFlat), "语音根治 v6: atHead 以「编辑器起点→光标」文本空判定(不猜 DOM 偏移)");
-ok(/'focusout',function\(e\)/.test(viFlat), "语音根治 v6: 失焦且只剩种子 → 收种还原占位");
+ok(!/stopImmediatePropagation/.test(viFlat), "语音根治 v7: 零拦截(无 stopImmediatePropagation)");
+ok(!/preventDefault/.test(viFlat), "语音根治 v7: 不 preventDefault(浏览器默认动作照常落字)");
+ok(/var Z='\\\\u200B'/.test(viGuard), "语音根治 v7: 零宽种子 Z 存在");
+ok(/document\.execCommand\('insertText',false,Z\)/.test(viFlat), "语音根治 v7: 播种经 execCommand 原生编辑管道(带 targetRanges·Slate 按真实选区归账)");
+ok(!/new InputEvent\('beforeinput'/.test(viFlat), "语音根治 v7: 合成 beforeinput 已全面移除(无 targetRanges → 误删句首真字之根)");
+ok(/if\(zNode\(ed\)\|\|!ph\(ed\)\)return;/.test(viFlat), "语音根治 v7: 只在空框+占位时播种(已有内容/已有种不重播)");
+ok(/function comp\(\)\{return compOn&&\(Date\.now\(\)-compT\)<4000;\}/.test(viFlat), "语音根治 v7: 组合态自过期(4s·防 IME 弃组合永久卡死守卫)");
+ok(/setInterval\(function\(\)\{try\{if\(comp\(\)\)return;seedTry\(\);/.test(viFlat), "语音根治 v7: 心跳补种");
+ok(/document\.addEventListener\('selectionchange',lazySeed\)/.test(viFlat) && /document\.addEventListener\('keyup',lazySeed,true\)/.test(viFlat), "语音根治 v7: 事件驱动多路补种(定时器死也能活)");
+ok(/document\.execCommand\('delete'\)/.test(viFlat), "语音根治 v7: 摘种经 execCommand('delete') 按真实 DOM 选区删除(只可能删 Z)");
+ok(/g2\.toString\(\)===Z/.test(viFlat), "语音根治 v7: 摘种前验证选区确为 Z(不误删真内容)");
+ok(/pre\.indexOf\(post\)===0/.test(viFlat) && /execCommand\('insertText',false,lost\)/.test(viFlat), "语音根治 v7: 摘后校验—可见文本变短即回注丢失字符(双重保险)");
+ok(/function fin\(\)/.test(viFlat) && /setTimeout\(function\(\)\{res\(m\+1\);\},250\)/.test(viFlat), "语音根治 v7: fin 持续轮询(250ms×8)钉光标回末尾(防 Qhello 开头落字)");
+ok(/atHead=\(g\.collapsed&&rp\.toString\(\)\.replace\(ZR,''\)===''\)\?1:0/.test(viFlat), "语音根治 v7: atHead 以「编辑器起点→光标」文本空判定(不猜 DOM 偏移)");
+ok(/'focusout',function\(e\)/.test(viFlat), "语音根治 v7: 失焦且只剩种子 → 收种还原占位");
 ok(!/it==='insertText'&&!e\.isComposing/.test(main), "语音根治 v2: 非组合直敲首字拦截已撤除 (模型脱钩→崩页主诱因)");
 // 旧方案病灶(外部直改 Slate DOM 的 schedStrip 去抖摘除)必须彻底移除
 ok(!/function schedStrip/.test(main), "语音根治: 旧去抖摘除逻辑已移除");
