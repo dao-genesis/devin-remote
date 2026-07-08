@@ -203,12 +203,47 @@ public class MainActivity extends AppCompatActivity {
         return ua.replace("; wv", "");
     }
 
+    // 空编辑器首段组合被 restartInput 掐断的孤儿修复(原生·测试输入法闭环实证的最底层根因):
+    //   往空 Slate 编辑器发出第一记 setComposingText 时, Slate 同步重挂文本节点 → Chromium
+    //   视焦点节点已换 → restartInput 重建 InputConnection, 刚起步的组合被就地提交成普通文本
+    //   ("孤儿"), 而 IME 不知情、继续以全量累积串组合 → 首字重复("鼻鼻、听…"); Gboard 一类
+    //   输入法则按自身账本回删 → 首字被删。语音听写与拼音打字第一个字的一切怪象同出此因。
+    //   修法: 旧 IC 带着未完成组合被替换时, 把已被就地提交的孤儿累入前缀账本; 新 IC 上 IME
+    //   继续发来的全量累积串若以孤儿前缀开头 → 只把「余量」交给编辑器(孤儿已在文中, 不删不动,
+    //   组合区只承载余量)。全程 IME 管道内操作, 零 JS·零合成事件·不触碰 Slate、不删已落文字
+    //   (删空会再次触发 Slate 空/非空重挂 → restartInput 死循环, 实测验证)。
     static class GuardedWebView extends WebView {
         GuardedWebView(Context c) { super(c); }
+        String activeComp = null;   // 当前 IC 组合区内的(已剥前缀的)文本
+        String orphanPrefix = "";   // 历次 restartInput 累计被就地提交的孤儿前缀
         @Override public android.view.inputmethod.InputConnection onCreateInputConnection(EditorInfo outAttrs) {
             android.view.inputmethod.InputConnection ic = super.onCreateInputConnection(outAttrs);
             if (ic == null) return null;
+            if (activeComp != null && !activeComp.isEmpty()) orphanPrefix = orphanPrefix + activeComp;
+            activeComp = null;
             return new android.view.inputmethod.InputConnectionWrapper(ic, true) {
+                private String strip(CharSequence t) {
+                    String s = t == null ? "" : t.toString();
+                    if (!orphanPrefix.isEmpty()) {
+                        if (s.startsWith(orphanPrefix)) s = s.substring(orphanPrefix.length());
+                        else orphanPrefix = "";
+                    }
+                    return s;
+                }
+                @Override public boolean setComposingText(CharSequence text, int newCursorPosition) {
+                    String s = strip(text);
+                    activeComp = s;
+                    return super.setComposingText(s, newCursorPosition);
+                }
+                @Override public boolean commitText(CharSequence text, int newCursorPosition) {
+                    String s = strip(text);
+                    activeComp = null; orphanPrefix = "";
+                    return super.commitText(s, newCursorPosition);
+                }
+                @Override public boolean finishComposingText() {
+                    activeComp = null; orphanPrefix = "";
+                    return super.finishComposingText();
+                }
                 // 左右同删的原生钳制(单一真源): 手机软键盘没有 Del 键 → IME 经 InputConnection 发出的
                 // 一切「前向删除」都不是用户意图, 只可能是输入法把一次退格拆单/合并误发的产物。
                 // ① 同一调用左右同删(before>0 && after>0) → 只保留左删;
@@ -1191,7 +1226,6 @@ public class MainActivity extends AppCompatActivity {
                     installLoginCapture(v);     // 监听登录提交 → 自动弹「保存登录？」
                     installKbHelper(v);         // 键盘弹出时输入框上滚到可见区中部 (不被遮挡)
                     installBackspaceGuard(v);   // 退格护栏: 拦下输入法误发的左右两侧同删
-                    installVoiceGuard(v);       // 语音护栏: 空编辑器零宽字符打底, 语音输入开头不再卡断
                     installVideoFit(v);         // 录像播放器窄屏适配: 视频区与步骤栏纵向堆叠同屏
                     installMediaRetry(v);       // 媒体加载自愈: 附件/对象存储直链瞬断→退避自动重载
                     harvestPageAuth(v, tab, u); // 非账号标签从页面登录态采收 auth → 媒体代取可用
@@ -1208,7 +1242,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVoiceGuard(v); installVideoFit(v); installMediaRetry(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
+                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -3726,115 +3760,10 @@ public class MainActivity extends AppCompatActivity {
             + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
-    // 语音输入根治(源级, 不再零宽打底): 空 Slate 编辑器首段语音只出一字即卡断的真根因,
-    //   与退格双删同一机制 —— Slate 安卓输入管理器处理空编辑器上的首段组合插入
-    //   (beforeinput insertCompositionText/insertText) 时重挂节点 → restartInput 掐断
-    //   进行中的 IME 语音会话; 编辑器开头已有字符时不重挂故正常。旧修法(U+200B 打底+去抖摘除)
-    //   本身就是对 Slate DOM 的外部改写, 反而制造陈旧快照(退格双删的诱因之一), 属亡羊补牢。
-    //   修法 = 同退格一路: 从空编辑器起始的整段组合期间, 捕获层对 Slate 的 beforeinput 做
-    //   stopImmediatePropagation(不 preventDefault) —— 浏览器默认动作照常落字, IME 会话
-    //   不被 restartInput 掐断, Slate 的 MutationObserver 把落字归账进模型; compositionend
-    //   后回归 Slate 常规处理。
-    //   v2: 撤除对非组合直敲首字(insertText)的拦截 —— 该拦截让每个新输入框的第一个字
-    //   都绕开 Slate 模型, 模型与 DOM 脱钩面过大(v0.37.168 崩页加频的主诱因), 且直敲
-    //   本就不经 IME 组合会话、无 restartInput 掐断问题, 无需拦。
-    //   v3: 组合期拦截保 IME 会话不断的同时, compositionend 后必须把落字「归账」回 Slate 模型 ——
-    //   v2 只拦不归账, 首段语音全程绕开模型: 模型恒空 → 占位提示(Ask Devin…)不消失与语音文字
-    //   重叠、文字不在模型里无法框选/复制、随后任一次退格触发 normalize 以空模型整体回滚(全文归零)。
-    //   归账法: compositionend 后延时看占位是否仍在(仍在=模型确未归账), 是则把整段组合文本以
-    //   合成 beforeinput(insertText) 重放给 Slate(非 trusted·本护栏不拦) → 模型落账、React 重渲,
-    //   DOM 与模型合一; 占位已消(Slate 自己归了账)则不重放, 绝不双写。幂等(window.__rtViGuard3)。
-    //   v4(真机闭环回归·大道至简): 撤除对 beforeinput 的一切拦截 —— AVD 真机对照实测(有/无 v3
-    //   护栏行为完全一致)证明: 组合期把 insertCompositionText 全程吞掉, 在会火 beforeinput 的
-    //   IME(手机语音听写=一整段长组合)上让 Slate 模型全程饿着 → 占位与文字长时间重叠、文字不在
-    //   模型里无法框选、组合中途任一退格触发 normalize 以空模型整体回滚(全文归零)。三症皆此一因。
-    //   保留两件与正常行为无冲突的事: ①组合期 CSS 隐藏占位(只改样式不动 DOM·不触发 Slate 重挂,
-    //   消除重叠且不掐 IME 会话) ②compositionend 后 120ms 归账兜底(占位仍在=模型确未归账才重放,
-    //   Slate 自己归了账则绝不双写)。
-    //   v5(空框首段语音·最小拦截): v4 全撤拦截后, 真机空输入框首段语音「只出一字即断」回归 ——
-    //   Slate 处理空编辑器上**第一记** insertCompositionText 时同步重渲(占位节点摘除+重挂)
-    //   → restartInput 掐断刚建立的 IME 语音会话, 此为首段掐断唯一节点。v3 之所以引发三症,
-    //   是把整段组合全程吞掉让模型长期饿着; v5 只对「空编辑器起始的组合」吞**第一记**
-    //   insertCompositionText(stopImmediatePropagation·不 preventDefault: 浏览器默认动作照常落字,
-    //   IME 会话不断), 第二记起 Slate 全程正常处理(此时组合已稳固, 重渲不再掐断)。
-    //   模型少记的首字由既有 compositionend 归账兜底补齐(占位仍在才重放·不双写)。
-    //   v6(种子法·顺势而为): 真机实测 v5 吞首记后 Slate 组合状态错位 —— 连续语音只上屏头两字
-    //   后组合流卡死。改为不拦任何事件: 编辑器开头已有字符时语音一切正常(用户实测规律),
-    //   故在「空框+占位」时以合成 beforeinput(insertText) 经 Slate 自身管道预植零宽种子 Z(U+200B):
-    //   占位摘除/重挂在组合开始**之前**完成, IME 语音会话全程不被 restartInput 掐断;
-    //   真内容落定后再经 Slate 同一管道摘种(非外部改 DOM·不造陈旧快照)。四要点:
-    //   ①组合态自过期 comp(): IME 弃组合可不发 compositionend, 布尔位永久卡死守卫 →
-    //     以「4s 内有组合事件」为准(语音长组合有持续 compositionupdate 保鲜)。
-    //   ②多路补种: 心跳 setInterval + selectionchange/keyup/visibilitychange 事件驱动,
-    //     后台节流/定时器被清掉也能活(实测旧实例心跳会死而事件路径仍通)。
-    //   ③摘种后 fin() 持续轮询(250ms×8)把开头光标钉回末尾: Slate 模型异步归账会瞬时把
-    //     DOM 光标拉回开头, 单次判定误退正是「后续输入落到开头 Qhello」之根。
-    //   ④失焦且只剩种子无真内容 → 收回种子还原占位。
-    //   v7(execCommand 精确播/摘种): 真机录屏实证 v6 的合成 beforeinput 摘种会误删句首真字 ——
-    //   合成 InputEvent 无 getTargetRanges, Slate 按自身模型选区执行删除, 而 DOM 选区(我们刚选中的 Z)
-    //   尚未同步进模型 → 删掉的是句首真字; 残留的 Z 再致模型/DOM 错位, 后续每次退格 normalize
-    //   多删数字(左右同删体感之源)。改用 document.execCommand('insertText'/'delete'):
-    //   浏览器原生编辑管道按真实 DOM 选区落实编辑并发带 targetRanges 的 beforeinput →
-    //   Slate 按正确范围归账, 摘种只可能删 Z 本身, 绝无误删。另加摘后校验: 可见文本变短即回注。
-    static void installVoiceGuard(WebView w) {
-        if (w == null) return;
-        String js = "(function(){if(window.__rtViGuard7)return;window.__rtViGuard7=1;"
-            + "var Z='\\u200B',ZR=new RegExp(Z,'g'),compOn=0,compT=0,unbusy=0;"
-            + "function comp(){return compOn&&(Date.now()-compT)<4000;}"
-            + "function ced(t){return t&&t.closest?t.closest('[data-slate-editor=true],[contenteditable=true],[contenteditable=\"\"]'):null;}"
-            + "function ph(ed){return ed?ed.querySelector('[data-slate-placeholder]'):null;}"
-            + "function edTxt(ed){var t='',w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT,{acceptNode:function(n){return n.parentElement&&n.parentElement.closest('[data-slate-placeholder]')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;}}),n;while((n=w.nextNode()))t+=n.nodeValue;return t;}"
-            + "function zNode(ed){var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n;while((n=w.nextNode())){var i=(n.nodeValue||'').indexOf(Z);if(i>=0)return[n,i];}return null;}"
-            // 播种: 空框+占位+非组合中+已聚焦 → execCommand 原生编辑管道插入 Z(带 targetRanges·Slate 按真实选区归账)
-            + "function seed(ed){try{if(!ed||!ed.isConnected||comp())return;if(zNode(ed)||!ph(ed))return;if(edTxt(ed).replace(ZR,'')!=='')return;"
-            + "if(!(document.activeElement&&ed.contains(document.activeElement))&&document.activeElement!==ed)return;"
-            + "document.execCommand('insertText',false,Z);}catch(e){}}"
-            + "function seedTry(){var ed=ced(document.activeElement);if(ed)seed(ed);}"
-            + "function toEnd(ed){var r3=document.createRange();r3.selectNodeContents(ed);r3.collapse(false);var s3=getSelection();s3.removeAllRanges();s3.addRange(r3);}"
-            // 摘种: 真内容落定后选中 Z 经 Slate 同一管道删除; end 时 fin() 持续轮询把光标钉回末尾
-            + "function unseed(ed,end){if(unbusy)return;unbusy=1;"
-            + "function fin(){if(!end)return;(function res(m){try{if(m>8||comp()||!ed.isConnected)return;"
-            + "var s3=getSelection();var atHead=1;"
-            + "if(s3.rangeCount){var g=s3.getRangeAt(0);if(ed.contains(g.startContainer)){var rp=document.createRange();rp.setStart(ed,0);rp.setEnd(g.startContainer,g.startOffset);atHead=(g.collapsed&&rp.toString().replace(ZR,'')==='')?1:0;}}"
-            + "if(atHead&&edTxt(ed).replace(ZR,'')!=='')toEnd(ed);"
-            + "setTimeout(function(){res(m+1);},250);}catch(e){}})(0);}"
-            + "(function att(k){try{if(k>6||comp()||!ed.isConnected){unbusy=0;return;}"
-            + "var zn=zNode(ed);if(!zn){unbusy=0;fin();return;}"
-            + "if(edTxt(ed).replace(ZR,'')===''){unbusy=0;return;}"
-            + "var pre=edTxt(ed).replace(ZR,'');"
-            + "var r=document.createRange();r.setStart(zn[0],zn[1]);r.setEnd(zn[0],zn[1]+1);var s=getSelection();s.removeAllRanges();s.addRange(r);"
-            + "var ok=0,s2=getSelection();if(s2.rangeCount){var g2=s2.getRangeAt(0);ok=(!g2.collapsed&&g2.toString()===Z)?1:0;}"
-            + "if(ok){document.execCommand('delete');"
-            + "var post=edTxt(ed).replace(ZR,'');"
-            + "if(post!==pre&&pre.indexOf(post)===0){var lost=pre.slice(post.length);toEnd(ed);document.execCommand('insertText',false,lost);}}"
-            + "setTimeout(function(){att(k+1);},250);"
-            + "}catch(e){unbusy=0;}})(0);}"
-            // 组合态追踪(自过期法·见 comp())
-            + "document.addEventListener('compositionstart',function(e){if(ced(e.target)){compOn=1;compT=Date.now();}},true);"
-            + "document.addEventListener('compositionupdate',function(e){if(ced(e.target)){compOn=1;compT=Date.now();}},true);"
-            + "document.addEventListener('compositionend',function(e){var ed=ced(e.target);compOn=0;if(!ed)return;"
-            + "setTimeout(function(){try{if(!comp()&&zNode(ed)&&edTxt(ed).replace(ZR,'')!=='')unseed(ed,true);}catch(x){}},120);},true);"
-            // 直敲路径: 真内容与种子共存即摘种
-            + "document.addEventListener('input',function(e){var ed=ced(e.target);if(!ed||comp())return;"
-            + "if(zNode(ed)&&edTxt(ed).replace(ZR,'')!=='')unseed(ed,true);},true);"
-            // 聚焦播种(延 50ms 等 Slate 建好选区)
-            + "document.addEventListener('focusin',function(e){var ed=ced(e.target);if(!ed)return;setTimeout(function(){seed(ed);},50);},true);"
-            // 失焦收种: 只剩种子无真内容 → 删 Z 还原占位
-            + "document.addEventListener('focusout',function(e){var ed=ced(e.target);if(!ed)return;setTimeout(function(){try{"
-            + "if(comp()||!ed.isConnected)return;var zn=zNode(ed);if(!zn)return;if(edTxt(ed).replace(ZR,'')!=='')return;"
-            + "var r=document.createRange();r.setStart(zn[0],zn[1]);r.setEnd(zn[0],zn[1]+1);var s=getSelection();s.removeAllRanges();s.addRange(r);"
-            + "var s4=getSelection(),ok4=0;if(s4.rangeCount){var g4=s4.getRangeAt(0);ok4=(!g4.collapsed&&g4.toString()===Z)?1:0;}"
-            + "if(ok4)document.execCommand('delete');"
-            + "}catch(x){}},80);},true);"
-            // 多路补种: 心跳 + 事件驱动(后台节流/定时器被清也能活)
-            + "setInterval(function(){try{if(comp())return;seedTry();}catch(e){}},700);"
-            + "var sdT=0;function lazySeed(){var n=Date.now();if(n-sdT<300)return;sdT=n;setTimeout(function(){try{if(!comp())seedTry();}catch(e){}},120);}"
-            + "document.addEventListener('selectionchange',lazySeed);"
-            + "document.addEventListener('keyup',lazySeed,true);"
-            + "document.addEventListener('visibilitychange',lazySeed);"
-            + "})();";
-        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
-    }
+    // 语音守卫已整体撤除(v8·反者道之动): v5/v6/v7 的拦截/种子/execCommand 方案全部证伪 ——
+    //   任何 JS 层对编辑器的主动写入(含 execCommand)都会触发 Chromium restartInput 掐断 IME 会话,
+    //   心跳补种更是持续打断键盘(真机 v0.37.177 实测: 键盘频繁自动收回·打字/退格/语音全面损坏)。
+    //   回归干净基线: JS 层零干预, 输入问题只在原生 InputConnection 层(GuardedWebView)最小处理。
     // DownloadListener 收到 blob: → 让当前页 JS 取出内容回传
     private void captureBlobDownload(String blobUrl) {
         if (active < 0 || active >= tabs.size()) { toast("下载失败"); return; }
