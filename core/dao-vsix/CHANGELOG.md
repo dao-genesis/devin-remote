@@ -2,6 +2,10 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.113
+- **修复「窗口重载后持久中继(relay)卡在 local 不自愈」**。`connectRelay` 置 `relayConnecting=true` 后，若 `connectSingleRelay` 的异步路径(代理隧道/握手)久悬不决——既不 `open` 亦不 `fail`——则 `relayConnecting` 被永久钉死，之后所有重连早退(`if (relayConnected || relayConnecting) return`)，公网入站通道一直不恢复。实测台式机双实例重载后均滞留 `relay: local`，须手工 `/api/relay/set` 才恢复。
+  - 修法：`connectRelay` 起连即装 20s 看门狗，到点若仍未 `open` 则强制 `relayConnecting=false` 并排一次 3s 重连；`open` 成功与 `daoRelayDisconnect` 时清除看门狗。守柔·自愈，无为而无不为。
+
 ## 3.50.112
 - **根治台式机「经常性 cmd.exe/powershell 黑窗弹出」**。Windows 上 `execSync` 恒经 `cmd.exe /c` 起子进程、`spawnSync('powershell',…)` 起控制台宿主——凡缺 `windowsHide:true` 皆闪黑窗。全仓审计补齐遗漏点：
   - `winDefaultBrowserExe()` 两处 `reg query`(每次多实例开浏览器即闪一次·主惯犯) — `core/dao-vsix/src/extension.ts`。
