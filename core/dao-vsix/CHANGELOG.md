@@ -2,6 +2,14 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.112
+- **根治台式机「经常性 cmd.exe/powershell 黑窗弹出」**。Windows 上 `execSync` 恒经 `cmd.exe /c` 起子进程、`spawnSync('powershell',…)` 起控制台宿主——凡缺 `windowsHide:true` 皆闪黑窗。全仓审计补齐遗漏点：
+  - `winDefaultBrowserExe()` 两处 `reg query`(每次多实例开浏览器即闪一次·主惯犯) — `core/dao-vsix/src/extension.ts`。
+  - rt-flow `_vscdb_inject_helper.py` 注入 `spawnSync(python)` — `core/rt-flow/extension.js` 与捆绑副本 `rtflow/extension.js` 同步。
+  - dao-proxy-pro `_readSystemProxy()` `reg query`、独立版 `_brgProbeLocalProxy()` 7 端口 `Test-NetConnection`(一轮最多闪 7 个 powershell 窗)、`where cloudflared`。
+  - dao-bridge `probeLocalProxy()` 7 端口 `Test-NetConnection`。
+  其余 spawn/exec 已带 `windowsHide` 或为 *nix 分支/有意开窗(浏览器)·未动。
+
 ## 3.50.92
 - **根治「冗余独立版 dao.dao-vsix 卸载后自动复活」**。归一(dao-one)内折副本(vendor-vsix)的 `bridgeSelfUpdateCheck` 照常从 GitHub Release 拉取 dao-vsix VSIX 并 `--install-extension` —— 装上的是**独立版** `dao.dao-vsix`，与宿主 dao-one 抢注同名命令(`dao.startServer` already exists)与视图，刚清理的单体插件 ≤6h 即被复活。修法：自更新入口检 `__dirname` 含 `vendor-vsix` 即直接返回，内折副本更新随 dao-one 整体发版，不走独立版通道。
 

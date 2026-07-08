@@ -328,7 +328,7 @@ function _readSystemProxy() {
     const cp = require("child_process");
     const reg = cp.execSync(
       'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer /v ProxyEnable',
-      { encoding: "utf8", timeout: 3000 },
+      { encoding: "utf8", timeout: 3000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
     );
     const enabled = /ProxyEnable\s+REG_DWORD\s+0x1/i.test(reg);
     if (!enabled) return null;

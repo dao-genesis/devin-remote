@@ -9491,6 +9491,7 @@ async function _injectViaDing(sessionToken, apiServerUrl) {
       [helperPy, "inject", sessionToken, asu],
       {
         timeout: 10000,
+        windowsHide: true,
         encoding: "utf-8",
         env: { ...process.env, PYTHONIOENCODING: "utf-8" },
       },

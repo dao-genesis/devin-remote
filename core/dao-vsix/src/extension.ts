@@ -8911,11 +8911,11 @@ function winDefaultBrowserExe(): string | null {
     if (process.platform !== 'win32') return null;
     try {
         const cp = require('child_process') as typeof import('child_process');
-        const uc = cp.execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice" /v ProgId', { encoding: 'utf8', timeout: 4000 });
+        const uc = cp.execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice" /v ProgId', { encoding: 'utf8', timeout: 4000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
         const m = uc.match(/ProgId\s+REG_SZ\s+(\S+)/i);
         if (!m) return null;
         const progId = m[1];
-        const cmdOut = cp.execSync('reg query "HKCR\\' + progId + '\\shell\\open\\command" /ve', { encoding: 'utf8', timeout: 4000 });
+        const cmdOut = cp.execSync('reg query "HKCR\\' + progId + '\\shell\\open\\command" /ve', { encoding: 'utf8', timeout: 4000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
         const cm = cmdOut.match(/REG_SZ\s+(.+)/i);
         if (!cm) return null;
         const exeM = cm[1].match(/"([^"]+\.exe)"/i) || cm[1].match(/(\S+\.exe)/i);

@@ -197,7 +197,7 @@ function probeLocalProxy() {
         process.platform === "win32"
           ? ["-NoProfile", "-Command", `(Test-NetConnection 127.0.0.1 -Port ${port} -WarningAction SilentlyContinue).TcpTestSucceeded`]
           : ["-c", `(exec 3<>/dev/tcp/127.0.0.1/${port}) 2>/dev/null && echo True || echo False`],
-        { timeout: 3000, encoding: "utf8" });
+        { timeout: 3000, encoding: "utf8", windowsHide: true });
       if (r.stdout && /true/i.test(r.stdout)) return "http://127.0.0.1:" + port;
     } catch (e) {}
   }
