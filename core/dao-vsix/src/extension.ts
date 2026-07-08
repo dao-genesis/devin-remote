@@ -1777,22 +1777,46 @@ async function daoRelaySetPersistent(rawUrl: string): Promise<{ ok: boolean; url
 //   插件仅作编排: 定位模块(动态 import ESM) + 打开登录链接 + 落盘后置顶接管 + 刷新面板。
 //   自愈: refresh 续期重部署; 删除/切号: 撤销授权 + 清态回退 quick tunnel/mesh。
 // ═══════════════════════════════════════════════════════════
-let _daoRelayOAuthMod: any = null;
-async function daoRelayOAuthModule(): Promise<any> {
-    if (_daoRelayOAuthMod) return _daoRelayOAuthMod;
+// dao-relay 模块目录定位(oauth.mjs / provision.mjs / worker.js / wrangler.toml / public 同处一处)。
+// 优先级: 环境变量 → 仓库根 addons → 扩展根捆绑副本(build.js vendor) → ~/.dao 落点(部署持久)。
+function daoRelayDir(): string {
     const cands = [
-        process.env.DAO_RELAY_DIR ? path.join(process.env.DAO_RELAY_DIR, 'oauth.mjs') : '',
-        path.join(__dirname, '..', '..', '..', 'addons', 'dao-relay', 'oauth.mjs'), // out/ → 仓库根/addons
-        path.join(__dirname, '..', '..', 'addons', 'dao-relay', 'oauth.mjs'),
-        path.join(__dirname, '..', 'dao-relay', 'oauth.mjs'),
-        path.join(DAO_DIR, 'dao-relay', 'oauth.mjs'),                                // 部署到用户机的落点
+        process.env.DAO_RELAY_DIR || '',
+        path.join(__dirname, '..', '..', '..', 'addons', 'dao-relay'), // out/ → 仓库根/addons
+        path.join(__dirname, '..', '..', 'addons', 'dao-relay'),
+        path.join(__dirname, '..', 'dao-relay'),                       // 扩展根捆绑副本(build.js vendor)
+        path.join(DAO_DIR, 'dao-relay'),                               // 部署到用户机的落点(跨升级持久)
     ].filter(Boolean);
-    const found = cands.find((p) => { try { return fs.existsSync(p); } catch { return false; } });
-    if (!found) throw new Error('未找到 dao-relay/oauth.mjs（可设环境变量 DAO_RELAY_DIR 指向 addons/dao-relay）');
+    const found = cands.find((p) => { try { return fs.existsSync(path.join(p, 'oauth.mjs')); } catch { return false; } });
+    if (!found) throw new Error('未找到 dao-relay 模块目录（可设环境变量 DAO_RELAY_DIR 指向 addons/dao-relay）');
+    return found;
+}
+const _daoRelayModCache: Record<string, any> = {};
+async function daoRelayLoadMod(file: string): Promise<any> {
+    if (_daoRelayModCache[file]) return _daoRelayModCache[file];
+    const p = path.join(daoRelayDir(), file);
+    if (!fs.existsSync(p)) throw new Error('未找到 dao-relay/' + file);
     // 动态 import ESM(用 Function 包裹, 规避打包器把 import() 降级成 require 破坏 ESM 加载)。
     const dynImport = new Function('u', 'return import(u)') as (u: string) => Promise<any>;
-    _daoRelayOAuthMod = await dynImport(require('url').pathToFileURL(found).href);
-    return _daoRelayOAuthMod;
+    _daoRelayModCache[file] = await dynImport(require('url').pathToFileURL(p).href);
+    return _daoRelayModCache[file];
+}
+function daoRelayOAuthModule(): Promise<any> { return daoRelayLoadMod('oauth.mjs'); }
+
+// 兜底/直通: 用户贴 API Token → 后端全自动 token→取账号→保证子域→wrangler deploy→落 relay.json
+//   →置顶接管。与 OAuth 登录后半程同源(都调 provision.mjs)。这是「公网永远走快速通道」的正解:
+//   有了持久 Worker 通道, connectRelay 即把它置顶, 出站 WSS 走 Worker 而非 cloudflared quick tunnel。
+async function daoRelayProvisionToken(token: string): Promise<{ ok: boolean; url?: string; healthy?: boolean; error?: string }> {
+    const tk = String(token || '').trim();
+    if (tk.length < 20) return { ok: false, error: '需要有效的 Cloudflare API Token（含 Workers 脚本编辑 + 账号读权限）' };
+    let mod: any;
+    try { mod = await daoRelayLoadMod('provision.mjs'); } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+    try {
+        const st = await mod.provision(tk, { log: (m: string) => { try { console.log('[relay-provision] ' + m); } catch { /* 守柔 */ } }, extraState: { auth: 'token' } });
+        try { if (st && st.url) await daoRelaySetPersistent(st.url); } catch { /* 守柔 */ }
+        try { refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ }
+        return { ok: true, url: st && st.url, healthy: !!(st && st.healthy) };
+    } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
 }
 
 // 一次登录: 起本地回调服务 → 拿到登录链接即 openExternal + 立刻返回 URL(不阻塞 HTTP);
@@ -1887,7 +1911,11 @@ function connectRelay(port: number, token: string) {
 function connectSingleRelay(wsUrl: string, relayUrl: string, sessionId: string, port: number, token: string, onFail: () => void) {
     try {
         // 动态require ws — VSIX bundle可能不包含
-        const WebSocket = require('ws');
+        let WebSocket: any;
+        try { WebSocket = require('ws'); } catch (e: any) {
+            console.error('[relay] ws 模块缺失(手工部署未带 node_modules/ws?): ' + (e && e.message || e));
+            onFail(); return;
+        }
         const relayHostname = new URL(relayUrl).hostname;
         const isCfHost = relayHostname.includes('workers.dev') || relayHostname.includes('cloudflare');
         // 直连兜底: 每实例独立出站连自己的 relay session (鸡犬相闻·老死不相往来)
@@ -3980,6 +4008,11 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         case '/api/relay/set': {
             const rb: any = JSON.parse(await readBody(req) || '{}');
             return await daoRelaySetPersistent(rb.url);
+        }
+        // 兜底/直通: 贴 API Token → 后端全自动 provision(取账号→保证子域→wrangler deploy→落盘→置顶)。
+        case '/api/relay/provision-token': {
+            const rb: any = JSON.parse(await readBody(req) || '{}');
+            return await daoRelayProvisionToken(String(rb.token || ''));
         }
         // OAuth 一次登录全自动打通(自动注册 CF Token·PKCE): 返回登录链接即可, 用户授权后后台自动部署落盘。
         case '/api/relay/oauth-login': { return await daoRelayOAuthLogin(); }
@@ -6831,29 +6864,16 @@ function rBridgeFull(){
   h+='<button class="btn sm primary" onclick="cmd(&#39;bridgeCopyCloudMd&#39;)">📋 复制云端 Agent MD</button>';
   h+='<button class="btn sm" onclick="cmd(&#39;bridgeInjectKnowledge&#39;)">📚 注入</button></div></div>';
 
-  // ── 末·参考一: 命名隧道 · 固定域名（可选） ──
-  h+='<div class="st" style="margin-top:14px">🔑 命名隧道 · 固定域名（可选）</div>';
+  // ── 末·兜底通道: 单一接口 · 贴 API Token 全自动打通(与顶部 OAuth 同源后半程 provision.mjs) ──
+  h+='<div class="st" style="margin-top:14px">🔑 兜底通道 · 贴 API Token 全自动打通（可选）</div>';
   h+='<div class="card">';
   var cfOn=!!(b.cfLoggedIn||b.named);
-  if(cfOn){
-    h+='<div class="cr"><span class="l">CloudFlare</span><span class="v" style="color:var(--success)">✓ 用户通道'+(b.cfEmail?(' · '+esc(b.cfEmail)):'')+(b.named?'（命名隧道·固定域名）':'')+'</span></div>';
-    h+='<div style="font-size:10px;color:var(--muted);margin:4px 0">已绑定 CloudFlare 凭证。'+(b.named?'命名隧道令牌已就绪 — 点「重启隧道」即以固定域名启动。':'如需固定公网域名，请在 CloudFlare 创建命名隧道并把 <code>tunnel run --token</code> 令牌填入下方。')+'</div>';
-    h+='<input id="cfKey" type="password" placeholder="更换 Tunnel Token / API Token / Global Key（填入后保存即替换当前凭证）" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
-    h+='<input id="cfEmail" type="email" placeholder="CloudFlare Email（可选）" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
-    h+='<div class="br" style="margin-top:4px"><button class="btn sm primary" onclick="bridgeCfLogin()">💾 保存新 Token</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;bridgeStartNamed&#39;)">🔗 用命名隧道(固定域名)启动</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;relayOAuthLogin&#39;)" title="免手搓 Token: 浏览器登录 Cloudflare 一次授权, 后台自动注册 Token 并部署固定 Worker 地址">⚡ OAuth 自动认证(免手搓)</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;openCf&#39;)">🌐 打开 CloudFlare 控制台</button>';
-    h+='<button class="btn sm danger" onclick="if(confirm(&#39;退出账号并清空全部 CloudFlare 凭证残留(含 cert.pem)，回到无账号快速隧道？&#39;))cmd(&#39;bridgeLogout&#39;)">🚪 退出账号 / 重置为无账号</button></div>';
-  } else {
-    h+='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">默认快速隧道已可用，<b style="color:var(--fg)">无需登录</b>。仅当你想要<b style="color:var(--fg)">固定不变的公网域名</b>时，才需配置 CloudFlare（也可放入 ~/.dao/dao-config.json 的 cfTunnelToken 自动加载）。</div>';
-    h+='<input id="cfEmail" type="email" placeholder="CloudFlare Email（可选）" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
-    h+='<input id="cfKey" type="password" placeholder="Tunnel Token / API Token / Global Key" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
-    h+='<div class="br"><button class="btn sm primary" onclick="bridgeCfLogin()">保存并切到用户通道</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;relayOAuthLogin&#39;)" title="免手搓 Token: 浏览器登录 Cloudflare 一次授权, 后台自动注册 Token 并部署固定 Worker 地址">⚡ OAuth 自动认证(免手搓)</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;bridgeCfBrowserLogin&#39;)" title="用浏览器登录 Cloudflare(可用 GitHub 账号), 需自有域名才有固定域名">🌐 浏览器登录 CF</button></div>';
-    h+='<button class="btn sm" onclick="cmd(&#39;openCf&#39;)" style="margin-top:4px">🌐 打开 CloudFlare 控制台</button>';
-  }
+  h+='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">顶部「一次登录」有问题时的<b style="color:var(--fg)">兜底</b>：只需贴一个 Cloudflare <b style="color:var(--fg)">API Token</b>（含 Workers 脚本编辑 + 账号读权限），后端即全自动 取账号 → 部署你自己的固定 Worker → 落盘置顶接管，与顶部同一套逻辑，状态同显于顶部持久通道卡片。<a href="#" onclick="cmd(&#39;openCf&#39;);return false" style="color:var(--accent2)">去 Cloudflare 创建 Token →</a></div>';
+  if(cfOn)h+='<div class="cr"><span class="l">CloudFlare</span><span class="v" style="color:var(--success)">✓ 已绑定凭证'+(b.cfEmail?(' · '+esc(b.cfEmail)):'')+(b.named?'（命名隧道·固定域名）':'')+'</span></div>';
+  h+='<input id="cfKey" type="password" placeholder="Cloudflare API Token（唯一入口 · 贴入后一键全自动打通）" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
+  h+='<div class="br" style="margin-top:4px"><button class="btn sm primary" onclick="relayTokenGo()" title="token→取账号→保证子域→wrangler deploy→落盘置顶, 全后台自动">🚀 用 Token 全自动打通</button>';
+  if(cfOn)h+='<button class="btn sm danger" onclick="if(confirm(&#39;退出账号并清空全部 CloudFlare 凭证残留(含 cert.pem)，回到无账号快速隧道？&#39;))cmd(&#39;bridgeLogout&#39;)">🚪 退出/重置</button>';
+  h+='</div>';
   h+='</div>';
   // ── 末·更深层能力 → 已独立为 MCP (内穿面板回归本源·只管整机直连; 四大模块不再内联此处) ──
   h+='<div class="st" style="margin-top:14px">🧩 更深层专业操作 · DAO Bridge MCP</div>';
@@ -6878,6 +6898,8 @@ function rBridgeAgents(){
   return rows;
 }
 function bridgeCfLogin(){var e=document.getElementById('cfEmail'),k=document.getElementById('cfKey');var email=e?e.value.trim():'';var key=k?k.value.trim():'';if(!key){toast('请填写 Token / API Key',false);return}toast('验证中…',true);cmd('bridgeCfLogin',{email:email,key:key})}
+// 兜底通道·单一接口: 贴 API Token → 后端全自动 provision 持久 Worker(+尽力绑定凭证/命名隧道)。
+function relayTokenGo(){var k=document.getElementById('cfKey');var token=k?k.value.trim():'';if(!token){toast('请先贴入 Cloudflare API Token',false);return}toast('全自动打通中…(取账号→部署 Worker→落盘置顶, 约 1-2 分钟)',true);cmd('relayProvisionToken',{token:token})}
 function bridgeExec(){var c=document.getElementById('bridgeCmd');var v=c?c.value.trim():'';if(!v)return;var o=document.getElementById('bridgeOut');if(o)o.textContent='执行中…';cmd('bridgeExec',{cmd:v})}
 // 问题②③ · 备份板块: 全账号×全对话备份成果 + 查看/下载 (路由 rt-flow 同源备份 · 纯本地·免 cog_ key)
 function rBackups(){
@@ -7522,7 +7544,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'relayProvisionToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -8733,6 +8755,16 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 if (r.ok && r.url) { try { await vscode.env.clipboard.writeText(r.url); } catch { /* 守柔 */ } vscode.window.showInformationMessage('登录链接已打开(并复制)。授权后后端将全自动部署持久通道并置顶接管。'); }
                 else vscode.window.showErrorMessage('DAO 持久通道登录失败: ' + (r.error || '未知错误'));
                 refreshReply({ type: 'actionResult', command: 'relayOAuthLogin', ok: !!r.ok, url: r.url, error: r.error });
+                break;
+            }
+            // 兜底/直通: 贴 API Token → 后端全自动 provision(取账号→保证子域→wrangler deploy→落盘→置顶)。
+            case 'relayProvisionToken': {
+                vscode.window.showInformationMessage('DAO 持久通道: 正在用 Token 全自动打通(取账号→部署 Worker→落盘置顶)…');
+                const r = await daoRelayProvisionToken(String(msg.token || ''));
+                vscode.window[r.ok ? 'showInformationMessage' : 'showErrorMessage']('DAO 持久通道: ' + (r.ok ? ('✓ 已打通 ' + (r.url || '')) : ('打通失败: ' + (r.error || '未知错误'))));
+                // 同一 Token 顺手绑定 CF 凭证 + 尽力开通命名隧道(有自有域名才成, 后台尽力而为不阻塞)。
+                if (r.ok) bridgeCfLogin('', String(msg.token || '')).then(() => { try { refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ } }).catch(() => { /* 守柔 */ });
+                refreshReply({ type: 'actionResult', command: 'relayProvisionToken', ok: !!r.ok, url: r.url, error: r.error });
                 break;
             }
             case 'relayOAuthRefresh': {

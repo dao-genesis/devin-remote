@@ -18,7 +18,7 @@ import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const CF_API = "https://api.cloudflare.com/client/v4";
 export const WORKER_NAME = "dao-relay-do"; // 与 wrangler.toml 的 name 一致
@@ -32,6 +32,8 @@ export function tokenDeepLink(name = "dao-relay") {
     { key: "workers_scripts", type: "edit" },     // 部署 Worker 脚本
     { key: "workers_kv_storage", type: "edit" },  // (可选)KV/DO 相关
     { key: "account_settings", type: "read" },    // 读账号/子域
+    { key: "zone", type: "read" },                // 读 zone(自定义域候选)
+    { key: "workers_routes", type: "edit" },      // 绑 Worker 自定义域(workers.dev 被墙时的可达入口)
   ];
   const q = new URLSearchParams({
     permissionGroupKeys: JSON.stringify(perms),
@@ -89,15 +91,45 @@ async function ensureSubdomain(token, accountId) {
   return (r && r.subdomain) || cand;
 }
 
+// 宿主可能是 IDE 扩展宿主(Electron): 继承其 ELECTRON_RUN_AS_NODE / NODE_OPTIONS / NODE_CHANNEL_FD /
+// npm_* 等会把子进程 node/npx 变成「Electron 假 node」或注入损坏参数, 实测 wrangler 在其中静默悬挂。
+// 洗净后子进程即回到系统纯净 node —— 与用户手动在终端跑 wrangler 完全同构。
+export function cleanChildEnv(base = process.env) {
+  const env = { ...base };
+  for (const k of Object.keys(env)) {
+    if (/^(ELECTRON_|npm_|VSCODE_)/i.test(k) || k === "NODE_OPTIONS" || k === "NODE_CHANNEL_FD" || k === "NODE_ENV") delete env[k];
+  }
+  return env;
+}
+
 function run(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const p = spawn(cmd, args, { shell: process.platform === "win32", ...opts });
-    let out = "", err = "";
+    const p = spawn(cmd, args, { shell: process.platform === "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"], ...opts });
+    let out = "", err = "", done = false;
+    const fin = (r) => { if (!done) { done = true; clearTimeout(tm); resolve(r); } };
+    // 部署有界: 10 分钟未归即杀(防僵尸悬挂拖死上层 provision 流程)。
+    const tm = setTimeout(() => { try { p.kill(); } catch { /* 守柔 */ } fin({ code: null, out, err: err + "\n[timeout] 子进程超时(600s)被终止" }); }, 600000);
     p.stdout?.on("data", (d) => (out += d.toString()));
     p.stderr?.on("data", (d) => (err += d.toString()));
-    p.on("error", (e) => resolve({ code: null, out, err: err + String(e) }));
-    p.on("close", (code) => resolve({ code, out, err }));
+    p.on("error", (e) => fin({ code: null, out, err: err + String(e) }));
+    p.on("close", (code) => fin({ code, out, err }));
   });
+}
+
+// 某些网络环境(GFW 等)整体屏蔽 *.workers.dev; 若账号有活跃 zone(经 CF 反代通常可达),
+// 尽力绑定 Workers 自定义域 dao-relay.<zone> 作首选入口, workers.dev 恒作回退。缺权限即静默跳过。
+async function tryCustomDomain(token, accountId, log) {
+  try {
+    const zones = await cf("/zones?status=active&per_page=10", token);
+    if (!Array.isArray(zones) || !zones.length) return null;
+    const z = zones[0];
+    const hostname = `dao-relay.${z.name}`;
+    await cf(`/accounts/${accountId}/workers/domains`, token, {
+      method: "PUT",
+      body: JSON.stringify({ zone_id: z.id, hostname, service: WORKER_NAME, environment: "production" }),
+    });
+    return `https://${hostname}`;
+  } catch (e) { log(`自定义域绑定跳过: ${e.message}`); return null; }
 }
 
 async function healthOk(url, tries = 10) {
@@ -146,14 +178,20 @@ export async function provision(token, { log = console.log, skipVerify = false, 
 
   const cwd = dirname(fileURLToPath(import.meta.url));
   log("④ wrangler deploy(后端全自动·免用户参与)…");
-  const env = { ...process.env, CLOUDFLARE_API_TOKEN: token, CLOUDFLARE_ACCOUNT_ID: accountId, WRANGLER_SEND_METRICS: "false" };
+  const env = { ...cleanChildEnv(), CLOUDFLARE_API_TOKEN: token, CLOUDFLARE_ACCOUNT_ID: accountId, WRANGLER_SEND_METRICS: "false", CI: "true" };
   const dep = await run("npx", ["--yes", "wrangler@^3", "deploy"], { cwd, env });
   if (dep.code !== 0) throw new Error(`wrangler deploy 失败(code=${dep.code}): ${(dep.err || dep.out).slice(-800)}`);
-  log("⑤ 部署完成, 等边缘传播并健康检查…");
-  const ok = await healthOk(url);
-  const state = { url, subdomain, accountId, token, deployedAt: new Date().toISOString(), healthy: ok, ...extraState };
+  log("⑤ 部署完成, 尽力绑定自定义域(workers.dev 被墙网络的可达入口)…");
+  const customUrl = await tryCustomDomain(token, accountId, log);
+  if (customUrl) log(`   自定义域: ${customUrl}`);
+  log("⑥ 等边缘传播并健康检查…");
+  const customOk = customUrl ? await healthOk(customUrl, 6) : false;
+  const ok = customOk || await healthOk(url, customUrl ? 4 : 10);
+  // 本机可达者优先(customOk 说明本网络能直达自定义域); 否则退 workers.dev。
+  const finalUrl = customOk ? customUrl : url;
+  const state = { url: finalUrl, workersDevUrl: url, customUrl: customUrl || undefined, subdomain, accountId, token, deployedAt: new Date().toISOString(), healthy: ok, ...extraState };
   const savedTo = saveState(state);
-  log(ok ? `✅ 持久通道就绪: ${url}` : `⚠ 已部署但健康检查暂未通过(边缘传播中): ${url}`);
+  log(ok ? `✅ 持久通道就绪: ${finalUrl}` : `⚠ 已部署但健康检查暂未通过(边缘传播中): ${finalUrl}`);
   return { ...state, savedTo };
 }
 
@@ -161,7 +199,7 @@ export async function provision(token, { log = console.log, skipVerify = false, 
 export { saveState, ensureSubdomain, firstAccountId, stateFile };
 
 // CLI: node provision.mjs [--deep-link | <token>]
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const arg = process.argv[2];
   if (!arg || arg === "--deep-link") {
     console.log(tokenDeepLink());

@@ -40,3 +40,21 @@ try {
     console.error('[build] FATAL: daoDropBridgeJs syntax error → ' + e.message);
     process.exit(1);
 }
+
+// 帛书·「善建者不拔」: vendor addons/dao-relay → 扩展根 dao-relay/（oauth/provision/worker/wrangler.toml/public）
+// 使「一次登录·全自动打通」「贴 Token 直通」随 VSIX 落到用户机（daoRelayDir 的扩展根候选）。
+try {
+    const relSrc = path.join(__dirname, '..', '..', 'addons', 'dao-relay');
+    const relDst = path.join(__dirname, 'dao-relay');
+    if (fs.existsSync(relSrc)) {
+        fs.rmSync(relDst, { recursive: true, force: true });
+        fs.cpSync(relSrc, relDst, {
+            recursive: true,
+            filter: (p) => !/node_modules|\.wrangler|package-lock\.json|\.test\.|[\\/]test$|[\\/]test[\\/]/.test(p),
+        });
+        console.log('[build] vendored addons/dao-relay → dao-relay/');
+    }
+} catch (e) {
+    console.error('[build] FATAL: vendor dao-relay failed → ' + e.message);
+    process.exit(1);
+}
