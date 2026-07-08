@@ -1347,7 +1347,7 @@ _dEl('dlwin').addEventListener('click',function(e){var el=e.target.closest&&e.ta
 // ── 整页翻译(对照手机 APK translate.js·Edge 免费引擎) ──────────────────────
 //   手机: 原生桥 __dcTr 做 HTTP; 桌面: 宿主做 HTTP(translate 消息), 外壳直改同源 iframe 文本节点。
 //   遍历可见文本节点(含开放 Shadow DOM) → 分批送译 → 回填(保留原文可一键恢复) + MutationObserver 增量。
-var _trCbs={},_trSeq=0;
+var _trCbs={},_trSeq=0,_trCache={},_trCacheN=0;
 function _trNative(texts,to){return new Promise(function(res){var id='t'+(++_trSeq)+'_'+Date.now();_trCbs[id]=res;setTimeout(function(){if(_trCbs[id]){delete _trCbs[id];res(null);}},20000);vscode.postMessage({type:'translate',reqId:id,texts:texts,to:to||'zh-Hans'});});}
 var _TR_SKIP={SCRIPT:1,STYLE:1,NOSCRIPT:1,TEXTAREA:1,CODE:1,PRE:1,KBD:1,SAMP:1,SVG:1,CANVAS:1,MATH:1};
 var _TR_LETTER=/[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0370-\u03FF\u3040-\u30FF\uAC00-\uD7AF]/;
@@ -1356,10 +1356,15 @@ function _trAllRoots(root){var roots=[root];try{var els=root.querySelectorAll?ro
 function _trCollect(S,doc,root){var out=[];var filter={acceptNode:function(n){if(n.__dcOrig!==undefined)return NodeFilter.FILTER_REJECT;var t=n.nodeValue;if(!t)return NodeFilter.FILTER_REJECT;var s=t.trim();if(s.length<2||!_TR_LETTER.test(s))return NodeFilter.FILTER_REJECT;if(_trRejectByParent(n))return NodeFilter.FILTER_REJECT;return NodeFilter.FILTER_ACCEPT;}};
   var roots=_trAllRoots(root);for(var r=0;r<roots.length;r++){try{var w=doc.createTreeWalker(roots[r],NodeFilter.SHOW_TEXT,filter);var n;while((n=w.nextNode()))out.push(n);_trObserveRoot(S,roots[r]);}catch(e){}}return out;}
 function _trBatch(nodes){var batches=[],cur=[],chars=0;for(var i=0;i<nodes.length;i++){var len=nodes[i].nodeValue.length;if(cur.length&&(cur.length>=64||chars+len>7000)){batches.push(cur);cur=[];chars=0;}cur.push(nodes[i]);chars+=len;}if(cur.length)batches.push(cur);return batches;}
-function _trRunOnce(S,doc){var nodes=_trCollect(S,doc,doc.body||doc.documentElement);if(!nodes.length)return Promise.resolve(0);var batches=_trBatch(nodes),bi=0,done=0;
+function _trApply(n,v){if(v!=null&&v!==''&&v!==n.nodeValue){n.__dcOrig=n.nodeValue;n.nodeValue=v;return 1;}if(v!=null)n.__dcOrig=n.nodeValue;return 0;}
+function _trRemember(src,v){if(v==null)return;if(_trCacheN>4000){_trCache={};_trCacheN=0;}if(_trCache[src]===undefined){_trCache[src]=v;_trCacheN++;}}
+function _trRunOnce(S,doc){var all=_trCollect(S,doc,doc.body||doc.documentElement);if(!all.length)return Promise.resolve(0);
+  // SPA 重渲染会重建文本节点 → 命中译文缓存的同步秒回填(不等网络), 消除中英来回闪烁
+  var nodes=[],done=0;for(var i=0;i<all.length;i++){var c=_trCache[all[i].nodeValue];if(c!==undefined)done+=_trApply(all[i],c);else nodes.push(all[i]);}
+  if(!nodes.length)return Promise.resolve(done);var batches=_trBatch(nodes),bi=0;
   return new Promise(function(resolve){function next(){if(!S.active||bi>=batches.length){resolve(done);return;}var grp=batches[bi++];var texts=grp.map(function(n){return n.nodeValue;});
-    _trNative(texts).then(function(tr){if(tr&&tr.length){for(var i=0;i<grp.length;i++){var v=tr[i];if(v!=null&&v!==''&&v!==grp[i].nodeValue){grp[i].__dcOrig=grp[i].nodeValue;grp[i].nodeValue=v;done++;}else if(v!=null){grp[i].__dcOrig=grp[i].nodeValue;}}}next();});}next();});}
-function _trObserveRoot(S,root){try{if(!root||S.observed.indexOf(root)>=0)return;var mo=new MutationObserver(function(){clearTimeout(S.debounce);S.debounce=setTimeout(function(){if(S.active)_trRunOnce(S,S.doc);},700);});mo.observe(root,{childList:true,subtree:true,characterData:true});S.observed.push(root);S.mos.push(mo);}catch(e){}}
+    _trNative(texts).then(function(tr){if(tr&&tr.length){for(var i=0;i<grp.length;i++){_trRemember(texts[i],tr[i]);done+=_trApply(grp[i],tr[i]);}}next();});}next();});}
+function _trObserveRoot(S,root){try{if(!root||S.observed.indexOf(root)>=0)return;var mo=new MutationObserver(function(){clearTimeout(S.debounce);S.debounce=setTimeout(function(){if(S.active)_trRunOnce(S,S.doc);},250);});mo.observe(root,{childList:true,subtree:true,characterData:true});S.observed.push(root);S.mos.push(mo);}catch(e){}}
 function _trRestore(S){try{S.active=false;for(var i=0;i<S.mos.length;i++){try{S.mos[i].disconnect();}catch(e){}}S.mos=[];S.observed=[];var roots=_trAllRoots(S.doc.documentElement);for(var r=0;r<roots.length;r++){try{var w=S.doc.createTreeWalker(roots[r],NodeFilter.SHOW_TEXT,null);var n;while((n=w.nextNode())){if(n.__dcOrig!==undefined){n.nodeValue=n.__dcOrig;delete n.__dcOrig;}}}catch(e){}}}catch(e){}}
 function toggleTranslate(){var t=tabs[active];var fr=t?t.frame:(isBoard()&&BOARDS[activeBoardTab()]?BOARDS[activeBoardTab()].frame:null);
   if(!fr){daoToast('请先打开一个页面再翻译',true);return;}
@@ -1372,10 +1377,11 @@ function toggleTranslate(){var t=tabs[active];var fr=t?t.frame:(isBoard()&&BOARD
       var target=ru.indexOf('/__web')===0?ru:((rl.indexOf('http://')===0||rl.indexOf('https://')===0)?'/__web?u='+encodeURIComponent(ru):'');
       if(target){t.__trRerouted=true;daoToast('🌐 经站内代理重载后自动翻译…');
         var fr2=t.frame,tid=active;
-        var onl=function(){fr2.removeEventListener('load',onl);setTimeout(function(){t.__trRerouted=false;if(active===tid)toggleTranslate();},500);};
+        var onl=function(){fr2.removeEventListener('load',onl);setTimeout(function(){if(active===tid)toggleTranslate();},500);}; // __trRerouted 保持 true: 重载后仍跨源也只重载一次, 不无限白屏循环
         fr2.addEventListener('load',onl);
         t.url=target;t._loaded=true;fr2.setAttribute('src',target);setLoading(tid,true);return;}}
     daoToast('本页不可翻译(跨源)',true);return;}
+  if(t)t.__trRerouted=false;
   var win=fr.contentWindow;var S=win.__daoTrans;
   if(S&&S.active){_trRestore(S);daoToast('已恢复原文');return;}
   S=win.__daoTrans={active:true,doc:doc,observed:[],mos:[],debounce:null};

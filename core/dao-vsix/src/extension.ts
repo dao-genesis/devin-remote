@@ -595,15 +595,19 @@ class WorkspaceState {
 
     getOrCreateSessionId(): string {
         if (this.relaySessionId) return this.relaySessionId;
+        // 多实例(同工作区多窗口 9920/9921…)各占独立 relay session: 共用一个 session 会在
+        // Worker 端相互踢线(后连者顶掉先连者·relay 状态来回翻)。主端口沿用旧文件保 URL 恒定,
+        // 其余端口按端口分文件 —— 鸡犬相闻·老死不相往来。
+        const sf = (this.port && this.port !== DEFAULT_PORT) ? (this.sessionFile + '-' + this.port) : this.sessionFile;
         try {
-            if (fs.existsSync(this.sessionFile)) {
-                this.relaySessionId = fs.readFileSync(this.sessionFile, 'utf8').trim();
+            if (fs.existsSync(sf)) {
+                this.relaySessionId = fs.readFileSync(sf, 'utf8').trim();
                 if (this.relaySessionId) return this.relaySessionId;
             }
         } catch {}
         // 每窗口专属session：workspaceKey + 32字符随机后缀（3.4×10^38种，不可暴力猜）
         this.relaySessionId = this.workspaceKey + '-' + crypto.randomBytes(16).toString('hex');
-        try { fs.writeFileSync(this.sessionFile, this.relaySessionId, 'utf8'); } catch {}
+        try { fs.writeFileSync(sf, this.relaySessionId, 'utf8'); } catch {}
         this.saveState();
         return this.relaySessionId;
     }
