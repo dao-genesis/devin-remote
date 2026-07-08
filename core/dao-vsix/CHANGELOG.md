@@ -2,6 +2,10 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.114
+- **修复「cloudflared quicktunnel 畸形址(前导连字符)被发布 → 公网端点永久死锁」**。`cfReadUrlFromLog` 的正则 `[a-z0-9-]+` 允许子域标签以连字符开头；实测日志曾折行/半写捕获出 `https://-perception-basically-slight.trycloudflare.com` 这类畸形主机名(DNS 恒不解析·边缘恒 530)被当作有效址落定并反向注入，非 leader 实例持续探测 `published-ineffective(tunnel-down/530)` 却因非 leader 无法接管刷新，公网入站/MCP 端点长时间不自愈。
+  - 修法：正则改为 `[a-z0-9](?:[a-z0-9-]*[a-z0-9])?`，主机名须以字母/数字起止，畸形折行片段一律拒收→继续探测直至捕获干净单行 URL。守柔·合法主机名，无为而无不为。
+
 ## 3.50.113
 - **修复「窗口重载后持久中继(relay)卡在 local 不自愈」**。`connectRelay` 置 `relayConnecting=true` 后，若 `connectSingleRelay` 的异步路径(代理隧道/握手)久悬不决——既不 `open` 亦不 `fail`——则 `relayConnecting` 被永久钉死，之后所有重连早退(`if (relayConnected || relayConnecting) return`)，公网入站通道一直不恢复。实测台式机双实例重载后均滞留 `relay: local`，须手工 `/api/relay/set` 才恢复。
   - 修法：`connectRelay` 起连即装 20s 看门狗，到点若仍未 `open` 则强制 `relayConnecting=false` 并排一次 3s 重连；`open` 成功与 `daoRelayDisconnect` 时清除看门狗。守柔·自愈，无为而无不为。
