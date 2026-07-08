@@ -65,7 +65,7 @@ ok(!/lastBkAt/.test(main), "旧 250ms 时间窗机制已整体移除 (倒序拆�
 //     原生 GuardedWebView 钳制根治。JS 层只保留白屏兜底(与输入无关)。
 ok(/__rtBsGuard3/.test(main), "退格回归本源: 幂等守卫 v3 存在");
 ok(!/__rtBsGuard2/.test(main), "退格回归本源: v2 sIP+归位方案已整体移除");
-const bsGuard = main.slice(main.indexOf("installBackspaceGuard(WebView w)"), main.indexOf("// 语音输入根治"));
+const bsGuard = main.slice(main.indexOf("installBackspaceGuard(WebView w)"), main.indexOf("// 语音守卫已整体撤除"));
 ok(!/beforeinput/.test(bsGuard), "退格回归本源: 退格护栏内无任何 beforeinput 拦截");
 ok(!/selectionchange/.test(bsGuard), "退格回归本源: 无 selectionchange 光标干预");
 ok(!/stopImmediatePropagation/.test(bsGuard), "退格回归本源: 无 stopImmediatePropagation");
@@ -78,36 +78,31 @@ ok(!/chk\(false\);\},700\)/.test(main), "退格回归本源: 旧看门狗 700/14
 ok(!/deleteContentForward'&&\(now-lastBk\)<150/.test(main.replace(/"\s*\+\s*"/g, "")), "退格回归本源: v1 前向删除时间窗拦截已移除 (原生 InputConnection 层已够)");
 ok(!/setComposingRegion\(int start, int end\)/.test(main), "原生 setComposingRegion 已恢复透传 (退格钳制只在 deleteSurroundingText)");
 
-// ②c2 语音输入根治 v7 (种子法·execCommand 精确播/摘种·零拦截):
-//      真机录屏实证 v6 合成 beforeinput 摘种误删句首真字(合成事件无 targetRanges,
-//      Slate 按自身模型选区删, DOM 选中的 Z 尚未同步进模型)。v7 改 document.execCommand:
-//      浏览器原生编辑管道按真实 DOM 选区落实编辑并发带 targetRanges 的 beforeinput →
-//      摘种只可能删 Z 本身; 另加摘后校验回注。
-ok(/static void installVoiceGuard\(WebView w\)/.test(main), "语音根治: installVoiceGuard 存在");
-ok(/__rtViGuard7/.test(main), "语音根治: 幂等守卫 v7 存在");
-ok(!/__rtViGuard5/.test(main) && !/window\.__rtViGuard6\)return/.test(main.replace(/"\s*\+\s*"/g, "")), "语音根治: v5/v6 旧方案已整体移除");
-const viGuard = main.slice(main.indexOf("static void installVoiceGuard"), main.indexOf("// DownloadListener"));
-const viFlat = viGuard.replace(/"\s*\+\s*"/g, "");
-ok(!/stopImmediatePropagation/.test(viFlat), "语音根治 v7: 零拦截(无 stopImmediatePropagation)");
-ok(!/preventDefault/.test(viFlat), "语音根治 v7: 不 preventDefault(浏览器默认动作照常落字)");
-ok(/var Z='\\\\u200B'/.test(viGuard), "语音根治 v7: 零宽种子 Z 存在");
-ok(/document\.execCommand\('insertText',false,Z\)/.test(viFlat), "语音根治 v7: 播种经 execCommand 原生编辑管道(带 targetRanges·Slate 按真实选区归账)");
-ok(!/new InputEvent\('beforeinput'/.test(viFlat), "语音根治 v7: 合成 beforeinput 已全面移除(无 targetRanges → 误删句首真字之根)");
-ok(/if\(zNode\(ed\)\|\|!ph\(ed\)\)return;/.test(viFlat), "语音根治 v7: 只在空框+占位时播种(已有内容/已有种不重播)");
-ok(/function comp\(\)\{return compOn&&\(Date\.now\(\)-compT\)<4000;\}/.test(viFlat), "语音根治 v7: 组合态自过期(4s·防 IME 弃组合永久卡死守卫)");
-ok(/setInterval\(function\(\)\{try\{if\(comp\(\)\)return;seedTry\(\);/.test(viFlat), "语音根治 v7: 心跳补种");
-ok(/document\.addEventListener\('selectionchange',lazySeed\)/.test(viFlat) && /document\.addEventListener\('keyup',lazySeed,true\)/.test(viFlat), "语音根治 v7: 事件驱动多路补种(定时器死也能活)");
-ok(/document\.execCommand\('delete'\)/.test(viFlat), "语音根治 v7: 摘种经 execCommand('delete') 按真实 DOM 选区删除(只可能删 Z)");
-ok(/g2\.toString\(\)===Z/.test(viFlat), "语音根治 v7: 摘种前验证选区确为 Z(不误删真内容)");
-ok(/pre\.indexOf\(post\)===0/.test(viFlat) && /execCommand\('insertText',false,lost\)/.test(viFlat), "语音根治 v7: 摘后校验—可见文本变短即回注丢失字符(双重保险)");
-ok(/function fin\(\)/.test(viFlat) && /setTimeout\(function\(\)\{res\(m\+1\);\},250\)/.test(viFlat), "语音根治 v7: fin 持续轮询(250ms×8)钉光标回末尾(防 Qhello 开头落字)");
-ok(/atHead=\(g\.collapsed&&rp\.toString\(\)\.replace\(ZR,''\)===''\)\?1:0/.test(viFlat), "语音根治 v7: atHead 以「编辑器起点→光标」文本空判定(不猜 DOM 偏移)");
-ok(/'focusout',function\(e\)/.test(viFlat), "语音根治 v7: 失焦且只剩种子 → 收种还原占位");
+// ②c2 语音守卫整体撤除 (v8·反者道之动·回归干净基线):
+//      v5(吞首记)/v6(合成 beforeinput 种子)/v7(execCommand 心跳播摘种)全部证伪 ——
+//      任何 JS 层对编辑器的主动写入(含 execCommand)都触发 restartInput 掐断 IME 会话,
+//      心跳补种持续打断键盘(真机 v0.37.177: 键盘频繁自动收回·打字/退格/语音全面损坏)。
+//      JS 层零干预; 输入问题只在原生 InputConnection 层最小处理。
+ok(!/installVoiceGuard/.test(main), "语音守卫 v8: installVoiceGuard 已从 MainActivity 整体移除");
+ok(!/installVoiceGuard/.test(tabAct), "语音守卫 v8: TabActivity 调用已同步移除");
+ok(!/__rtViGuard/.test(main), "语音守卫 v8: 一切 __rtViGuard 方案(v3-v7)已整体移除");
+ok(!/seedTry|lazySeed/.test(main), "语音守卫 v8: 心跳/事件补种(restartInput 掐键盘之根)已根除 (远控 browseType 的按需 execCommand 不在此列)");
+ok(!/u200B/.test(main), "语音守卫 v8: 零宽种子机制已根除");
+ok(!/new InputEvent\('beforeinput'/.test(main.replace(/"\s*\+\s*"/g, "")), "语音守卫 v8: 无合成 beforeinput");
 ok(!/it==='insertText'&&!e\.isComposing/.test(main), "语音根治 v2: 非组合直敲首字拦截已撤除 (模型脱钩→崩页主诱因)");
-// 旧方案病灶(外部直改 Slate DOM 的 schedStrip 去抖摘除)必须彻底移除
 ok(!/function schedStrip/.test(main), "语音根治: 旧去抖摘除逻辑已移除");
-ok(/installVoiceGuard\(v\);\s+\/\//.test(main) || /installVoiceGuard\(v\);/.test(main), "语音根治: onPageFinished 安装");
-ok((tabAct.match(/MainActivity\.installVoiceGuard\(v\);/g) || []).length >= 2, "语音根治: TabActivity 账号页两处(onPageFinished + SPA 路由)同装");
+
+// ②c4 孤儿组合修复 (v8 原生层·测试输入法闭环实证的最底层根因):
+//      空 Slate 编辑器首记 setComposingText → Slate 重挂节点 → restartInput 把起步组合
+//      就地提交成孤儿; IME 继续以全量累积串组合 → 首字重复/被删。修法 = InputConnection
+//      层记孤儿前缀、对后续全量串只透传余量; 绝不删已落文字(删空会再触发重挂 → 死循环)。
+ok(/String orphanPrefix = ""/.test(main), "孤儿修复: orphanPrefix 账本存在");
+ok(/orphanPrefix = orphanPrefix \+ activeComp/.test(main), "孤儿修复: IC 重建时累计被就地提交的组合");
+ok(/if \(s\.startsWith\(orphanPrefix\)\) s = s\.substring\(orphanPrefix\.length\(\)\);/.test(main), "孤儿修复: 全量累积串只透传余量");
+ok(/else orphanPrefix = "";/.test(main), "孤儿修复: 非前缀即弃账(不误剥用户新输入)");
+const gwv = main.slice(main.indexOf("class GuardedWebView"), main.indexOf("void applyImmersive"));
+ok(!/deleteSurroundingText\(orphanPrefix/.test(gwv) && !/super\.deleteSurroundingText\(p\.length/.test(gwv), "孤儿修复: 不删已落文字(防空/非空重挂死循环·实测验证)");
+ok(/activeComp = null; orphanPrefix = "";\s*\n\s*return super\.finishComposingText/.test(main), "孤儿修复: finishComposingText 清账");
 
 // ②c3 取数统一 (拖拽/传到当前页 统一到「下载MD」同源快路径)
 const daopan = fs.readFileSync(path.join(ROOT, "app/src/main/assets/engine/daopan.html"), "utf8");
@@ -126,7 +121,7 @@ ok(/Native\.accessGuideMd\(JSON\.stringify\(it\.acc\), it\.sid/.test(daopan), "�
 // ②d 媒体鉴权本源补齐: 非账号标签从页面登录态采收 auth
 ok(/private void harvestPageAuth\(WebView v, Tab tab, String pageUrl\)/.test(main), "harvestPageAuth 存在");
 ok(/harvestPageAuth\(v, tab, u\); \/\/[^\n]*\n\s*warmAttachmentCookie/.test(main) || /harvestPageAuth\(v, tab, u\);/.test(main), "onPageFinished 采收页面登录态");
-ok(/installBackspaceGuard\(v\); installVoiceGuard\(v\); installVideoFit\(v\); installMediaRetry\(v\); harvestPageAuth\(v, tab, u\); warmAttachmentCookie/.test(main), "SPA 路由后重采 (doUpdateVisitedHistory)");
+ok(/installBackspaceGuard\(v\); installVideoFit\(v\); installMediaRetry\(v\); harvestPageAuth\(v, tab, u\); warmAttachmentCookie/.test(main), "SPA 路由后重采 (doUpdateVisitedHistory)");
 ok(/auth1_session/.test(main), "采收源 = 页面 auth1_session 登录态");
 
 // ②e VPN 自然回退 (有则走、死则直连·不强依赖)

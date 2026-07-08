@@ -136,7 +136,6 @@ public class TabActivity extends AppCompatActivity {
                 MainActivity.installDownloadHook(v);                  // <a download>/blob:/data: 下载捕获
                 MainActivity.installKbHelper(v);                      // 键盘弹出滚动补偿
                 MainActivity.installBackspaceGuard(v);                // IME 退格护栏 (与主壳一致)
-                MainActivity.installVoiceGuard(v);                    // 语音护栏 (与主壳一致)
                 MainActivity.installVideoFit(v);                      // 录像播放器窄屏适配 (与主壳一致)
                 MainActivity.installMediaRetry(v);                    // 媒体加载自愈 (与主壳一致)
             }
@@ -146,7 +145,6 @@ public class TabActivity extends AppCompatActivity {
                     MainActivity.installDownloadHook(v);
                     MainActivity.installKbHelper(v);
                     MainActivity.installBackspaceGuard(v);
-                    MainActivity.installVoiceGuard(v);
                     MainActivity.installVideoFit(v);
                     MainActivity.installMediaRetry(v);
                     MainActivity.warmAttachmentCookie(fToken, fOrg, u);
