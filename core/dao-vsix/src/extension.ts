@@ -7026,6 +7026,15 @@ function mcpProbe(idx){var m=(window._mcp||[])[idx];if(!m)return;var s=document.
 function mcpProbeAll(){var n=(window._mcp||[]).length;if(!n)return;toast('接测 '+n+' 项…',true);for(var i=0;i<n;i++){(function(j){setTimeout(function(){mcpProbe(j)},j*120)})(i);}}
 function mcpRepairLocal(){toast('修复本机 MCP 中…(自动识别运行时/路径, 已备份)',true);cmd('repairLocalMcp',{});}
 function mcpVerifyLocal(){toast('实测 Devin Desktop MCP 中…',true);cmd('verifyLocalMcp',{});}
+// 直装本机 MCP: 把当前 IDE(Devin Desktop 等)内部 MCP 一键直装到本账号(跳过已装/缺密钥项), 装毕自动接测。
+function mcpNeedsKey(m){try{if(m.transport==='STDIO'){var evs=m.env_variables||[];for(var i=0;i<evs.length;i++){var v=evs[i];if(typeof v==='string'){if(v.indexOf('=')<0)return true;}else if(v&&v.name&&!(v.value||v.default))return true;}return false;}return !!m.requiresOauth;}catch(e){return false;}}
+function mcpInstallLocalAll(auto){var list=(window._mcpIde||[]).map(function(i){return {i:i,m:(window._mcp||[])[i]};}).filter(function(x){return x.m&&!x.m.installed&&!mcpNeedsKey(x.m);});
+  if(!list.length){if(!auto)toast('本机 MCP 均已装到本账号(或需先配密钥)',true);return;}
+  toast('⚡ 直装本机 '+list.length+' 个 MCP 到本账号…',true);
+  list.forEach(function(x,j){setTimeout(function(){cmd('mcpMarketInstall',{spec:mcpSpec(x.m)});},j*400);});
+  setTimeout(function(){try{list.forEach(function(x){mcpProbe(x.i);});}catch(e){}},list.length*400+1500);}
+// 默认自动直装(每账号一次): MCP 板块打开时把本机 IDE MCP 自动装到当前账号, 免手点。
+function mcpAutoInstallLocal(){try{var em=(S.auth&&S.auth.email)||'';if(!em)return;var k='dao_mcp_autoinst_'+em;if(localStorage.getItem(k))return;localStorage.setItem(k,String(Date.now()));mcpInstallLocalAll(true);}catch(e){}}
 // MCP 工具清单: 真调 tools/list, 内联展开该 MCP 全部可用工具 (再点收起)
 function mcpTools(idx){var m=(window._mcp||[])[idx];if(!m)return;var box=document.getElementById('mcp-tools-'+idx);if(!box)return;if(box.style.display==='block'&&box.getAttribute('data-loaded')){box.style.display='none';return}box.style.display='block';box.innerHTML='<div style="font-size:11px;color:var(--muted)">tools/list 拉取中…</div>';cmd('mcpTools',{idx:idx,spec:mcpSpec(m)});}
 function mcpToolsRender(idx,r){var box=document.getElementById('mcp-tools-'+idx);if(!box)return;box.setAttribute('data-loaded','1');r=r||{};if(!r.ok){box.innerHTML='<div style="font-size:11px;color:var(--danger)">✗ '+esc(r.error||'无法获取工具清单')+'</div>';return}var ts=r.tools||[];var h='<div style="font-size:11px;color:var(--success);margin-bottom:4px">✓ '+ts.length+' 个工具</div><div style="max-height:220px;overflow:auto;background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:4px;padding:6px">';ts.forEach(function(t){h+='<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)"><span style="font-size:11px;font-weight:600;color:var(--accent)">'+esc(t.name||'')+'</span>'+(t.description?('<div style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(t.description)+'">'+esc(String(t.description).slice(0,160))+'</div>'):'')+'</div>'});h+='</div>';box.innerHTML=h;}
@@ -7104,7 +7113,7 @@ function rT(tab,items,err,fallbackProxy){
     // 官网 MCP 整图给到本地: 已装(★)+ 全市场目录; 每项可「装到本账号 / +档案(批量注入) / 卸载」
     // 对齐官网: 顶部「+ 自定义 MCP」(直接装到本账号) + 搜索/筛选框 (名称/简介即时过滤)。
     window._mcp=[];window._mcpIde=[];
-    h+='<div class="br" style="margin-bottom:6px"><button class="btn sm primary" onclick="mcpAddCustom()">+ 自定义 MCP</button><button class="btn sm" onclick="mcpProbeAll()" title="逐项接测所有 MCP 连接(连通性验证)">🔍 全部接测</button><button class="btn sm" onclick="mcpRepairLocal()" title="一键修复本机 MCP: 自动识别 node 运行时与模块路径、修正命令并启用(先备份, 通用·强鲁棒)。重载窗口后生效" style="background:#b8860b;color:#fff">🔧 一键修复本机 MCP</button><button class="btn sm" onclick="mcpVerifyLocal()" title="实测使用: 真起进程 initialize+tools/list 拿真实工具数" style="background:#1a7f5a;color:#fff">🧪 实测使用</button></div>';
+    h+='<div class="br" style="margin-bottom:6px"><button class="btn sm primary" onclick="mcpAddCustom()">+ 自定义 MCP</button><button class="btn sm" onclick="mcpProbeAll()" title="逐项接测所有 MCP 连接(连通性验证)">🔍 全部接测</button><button class="btn sm" onclick="mcpRepairLocal()" title="一键修复本机 MCP: 自动识别 node 运行时与模块路径、修正命令并启用(先备份, 通用·强鲁棒)。重载窗口后生效" style="background:#b8860b;color:#fff">🔧 一键修复本机 MCP</button><button class="btn sm" onclick="mcpVerifyLocal()" title="实测使用: 真起进程 initialize+tools/list 拿真实工具数" style="background:#1a7f5a;color:#fff">🧪 实测使用</button><button class="btn sm" onclick="mcpInstallLocalAll()" title="把本机 IDE(Devin Desktop 等)内部 MCP 一键直装到本账号 — 跳过已装与缺密钥项, 装毕自动接测" style="background:#0e639c;color:#fff">⚡ 直装本机 MCP</button></div>';
     h+='<input id="mcpq" placeholder="🔍 搜索 MCP (名称 / 简介)" oninput="mcpFilter(this.value)" style="width:100%;margin:0 0 8px;padding:6px 8px;box-sizing:border-box;background:var(--card,#222);color:var(--fg);border:1px solid var(--border);border-radius:4px">';
     var _curG='';
     var _ideSrcs=[];items.forEach(function(x){if(x.group==='ide'&&x.source&&_ideSrcs.indexOf(x.source)<0)_ideSrcs.push(x.source);});
@@ -7139,6 +7148,8 @@ function rT(tab,items,err,fallbackProxy){
     });
     // 本机 IDE MCP 默认自动接测 (用户「初始化接测」) — 市场项按需点接测
     setTimeout(function(){try{(window._mcpIde||[]).forEach(function(i){mcpProbe(i)})}catch(e){}},150);
+    // 默认直装: 本机 IDE MCP 自动装到当前账号(每账号一次·跳过已装/缺密钥项)
+    setTimeout(function(){try{mcpAutoInstallLocal()}catch(e){}},600);
   }else if(tab==='usage'||tab==='org'||tab==='automations'){
     items.forEach(it=>{
       const nm=it.name||it.title||'';const dt=it.detail||'';
