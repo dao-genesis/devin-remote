@@ -3758,29 +3758,72 @@ public class MainActivity extends AppCompatActivity {
     //   insertCompositionText(stopImmediatePropagation·不 preventDefault: 浏览器默认动作照常落字,
     //   IME 会话不断), 第二记起 Slate 全程正常处理(此时组合已稳固, 重渲不再掐断)。
     //   模型少记的首字由既有 compositionend 归账兜底补齐(占位仍在才重放·不双写)。
+    //   v6(种子法·顺势而为): 真机实测 v5 吞首记后 Slate 组合状态错位 —— 连续语音只上屏头两字
+    //   后组合流卡死。改为不拦任何事件: 编辑器开头已有字符时语音一切正常(用户实测规律),
+    //   故在「空框+占位」时以合成 beforeinput(insertText) 经 Slate 自身管道预植零宽种子 Z(U+200B):
+    //   占位摘除/重挂在组合开始**之前**完成, IME 语音会话全程不被 restartInput 掐断;
+    //   真内容落定后再经 Slate 同一管道摘种(非外部改 DOM·不造陈旧快照)。四要点:
+    //   ①组合态自过期 comp(): IME 弃组合可不发 compositionend, 布尔位永久卡死守卫 →
+    //     以「4s 内有组合事件」为准(语音长组合有持续 compositionupdate 保鲜)。
+    //   ②多路补种: 心跳 setInterval + selectionchange/keyup/visibilitychange 事件驱动,
+    //     后台节流/定时器被清掉也能活(实测旧实例心跳会死而事件路径仍通)。
+    //   ③摘种后 fin() 持续轮询(250ms×8)把开头光标钉回末尾: Slate 模型异步归账会瞬时把
+    //     DOM 光标拉回开头, 单次判定误退正是「后续输入落到开头 Qhello」之根。
+    //   ④失焦且只剩种子无真内容 → 收回种子还原占位。
     static void installVoiceGuard(WebView w) {
         if (w == null) return;
-        String js = "(function(){if(window.__rtViGuard5)return;window.__rtViGuard5=1;"
+        String js = "(function(){if(window.__rtViGuard6)return;window.__rtViGuard6=1;"
+            + "var Z='\\u200B',ZR=new RegExp(Z,'g'),compOn=0,compT=0,unbusy=0;"
+            + "function comp(){return compOn&&(Date.now()-compT)<4000;}"
             + "function ced(t){return t&&t.closest?t.closest('[data-slate-editor=true],[contenteditable=true],[contenteditable=\"\"]'):null;}"
-            + "var hold=null,buf='',fresh=0;"
             + "function ph(ed){return ed?ed.querySelector('[data-slate-placeholder]'):null;}"
-            + "document.addEventListener('compositionstart',function(e){var ed=ced(e.target);hold=ed||null;buf='';"
-            + "var p=ph(ed);fresh=(ed&&p)?1:0;if(p)p.style.visibility='hidden';},true);"
-            + "document.addEventListener('compositionupdate',function(e){if(hold)buf=String(e.data||'');},true);"
-            + "document.addEventListener('beforeinput',function(e){"
-            + "if(fresh&&hold&&e.isTrusted&&e.inputType==='insertCompositionText'){fresh=0;e.stopImmediatePropagation();}"
-            + "},true);"
-            + "document.addEventListener('compositionend',function(e){var ed=hold;hold=null;fresh=0;if(!ed)return;"
-            + "var p=ph(ed);if(p)p.style.visibility='';"
-            + "var txt=String(e.data!=null&&e.data!==''?e.data:buf)||'';if(!txt)return;"
-            // 延时归账: 给 Slate 自身(MutationObserver)一拍归账机会; 占位仍在=模型确未归账才重放
+            + "function edTxt(ed){var t='',w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT,{acceptNode:function(n){return n.parentElement&&n.parentElement.closest('[data-slate-placeholder]')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;}}),n;while((n=w.nextNode()))t+=n.nodeValue;return t;}"
+            + "function zNode(ed){var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n;while((n=w.nextNode())){var i=(n.nodeValue||'').indexOf(Z);if(i>=0)return[n,i];}return null;}"
+            // 播种: 空框+占位+非组合中 → 经 Slate 自身管道插入 Z(合成 beforeinput·非外部改 DOM)
+            + "function seed(ed){try{if(!ed||!ed.isConnected||comp())return;if(zNode(ed)||!ph(ed))return;if(edTxt(ed).replace(ZR,'')!=='')return;"
+            + "var ev=new InputEvent('beforeinput',{inputType:'insertText',data:Z,bubbles:true,cancelable:true});"
+            + "var tgt=(document.activeElement&&ed.contains(document.activeElement))?document.activeElement:ed;tgt.dispatchEvent(ev);}catch(e){}}"
+            + "function seedTry(){var ed=ced(document.activeElement);if(ed)seed(ed);}"
+            + "function toEnd(ed){var r3=document.createRange();r3.selectNodeContents(ed);r3.collapse(false);var s3=getSelection();s3.removeAllRanges();s3.addRange(r3);}"
+            // 摘种: 真内容落定后选中 Z 经 Slate 同一管道删除; end 时 fin() 持续轮询把光标钉回末尾
+            + "function unseed(ed,end){if(unbusy)return;unbusy=1;"
+            + "function fin(){if(!end)return;(function res(m){try{if(m>8||comp()||!ed.isConnected)return;"
+            + "var s3=getSelection();var atHead=1;"
+            + "if(s3.rangeCount){var g=s3.getRangeAt(0);if(ed.contains(g.startContainer)){var rp=document.createRange();rp.setStart(ed,0);rp.setEnd(g.startContainer,g.startOffset);atHead=(g.collapsed&&rp.toString().replace(ZR,'')==='')?1:0;}}"
+            + "if(atHead&&edTxt(ed).replace(ZR,'')!=='')toEnd(ed);"
+            + "setTimeout(function(){res(m+1);},250);}catch(e){}})(0);}"
+            + "(function att(k){try{if(k>6||comp()||!ed.isConnected){unbusy=0;return;}"
+            + "var zn=zNode(ed);if(!zn){unbusy=0;fin();return;}"
+            + "if(edTxt(ed).replace(ZR,'')===''){unbusy=0;return;}"
+            + "var r=document.createRange();r.setStart(zn[0],zn[1]);r.setEnd(zn[0],zn[1]+1);var s=getSelection();s.removeAllRanges();s.addRange(r);"
             + "setTimeout(function(){try{"
-            + "if(!ed.isConnected)return;"
-            + "if(!ph(ed))return;"
-            + "var ev=new InputEvent('beforeinput',{inputType:'insertText',data:txt,bubbles:true,cancelable:true});"
-            + "var tgt=(document.activeElement&&ed.contains(document.activeElement))?document.activeElement:ed;"
-            + "tgt.dispatchEvent(ev);"
-            + "}catch(x){}},120);},true);})();";
+            + "var ok=0,s2=getSelection();if(s2.rangeCount){var g2=s2.getRangeAt(0);ok=(!g2.collapsed&&g2.toString()===Z)?1:0;}"
+            + "if(ok)ed.dispatchEvent(new InputEvent('beforeinput',{inputType:'deleteContentBackward',bubbles:true,cancelable:true}));"
+            + "setTimeout(function(){att(k+1);},250);}catch(e){unbusy=0;}},80);"
+            + "}catch(e){unbusy=0;}})(0);}"
+            // 组合态追踪(自过期法·见 comp())
+            + "document.addEventListener('compositionstart',function(e){if(ced(e.target)){compOn=1;compT=Date.now();}},true);"
+            + "document.addEventListener('compositionupdate',function(e){if(ced(e.target)){compOn=1;compT=Date.now();}},true);"
+            + "document.addEventListener('compositionend',function(e){var ed=ced(e.target);compOn=0;if(!ed)return;"
+            + "setTimeout(function(){try{if(!comp()&&zNode(ed)&&edTxt(ed).replace(ZR,'')!=='')unseed(ed,true);}catch(x){}},120);},true);"
+            // 直敲路径: 真内容与种子共存即摘种
+            + "document.addEventListener('input',function(e){var ed=ced(e.target);if(!ed||comp())return;"
+            + "if(zNode(ed)&&edTxt(ed).replace(ZR,'')!=='')unseed(ed,true);},true);"
+            // 聚焦播种(延 50ms 等 Slate 建好选区)
+            + "document.addEventListener('focusin',function(e){var ed=ced(e.target);if(!ed)return;setTimeout(function(){seed(ed);},50);},true);"
+            // 失焦收种: 只剩种子无真内容 → 删 Z 还原占位
+            + "document.addEventListener('focusout',function(e){var ed=ced(e.target);if(!ed)return;setTimeout(function(){try{"
+            + "if(comp()||!ed.isConnected)return;var zn=zNode(ed);if(!zn)return;if(edTxt(ed).replace(ZR,'')!=='')return;"
+            + "var r=document.createRange();r.setStart(zn[0],zn[1]);r.setEnd(zn[0],zn[1]+1);var s=getSelection();s.removeAllRanges();s.addRange(r);"
+            + "setTimeout(function(){try{ed.dispatchEvent(new InputEvent('beforeinput',{inputType:'deleteContentBackward',bubbles:true,cancelable:true}));}catch(x){}},60);"
+            + "}catch(x){}},80);},true);"
+            // 多路补种: 心跳 + 事件驱动(后台节流/定时器被清也能活)
+            + "setInterval(function(){try{if(comp())return;seedTry();}catch(e){}},700);"
+            + "var sdT=0;function lazySeed(){var n=Date.now();if(n-sdT<300)return;sdT=n;setTimeout(function(){try{if(!comp())seedTry();}catch(e){}},120);}"
+            + "document.addEventListener('selectionchange',lazySeed);"
+            + "document.addEventListener('keyup',lazySeed,true);"
+            + "document.addEventListener('visibilitychange',lazySeed);"
+            + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // DownloadListener 收到 blob: → 让当前页 JS 取出内容回传

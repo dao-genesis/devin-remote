@@ -78,25 +78,31 @@ ok(!/chk\(false\);\},700\)/.test(main), "退格回归本源: 旧看门狗 700/14
 ok(!/deleteContentForward'&&\(now-lastBk\)<150/.test(main.replace(/"\s*\+\s*"/g, "")), "退格回归本源: v1 前向删除时间窗拦截已移除 (原生 InputConnection 层已够)");
 ok(!/setComposingRegion\(int start, int end\)/.test(main), "原生 setComposingRegion 已恢复透传 (退格钳制只在 deleteSurroundingText)");
 
-// ②c2 语音输入根治 v5 (v4 基座 + 空框首记最小拦截):
-//      v4 保留: ①组合期 CSS 隐藏占位(不动 DOM·不触发重挂) ②compositionend 归账兜底(不双写)。
-//      v5 新增: 空编辑器起始的组合只吞**第一记** insertCompositionText(sIP·不 preventDefault)
-//      → Slate 不在首记同步重渲重挂, restartInput 不再掐断刚建立的语音会话; 第二记起全程直通。
+// ②c2 语音输入根治 v6 (种子法·顺势而为·零拦截):
+//      真机实测 v5 吞首记后 Slate 组合状态错位(连续语音只上屏头两字后卡死)。
+//      v6 改为不拦任何事件: 空框+占位时经 Slate 自身管道(合成 beforeinput·insertText)
+//      预植零宽种子 Z → 占位摘除/重挂在组合开始之前完成, restartInput 不再掐断语音会话;
+//      真内容落定后同管道摘种 + fin() 持续轮询钉光标回末尾。
 ok(/static void installVoiceGuard\(WebView w\)/.test(main), "语音根治: installVoiceGuard 存在");
-ok(/__rtViGuard5/.test(main), "语音根治: 幂等守卫 v5 存在");
+ok(/__rtViGuard6/.test(main), "语音根治: 幂等守卫 v6 存在");
+ok(!/__rtViGuard5/.test(main), "语音根治: v5 吞首记方案已整体移除");
 const viGuard = main.slice(main.indexOf("static void installVoiceGuard"), main.indexOf("// DownloadListener"));
 const viFlat = viGuard.replace(/"\s*\+\s*"/g, "");
-ok(/if\(fresh&&hold&&e\.isTrusted&&e\.inputType==='insertCompositionText'\)\{fresh=0;e\.stopImmediatePropagation\(\);\}/.test(viFlat), "语音根治 v5: 空框组合只吞第一记 insertCompositionText(防 restartInput 掐断)");
-ok((viFlat.match(/stopImmediatePropagation/g) || []).length === 1, "语音根治 v5: 拦截面最小化(仅首记一处 sIP, 其余直通)");
-ok(!/preventDefault/.test(viFlat), "语音根治 v5: 不 preventDefault(浏览器默认动作照常落字)");
-ok(/p\.style\.visibility='hidden'/.test(viGuard), "语音根治: 组合期仅 CSS 隐藏占位(消除重叠·不掐 IME)");
-ok(/'compositionend',function\(e\)\{var ed=hold;hold=null;fresh=0;/.test(viFlat), "语音根治: compositionend 归位+拦截标志复位");
-ok(/setTimeout\(function\(\)\{try\{/.test(main) && /if\(!ph\(ed\)\)return;/.test(viFlat), "语音根治: 占位仍在才重放(已归账不双写)");
-ok(/new InputEvent\('beforeinput',\{inputType:'insertText',data:txt,bubbles:true,cancelable:true\}\)/.test(main), "语音根治: 合成 beforeinput(insertText) 归账兜底");
-ok(/'compositionupdate',function\(e\)\{if\(hold\)buf=String\(e\.data\|\|''\);/.test(main), "语音根治 v4: 组合文本经 compositionupdate 缓存(供归账兜底)");
+ok(!/stopImmediatePropagation/.test(viFlat), "语音根治 v6: 零拦截(无 stopImmediatePropagation)");
+ok(!/preventDefault/.test(viFlat), "语音根治 v6: 不 preventDefault(浏览器默认动作照常落字)");
+ok(/var Z='\\\\u200B'/.test(viGuard), "语音根治 v6: 零宽种子 Z 存在");
+ok(/inputType:'insertText',data:Z/.test(viFlat), "语音根治 v6: 播种经合成 beforeinput(insertText) 走 Slate 自身管道(非外部改 DOM)");
+ok(/if\(zNode\(ed\)\|\|!ph\(ed\)\)return;/.test(viFlat), "语音根治 v6: 只在空框+占位时播种(已有内容/已有种不重播)");
+ok(/function comp\(\)\{return compOn&&\(Date\.now\(\)-compT\)<4000;\}/.test(viFlat), "语音根治 v6: 组合态自过期(4s·防 IME 弃组合永久卡死守卫)");
+ok(/setInterval\(function\(\)\{try\{if\(comp\(\)\)return;seedTry\(\);/.test(viFlat), "语音根治 v6: 心跳补种");
+ok(/document\.addEventListener\('selectionchange',lazySeed\)/.test(viFlat) && /document\.addEventListener\('keyup',lazySeed,true\)/.test(viFlat), "语音根治 v6: 事件驱动多路补种(定时器死也能活)");
+ok(/inputType:'deleteContentBackward'/.test(viFlat), "语音根治 v6: 摘种经同管道 deleteContentBackward(不造陈旧快照)");
+ok(/g2\.toString\(\)===Z/.test(viFlat), "语音根治 v6: 摘种前验证选区确为 Z(不误删真内容)");
+ok(/function fin\(\)/.test(viFlat) && /setTimeout\(function\(\)\{res\(m\+1\);\},250\)/.test(viFlat), "语音根治 v6: fin 持续轮询(250ms×8)钉光标回末尾(防 Qhello 开头落字)");
+ok(/atHead=\(g\.collapsed&&rp\.toString\(\)\.replace\(ZR,''\)===''\)\?1:0/.test(viFlat), "语音根治 v6: atHead 以「编辑器起点→光标」文本空判定(不猜 DOM 偏移)");
+ok(/'focusout',function\(e\)/.test(viFlat), "语音根治 v6: 失焦且只剩种子 → 收种还原占位");
 ok(!/it==='insertText'&&!e\.isComposing/.test(main), "语音根治 v2: 非组合直敲首字拦截已撤除 (模型脱钩→崩页主诱因)");
-// 旧零宽打底方案(外部改写 Slate DOM → 陈旧快照诱因)必须彻底移除
-ok(!/var Z='\\\\u200B';/.test(main), "语音根治: 旧零宽字符打底已移除");
+// 旧方案病灶(外部直改 Slate DOM 的 schedStrip 去抖摘除)必须彻底移除
 ok(!/function schedStrip/.test(main), "语音根治: 旧去抖摘除逻辑已移除");
 ok(/installVoiceGuard\(v\);\s+\/\//.test(main) || /installVoiceGuard\(v\);/.test(main), "语音根治: onPageFinished 安装");
 ok((tabAct.match(/MainActivity\.installVoiceGuard\(v\);/g) || []).length >= 2, "语音根治: TabActivity 账号页两处(onPageFinished + SPA 路由)同装");
