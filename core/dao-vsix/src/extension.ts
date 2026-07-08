@@ -11405,7 +11405,9 @@ async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promi
     const r = await devinJsonPost(DEVIN_APP + '/api/mcp/installations',
         { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId }, payload);
     const j = r.json || {};
-    const ok = r.status === 200 || r.status === 201;
+    // 幂等: 409「already installed」= 目标态已达成, 视同成功 (自动直装/批量装重复触发不再误报失败)
+    const already = r.status === 409 && /already installed/i.test(String((j.detail || j.error || j.message || '')));
+    const ok = r.status === 200 || r.status === 201 || already;
     // 帛书·「知不知尚矣」— 失败时把上游校验原因透出, 不再吞成裸 status (便于面板/调用方诊断)
     let error = '';
     if (!ok) {
