@@ -34,9 +34,9 @@ function detectProxy(conf) {
   if (process.platform !== 'win32') return '';
   try {
     const base = 'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ';
-    const en = cp.execSync(base + 'ProxyEnable', { encoding: 'utf8' });
+    const en = cp.execSync(base + 'ProxyEnable', { encoding: 'utf8', windowsHide: true });
     if (!/0x1\b/.test(en)) return '';
-    const sv = cp.execSync(base + 'ProxyServer', { encoding: 'utf8' });
+    const sv = cp.execSync(base + 'ProxyServer', { encoding: 'utf8', windowsHide: true });
     const m = sv.match(/ProxyServer\s+REG_SZ\s+(.+)/);
     if (!m) return '';
     let val = m[1].trim();

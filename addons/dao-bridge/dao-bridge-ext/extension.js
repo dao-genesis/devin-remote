@@ -335,7 +335,7 @@ function findCloudflared(ctx) {
   // PATH 兜底: 遍历 where/command -v 全部结果, 跳过 shim, 只取真二进制
   try {
     const probe = process.platform === "win32" ? "where cloudflared" : "command -v cloudflared 2>/dev/null; which -a cloudflared 2>/dev/null";
-    const lines = cp.execSync(probe, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim().split(/\r?\n/);
+    const lines = cp.execSync(probe, { stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).toString().trim().split(/\r?\n/);
     for (const ln of lines) { const p = ln.trim(); if (isRealCloudflared(p) && probeCloudflared(p)) return p; }
   } catch (e) {}
   return "";
