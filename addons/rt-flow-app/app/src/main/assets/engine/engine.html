@@ -326,6 +326,10 @@
       //   ended=本轮观测到「曾追踪→已终态」的会话; scanned=本轮扫描成功的账号(供 tick 结束判定门控·防误报)。
       var watch=Object.create(null); (opt&&opt.watchSids||[]).forEach(function(x){ if(x) watch[x]=1; });
       var ended=[], scanned=Object.create(null);
+      // 时效性: 上轮在追踪的账号排最前扫(状态跃迁多发生在它们身上) → 卡住/结束/额度耗尽的
+      //   检出时延从「整池扫完」(200+ 号可达分钟级)降到首几波; 其余账号原序跟进, 一号不漏。
+      var prio=Object.create(null); (opt&&opt.priorityEmails||[]).forEach(function(e){ if(e) prio[String(e).toLowerCase()]=1; });
+      accs.sort(function(a,b){ return (prio[String(b.email||"").toLowerCase()]?1:0)-(prio[String(a.email||"").toLowerCase()]?1:0); });
       // 单账号会话扫描 → 推入 hits (与 switch.html _pollOneAcc 同构, 供并发池调用)。
       async function scanAcc(acc){
         var r; try{ r=await DaoCloud.listSessions(acc, 50); }catch(e){ return; }
@@ -1228,8 +1232,11 @@
       return String(email||"").split("@")[0];
     }
     // 额度耗尽: 按账号聚合 N 个休眠对话, 跃迁(从无到有/数目增加)或超节流窗即真推送一次; 恢复(本轮无)即清, 下次再耗尽立报。
-    function quotaWatch(byAcct, titleByAcct, now){
+    function quotaWatch(byAcct, titleByAcct, now, scanned){
       var q = _ls(QKEY), nq = {};
+      // 扫描失败门控: 本轮未扫到的账号(网络抖动/单号失败)不等于已恢复 → 原样保留节流账本,
+      //   否则下轮扫描成功时被当作「跃迁」重推 → 同一耗尽状态反复刷屏(误报根治)。
+      if(scanned){ Object.keys(q).forEach(function(email){ if(!(email in byAcct) && !scanned[String(email).toLowerCase()]) nq[email]=q[email]; }); }
       Object.keys(byAcct).forEach(function(email){
         var cnt = byAcct[email]|0; if(cnt<=0) return;
         var p = q[email], transition = !p || (p.cnt|0) < cnt, stale = p && (now - (p.ts||0) >= QUOTA_THROTTLE);
@@ -1417,7 +1424,8 @@
       try {
         var accs = []; try { accs = loadAcc().filter(function(x){ return x.auth1 && x.orgId; }); } catch(e){}
         if (accs.length) {
-          var r = null; try { r = await CMDS.trackStuck({ watchSids: Object.keys(loadPrev()) }); } catch(e){ r = null; }
+          var r = null; try { var _pv = loadPrev(); var _pe = Object.create(null); Object.keys(_pv).forEach(function(sid){ var e=(_pv[sid]&&_pv[sid].email)||""; if(e) _pe[String(e).toLowerCase()]=1; });
+            r = await CMDS.trackStuck({ watchSids: Object.keys(_pv), priorityEmails: Object.keys(_pe) }); } catch(e){ r = null; }
           if (r && r.ok && Array.isArray(r.sessions)) { window.__lastTrk = r; try { _convTrack(r); } catch(e){} }
         }
       } catch(e){}
@@ -1509,7 +1517,7 @@
       savePrev(next);
       try { _mirrorTickToVault(r.sessions, now, r.ended); } catch(e){}   // 常驻后台权威态写入共享金库(含最近结束闭环) → 网页/跨设备对话追踪恒鲜(≤60s)·一号不漏
       // 额度通知 (真·系统推送, 与对话卡座同款): 已耗尽聚合 + 即将耗尽预警。
-      try { quotaWatch(quotaByAcct, quotaTitleByAcct, now); } catch(e){}
+      try { quotaWatch(quotaByAcct, quotaTitleByAcct, now, scanned); } catch(e){}
       try { quotaLowWatch(loadAcc().filter(function(x){ return x.auth1 && x.orgId; }), titleByAcct, now); } catch(e){}
     }
     setTimeout(function(){ tick(); setInterval(tick, POLL_MS); }, FIRST_DELAY);

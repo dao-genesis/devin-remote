@@ -37,8 +37,13 @@ ok(/var QKEY = "rtflow\.convwatch\.quota"/.test(engineSrc) && /var QLKEY = "rtfl
    "源级: 额度耗尽/即将耗尽各持独立按账号节流存储");
 ok(/s\.reason === "quota"\) \{ cur\[sid\] = \{ phase: "quota"/.test(engineSrc),
    "源级: 额度耗尽 sid 仍登记 cur(phase=quota) → 不被误判「已结束」");
-ok(/try \{ quotaWatch\(quotaByAcct, quotaTitleByAcct, now\); \} catch/.test(engineSrc) && /try \{ quotaLowWatch\(loadAcc\(\)\.filter\(function\(x\)\{ return x\.auth1 && x\.orgId; \}\), titleByAcct, now\); \} catch/.test(engineSrc),
-   "源级: tick 每轮触发 quotaWatch + quotaLowWatch(均带本轮对话名映射)");
+ok(/try \{ quotaWatch\(quotaByAcct, quotaTitleByAcct, now, scanned\); \} catch/.test(engineSrc) && /try \{ quotaLowWatch\(loadAcc\(\)\.filter\(function\(x\)\{ return x\.auth1 && x\.orgId; \}\), titleByAcct, now\); \} catch/.test(engineSrc),
+   "源级: tick 每轮触发 quotaWatch(带扫描门控) + quotaLowWatch(均带本轮对话名映射)");
+// ── 源级护栏: 时效性 — 上轮在追踪的账号优先扫; 扫描失败门控保留额度节流账本 ──
+ok(/priorityEmails/.test(engineSrc) && /accs\.sort\(function\(a,b\)\{ return \(prio\[/.test(engineSrc),
+   "源级: trackStuck 上轮追踪账号排最前扫(检出时延降到首几波·一号不漏)");
+ok(/priorityEmails: Object\.keys\(_pe\)/.test(engineSrc),
+   "源级: notifyTick 把上轮追踪账号 email 传给 trackStuck 作优先扫描");
 
 // ── 源级护栏: 额度类通知主体优先用「该号对话名」, 仅全新零对话账号才回退账号名 (用户要求) ──
 ok(/function _acctConvName\(email, preferred\)/.test(engineSrc) &&
@@ -99,6 +104,17 @@ function makeHarness() {
   h.quotaWatch({}, {}, t0 + 6*60*1000 + 32*60*1000);
   h.quotaWatch({ "alice@x.com": 1 }, { "alice@x.com": "修登录 bug" }, t0 + 6*60*1000 + 33*60*1000);
   ok(h.notes.length === 4, "恢复后再耗尽 → 立即推送(下次该报必报)");
+
+  // 扫描失败门控: 本轮该号未扫到(scanned 缺席) → 账本保留, 不视为恢复; 下轮扫描成功且仍耗尽 → 不重推(非跃迁)
+  const h3 = makeHarness();
+  h3.quotaWatch({ "carol@x.com": 2 }, {}, t0, { "carol@x.com": 1 });
+  ok(h3.notes.length === 1, "门控前置: 首现推送一次");
+  h3.quotaWatch({}, {}, t0 + 60*1000, {});                                  // 本轮扫描失败(scanned 空) → 保留账本
+  h3.quotaWatch({ "carol@x.com": 2 }, {}, t0 + 2*60*1000, { "carol@x.com": 1 });
+  ok(h3.notes.length === 1, "扫描失败轮不清账本 → 恢复扫描后同状态不重推(反复刷屏根治)");
+  h3.quotaWatch({}, {}, t0 + 3*60*1000, { "carol@x.com": 1 });              // 本轮真扫到且无耗尽 → 真恢复清账
+  h3.quotaWatch({ "carol@x.com": 2 }, {}, t0 + 4*60*1000, { "carol@x.com": 1 });
+  ok(h3.notes.length === 2, "真恢复(扫描成功且无耗尽)后再耗尽 → 跃迁立报");
 
   // 无对话名(全新零对话号) → 回退账号名
   const h2 = makeHarness();

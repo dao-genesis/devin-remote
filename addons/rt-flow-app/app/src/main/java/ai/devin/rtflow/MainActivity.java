@@ -212,21 +212,43 @@ public class MainActivity extends AppCompatActivity {
     //   继续发来的全量累积串若以孤儿前缀开头 → 只把「余量」交给编辑器(孤儿已在文中, 不删不动,
     //   组合区只承载余量)。全程 IME 管道内操作, 零 JS·零合成事件·不触碰 Slate、不删已落文字
     //   (删空会再次触发 Slate 空/非空重挂 → restartInput 死循环, 实测验证)。
+    // 持久化补全(退格钳制"几分钟后失效"之根): 每当本层吞掉/改写一次 IME 操作(钳左右同删、
+    //   吞前向删、剥孤儿前缀), IME 自身的文本账本即与编辑器真相脱钩; Gboard 一类输入法后续
+    //   按陈账计算组合区/删除区 → 越删越乱(表象=左右同删复发·乱退格), 直到整页刷新(restartInput)
+    //   才校正。修法 = 谁改写谁对账: 每次改写后在组合安全点(无活跃组合时)restartInput 让 IME
+    //   重读编辑器真相; 无会话可掐, 不收键盘, 账本即时归真 → 钳制永续。
     static class GuardedWebView extends WebView {
         GuardedWebView(Context c) { super(c); }
         String activeComp = null;   // 当前 IC 组合区内的(已剥前缀的)文本
         String orphanPrefix = "";   // 历次 restartInput 累计被就地提交的孤儿前缀
+        long orphanAt = 0;          // 孤儿记账时刻(账本只在紧随重建的短窗内有效)
+        boolean icAltered = false;  // 本层改写过 IME 操作 → IME 账本已脱钩, 待对账
+        void resyncIme() {          // 组合安全点对账: 无活跃组合才 restartInput(不掐会话·不收键盘)
+            post(() -> {
+                if (activeComp != null && !activeComp.isEmpty()) return;
+                if (!icAltered) return;
+                icAltered = false;
+                try {
+                    android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager)
+                        getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+                    if (imm != null) imm.restartInput(GuardedWebView.this);
+                } catch (Exception ignored) {}
+            });
+        }
         @Override public android.view.inputmethod.InputConnection onCreateInputConnection(EditorInfo outAttrs) {
             android.view.inputmethod.InputConnection ic = super.onCreateInputConnection(outAttrs);
             if (ic == null) return null;
-            if (activeComp != null && !activeComp.isEmpty()) orphanPrefix = orphanPrefix + activeComp;
+            if (activeComp != null && !activeComp.isEmpty()) { orphanPrefix = orphanPrefix + activeComp; orphanAt = System.currentTimeMillis(); }
             activeComp = null;
             return new android.view.inputmethod.InputConnectionWrapper(ic, true) {
                 private String strip(CharSequence t) {
                     String s = t == null ? "" : t.toString();
                     if (!orphanPrefix.isEmpty()) {
-                        if (s.startsWith(orphanPrefix)) s = s.substring(orphanPrefix.length());
-                        else orphanPrefix = "";
+                        // 注: 不可经 getTextBeforeCursor 验孤儿落地 —— restartInput 后渲染进程
+                        // 异步, 此刻读到的是陈文本(实测), 会误弃账。时效窗 + 前缀双条件已足够安全。
+                        boolean fresh = System.currentTimeMillis() - orphanAt < 5000;   // 只救紧随重建的组合流
+                        if (fresh && s.startsWith(orphanPrefix)) { s = s.substring(orphanPrefix.length()); icAltered = true; }
+                        else orphanPrefix = "";   // 过期/非前缀 → 立即弃账, 绝不误剥后续输入
                     }
                     return s;
                 }
@@ -238,11 +260,15 @@ public class MainActivity extends AppCompatActivity {
                 @Override public boolean commitText(CharSequence text, int newCursorPosition) {
                     String s = strip(text);
                     activeComp = null; orphanPrefix = "";
-                    return super.commitText(s, newCursorPosition);
+                    boolean r = super.commitText(s, newCursorPosition);
+                    resyncIme();
+                    return r;
                 }
                 @Override public boolean finishComposingText() {
                     activeComp = null; orphanPrefix = "";
-                    return super.finishComposingText();
+                    boolean r = super.finishComposingText();
+                    resyncIme();
+                    return r;
                 }
                 // 左右同删的原生钳制(单一真源): 手机软键盘没有 Del 键 → IME 经 InputConnection 发出的
                 // 一切「前向删除」都不是用户意图, 只可能是输入法把一次退格拆单/合并误发的产物。
@@ -252,15 +278,27 @@ public class MainActivity extends AppCompatActivity {
                 // ③ IME 经 sendKeyEvent 模拟的 FORWARD_DEL 同理吞掉(实体外接键盘的 Del 走
                 //    Activity dispatchKeyEvent, 不经 InputConnection, 不受影响)。
                 @Override public boolean deleteSurroundingText(int beforeLength, int afterLength) {
-                    if (afterLength > 0) { if (beforeLength <= 0) return true; afterLength = 0; }
-                    return super.deleteSurroundingText(beforeLength, afterLength);
+                    if (afterLength > 0) {
+                        icAltered = true;
+                        if (beforeLength <= 0) { resyncIme(); return true; }
+                        afterLength = 0;
+                    }
+                    boolean r = super.deleteSurroundingText(beforeLength, afterLength);
+                    if (icAltered) resyncIme();
+                    return r;
                 }
                 @Override public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
-                    if (afterLength > 0) { if (beforeLength <= 0) return true; afterLength = 0; }
-                    return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
+                    if (afterLength > 0) {
+                        icAltered = true;
+                        if (beforeLength <= 0) { resyncIme(); return true; }
+                        afterLength = 0;
+                    }
+                    boolean r = super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
+                    if (icAltered) resyncIme();
+                    return r;
                 }
                 @Override public boolean sendKeyEvent(android.view.KeyEvent event) {
-                    if (event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_FORWARD_DEL) return true;
+                    if (event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_FORWARD_DEL) { icAltered = true; resyncIme(); return true; }
                     return super.sendKeyEvent(event);
                 }
             };

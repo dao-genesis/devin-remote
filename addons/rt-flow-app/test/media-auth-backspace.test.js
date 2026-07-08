@@ -43,7 +43,7 @@ ok(/MainActivity\.warmAttachmentCookie\(fToken, fOrg, u\)/.test(tabAct), "TabAct
 // ② 退格根治 (原生 InputConnection 夹断)
 ok(/class GuardedWebView extends WebView/.test(main), "GuardedWebView 存在");
 ok(/new GuardedWebView\(this\)/.test(main), "makeTab 实际使用 GuardedWebView");
-const clamps = main.match(/if \(afterLength > 0\) \{ if \(beforeLength <= 0\) return true; afterLength = 0; \}/g) || [];
+const clamps = main.match(/if \(afterLength > 0\) \{\s*\n\s*icAltered = true;\s*\n\s*if \(beforeLength <= 0\) \{ resyncIme\(\); return true; \}\s*\n\s*afterLength = 0;/g) || [];
 ok(clamps.length >= 2, "deleteSurroundingText / InCodePoints 双双夹断 (found " + clamps.length + ")");
 ok(/onCreateInputConnection\(EditorInfo outAttrs\)/.test(main), "夹断落在 onCreateInputConnection 包装层");
 
@@ -55,8 +55,13 @@ ok(String(clamp(1, 0)) === "1,0", "夹断: (1,0) 原样 (正常退格)");
 ok(clamp(0, 1) === null, "夹断: (0,1) 纯前向删除整体吞掉 (IME 拆单无论顺序皆被拦)");
 
 // ②b 前向删除无条件拦断 (旧 250ms 时间窗对「先前向后退格」倒序拆单无效 → 已整体撤除改无条件)
-ok(/if \(afterLength > 0\) \{ if \(beforeLength <= 0\) return true; afterLength = 0; \}/.test(main), "纯前向 deleteSurroundingText 无条件吞掉");
-ok(/KEYCODE_FORWARD_DEL\) return true;/.test(main), "IME 模拟的 FORWARD_DEL 键事件无条件吞掉");
+ok(/if \(beforeLength <= 0\) \{ resyncIme\(\); return true; \}/.test(main), "纯前向 deleteSurroundingText 无条件吞掉(吞后对账)");
+ok(/KEYCODE_FORWARD_DEL\) \{ icAltered = true; resyncIme\(\); return true; \}/.test(main), "IME 模拟的 FORWARD_DEL 键事件无条件吞掉(吞后对账)");
+// ②b2 持久化对账 (v8.1): 每次吞/改写 IME 操作后在组合安全点 restartInput 让 IME 重读编辑器真相,
+//      IME 账本不再随时间脱钩 → 钳制永续(根治「几分钟后左右同删复发」)。
+ok(/boolean icAltered = false;/.test(main), "持久化: icAltered 脱钩标记存在");
+ok(/void resyncIme\(\)/.test(main) && /imm\.restartInput\(GuardedWebView\.this\)/.test(main), "持久化: resyncIme 经 IMM.restartInput 对账(不收键盘)");
+ok(/if \(activeComp != null && !activeComp\.isEmpty\(\)\) return;/.test(main), "持久化: 仅组合安全点对账(绝不掠断进行中的语音/拼音会话)");
 ok(!/lastBkAt/.test(main), "旧 250ms 时间窗机制已整体移除 (倒序拆单之漏根除)");
 
 // ②c JS 回归本源 v3 (大道至简): JS 层对输入事件一律直通不拦 ——
@@ -98,11 +103,11 @@ ok(!/function schedStrip/.test(main), "语音根治: 旧去抖摘除逻辑已移
 //      层记孤儿前缀、对后续全量串只透传余量; 绝不删已落文字(删空会再触发重挂 → 死循环)。
 ok(/String orphanPrefix = ""/.test(main), "孤儿修复: orphanPrefix 账本存在");
 ok(/orphanPrefix = orphanPrefix \+ activeComp/.test(main), "孤儿修复: IC 重建时累计被就地提交的组合");
-ok(/if \(s\.startsWith\(orphanPrefix\)\) s = s\.substring\(orphanPrefix\.length\(\)\);/.test(main), "孤儿修复: 全量累积串只透传余量");
-ok(/else orphanPrefix = "";/.test(main), "孤儿修复: 非前缀即弃账(不误剥用户新输入)");
+ok(/if \(fresh && s\.startsWith\(orphanPrefix\)\) \{ s = s\.substring\(orphanPrefix\.length\(\)\); icAltered = true; \}/.test(main), "孤儿修复: 全量累积串只透传余量(时效窗内·剥后对账)");
+ok(/else orphanPrefix = "";/.test(main), "孤儿修复: 过期/非前缀即弃账(不误剥用户新输入)");
 const gwv = main.slice(main.indexOf("class GuardedWebView"), main.indexOf("void applyImmersive"));
 ok(!/deleteSurroundingText\(orphanPrefix/.test(gwv) && !/super\.deleteSurroundingText\(p\.length/.test(gwv), "孤儿修复: 不删已落文字(防空/非空重挂死循环·实测验证)");
-ok(/activeComp = null; orphanPrefix = "";\s*\n\s*return super\.finishComposingText/.test(main), "孤儿修复: finishComposingText 清账");
+ok(/activeComp = null; orphanPrefix = "";\s*\n\s*boolean r = super\.finishComposingText/.test(main), "孤儿修复: finishComposingText 清账(随后对账)");
 
 // ②c3 取数统一 (拖拽/传到当前页 统一到「下载MD」同源快路径)
 const daopan = fs.readFileSync(path.join(ROOT, "app/src/main/assets/engine/daopan.html"), "utf8");

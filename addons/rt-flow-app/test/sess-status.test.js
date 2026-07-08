@@ -384,8 +384,8 @@ ok(/return \{ok:true, count:hits\.length, actionRequired:need\.length, needAtten
 // ── 源级护栏: tick 闭环 (新对话/新内容/精确终态/扫描门控) ──
 ok(/var coldStart = !prev \|\| !Object\.keys\(prev\)\.length/.test(engineSrc),
    "源级: tick 冷启判定(prev 空只播种·不刷屏「新对话」)");
-ok(/CMDS\.trackStuck\(\{ watchSids: Object\.keys\(loadPrev\(\)\) \}\)/.test(engineSrc),
-   "源级: tick 把上轮 sid 集作为 watchSids 传入 trackStuck");
+ok(/CMDS\.trackStuck\(\{ watchSids: Object\.keys\(_pv\), priorityEmails: Object\.keys\(_pe\) \}\)/.test(engineSrc),
+   "源级: tick 把上轮 sid 集作为 watchSids 传入 trackStuck(并附上轮账号优先扫描)");
 ok(/\(r\.scanned\|\|\[\]\)\.forEach\(function\(e\)\{ scanned\[String\(e\)\.toLowerCase\(\)\]=1; \}\)/.test(engineSrc),
    "源级: tick 提取 r.scanned 成功账号集(门控结束判定)");
 // 新对话/续跑/新内容 → 仅追踪+标签变绿·不发消息提示(用户要求·静默)。next[sid] 登记状态供金库/网页镜像。
