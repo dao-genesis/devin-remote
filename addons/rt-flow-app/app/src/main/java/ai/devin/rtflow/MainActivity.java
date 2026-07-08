@@ -3770,19 +3770,25 @@ public class MainActivity extends AppCompatActivity {
     //   ③摘种后 fin() 持续轮询(250ms×8)把开头光标钉回末尾: Slate 模型异步归账会瞬时把
     //     DOM 光标拉回开头, 单次判定误退正是「后续输入落到开头 Qhello」之根。
     //   ④失焦且只剩种子无真内容 → 收回种子还原占位。
+    //   v7(execCommand 精确播/摘种): 真机录屏实证 v6 的合成 beforeinput 摘种会误删句首真字 ——
+    //   合成 InputEvent 无 getTargetRanges, Slate 按自身模型选区执行删除, 而 DOM 选区(我们刚选中的 Z)
+    //   尚未同步进模型 → 删掉的是句首真字; 残留的 Z 再致模型/DOM 错位, 后续每次退格 normalize
+    //   多删数字(左右同删体感之源)。改用 document.execCommand('insertText'/'delete'):
+    //   浏览器原生编辑管道按真实 DOM 选区落实编辑并发带 targetRanges 的 beforeinput →
+    //   Slate 按正确范围归账, 摘种只可能删 Z 本身, 绝无误删。另加摘后校验: 可见文本变短即回注。
     static void installVoiceGuard(WebView w) {
         if (w == null) return;
-        String js = "(function(){if(window.__rtViGuard6)return;window.__rtViGuard6=1;"
+        String js = "(function(){if(window.__rtViGuard7)return;window.__rtViGuard7=1;"
             + "var Z='\\u200B',ZR=new RegExp(Z,'g'),compOn=0,compT=0,unbusy=0;"
             + "function comp(){return compOn&&(Date.now()-compT)<4000;}"
             + "function ced(t){return t&&t.closest?t.closest('[data-slate-editor=true],[contenteditable=true],[contenteditable=\"\"]'):null;}"
             + "function ph(ed){return ed?ed.querySelector('[data-slate-placeholder]'):null;}"
             + "function edTxt(ed){var t='',w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT,{acceptNode:function(n){return n.parentElement&&n.parentElement.closest('[data-slate-placeholder]')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;}}),n;while((n=w.nextNode()))t+=n.nodeValue;return t;}"
             + "function zNode(ed){var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n;while((n=w.nextNode())){var i=(n.nodeValue||'').indexOf(Z);if(i>=0)return[n,i];}return null;}"
-            // 播种: 空框+占位+非组合中 → 经 Slate 自身管道插入 Z(合成 beforeinput·非外部改 DOM)
+            // 播种: 空框+占位+非组合中+已聚焦 → execCommand 原生编辑管道插入 Z(带 targetRanges·Slate 按真实选区归账)
             + "function seed(ed){try{if(!ed||!ed.isConnected||comp())return;if(zNode(ed)||!ph(ed))return;if(edTxt(ed).replace(ZR,'')!=='')return;"
-            + "var ev=new InputEvent('beforeinput',{inputType:'insertText',data:Z,bubbles:true,cancelable:true});"
-            + "var tgt=(document.activeElement&&ed.contains(document.activeElement))?document.activeElement:ed;tgt.dispatchEvent(ev);}catch(e){}}"
+            + "if(!(document.activeElement&&ed.contains(document.activeElement))&&document.activeElement!==ed)return;"
+            + "document.execCommand('insertText',false,Z);}catch(e){}}"
             + "function seedTry(){var ed=ced(document.activeElement);if(ed)seed(ed);}"
             + "function toEnd(ed){var r3=document.createRange();r3.selectNodeContents(ed);r3.collapse(false);var s3=getSelection();s3.removeAllRanges();s3.addRange(r3);}"
             // 摘种: 真内容落定后选中 Z 经 Slate 同一管道删除; end 时 fin() 持续轮询把光标钉回末尾
@@ -3795,11 +3801,13 @@ public class MainActivity extends AppCompatActivity {
             + "(function att(k){try{if(k>6||comp()||!ed.isConnected){unbusy=0;return;}"
             + "var zn=zNode(ed);if(!zn){unbusy=0;fin();return;}"
             + "if(edTxt(ed).replace(ZR,'')===''){unbusy=0;return;}"
+            + "var pre=edTxt(ed).replace(ZR,'');"
             + "var r=document.createRange();r.setStart(zn[0],zn[1]);r.setEnd(zn[0],zn[1]+1);var s=getSelection();s.removeAllRanges();s.addRange(r);"
-            + "setTimeout(function(){try{"
             + "var ok=0,s2=getSelection();if(s2.rangeCount){var g2=s2.getRangeAt(0);ok=(!g2.collapsed&&g2.toString()===Z)?1:0;}"
-            + "if(ok)ed.dispatchEvent(new InputEvent('beforeinput',{inputType:'deleteContentBackward',bubbles:true,cancelable:true}));"
-            + "setTimeout(function(){att(k+1);},250);}catch(e){unbusy=0;}},80);"
+            + "if(ok){document.execCommand('delete');"
+            + "var post=edTxt(ed).replace(ZR,'');"
+            + "if(post!==pre&&pre.indexOf(post)===0){var lost=pre.slice(post.length);toEnd(ed);document.execCommand('insertText',false,lost);}}"
+            + "setTimeout(function(){att(k+1);},250);"
             + "}catch(e){unbusy=0;}})(0);}"
             // 组合态追踪(自过期法·见 comp())
             + "document.addEventListener('compositionstart',function(e){if(ced(e.target)){compOn=1;compT=Date.now();}},true);"
@@ -3815,7 +3823,8 @@ public class MainActivity extends AppCompatActivity {
             + "document.addEventListener('focusout',function(e){var ed=ced(e.target);if(!ed)return;setTimeout(function(){try{"
             + "if(comp()||!ed.isConnected)return;var zn=zNode(ed);if(!zn)return;if(edTxt(ed).replace(ZR,'')!=='')return;"
             + "var r=document.createRange();r.setStart(zn[0],zn[1]);r.setEnd(zn[0],zn[1]+1);var s=getSelection();s.removeAllRanges();s.addRange(r);"
-            + "setTimeout(function(){try{ed.dispatchEvent(new InputEvent('beforeinput',{inputType:'deleteContentBackward',bubbles:true,cancelable:true}));}catch(x){}},60);"
+            + "var s4=getSelection(),ok4=0;if(s4.rangeCount){var g4=s4.getRangeAt(0);ok4=(!g4.collapsed&&g4.toString()===Z)?1:0;}"
+            + "if(ok4)document.execCommand('delete');"
             + "}catch(x){}},80);},true);"
             // 多路补种: 心跳 + 事件驱动(后台节流/定时器被清也能活)
             + "setInterval(function(){try{if(comp())return;seedTry();}catch(e){}},700);"
@@ -4875,8 +4884,15 @@ public class MainActivity extends AppCompatActivity {
             + "(function go(){"
             + "if(!window.DaoCloud||!DaoCloud.exportSession){if(++tries<40){setTimeout(go,500);}else{done('','');}return;}"
             + "if(!acc||!acc.email){var R=window.REC||[];for(var i=0;i<R.length;i++){if(R[i].sid===sid||'devin-'+R[i].sid===sid||R[i].sid==='devin-'+sid){acc=R[i].acc;break;}}}"
-            + "if(!acc){try{var A=JSON.parse(localStorage.getItem('rtflow.accounts')||'[]');if(A.length===1)acc=A[0];}catch(e){}}"
+            + "if(!acc){try{var A0=JSON.parse(localStorage.getItem('rtflow.accounts')||'[]');if(A0.length===1)acc=A0[0];}catch(e){}}"
             + "if(!acc){done('','');return;}"
+            // 账号态归一自愈: accJson/REC 里的号常是陈旧快照(auth1 过期·无密码) → 先并库中同邮箱号
+            // (拿最新 auth1+密码, exportSession 内 401 自动重登); 归零被移出库的号 → 金库
+            // account.json/移出记录.json 找回账密(移出时留底), 认证错误从源头消失。
+            + "try{if(acc.email){var A=JSON.parse(localStorage.getItem('rtflow.accounts')||'[]');for(var i2=0;i2<A.length;i2++){if(A[i2]&&A[i2].email===acc.email){acc=Object.assign({},acc,A[i2]);break;}}}}catch(e){}"
+            + "try{if(acc.email&&!acc.password&&window.Native&&Native.vaultReadBackup){var fo=String(acc.email).split('@')[0].replace(/[^a-zA-Z0-9_\\-]/g,'_');"
+            + "var raw=Native.vaultReadBackup(fo,'account.json')||Native.vaultReadBackup(fo,'\\u79fb\\u51fa\\u8bb0\\u5f55.json');"
+            + "if(raw){var vb=JSON.parse(raw);var va=vb&&vb.account;if(va&&va.email===acc.email){if(va.password)acc.password=va.password;if(!acc.auth1&&va.auth1)acc.auth1=va.auth1;if(!acc.orgId&&va.orgId)acc.orgId=va.orgId;}}}}catch(e){}"
             + "DaoCloud.exportSession(acc,sid,'conversation').then(function(r){done((r&&r.title)||'',(r&&r.ok&&r.md)||'');})"
             + ".catch(function(e){done('','');});"
             + "})();"
