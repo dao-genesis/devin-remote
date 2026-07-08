@@ -1368,7 +1368,8 @@ function toggleTranslate(){var t=tabs[active];var fr=t?t.frame:(isBoard()&&BOARD
     // 跨源自愈: 页面在代理外(整页跳转逃逸/直连外站) → 经站内同源代理 /__web 重载同一 URL, 载毕自动续译。
     var ru=t&&t.url?String(t.url):'';
     if(t&&ru&&!t.__trRerouted){
-      var target=ru.indexOf('/__web')===0?ru:(/^https?:\/\//i.test(ru)?'/__web?u='+encodeURIComponent(ru):'');
+      var rl=ru.toLowerCase();
+      var target=ru.indexOf('/__web')===0?ru:((rl.indexOf('http://')===0||rl.indexOf('https://')===0)?'/__web?u='+encodeURIComponent(ru):'');
       if(target){t.__trRerouted=true;daoToast('🌐 经站内代理重载后自动翻译…');
         var fr2=t.frame,tid=active;
         var onl=function(){fr2.removeEventListener('load',onl);setTimeout(function(){t.__trRerouted=false;if(active===tid)toggleTranslate();},500);};
