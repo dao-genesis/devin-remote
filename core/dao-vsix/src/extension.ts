@@ -718,7 +718,12 @@ export async function activate(context: vscode.ExtensionContext) {
         else if (fs.existsSync(_siblingRtflow)) { _rtflowPath = _siblingRtflow; _activateRtflowHere = false; }
         if (_rtflowPath) _rtflowModule = require(_rtflowPath) as RtflowModule;
         if (_activateRtflowHere && _rtflowModule && typeof _rtflowModule.activate === 'function') {
-            await Promise.resolve(_rtflowModule.activate(context));
+            // 守柔: rt-flow 激活可能悬挂(全新 profile 首启实测可永不归) — 限时等待,
+            //   逾时即放行本体(startServer 等)继续, rt-flow 留后台自续, 不得阻断 dao-vsix。
+            const _rtAct = Promise.resolve(_rtflowModule.activate(context)).catch(e => {
+                try { console.error('[dao-vsix] rt-flow activate 异常(守柔):', e); } catch { /* 守柔 */ }
+            });
+            await Promise.race([_rtAct, new Promise<void>(r => setTimeout(r, 20000))]);
         }
         // 归一 · 把「全功能面板六大板块」作为同级子网页接进 rt-flow 统一外壳。
         // 外壳经 blob-iframe + 消息中继挂载本面板 HTML, 复用 handleMiddlePanelMessage/refresh, 零重写。
