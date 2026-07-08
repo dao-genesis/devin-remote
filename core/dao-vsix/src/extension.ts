@@ -874,7 +874,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     bridgeSaveAuthToken(bridgeToken);
                     bridgeSaveConnJson();
                     try { bridgeWriteArtifacts(); } catch { /* 守柔 */ }
-                    try { if (ws.devinAuth1 && ws.devinOrgId) await bridgeInjectKnowledge(); } catch { /* 守柔 */ }
+                    try { if (ws.devinAuth1 && ws.devinOrgId) await bridgeInjectKnowledge(true); } catch { /* 守柔 */ }
                     bridgeScheduleReinject('tokenRefresh');
                     vscode.window.showInformationMessage('Bridge Token 已重新同步发布 (机器级恒稳·永不再漂)');
                     return { ok: true };
@@ -5562,8 +5562,16 @@ function expandKbSentinel(name: string, body: string): string {
     return body;
 }
 
-async function bridgeInjectKnowledge(): Promise<boolean> {
+async function bridgeInjectKnowledge(manual = false): Promise<boolean> {
     if (!ws.devinAuth1 || !ws.devinOrgId) return false;
+    // 帛书·「得一」单一维护者: 机器级内穿/MCP 文档恒由 leader(版本最高·同版取端口最小之活实例)统一维护。
+    //   同 org 的多窗口(leader 9920·v3.50.102 与 follower 9921·v3.50.92)会 upsert 同一条 org 知识条目,
+    //   非 leader 若照写即把「版本/工具数」戳成自身旧值 → 云端读到的版本/工具数在两值间抖动(实测 65↔64)。
+    //   故与 reinjectBridgeToAllAccounts 同律: 自动路径非 leader 守柔不写; 手动点按 authoritative 放行。
+    if (!manual && !bridgeIsLeaderInstance()) {
+        daoLoopLog('tunnel', 'injectKnowledge SKIP: 非 leader 实例·机器级文档由 leader 统一维护 (port=' + (ws.port || 0) + '/leader=' + bridgeMachinePort() + ')');
+        return false;
+    }
     // 帛书·「宁守柔而不以死覆生」: 注入前先公网实活校验本进程隧道地址。探到活址即收敛 bridgeUrl→注活址;
     //   若全死(含 bridgeUrl 空 / 502 / 530)则**不以 (未连接)/死址覆盖账号库良态**, 守柔退出, 待探活环重建隧道后再注。
     //   根治: autoPersist 路径旧法无此闸门, 隧道未捕获(publicUrl=null)时径直把死址/(未连接)写进知识库 → 云端读到连不上。
@@ -8484,7 +8492,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 bridgeSaveConnJson();
                 try { bridgeWriteArtifacts(); } catch { /* 守柔 */ }
                 let injected = false;
-                try { if (ws.devinAuth1 && ws.devinOrgId) injected = await bridgeInjectKnowledge(); } catch { /* 守柔 */ }
+                try { if (ws.devinAuth1 && ws.devinOrgId) injected = await bridgeInjectKnowledge(true); } catch { /* 守柔 */ }
                 // v3.17.4 · 新牌实时扩散到所有账号(KB+MCP)
                 bridgeScheduleReinject('tokenRefresh');
                 vscode.window.showInformationMessage('Bridge Token 已刷新' + (injected ? ' · 已同步到当前账号 Knowledge' : '') + ' (旧牌仍短暂有效, 不断链)');
@@ -8492,7 +8500,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             case 'bridgeInjectKnowledge': {
-                const injected = await bridgeInjectKnowledge();
+                const injected = await bridgeInjectKnowledge(true);
                 reply({ type: 'actionResult', command: 'bridgeInjectKnowledge', ok: injected });
                 break;
             }
@@ -8509,7 +8517,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 }
                 diag += '→ 执行反向注入…\n';
                 try {
-                    const injOk = await bridgeInjectKnowledge();
+                    const injOk = await bridgeInjectKnowledge(true);
                     diag += '→ 反向注入: ' + (injOk ? '✓ 成功' : '✗ 失败/无活地址') + '\n';
                     try { _lastBridgeReinjectSig = ''; bridgeScheduleReinject('diagnose'); } catch { /* 守柔 */ }
                 } catch { diag += '→ 反向注入异常\n'; }
