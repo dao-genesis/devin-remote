@@ -107,24 +107,28 @@ const sessStatusA = eval("(function(){\n" + seg[0] + "\nreturn sessStatusA;})()"
 }
 
 // ══ 账号级额度对账 (本轮根因·根治「满额号被陈旧会话 reason=out_of_quota 误标额度耗尽」) ══
-// quotaLive: 实时额度判活
+// quotaLive: 实时额度判活 (鲜度门: ≤15min 内真取过(qTs)才能压官方耗尽信号)
 {
-  ok(quotaLive({ dPct: 100, overageDollars: 68.57 }) === true, "dPct=100 满额 + $68.57 → 有额度(true)");
-  ok(quotaLive({ dPct: 100, overageDollars: 0 }) === true, "dPct=100 (日免费配额满) 即便 $0 → 有额度(true·可用免费配额)");
-  ok(quotaLive({ dPct: 0, wPct: 30, overageDollars: 0 }) === true, "日配额耗尽但周配额 30% 余 → 有额度(true)");
-  ok(quotaLive({ dPct: 0, wPct: 0, overageDollars: 12.5 }) === true, "日/周配额耗尽但 $12.5 余 → 有额度(true)");
-  ok(quotaLive({ dPct: 0, wPct: 0, overageDollars: 0 }) === false, "日/周配额=0 且 $0 → 确无额度(false·真耗尽)");
-  ok(quotaLive({ dPct: 0 }) === null, "dPct=0 但美金未知 → 不确定(null·保守)");
-  ok(quotaLive({}) === null, "无任何额度字段 → 不确定(null)");
+  const FR = Date.now();
+  ok(quotaLive({ qTs: FR, dPct: 100, overageDollars: 68.57 }) === true, "dPct=100 满额 + $68.57 → 有额度(true)");
+  ok(quotaLive({ qTs: FR, dPct: 100, overageDollars: 0 }) === true, "dPct=100 (日免费配额满) 即便 $0 → 有额度(true·可用免费配额)");
+  ok(quotaLive({ qTs: FR, dPct: 0, wPct: 30, overageDollars: 0 }) === true, "日配额耗尽但周配额 30% 余 → 有额度(true)");
+  ok(quotaLive({ qTs: FR, dPct: 0, wPct: 0, overageDollars: 12.5 }) === true, "日/周配额耗尽但 $12.5 余 → 有额度(true)");
+  ok(quotaLive({ qTs: FR, dPct: 0, wPct: 0, overageDollars: 0 }) === false, "日/周配额=0 且 $0 → 确无额度(false·真耗尽)");
+  ok(quotaLive({ qTs: FR, dPct: 0 }) === null, "dPct=0 但美金未知 → 不确定(null·保守)");
+  ok(quotaLive({ qTs: FR }) === null, "无任何额度字段 → 不确定(null)");
   ok(quotaLive(null) === null, "quota 缺失 → null");
+  // 鲜度门 (根治「额度归零号识别不到」: 刚归零时本地冻着 dPct>0 旧值不能拿来抹掉 quota 信号)
+  ok(quotaLive({ dPct: 100, overageDollars: 68.57 }) === null, "无 qTs 鲜度戳 → null(不压官方信号)");
+  ok(quotaLive({ qTs: FR - 16 * 60 * 1000, dPct: 100, overageDollars: 68.57 }) === null, "qTs 陈旧(>15min) → null(不压官方信号)");
 }
 // sessStatusA: 账号实时额度纠偏陈旧会话原因
 {
   const sleptConv = { status: "suspended", latest_status_contents: { reason: "out_of_quota" } };
   ok(sessStatus(sleptConv)[0] === "exhausted", "前提: 该会话裸判(无账号上下文) = exhausted");
-  ok(sessStatusA(sleptConv, { quota: { dPct: 100, overageDollars: 68.57 } })[0] === "finished",
+  ok(sessStatusA(sleptConv, { quota: { qTs: Date.now(), dPct: 100, overageDollars: 68.57 } })[0] === "finished",
      "核心: 满额$68的号·会话历史 out_of_quota → 对账降级为 finished (不误标额度耗尽)");
-  ok(sessStatusA(sleptConv, { quota: { dPct: 100, overageDollars: 0 } })[0] === "finished",
+  ok(sessStatusA(sleptConv, { quota: { qTs: Date.now(), dPct: 100, overageDollars: 0 } })[0] === "finished",
      "dPct=100 日免费配额满 → 降级 finished (即便 $0)");
   ok(sessStatusA(sleptConv, { quota: { dPct: 0, wPct: 0, overageDollars: 0 } })[0] === "exhausted",
      "真耗尽号(日/周=0·$0) → 保留 exhausted 额度耗尽");
@@ -226,8 +230,9 @@ ok(/var _qLive=\(DaoCloud\.quotaLive\?DaoCloud\.quotaLive\(acc\.quota\)/.test(en
   const seg3 = cloudSrc.match(/function quotaLive\(q\)[\s\S]*?\n\s*(?=root\.DaoCloud)/);
   if (!seg3) { console.error("FAIL: devin-cloud.js 未找到 quotaLive/sessStatusA 区段"); process.exit(1); }
   const cloudQuotaLive = eval("(function(){\n" + seg3[0] + "\nreturn quotaLive;})()");
-  ok(cloudQuotaLive({ dPct: 100, overageDollars: 68.57 }) === true, "devin-cloud.quotaLive: 满额 → true");
-  ok(cloudQuotaLive({ dPct: 0, wPct: 0, overageDollars: 0 }) === false, "devin-cloud.quotaLive: 真耗尽 → false");
+  ok(cloudQuotaLive({ qTs: Date.now(), dPct: 100, overageDollars: 68.57 }) === true, "devin-cloud.quotaLive: 满额(鲜) → true");
+  ok(cloudQuotaLive({ dPct: 100, overageDollars: 68.57 }) === null, "devin-cloud.quotaLive: 满额但无鲜度戳 → null(不压官方信号)");
+  ok(cloudQuotaLive({ qTs: Date.now(), dPct: 0, wPct: 0, overageDollars: 0 }) === false, "devin-cloud.quotaLive: 真耗尽 → false");
   ok(cloudQuotaLive({ dPct: 0 }) === null, "devin-cloud.quotaLive: 美金未知 → null (保守)");
 }
 {

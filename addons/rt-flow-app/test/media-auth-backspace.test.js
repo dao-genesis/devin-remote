@@ -80,10 +80,15 @@ ok(!/setComposingRegion\(int start, int end\)/.test(main), "原生 setComposingR
 // ②c2 语音输入根治 (空 Slate 编辑器首段组合被 Slate 处理 → 重挂+restartInput 掐断 IME;
 //      修法 = 同退格一路: 空编辑器起始的整段组合期间拦下 Slate 的 beforeinput, 不再零宽打底)
 ok(/static void installVoiceGuard\(WebView w\)/.test(main), "语音根治: installVoiceGuard 存在");
-ok(/__rtViGuard2/.test(main), "语音根治: 幂等守卫 v2 存在");
+ok(/__rtViGuard3/.test(main), "语音根治: 幂等守卫 v3 存在");
 ok(/'compositionstart',function\(e\)\{var ed=ced\(e\.target\);hold=\(ed&&empty\(ed\)\)\?ed:null;/.test(main), "语音根治: 空编辑器 compositionstart 进入拦截期");
-ok(/'compositionend',function\(e\)\{hold=null;/.test(main), "语音根治: compositionend 回归 Slate 常规处理");
-ok(/hold===ed&&\(it==='insertCompositionText'\|\|it==='deleteCompositionText'\|\|\(it==='insertText'&&e\.isComposing\)\)\)\{e\.stopImmediatePropagation\(\);/.test(main), "语音根治: 拦截期内仅组合事件 stopImmediatePropagation (默认落字照常·IME 不被 restartInput 掐断)");
+ok(/'compositionend',function\(e\)\{var ed=hold;hold=null;/.test(main), "语音根治: compositionend 退出拦截期");
+// v3 归账: compositionend 后延时看占位是否仍在(模型未归账) → 合成 beforeinput(insertText) 重放给 Slate
+//   (根治 v2 只拦不归账: 占位与语音文字重叠、文字不在模型里无法框选、退格触发 normalize 全文归零)
+ok(/setTimeout\(function\(\)\{try\{/.test(main) && /\[data-slate-placeholder\]'\)\)return;/.test(main), "语音根治 v3: 占位仍在才重放(已归账不双写)");
+ok(/new InputEvent\('beforeinput',\{inputType:'insertText',data:txt,bubbles:true,cancelable:true\}\)/.test(main), "语音根治 v3: 合成 beforeinput(insertText) 归账回 Slate 模型");
+ok(/if\(!e\.isTrusted\)return;/.test(main), "语音根治 v3: 合成事件(非 trusted)不被本护栏拦截");
+ok(/hold===ed&&\(it==='insertCompositionText'\|\|it==='deleteCompositionText'\|\|\(it==='insertText'&&e\.isComposing\)\)\)\{if\(it==='insertCompositionText'\)buf=String\(e\.data\|\|''\);e\.stopImmediatePropagation\(\);/.test(main), "语音根治: 拦截期内仅组合事件 stopImmediatePropagation + 缓存组合文本(供归账)");
 ok(!/it==='insertText'&&!e\.isComposing/.test(main), "语音根治 v2: 非组合直敲首字拦截已撤除 (模型脱钩→崩页主诱因)");
 ok(/\[data-slate-placeholder\],\[contenteditable=false\]/.test(main), "语音根治: 判空跳过 Slate 占位提示 (placeholder 不算内容)");
 // 旧零宽打底方案(外部改写 Slate DOM → 陈旧快照诱因)必须彻底移除
@@ -97,7 +102,8 @@ const daopan = fs.readFileSync(path.join(ROOT, "app/src/main/assets/engine/daopa
 ok(/private void fastPanelExtractInject\(/.test(main), "取数统一: fastPanelExtractInject 存在");
 ok(/DaoCloud\.exportSession\(acc,sid,'conversation'\)/.test(main), "取数统一: 面板快路径走 DaoCloud.exportSession (与下载MD同源)");
 ok(/public void convMdResult\(String reqId, String title, String md\)/.test(main), "取数统一: Bridge.convMdResult 回灌通道");
-ok(/fastPanelExtractInject\(sid, accJson, target, x, y,[\s\S]{0,120}engineRpcExtractInject/.test(main), "取数统一: 链路 本地备份→面板快路径→引擎→fallback");
+ok(/fastPanelExtractInject\(sid, accJson, target, x, y, fallback\)/.test(main), "取数统一: 链路 本地备份→面板快路径→fallback(旧引擎 RPC/源页 fetch 降级腿已移除)");
+ok(!/engineRpcExtractInject/.test(main), "取数统一: 旧引擎 RPC 取数腿已整体移除(降级产物乱数据根源)");
 ok(/tryLocalBackupInject\(email, accJson, sid, target, x, y\)/.test(main), "取数统一: 本地备份秒注入仍为第一优先");
 ok(/public void deliverConvToPage\(String name, String b64\)/.test(main), "取数统一: Bridge.deliverConvToPage 原生直投");
 ok(/private void deliverConvToActivePage\(String name, String b64\)/.test(main), "取数统一: 直投当前活动标签实现");

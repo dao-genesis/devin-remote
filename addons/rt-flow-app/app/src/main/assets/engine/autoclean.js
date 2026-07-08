@@ -70,6 +70,10 @@
       var sid = s.devin_id || s.session_id || s.id; if (!sid) return { skipped: true };
       var title = s.title || s.name || s.prompt || sid; var ts = DaoCloud.sessTs(s) || 0;
       var prev = man.sessions[sid]; var folder = _acctFolder(a);
+      // 活跃目击登记(本地钟·不信平台触碰): 记录「我们最后一次亲见该会话真在活动」的时刻。
+      //   额度耗尽会话在归零后数分钟即转 suspended(终态) → 旧逻辑 fresh=0 当轮即移出账号,
+      //   故 24h 等待期必须以本地目击时刻起算 —— 这是「归零号未等 24h 即被移出」的根治锚点。
+      if (prev && _isActive(s, ts)) prev.activeSeenAt = Date.now();
       // 双轨判定: 闲置 且 WiFi(非计费网络) 才做重量级「全量增量 ZIP」; 否则(活跃/计费网络)只走实时 MD 轻量轨。
       var canFullZip = !_isActive(s, ts) && !autoDlBlocked();
       // 无变化即跳过: 已是整包 ZIP(备齐), 或此刻无法升级为整包(仍活跃/计费网络) → 跳过 (仅补指引)。
@@ -105,7 +109,8 @@
       man.sessions[sid] = { sid: sid, title: title, ts: ts, backedUpAt: Date.now(),
         md: convOk ? ("conv-" + sid + ".md") : (prev && prev.md ? prev.md : null),
         guide: guideOk ? ("指引-" + sid + ".md") : (prev && prev.guide ? prev.guide : null),
-        zip: keepZip, hasFiles: hasFiles, events: evCnt, complete: (evCnt > 0), deleted: false };
+        zip: keepZip, hasFiles: hasFiles, events: evCnt, complete: (evCnt > 0), deleted: false,
+        activeSeenAt: _isActive(s, ts) ? Date.now() : ((prev && prev.activeSeenAt) || 0) };
       return { backedUp: true, sid: sid, track: zipOk ? "zip" : "md" };
     }
     // 账号全量备份(增量·完整文件夹): 逐对话备份 + 账号集成底层 + 清单。
@@ -169,8 +174,12 @@
         // updated_at → 归零死号恒有一条「假·新鲜」会话, fresh 永不归零, 永滞库中(实测 15/15 如此)。
         // 终态(挂起/过期/停止/完成/中断)会话内容已定格且本轮已备份 → 不计 fresh; 一旦被续跑,
         // 状态回到 running 自然重新计 fresh, 安全不失。
-        if (now - ts < CLEAN_STALE_MS && !_dormant(s)) { fresh++; }     // 24h 内有更新且非终态 → 计新鲜
-        if (now - ts < CLEAN_STALE_MS) { kept++; continue; }            // 24h 内有更新 → 保留(只备份不清理)
+        // 新鲜判定双源: ① 服务端 ts<24h 且非终态; ② 本地目击 activeSeenAt<24h(会话可能已转终态,
+        //   如额度耗尽数分钟即 suspended, 但我们亲见它 24h 内还在活动 → 仍算新鲜, 账号绝不提前移出)。
+        //   纯终态死号(从未被目击非终态)无 activeSeenAt → 不计新鲜, 「永滞库中」的旧修复不回退。
+        var seenActive = !!(ent && ent.activeSeenAt && now - ent.activeSeenAt < CLEAN_STALE_MS);
+        if ((now - ts < CLEAN_STALE_MS && !_dormant(s)) || seenActive) { fresh++; }
+        if (now - ts < CLEAN_STALE_MS || seenActive) { kept++; continue; }   // 24h 内有更新/被目击活跃 → 保留(只备份不清理)
         if (!ent || !ent.backedUpAt || (!ent.md && !ent.zip)) { kept++; continue; }
         try { var r = await DaoCloud.purgeSession(a, sid); if (r && r.deleted) { cleaned++; ent.deleted = true; ent.cleanedAt = now; } else kept++; } catch (e) { kept++; }
       }

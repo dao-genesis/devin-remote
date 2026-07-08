@@ -783,8 +783,11 @@
   //   必须以实时额度 quota 为准, 绝不能被一条陈旧会话原因永久误判 (实测: dPct=100 满额、余额 $68 的号
   //   仍因最近一条历史会话 reason=out_of_quota 被整号标「额度耗尽」, 即用户反馈「额度根本没耗尽却乱标」)。
   //   返回: true=账号当前确有可用额度(日/周配额>0 或 美金余额>0); false=确无; null=未知(billing 未取到→保守, 信官方信号)。
+  //   鲜度门(根治「额度归零号识别不到」): 只有 ≤15min 内真取过的额度(qTs)才能返 true 去压官方耗尽信号;
+  //   陈旧/无戳额度一律返 null —— 号刚归零时本地还冻着 dPct>0 的旧值, 拿它当真会把 quota 会话整体抹成「完成」→ 零通知。
   function quotaLive(q) {
     if (!q || typeof q !== "object") return null;
+    if (!q.qTs || Date.now() - q.qTs > 15 * 60 * 1000) return null;   // 鲜度门
     if (typeof q.dPct === "number" && q.dPct > 0) return true;   // 日配额仍有余 → 可运行
     if (typeof q.wPct === "number" && q.wPct > 0) return true;   // 周配额仍有余
     if (typeof q.overageDollars === "number") return q.overageDollars > 0;  // 配额耗尽看 Extra Usage 美金余额
