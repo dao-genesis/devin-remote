@@ -1196,7 +1196,8 @@
   //   复用 CMDS.trackStuck 的判定 (latest_status_contents.user_action_required 等真信号)。
   (function startConvWatch(){
     var PREV_KEY = "rtflow.convwatch";            // sid → {phase, title, email, ts}
-    var POLL_MS = 60000, FIRST_DELAY = 15000;
+    // 通知轨 30s 一拍(卡住/待处理/额度耗尽的提示时效翻倍); 维护轨(额度刷新/清理/备份)仍 60s 一拍。
+    var POLL_MS = 30000, MAINT_MIN_MS = 60000, FIRST_DELAY = 15000;
     function loadPrev(){ try { return JSON.parse(localStorage.getItem(PREV_KEY)||"{}")||{}; } catch(e){ return {}; } }
     function savePrev(o){ try { localStorage.setItem(PREV_KEY, JSON.stringify(o)); } catch(e){} }
     function notify(tag, title, text){ try { if (N.notifyGlobal) N.notifyGlobal(String(tag), String(title), String(text)); } catch(e){} }
@@ -1404,34 +1405,52 @@
       }catch(e){}
       _bgCleanBusy = false;
     }
-    var _tickBusy = false, _tickStart = 0;
-    async function tick(){
+    // 通知轨与维护轨彻底解耦(各自 busy 护栏·互不阻塞):
+    //   旧病灶: 单一串行 tick 里 trackStuck 之后还要等 额度刷新+全池逐号清理+备份(低额号一次
+    //   全量备份可达数分钟)全部跑完, busy 护栏才释放 → 下一轮卡住/额度耗尽的**通知**被维护作业
+    //   拖延数分钟(用户「提示非常缓慢」之根因)。今通知轨 30s 独立一拍永不被阻, 维护轨另起协程。
+    var _ntBusy = false, _ntStart = 0;
+    var _mtBusy = false, _mtStart = 0, _mtLast = 0;
+    async function notifyTick(){
+      if (_ntBusy && Date.now() - _ntStart > 300000) _ntBusy = false;   // 看门狗: 单轮挂死即弃旧轮复位
+      if (_ntBusy) return; _ntBusy = true; _ntStart = Date.now();
+      try {
+        var accs = []; try { accs = loadAcc().filter(function(x){ return x.auth1 && x.orgId; }); } catch(e){}
+        if (accs.length) {
+          var r = null; try { r = await CMDS.trackStuck({ watchSids: Object.keys(loadPrev()) }); } catch(e){ r = null; }
+          if (r && r.ok && Array.isArray(r.sessions)) { window.__lastTrk = r; try { _convTrack(r); } catch(e){} }
+        }
+      } catch(e){}
+      _ntBusy = false;
+    }
+    async function maintTick(){
+      if (_mtBusy && Date.now() - _mtStart > 300000) _mtBusy = false;
+      if (_mtBusy) return;
+      if (Date.now() - _mtLast < MAINT_MIN_MS) return;
+      _mtBusy = true; _mtStart = Date.now(); _mtLast = Date.now();
+      try {
+        var accs = []; try { accs = loadAcc().filter(function(x){ return x.auth1 && x.orgId; }); } catch(e){}
+        if (accs.length) {
+          var sess = (window.__lastTrk && window.__lastTrk.sessions) || [];
+          // 额度权威刷新: 活跃号必刷 + 空闲号轮转, 刷毕直推原生页签 → 金额/状态不再依赖切号板在前台
+          try { await bgQuotaTick(sess, accs); } catch(e){}
+          // 归零移出库·常驻接管: 全池逐号走共用清理流水线
+          try { await bgAutoCleanTick(accs); } catch(e){}
+          // 增量备份·常驻接管(每轮轮转一号): ZIP 备份时刻跟随最新对话内容
+          try { await bgBackupTick(accs); } catch(e){}
+        }
+      } catch(e){}
+      _mtBusy = false;
+    }
+    function tick(){
       if (!watchEnabled()) return;
-      // 看门狗: 单轮协程挂死(网络请求永不回) → busy 永真、后续心跳全空转。忙超 5min 即弃旧轮复位。
-      if (_tickBusy && Date.now() - _tickStart > 300000) _tickBusy = false;
-      if (_tickBusy) return; _tickBusy = true; _tickStart = Date.now();   // 重入护栏: 大池(100+号)单轮可能超过 POLL_MS, 防并发叠轮洪峰
-      try { await _tickOnce(); } catch(e){}
-      _tickBusy = false;
+      notifyTick();   // 通知轨: 每拍必跑·不被维护轨阻塞
+      maintTick();    // 维护轨: 自限 60s 一拍·独立协程后台跑
     }
     // 原生外驱入口: 离屏 WebView 的 setInterval 会被 Chromium 节流/冻结(息屏/Doze 下 convwatch
     //   与额度刷新形同虚设 —— "通知没有/额度不动"之根因)。RelayService 以 Handler 周期
     //   evaluateJavascript 调本入口(不受计时器节流), 自身 setInterval 仅作前台兜底。
     window.__convTick = tick;
-    async function _tickOnce(){
-      var accs = []; try { accs = loadAcc().filter(function(x){ return x.auth1 && x.orgId; }); } catch(e){}
-      if (!accs.length) return;
-      // 对话追踪(trackStuck)与 额度/清理/备份 解耦·各行其道:
-      //   旧病灶: trackStuck 失败/超时即 return → 下游 bgAutoCleanTick/bgBackupTick 永不执行,
-      //   归零移出库「开关全开却从不生效」的根因之一。今追踪块失败只跳过通知, 维护块照常跑。
-      var r = null; try { r = await CMDS.trackStuck({ watchSids: Object.keys(loadPrev()) }); } catch(e){ r = null; }
-      if (r && r.ok && Array.isArray(r.sessions)) { try { _convTrack(r); } catch(e){} }
-      // 额度权威刷新(同拍同轮): 活跃号必刷 + 空闲号轮转, 刷毕直推原生页签 → 金额/状态不再依赖切号板在前台
-      try { await bgQuotaTick((r&&r.sessions)||[], accs); } catch(e){}
-      // 归零移出库·常驻接管(同拍殿后): 全池逐号走共用清理流水线, 不再依赖切号板在前台
-      try { await bgAutoCleanTick(accs); } catch(e){}
-      // 增量备份·常驻接管(每轮轮转一号): ZIP 备份时刻跟随最新对话内容, 不依赖切号板在前台
-      try { await bgBackupTick(accs); } catch(e){}
-    }
     function _convTrack(r){
       var prev = loadPrev(), next = {}, now = Date.now();
       var coldStart = !prev || !Object.keys(prev).length;   // 冷启(prev 空): 只播种, 不对全部既有活跃会话刷屏「新对话」

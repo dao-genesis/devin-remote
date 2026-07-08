@@ -22,7 +22,7 @@ let failures = 0;
 function ok(cond, msg) { if (cond) { console.log("  ok  - " + msg); } else { failures++; console.error("  FAIL- " + msg); } }
 
 // 切出 _pushTabQuota → bgQuotaTick 区段
-const seg = engineSrc.match(/var _bgIdleCursor = 0;[\s\S]*?(?=\n\s*async function tick\(\))/);
+const seg = engineSrc.match(/var _bgIdleCursor = 0;[\s\S]*?(?=\n\s*\/\/ 通知轨与维护轨彻底解耦)/);
 if (!seg) { console.error("FAIL: 未找到 bgQuotaTick 区段"); process.exit(1); }
 
 function makeModule() {
@@ -89,7 +89,7 @@ function makeModule() {
     ok(m.refreshed.slice(before.length).some((id) => !before.includes(id) || id === "id0"), "下一轮轮转到不同空闲号 (全池周期覆盖)");
   }
   // ── 场景 5: 源级护栏 ──
-  ok(/try \{ await bgQuotaTick\(\(r&&r\.sessions\)\|\|\[\], accs\); \} catch\(e\)\{\}/.test(engineSrc), "engine tick 每轮调 bgQuotaTick (与对话追踪同拍)");
+  ok(/try \{ await bgQuotaTick\(sess, accs\); \} catch\(e\)\{\}/.test(engineSrc), "engine 维护轨每轮调 bgQuotaTick (与通知轨解耦·自限 60s)");
   ok(/@JavascriptInterface public void setTabDollars\(String accountId, String dollars\) \{\s*\n\s*MainActivity m = MainActivity\.sInstance; if \(m != null\) m\.ipcSetTabDollars\(accountId, dollars\);/.test(relaySrc), "RelayService 桥转发 setTabDollars → MainActivity.ipcSetTabDollars");
   ok(/m\.ipcSetTabStatus\(accountId, convName, status\);/.test(relaySrc), "RelayService 桥转发 setTabStatus → MainActivity.ipcSetTabStatus");
   ok(/public void ipcSetTabDollars\(String accountId, String dollars\)/.test(mainSrc), "MainActivity 具公开 ipcSetTabDollars");
