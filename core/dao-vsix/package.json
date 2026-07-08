@@ -804,7 +804,7 @@
   "scripts": {
     "vscode:prepublish": "node ./build.js",
     "compile": "node ./build.js",
-    "test": "node ./build.js && node test/reverse-inject.test.js && node test/multi-instance.sim.js"
+    "test": "node ./build.js && node test/board-solo.test.js && node test/reverse-inject.test.js && node test/multi-instance.sim.js"
   },
   "devDependencies": {
     "@types/node": "^25.9.2",

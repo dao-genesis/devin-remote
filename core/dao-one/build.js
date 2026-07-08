@@ -67,7 +67,7 @@ function buildVsix() {
       );
       // 归一·② Proxy Pro 是面板板块而非数据 tab: reloadActiveDataTab 若对其发
       // loadTabData, 宿主必回 'Unknown tab' 并把三模块面板覆写成错误页(实测·solo 板块
-      // init 广播即触发) → 把 'proxy' 折入其面板板块早退清单, 与 bridge/computer 同列。
+      // init 广播即触发) → 把 'proxy' 折入其面板板块早退清单, 与 bridge/backups 等面板板块同列。
       if (!/reloadActiveDataTab\(\)\{[\s\S]{0,120}?t==='proxy'/.test(code)) {
         code = code.replace(
           /(function reloadActiveDataTab\(\)\{\s*var t=S\.tab;\s*if\()/,
