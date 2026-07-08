@@ -1372,16 +1372,20 @@ function toggleTranslate(){var t=tabs[active];var fr=t?t.frame:(isBoard()&&BOARD
   if(!doc||!doc.documentElement){
     // 跨源自愈: 页面在代理外(整页跳转逃逸/直连外站) → 经站内同源代理 /__web 重载同一 URL, 载毕自动续译。
     var ru=t&&t.url?String(t.url):'';
-    if(t&&ru&&!t.__trRerouted){
+    if(t&&ru&&t.__trRerouted!==ru){ // 按 URL 记重载: 换页后又可自愈, 同页只重载一次不无限循环
       var rl=ru.toLowerCase();
       var target=ru.indexOf('/__web')===0?ru:((rl.indexOf('http://')===0||rl.indexOf('https://')===0)?'/__web?u='+encodeURIComponent(ru):'');
-      if(target){t.__trRerouted=true;daoToast('🌐 经站内代理重载后自动翻译…');
+      if(target){t.__trRerouted=ru;daoToast('🌐 经站内代理重载后自动翻译…');
         var fr2=t.frame,tid=active;
-        var onl=function(){fr2.removeEventListener('load',onl);setTimeout(function(){if(active===tid)toggleTranslate();},500);}; // __trRerouted 保持 true: 重载后仍跨源也只重载一次, 不无限白屏循环
+        // 载毕轮询等 doc 就绪(SPA 水合/重定向可能晚于 load), 最多 10s, 就绪即续译
+        var onl=function(){fr2.removeEventListener('load',onl);var n=0;(function poll(){if(active!==tid)return;
+          var d2=null;try{d2=fr2.contentDocument||(fr2.contentWindow&&fr2.contentWindow.document);}catch(e){}
+          if(d2&&d2.documentElement){toggleTranslate();return;}
+          if(++n<20)setTimeout(poll,500);else daoToast('本页不可翻译(代理重载后仍跨源)',true);})();};
         fr2.addEventListener('load',onl);
         t.url=target;t._loaded=true;fr2.setAttribute('src',target);setLoading(tid,true);return;}}
     daoToast('本页不可翻译(跨源)',true);return;}
-  if(t)t.__trRerouted=false;
+  if(t)t.__trRerouted=null;
   var win=fr.contentWindow;var S=win.__daoTrans;
   if(S&&S.active){_trRestore(S);daoToast('已恢复原文');return;}
   S=win.__daoTrans={active:true,doc:doc,observed:[],mos:[],debounce:null};
