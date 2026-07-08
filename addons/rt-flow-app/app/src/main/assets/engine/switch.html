@@ -618,8 +618,10 @@ function sessStatus(s){
 // 账号实时额度判活 (与 devin-cloud.js 同源·正本清源): 根治「满额号被陈旧会话 reason=out_of_quota 误标额度耗尽」。
 //   单条会话的 reason 只是它「当时」触顶休眠的瞬时原因; 日/周配额会重置、Extra Usage 美金可续 → 账号此刻是否真耗尽
 //   须以实时额度为准。返回 true=当前确有可用额度; false=确无; null=未知(保守·信官方信号)。
+//   鲜度门(与 devin-cloud.js 同源): 只有 ≤15min 内真取过的额度(qTs)才能返 true 压官方耗尽信号; 陈旧/无戳一律 null。
 function quotaLive(q){
   if(!q||typeof q!=="object") return null;
+  if(!q.qTs||Date.now()-q.qTs>15*60*1000) return null;
   if(typeof q.dPct==="number"&&q.dPct>0) return true;
   if(typeof q.wPct==="number"&&q.wPct>0) return true;
   if(typeof q.overageDollars==="number") return q.overageDollars>0;

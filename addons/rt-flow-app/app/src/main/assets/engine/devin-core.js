@@ -362,7 +362,7 @@
     acc.orgId = orgId; acc.orgName = orgName; acc.orgSlug = orgSlug; acc.userId = acc.userId || j3.user_id || "";
     acc.lastError = ""; acc.verifiedAt = Date.now();
     var quota = null; try { quota = await devinFetchQuota(acc.apiKey, acc.windsurfKey, acc.auth1, orgId, acc.apiServerUrl); } catch (e) {}
-    if (quota) { acc.quota = quota; acc.plan = quota.planName || acc.plan; }
+    if (quota) { quota.qTs = Date.now(); acc.quota = quota; acc.plan = quota.planName || acc.plan; }
     upsertAcc(acc);
     return { ok: true, orgId: orgId, orgName: orgName, orgSlug: orgSlug, quota: quota, account: acc };
   }
@@ -402,6 +402,7 @@
         q.overageStale = true;
         q.overageTs = acc.quota.overageTs || 0;
       }
+      q.qTs = Date.now();   // 额度鲜度戳: quotaLive 据此判新鲜, 陈旧额度绝不拿来压官方耗尽信号
       acc.quota = q; acc.plan = q.planName || acc.plan; upsertAcc(acc);
     }
     return { ok: !!q, quota: q || acc.quota };

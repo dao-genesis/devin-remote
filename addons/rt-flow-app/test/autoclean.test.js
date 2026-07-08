@@ -196,10 +196,10 @@ function makeEnv(opts) {
   ok(/saveAcc\(accs\); try\{ mirrorAccountsToVault\(\); \}catch\(e\)\{\}/.test(switchSrc), "doAdd 后立即镜像金库 (重加号不被金库回拉抓回幽灵态)");
   ok(/window\.__rtBsGuard3\)return/.test(mainSrc), "退格护栏: 幂等守卫 v3");
 
-  // ── 源级护栏: 拖拽提取 103B 空导出三层防线 (头部-only 拒注入 + 回退链报真错 + 引擎自动登录解锁) ──
-  ok(/!fconv\.contains\("## "\)/.test(mainSrc), "103B防线: engineExtractInject 拒绝仅标题头无消息段的导出");
-  ok(/conv\.isEmpty\(\) \|\| !conv\.contains\("## "\)/.test(mainSrc), "103B防线: onConvExtracted 拒绝头部-only 注入");
-  ok(/__ST=r\.status/.test(mainSrc) && /0事件\(HTTP '\+__ST\+'\)/.test(mainSrc), "103B防线: 回退链 0 事件时回报 HTTP 状态真错");
+  // ── 源级护栏: 拖拽提取取数链归一 (与「下MD」同源同路 + 头部-only 拒注入 + 旧降级腿已移除 + 引擎自动登录解锁) ──
+  ok(/fastPanelExtractInject\(sid, accJson, target, x, y, fallback\)/.test(mainSrc), "取数归一: engineExtractInject 只走 本地备份→面板快路径(与下MD同源)");
+  ok(/!md\.contains\("## "\)/.test(mainSrc), "103B防线: 面板快路径拒绝仅标题头无消息段的导出");
+  ok(!/onConvExtracted/.test(mainSrc) && !/__ST=r\.status/.test(mainSrc), "取数归一: 旧第三/四腿(引擎 RPC 取数、源页内 fetch 提取)已整体移除(降级产物乱数据根源)");
   ok(/\(!acc\.auth1\|\|!acc\.orgId\)&&acc\.email&&acc\.password/.test(engineSrc), "103B防线: extractConversation 未解锁号自动登录再取 (额度归零号拖拽可用)");
 
   // ── 源级护栏: ZIP 备份增量同步 (对话有新内容 → 备份自动跟进) ──
