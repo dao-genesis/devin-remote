@@ -118,7 +118,9 @@ function successPage(msg, ok) {
     `<p style="opacity:.7">${msg}</p><p style="opacity:.5">可关闭本页, 返回插件查看进度。</p></div></body>`;
 }
 
+let _activeCallbackSrv = null; // 重复登录: 先关上一轮回调服务, 免 EADDRINUSE
 export function waitForCallback(expectedState, { host = "localhost", port = CALLBACK_PORT, timeoutMs = 300000, onReady } = {}) {
+  if (_activeCallbackSrv) { try { _activeCallbackSrv.close(); } catch { /* noop */ } _activeCallbackSrv = null; }
   return new Promise((resolve, reject) => {
     let done = false;
     // settle 只结算 promise(不关服务), 关服务交给连接关闭事件 —— 否则同步 close() 会截断
@@ -142,6 +144,8 @@ export function waitForCallback(expectedState, { host = "localhost", port = CALL
     });
     const timer = setTimeout(() => { settle(reject, new Error("OAuth 登录超时(5分钟未完成授权)")); shutdown(); }, timeoutMs);
     srv.on("error", (e) => { settle(reject, e); shutdown(); });
+    srv.on("close", () => { if (_activeCallbackSrv === srv) _activeCallbackSrv = null; });
+    _activeCallbackSrv = srv;
     srv.listen(port, host, () => { try { onReady && onReady(); } catch { /* noop */ } });
   });
 }
