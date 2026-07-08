@@ -205,33 +205,27 @@ public class MainActivity extends AppCompatActivity {
 
     static class GuardedWebView extends WebView {
         GuardedWebView(Context c) { super(c); }
-        long lastBkAt = 0;   // 最近一次退格(左删/DEL 键)的时刻 —— 紧跟其后的前向删除判为 IME 误发
         @Override public android.view.inputmethod.InputConnection onCreateInputConnection(EditorInfo outAttrs) {
             android.view.inputmethod.InputConnection ic = super.onCreateInputConnection(outAttrs);
             if (ic == null) return null;
             return new android.view.inputmethod.InputConnectionWrapper(ic, true) {
+                // 左右同删的原生钳制(单一真源): 手机软键盘没有 Del 键 → IME 经 InputConnection 发出的
+                // 一切「前向删除」都不是用户意图, 只可能是输入法把一次退格拆单/合并误发的产物。
+                // ① 同一调用左右同删(before>0 && after>0) → 只保留左删;
+                // ② 纯前向删除(before==0 && after>0) → 无条件吞掉(不再限 250ms 时间窗:
+                //    拆单顺序可能是「先前向后退格」, 时间窗对这种倒序无效, 正是左右同删屡修不绝之因);
+                // ③ IME 经 sendKeyEvent 模拟的 FORWARD_DEL 同理吞掉(实体外接键盘的 Del 走
+                //    Activity dispatchKeyEvent, 不经 InputConnection, 不受影响)。
                 @Override public boolean deleteSurroundingText(int beforeLength, int afterLength) {
-                    long now = android.os.SystemClock.uptimeMillis();
-                    if (beforeLength > 0) lastBkAt = now;
-                    if (beforeLength > 0 && afterLength > 0) afterLength = 0;
-                    // 纯前向删除紧跟退格(<250ms): 手机键盘无 Del 键, 必为输入法拆单误发 → 吞掉
-                    if (beforeLength == 0 && afterLength > 0 && (now - lastBkAt) < 250) return true;
+                    if (afterLength > 0) { if (beforeLength <= 0) return true; afterLength = 0; }
                     return super.deleteSurroundingText(beforeLength, afterLength);
                 }
                 @Override public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
-                    long now = android.os.SystemClock.uptimeMillis();
-                    if (beforeLength > 0) lastBkAt = now;
-                    if (beforeLength > 0 && afterLength > 0) afterLength = 0;
-                    if (beforeLength == 0 && afterLength > 0 && (now - lastBkAt) < 250) return true;
+                    if (afterLength > 0) { if (beforeLength <= 0) return true; afterLength = 0; }
                     return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
                 }
                 @Override public boolean sendKeyEvent(android.view.KeyEvent event) {
-                    if (event != null) {
-                        long now = android.os.SystemClock.uptimeMillis();
-                        int kc = event.getKeyCode();
-                        if (kc == android.view.KeyEvent.KEYCODE_DEL) { lastBkAt = now; }
-                        else if (kc == android.view.KeyEvent.KEYCODE_FORWARD_DEL && (now - lastBkAt) < 250) return true;
-                    }
+                    if (event != null && event.getKeyCode() == android.view.KeyEvent.KEYCODE_FORWARD_DEL) return true;
                     return super.sendKeyEvent(event);
                 }
             };
@@ -3757,16 +3751,26 @@ public class MainActivity extends AppCompatActivity {
     //   保留两件与正常行为无冲突的事: ①组合期 CSS 隐藏占位(只改样式不动 DOM·不触发 Slate 重挂,
     //   消除重叠且不掐 IME 会话) ②compositionend 后 120ms 归账兜底(占位仍在=模型确未归账才重放,
     //   Slate 自己归了账则绝不双写)。
+    //   v5(空框首段语音·最小拦截): v4 全撤拦截后, 真机空输入框首段语音「只出一字即断」回归 ——
+    //   Slate 处理空编辑器上**第一记** insertCompositionText 时同步重渲(占位节点摘除+重挂)
+    //   → restartInput 掐断刚建立的 IME 语音会话, 此为首段掐断唯一节点。v3 之所以引发三症,
+    //   是把整段组合全程吞掉让模型长期饿着; v5 只对「空编辑器起始的组合」吞**第一记**
+    //   insertCompositionText(stopImmediatePropagation·不 preventDefault: 浏览器默认动作照常落字,
+    //   IME 会话不断), 第二记起 Slate 全程正常处理(此时组合已稳固, 重渲不再掐断)。
+    //   模型少记的首字由既有 compositionend 归账兜底补齐(占位仍在才重放·不双写)。
     static void installVoiceGuard(WebView w) {
         if (w == null) return;
-        String js = "(function(){if(window.__rtViGuard4)return;window.__rtViGuard4=1;"
+        String js = "(function(){if(window.__rtViGuard5)return;window.__rtViGuard5=1;"
             + "function ced(t){return t&&t.closest?t.closest('[data-slate-editor=true],[contenteditable=true],[contenteditable=\"\"]'):null;}"
-            + "var hold=null,buf='';"
+            + "var hold=null,buf='',fresh=0;"
             + "function ph(ed){return ed?ed.querySelector('[data-slate-placeholder]'):null;}"
             + "document.addEventListener('compositionstart',function(e){var ed=ced(e.target);hold=ed||null;buf='';"
-            + "var p=ph(ed);if(p)p.style.visibility='hidden';},true);"
+            + "var p=ph(ed);fresh=(ed&&p)?1:0;if(p)p.style.visibility='hidden';},true);"
             + "document.addEventListener('compositionupdate',function(e){if(hold)buf=String(e.data||'');},true);"
-            + "document.addEventListener('compositionend',function(e){var ed=hold;hold=null;if(!ed)return;"
+            + "document.addEventListener('beforeinput',function(e){"
+            + "if(fresh&&hold&&e.isTrusted&&e.inputType==='insertCompositionText'){fresh=0;e.stopImmediatePropagation();}"
+            + "},true);"
+            + "document.addEventListener('compositionend',function(e){var ed=hold;hold=null;fresh=0;if(!ed)return;"
             + "var p=ph(ed);if(p)p.style.visibility='';"
             + "var txt=String(e.data!=null&&e.data!==''?e.data:buf)||'';if(!txt)return;"
             // 延时归账: 给 Slate 自身(MutationObserver)一拍归账机会; 占位仍在=模型确未归账才重放
@@ -4922,16 +4926,19 @@ public class MainActivity extends AppCompatActivity {
             final int hasFiles = ent.optInt("hasFiles", 0);
             final String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
             final String guide = buildAccessGuideMd(accJson, sid, title);
-            // 单包 ZIP 为本源: 只要有整包就直注整包(内含对话MD+指引+产出文件, 不再要求 hasFiles>0)
+            // 单包 ZIP 为本源: 整包直注(内含对话MD+指引+产出文件); 同时从包内取出「对话_人类可读.md」
+            // 一并注入 → 拖拽落地 = ZIP + 对话MD + 取数指引 (无需对方先解包即可直读对话全文)
             if (zipName != null && !zipName.isEmpty()) {
                 final String zb64 = vaultReadBackupB64(folder, zipName);
                 if (zb64 != null && !zb64.isEmpty()) {
+                    final String zmd = zipEntryTextB64(zb64, "对话_人类可读.md");
                     main.post(() -> {
                         java.util.List<String[]> files = new java.util.ArrayList<>();
                         files.add(new String[]{ base + ".zip", zb64 });
+                        if (zmd != null && !zmd.isEmpty()) files.add(new String[]{ base + "-conversation.md", zmd });
                         files.add(new String[]{ base + "-files-access.md", b64Utf8(guide) });
                         dropB64FilesIntoPage(target, x, y, files);
-                        toast("本地备份·秒注入 对话整包ZIP" + (hasFiles > 0 ? ("(" + hasFiles + "件产出)") : "") + " + 取数指引");
+                        toast("本地备份·秒注入 对话整包ZIP" + (hasFiles > 0 ? ("(" + hasFiles + "件产出)") : "") + ((zmd != null && !zmd.isEmpty()) ? " + 对话MD" : "") + " + 取数指引");
                     });
                     return true;
                 }
@@ -4952,6 +4959,27 @@ public class MainActivity extends AppCompatActivity {
             }
         } catch (Exception ignored) {}
         return false;
+    }
+
+    /** 从 base64 ZIP(备份整包·store/deflate 皆可)中取指定条目文本, 返回其 base64(UTF-8); 无/失败返 null。 */
+    private static String zipEntryTextB64(String zipB64, String entryName) {
+        try {
+            byte[] zip = android.util.Base64.decode(zipB64, android.util.Base64.DEFAULT);
+            java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(zip));
+            java.util.zip.ZipEntry ze;
+            while ((ze = zis.getNextEntry()) != null) {
+                String n = ze.getName();
+                if (n != null && (n.equals(entryName) || n.endsWith("/" + entryName))) {
+                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[8192]; int r;
+                    while ((r = zis.read(buf)) > 0) bos.write(buf, 0, r);
+                    zis.close();
+                    return android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP);
+                }
+            }
+            zis.close();
+        } catch (Exception ignored) {}
+        return null;
     }
 
     /** 全服通近期对话拖拽放手: 据账号(含 email/密码/org) + sid 直接经引擎取数并注入目标页 (无需源标签)。 */

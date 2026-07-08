@@ -1354,7 +1354,7 @@ public class RelayService extends Service {
      *  convwatch(对话通知)/额度刷新/自动清理备份的 setInterval 形同虚设。evaluateJavascript
      *  不受计时器节流影响, 由原生 Handler 周期直驱 window.__convTick(), 与 MainActivity
      *  外驱 switch.html engineHeartbeat() 同一范式 → 通知与额度自动刷新与前后台/息屏无关、恒可靠。 */
-    private static final long CONV_PUMP_MS = 60000;
+    private static final long CONV_PUMP_MS = 30000;   // 30s 一拍: 与引擎通知轨同拍(通知时效翻倍); 维护轨在 JS 侧自限 60s
     private final Runnable convPump = new Runnable() {
         @Override public void run() {
             if (engine != null) {

@@ -43,20 +43,21 @@ ok(/MainActivity\.warmAttachmentCookie\(fToken, fOrg, u\)/.test(tabAct), "TabAct
 // ② 退格根治 (原生 InputConnection 夹断)
 ok(/class GuardedWebView extends WebView/.test(main), "GuardedWebView 存在");
 ok(/new GuardedWebView\(this\)/.test(main), "makeTab 实际使用 GuardedWebView");
-const clamps = main.match(/if \(beforeLength > 0 && afterLength > 0\) afterLength = 0;/g) || [];
+const clamps = main.match(/if \(afterLength > 0\) \{ if \(beforeLength <= 0\) return true; afterLength = 0; \}/g) || [];
 ok(clamps.length >= 2, "deleteSurroundingText / InCodePoints 双双夹断 (found " + clamps.length + ")");
 ok(/onCreateInputConnection\(EditorInfo outAttrs\)/.test(main), "夹断落在 onCreateInputConnection 包装层");
 
-// 夹断语义 (JS 等价复算): 左右同删 → 只删左; 纯左删/纯右删原样
-function clamp(before, after) { if (before > 0 && after > 0) after = 0; return [before, after]; }
+// 夹断语义 (JS 等价复算): 左右同删 → 只删左; 纯前向删除 → 整体吞掉(手机软键盘无 Del 键);
+// 纯左删原样。不再用 250ms 时间窗: 拆单可能「先前向后退格」, 时间窗对倒序无效。
+function clamp(before, after) { if (after > 0) { if (before <= 0) return null; after = 0; } return [before, after]; }
 ok(String(clamp(1, 1)) === "1,0", "夹断: (1,1) → (1,0) 一次退格只删左侧");
 ok(String(clamp(1, 0)) === "1,0", "夹断: (1,0) 原样 (正常退格)");
-ok(String(clamp(0, 1)) === "0,1", "夹断: (0,1) 原样 (纯前向删除不受影响)");
+ok(clamp(0, 1) === null, "夹断: (0,1) 纯前向删除整体吞掉 (IME 拆单无论顺序皆被拦)");
 
-// ②b 退格时间窗加固 (IME 拆单: 退格后紧跟前向删除 → 吞掉)
-ok(/beforeLength == 0 && afterLength > 0 && \(now - lastBkAt\) < 250\) return true;/.test(main), "时间窗: 紧跟退格的纯前向删除被吞 (deleteSurroundingText 拆单)");
-ok(/KEYCODE_FORWARD_DEL && \(now - lastBkAt\) < 250\) return true;/.test(main), "时间窗: 紧跟退格的 FORWARD_DEL 键事件被吞 (sendKeyEvent 拆单)");
-ok(/KEYCODE_DEL\) \{ lastBkAt = now; \}/.test(main), "时间窗: 退格键事件登记时刻");
+// ②b 前向删除无条件拦断 (旧 250ms 时间窗对「先前向后退格」倒序拆单无效 → 已整体撤除改无条件)
+ok(/if \(afterLength > 0\) \{ if \(beforeLength <= 0\) return true; afterLength = 0; \}/.test(main), "纯前向 deleteSurroundingText 无条件吞掉");
+ok(/KEYCODE_FORWARD_DEL\) return true;/.test(main), "IME 模拟的 FORWARD_DEL 键事件无条件吞掉");
+ok(!/lastBkAt/.test(main), "旧 250ms 时间窗机制已整体移除 (倒序拆单之漏根除)");
 
 // ②c JS 回归本源 v3 (大道至简): JS 层对输入事件一律直通不拦 ——
 //     v2 的 sIP+光标归位使 Slate 模型与 DOM 脱钩, normalize 整体回滚把整段文字连附件
@@ -77,17 +78,20 @@ ok(!/chk\(false\);\},700\)/.test(main), "退格回归本源: 旧看门狗 700/14
 ok(!/deleteContentForward'&&\(now-lastBk\)<150/.test(main.replace(/"\s*\+\s*"/g, "")), "退格回归本源: v1 前向删除时间窗拦截已移除 (原生 InputConnection 层已够)");
 ok(!/setComposingRegion\(int start, int end\)/.test(main), "原生 setComposingRegion 已恢复透传 (退格钳制只在 deleteSurroundingText)");
 
-// ②c2 语音输入根治 v4 (真机闭环回归·大道至简): 撤除 beforeinput 一切拦截 ——
-//      v3 组合期吞事件让 Slate 模型全程饿着 → 占位重叠/无法框选/退格全文归零 三症同因。
-//      仅保留: ①组合期 CSS 隐藏占位(不动 DOM·不触发重挂) ②compositionend 归账兜底(不双写)。
+// ②c2 语音输入根治 v5 (v4 基座 + 空框首记最小拦截):
+//      v4 保留: ①组合期 CSS 隐藏占位(不动 DOM·不触发重挂) ②compositionend 归账兜底(不双写)。
+//      v5 新增: 空编辑器起始的组合只吞**第一记** insertCompositionText(sIP·不 preventDefault)
+//      → Slate 不在首记同步重渲重挂, restartInput 不再掐断刚建立的语音会话; 第二记起全程直通。
 ok(/static void installVoiceGuard\(WebView w\)/.test(main), "语音根治: installVoiceGuard 存在");
-ok(/__rtViGuard4/.test(main), "语音根治: 幂等守卫 v4 存在");
+ok(/__rtViGuard5/.test(main), "语音根治: 幂等守卫 v5 存在");
 const viGuard = main.slice(main.indexOf("static void installVoiceGuard"), main.indexOf("// DownloadListener"));
-ok(!/stopImmediatePropagation/.test(viGuard), "语音根治 v4: 无任何 stopImmediatePropagation(组合事件对 Slate 直通)");
-ok(!/'beforeinput',function/.test(viGuard.replace(/"\s*\+\s*"/g, "")), "语音根治 v4: 不再挂 beforeinput 拦截监听");
-ok(/p\.style\.visibility='hidden'/.test(viGuard), "语音根治 v4: 组合期仅 CSS 隐藏占位(消除重叠·不掐 IME)");
-ok(/'compositionend',function\(e\)\{var ed=hold;hold=null;/.test(main), "语音根治: compositionend 归位");
-ok(/setTimeout\(function\(\)\{try\{/.test(main) && /if\(!ph\(ed\)\)return;/.test(viGuard.replace(/"\s*\+\s*"/g, "")), "语音根治: 占位仍在才重放(已归账不双写)");
+const viFlat = viGuard.replace(/"\s*\+\s*"/g, "");
+ok(/if\(fresh&&hold&&e\.isTrusted&&e\.inputType==='insertCompositionText'\)\{fresh=0;e\.stopImmediatePropagation\(\);\}/.test(viFlat), "语音根治 v5: 空框组合只吞第一记 insertCompositionText(防 restartInput 掐断)");
+ok((viFlat.match(/stopImmediatePropagation/g) || []).length === 1, "语音根治 v5: 拦截面最小化(仅首记一处 sIP, 其余直通)");
+ok(!/preventDefault/.test(viFlat), "语音根治 v5: 不 preventDefault(浏览器默认动作照常落字)");
+ok(/p\.style\.visibility='hidden'/.test(viGuard), "语音根治: 组合期仅 CSS 隐藏占位(消除重叠·不掐 IME)");
+ok(/'compositionend',function\(e\)\{var ed=hold;hold=null;fresh=0;/.test(viFlat), "语音根治: compositionend 归位+拦截标志复位");
+ok(/setTimeout\(function\(\)\{try\{/.test(main) && /if\(!ph\(ed\)\)return;/.test(viFlat), "语音根治: 占位仍在才重放(已归账不双写)");
 ok(/new InputEvent\('beforeinput',\{inputType:'insertText',data:txt,bubbles:true,cancelable:true\}\)/.test(main), "语音根治: 合成 beforeinput(insertText) 归账兜底");
 ok(/'compositionupdate',function\(e\)\{if\(hold\)buf=String\(e\.data\|\|''\);/.test(main), "语音根治 v4: 组合文本经 compositionupdate 缓存(供归账兜底)");
 ok(!/it==='insertText'&&!e\.isComposing/.test(main), "语音根治 v2: 非组合直敲首字拦截已撤除 (模型脱钩→崩页主诱因)");
