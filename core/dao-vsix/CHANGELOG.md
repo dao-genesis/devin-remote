@@ -2,6 +2,12 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.50.115
+- **找回三笔「合并后落单」的实机验证修复**——它们当时被推到 PR #1106 分支但在其合并**之后**，从未进入 main，致 3.50.112~114 发行版全部缺失：
+  - **翻译白屏闪烁修复**：跨源重载(/__web)每 URL 只走一次(免无限白屏循环) + 译文缓存同步秒回填(SPA 重渲染不再中英来回闪) + 增量去抖 700→250ms — `core/rt-flow/extension.js` 与捆绑副本同步。
+  - **relay 多实例互踢修复**：Worker 持久通道 session 按端口分文件(`relay-session-<port>.json`)，同工作区多窗口不再在 Worker 端互踢线致 relay 状态来回翻。
+  - **OAuth 回调端口占用修复**：重复登录先关上一轮回调服务，免 8976 EADDRINUSE。
+
 ## 3.50.114
 - **修复「cloudflared quicktunnel 畸形址(前导连字符)被发布 → 公网端点永久死锁」**。`cfReadUrlFromLog` 的正则 `[a-z0-9-]+` 允许子域标签以连字符开头；实测日志曾折行/半写捕获出 `https://-perception-basically-slight.trycloudflare.com` 这类畸形主机名(DNS 恒不解析·边缘恒 530)被当作有效址落定并反向注入，非 leader 实例持续探测 `published-ineffective(tunnel-down/530)` 却因非 leader 无法接管刷新，公网入站/MCP 端点长时间不自愈。
   - 修法：正则改为 `[a-z0-9](?:[a-z0-9-]*[a-z0-9])?`，主机名须以字母/数字起止，畸形折行片段一律拒收→继续探测直至捕获干净单行 URL。守柔·合法主机名，无为而无不为。
