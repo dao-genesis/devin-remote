@@ -4342,6 +4342,68 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             return { ok: true, wssUrl: devinBuildWssUrl(ws.devinSessionToken) };
         }
 
+        // ═══ 切号板块 (switch) · MD 契约全量: 账号池/切换/归零清理亦以 REST 暴露 ═══
+        case '/api/devin/switch/accounts': {
+            const pool = loadAccountPool(true);
+            const cur = (ws.devinEmail || '').trim().toLowerCase();
+            return { ok: true, current: ws.devinEmail || '', accounts: pool.map(a => ({ email: a.email, active: a.email === cur })) };
+        }
+        case '/api/devin/switch/to': {
+            const swb = await readBody(req);
+            const em = String((JSON.parse(swb || '{}').email) || '').trim().toLowerCase();
+            if (!em) return { ok: false, error: 'email required' };
+            const acct = loadAccountPool().find(a => a.email === em);
+            if (!acct) return { ok: false, error: 'account not in pool: ' + em };
+            await setAccountSyncMode('manual');
+            const r = await devinLogin(acct.email, acct.password);
+            if (r.ok) { try { await devinFullInject(); } catch { /* 守柔 */ } }
+            return { ok: r.ok, email: acct.email, error: r.error };
+        }
+        case '/api/devin/switch/cleanup-zero': {
+            // 委托 RT Flow 一气呵成: 全量备份→清理→出库 (自带模态确认+备份完整性校验·余额未知不删)
+            try { await vscode.commands.executeCommand('wam.devinCleanupZeroQuota'); return { ok: true, started: true }; }
+            catch (e: any) { return { ok: false, error: (e && e.message) || String(e) }; }
+        }
+        case '/api/devin/switch/cleanup-immediate': {
+            // 参手机版·无模态: 全部账号 先备份(严格校验)→归零→出库
+            try { await vscode.commands.executeCommand('wam.devinCleanupImmediate'); return { ok: true, started: true }; }
+            catch (e: any) { return { ok: false, error: (e && e.message) || String(e) }; }
+        }
+
+        // ═══ 对话备份板块 (backups) · MD 契约全量: 备份树/正文亦以 REST 暴露 ═══
+        case '/api/devin/backups': {
+            const dc = loadDevinCloud();
+            if (!dc || typeof dc.listBackups !== 'function') return { ok: false, error: 'rt-flow 备份引擎不可用' };
+            const root = resolveBackupRoot();
+            try { return { ok: true, root, tree: dc.listBackups(root) }; } catch (e: any) { return { ok: false, error: (e && e.message) || String(e) }; }
+        }
+        case '/api/devin/backups/conv': {
+            // 读一条对话备份正文 (目录/zip/单文件 · 优先 对话.md) — 与面板 readBackupConv 同源逻辑
+            const bp = url.searchParams.get('path') || '';
+            if (!bp || !fs.existsSync(bp)) return { ok: false, error: '路径不存在' };
+            try {
+                const MAXLEN = 400 * 1024;
+                let content = ''; let fmt = 'md';
+                const st0 = fs.statSync(bp);
+                if (st0.isDirectory()) {
+                    const files = fs.readdirSync(bp);
+                    const md = files.find(f => /对话\.md$/i.test(f)) || files.find(f => /\.md$/i.test(f));
+                    const html = files.find(f => /对话\.html$/i.test(f)) || files.find(f => /\.html$/i.test(f));
+                    if (md) { content = fs.readFileSync(path.join(bp, md), 'utf8'); fmt = 'md'; }
+                    else if (html) { content = fs.readFileSync(path.join(bp, html), 'utf8'); fmt = 'html'; }
+                    else return { ok: false, error: '该备份无 对话.md / 对话.html' };
+                } else if (/\.zip$/i.test(bp)) {
+                    const z = readZipTextEntry(bp, [/对话\.md$/i, /\.md$/i, /对话\.html$/i, /\.html$/i]);
+                    if (!z) return { ok: false, error: 'ZIP 内无 对话.md / 对话.html' };
+                    content = z.text; fmt = /\.md$/i.test(z.name) ? 'md' : 'html';
+                } else {
+                    content = fs.readFileSync(bp, 'utf8'); fmt = /\.html$/i.test(bp) ? 'html' : 'md';
+                }
+                if (content.length > MAXLEN) content = content.slice(0, MAXLEN) + '\n\n…(正文较长已截断)';
+                return { ok: true, fmt, content };
+            } catch (e: any) { return { ok: false, error: (e && e.message) || String(e) }; }
+        }
+
         // ═══════════════════════════════════════════════════════════
         // 状态查询 · 帛书·五十二「见小曰明·守柔曰强」— 外部插件可读
         // ═══════════════════════════════════════════════════════════
@@ -9888,8 +9950,18 @@ function agentApiCatalog(): { group: string; items: AgentApiEndpoint[] }[] {
             { method: 'GET', path: '/api/manifest', desc: '机器可读的能力清单 (JSON)' },
         ]},
         { group: '账号 (登录 / 配额)', items: [
-            { method: 'POST', path: '/api/devin/login', body: '{"email":"..","password":".."}', desc: '手动登录指定账号 (换取 auth1)' },
-            { method: 'GET', path: '/api/devin/quota', desc: '刷新并返回配额' },
+            { method: 'POST', path: '/api/devin/login', body: '{"email":"..","password":".."}', desc: '手动登录指定账号 (换取 auth1); 弱网/429/5xx 自带指数退避重试 (参手机 APK 多镜像韧性)' },
+            { method: 'GET', path: '/api/devin/quota', desc: '刷新并返回配额; 含 overageDollars(美元余额) 与 overageKnown(余额是否确知·false=billing 瞬断查不到, 绝不当 0 判归零)' },
+        ]},
+        { group: '切号板块 · 账号池 / 切换 / 归零清理 (switch)', items: [
+            { method: 'GET', path: '/api/devin/switch/accounts', desc: '列出切号账号池 (accounts.md 真源) + 当前活动账号' },
+            { method: 'POST', path: '/api/devin/switch/to', body: '{"email":"a@x"}', desc: '切换到池中指定账号 (设 manual → 登录 → 全量反向注入)' },
+            { method: 'POST', path: '/api/devin/switch/cleanup-zero', desc: '一气呵成清理额度归零账号: 全量备份(严格校验)→清理→出库; 余额未知(billing 查不到)绝不误删' },
+            { method: 'POST', path: '/api/devin/switch/cleanup-immediate', desc: '立即清理(参手机版·无模态): 全部账号 先备份→归零→出库' },
+        ]},
+        { group: '对话备份板块 (backups)', items: [
+            { method: 'GET', path: '/api/devin/backups', desc: '列出对话备份树 (账号×对话·与备份面板同源)' },
+            { method: 'GET', path: '/api/devin/backups/conv?path=/abs/path', desc: '读一条对话备份正文 (目录/zip/单文件·优先 对话.md·截断 400KB)' },
         ]},
         { group: 'Sessions (会话 · 读 + 反向操作)', items: [
             { method: 'GET', path: '/api/devin/sessions?limit=50', desc: '列出会话' },
@@ -9935,13 +10007,26 @@ function agentApiCatalog(): { group: string; items: AgentApiEndpoint[] }[] {
             { method: 'POST', path: '/api/devin/multi/open', body: '{"email":"a@x","mode":"ide"}  (mode=sys 走电脑浏览器隔离窗口)', desc: '路由指定账号官网多实例 (等价主页/切号面板的多实例按钮)' },
             { method: 'POST', path: '/api/devin/multi/conv', body: '{"email":"a@x","devinId":"devin-xxx","mode":"ide"}', desc: '多实例打开某账号的具体对话官网' },
         ]},
-        { group: '额度 / 集成 / 全量注入', items: [
+        { group: '额度 / 集成 / 全量注入 / 去重', items: [
             { method: 'POST', path: '/api/devin/usage/limit', body: '{"maxCredits":30}', desc: '设单条消息额度上限 (max_credits)' },
             { method: 'GET', path: '/api/devin/git/connections', desc: 'Git 集成连接状态' },
             { method: 'POST', path: '/api/devin/git/connect', body: '{"pat":"ghp_.."}', desc: '连接 GitHub PAT' },
             { method: 'POST', path: '/api/devin/git/disconnect', body: '{"connectionId":".."}', desc: '断开 Git 集成' },
             { method: 'POST', path: '/api/devin/inject', desc: '一键全量注入 (Secret/Knowledge/Playbook/规则)' },
             { method: 'POST', path: '/api/devin/reconcile-pool', desc: '全池反向注入核对 · 立即强制(账号库实时检测闭环手动触发)' },
+            { method: 'POST', path: '/api/devin/dedupe', desc: '去重: 同名知识/同标题剧本只留一份 (删旧版本残留)' },
+            { method: 'POST', path: '/api/devin/automations/clear', desc: '清除官网本账号全部自动化' },
+        ]},
+        { group: '环境蓝图 / 机器快照 (blueprints)', items: [
+            { method: 'GET', path: '/api/devin/blueprints', desc: '环境蓝图列表 (snapshot-setup)' },
+            { method: 'POST', path: '/api/devin/blueprints/detail', body: '{"id":".."}', desc: '单个蓝图详情' },
+            { method: 'GET', path: '/api/devin/snapshots', desc: '机器快照列表' },
+        ]},
+        { group: '公网穿透 · Bridge / Relay (bridge)', items: [
+            { method: 'GET', path: '/api/bridge-state', desc: '内网穿透隧道状态 (url/token/连接态)' },
+            { method: 'GET', path: '/api/relay/state', desc: 'dao-relay 中继状态 (零账号去中心化通道)' },
+            { method: 'POST', path: '/api/relay/provision-token', desc: '为中继下发/续期 token' },
+            { method: 'GET', path: '/api/devin/wss-url', desc: '当前会话 WSS 实时流地址 (实时状态/消息)' },
         ]},
         { group: 'IDE 控制 (本机工作区)', items: [
             { method: 'POST', path: '/api/exec', body: '{"cmd":"ls"}', desc: '在 IDE 终端执行命令并回收输出' },
@@ -10794,7 +10879,9 @@ async function devinFetchQuota(apiKey: string, apiServerUrl?: string): Promise<a
                     // 配额只显美金: 即便 GetUserStatus 成功, 也并入 billing 美金余额 (overageDollars)
                     const ps = devinParsePlanStatus(r.json);
                     const od = await devinFetchOverageDollars();
-                    if (od != null) ps.overageDollars = od;
+                    // 参手机 APK: overageKnown 区分「余额确知」与「billing 瞬断查不到」— 未知余额绝不当 0 处理(防归零清理误删)
+                    if (od != null) { ps.overageDollars = od; ps.overageKnown = true; ps.overageTs = Date.now(); }
+                    else { ps.overageKnown = false; }
                     return ps;
                 }
                 if (r.status === 401 || r.status === 403 || r.status === 400) { sawAuthFailure = true; break; }
@@ -10809,9 +10896,11 @@ async function devinFetchQuota(apiKey: string, apiServerUrl?: string): Promise<a
             const br = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/status', { Authorization: 'Bearer ' + ws.devinAuth1, 'x-cog-org-id': ws.devinOrgId });
             if (br.status === 200 && br.json) {
                 // 实测: 按需余额在 overage_credits, 正值=可用美元(账单页「Remaining balance」), 负值=已透支→视作 0。
-                const dollars = (typeof br.json.overage_credits === 'number' && isFinite(br.json.overage_credits)) ? Math.max(br.json.overage_credits, 0) : 0;
-                const hasFunds = dollars > 0 && !br.json.billing_error;
-                return { planName: 'Trial', dailyQuotaRemainingPercent: hasFunds ? 100 : 0, weeklyQuotaRemainingPercent: hasFunds ? 100 : 0, overageActive: hasFunds, overageDollars: dollars, _source: 'devin_billing' };
+                // 参手机 APK: 字段缺失/非数值 = 余额未知(overageKnown=false·overageDollars=null), 不得冒充 $0
+                const known = (typeof br.json.overage_credits === 'number' && isFinite(br.json.overage_credits));
+                const dollars = known ? Math.max(br.json.overage_credits, 0) : 0;
+                const hasFunds = known && dollars > 0 && !br.json.billing_error;
+                return { planName: 'Trial', dailyQuotaRemainingPercent: hasFunds ? 100 : 0, weeklyQuotaRemainingPercent: hasFunds ? 100 : 0, overageActive: hasFunds, overageDollars: known ? dollars : null, overageKnown: known, overageTs: Date.now(), _source: 'devin_billing' };
             }
             if (br.status === 401 || br.status === 403) { sawAuthFailure = true; }
         } catch {}
