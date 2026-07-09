@@ -2402,6 +2402,16 @@ function _wireMultiPanel(panel) {
         try { panel.webview.postMessage({ type: "trRerouteRes", ok: !!src, src }); } catch (e) {}
         return;
       }
+      if (m.type === "translate") {
+        // 整页翻译(webview 泵): 与 /shell 泵同源同法 — 宿主做 HTTP → Edge 免费引擎。
+        //   (病灶: 此泵此前无 translate 分支 → IDE 内点翻译恒 20s 超时静默, 翻译"完全不通"之根因。)
+        const reqId = String(m.reqId || ""); if (!reqId) return;
+        const texts = Array.isArray(m.texts) ? m.texts.slice(0, 128).map((x) => String(x == null ? "" : x)) : [];
+        let arr = null;
+        try { arr = await _edgeTranslate(texts, String(m.to || "zh-Hans")); } catch (e) { arr = null; }
+        try { panel.webview.postMessage({ type: "translated", reqId, arr: arr || [] }); } catch (e) {}
+        return;
+      }
       if (m.type === "openWebTab" && m.url) {
         // 站内新标签开任意网页/搜索 → 经本地 HTTP 代理 /__web 直出(剥 XFO·当 iframe 加载), 不再弹外部系统浏览器。
         let abs = "";

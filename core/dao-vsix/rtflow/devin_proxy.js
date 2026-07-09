@@ -733,6 +733,8 @@ async function handleRequest(req, res, auth, opts, _log) {
           kl === "x-frame-options" ||
           kl === "content-security-policy" ||
           kl === "content-security-policy-report-only" ||
+          kl === "permissions-policy" ||
+          kl === "feature-policy" ||
           kl === "strict-transport-security" ||
           kl === "x-content-type-options" ||
           kl === "content-encoding" ||
@@ -797,6 +799,7 @@ async function handleRequest(req, res, auth, opts, _log) {
         for (const k of Object.keys(proxyRes.headers)) {
           const kl = k.toLowerCase();
           if (kl === "x-frame-options" || kl === "content-security-policy" || kl === "content-security-policy-report-only" ||
+              kl === "permissions-policy" || kl === "feature-policy" ||
               kl === "strict-transport-security" || kl === "connection" || kl === "keep-alive" || kl === "proxy-connection" ||
               kl === "proxy-authenticate" || kl === "proxy-authorization" || kl === "te" || kl === "trailer" ||
               kl === "transfer-encoding" || kl === "upgrade") continue;
