@@ -909,7 +909,7 @@ function classifySession(s) {
 
   // 2. 终态: enum=finished 或顶层 suspended/expired/exited/archived → finished
   //    (历史 out_of_quota/error 已结束的会话不再算"活跃·卡住", 避免前端长期噪声)
-  const terminal = enumV === "finished" || /suspended|expired|exited|archived|deleted/.test(status);
+  const terminal = enumV === "finished" || /finished|done|completed|suspended|expired|exited|archived|deleted/.test(status);
   if (terminal) return "finished";
 
   // 3. 进行中(非终态)的细分: 额度/错误 → blocked, 等待 → awaiting, 其余 → running
@@ -927,13 +927,24 @@ function isActiveClass(cls) { return cls === "running" || cls === "awaiting" || 
 
 // v4.6.0 · 返回所有"活跃·需关注"会话 (运行/等待输入/卡住), 各带 statusClass 供前端细分显示。
 //   旧版只返回 running; 现纳入 awaiting/blocked, 让中途停顿/额度耗尽也能在前端实时反馈。
+//   devinId 广谱提取: 不同租户/模式(企业·消费者·Ask)返回字段不一, 全部候选字段 + URL 兜底,
+//   确保每条活跃对话都有 id → 追踪面板每行的 勾选/IDE内多实例/浏览器多实例/取消追踪 全部可用。
+function _extractDevinId(s) {
+  const direct = s.devin_id || s.session_id || s.id || s.devinId || s.sessionId || s.uuid || s.conversation_id || s.conversationId || s.query_id;
+  if (direct) return String(direct);
+  for (const k of ["url", "session_url", "web_url", "link"]) {
+    const m = String(s[k] || "").match(/\/sessions\/([A-Za-z0-9-]+)/);
+    if (m) return "devin-" + m[1].replace(/^devin-/, "");
+  }
+  return "";
+}
 async function listRunningSessions(auth) {
   const r = await listSessions(auth, 100);
   const active = (r.sessions || [])
     .map((s) => {
       const lsc = s.latest_status_contents || {};
       return {
-        devinId: s.devin_id || s.session_id || s.id,
+        devinId: _extractDevinId(s),
         title: s.title || s.name || "(未命名)",
         status: (lsc.enum || s.status || s.activity_status || "") + (lsc.reason ? "(" + lsc.reason + ")" : ""),
         reason: lsc.reason || "",
