@@ -27,6 +27,16 @@ ok(/sMediaPfPool\s*=\s*\n?\s*java\.util\.concurrent\.Executors\.newFixedThreadPo
 ok(/sMediaPfPool\.execute\(/.test(main), "mediaCachePrefetch 提交线程池");
 ok(!/}, "media-cache"\)\.start\(\);/.test(main), "旧裸线程路径已移除");
 
+// ── ②b 弱网断点续传 + 退避重试: 单次断流不作废已到手字节 ──
+ok(/static boolean mediaCacheFetchOnce\(/.test(main), "mediaCacheFetchOnce 存在 (单次续取)");
+ok(/MEDIA_PF_TRIES/.test(main) && /attempt < MEDIA_PF_TRIES/.test(main), "任务内退避重试 (MEDIA_PF_TRIES)");
+ok(/Thread\.sleep\(2000L << Math\.min\(attempt - 1, 3\)\)/.test(main), "指数退避");
+ok(/"bytes=" \+ have \+ "-"/.test(main), ".part 存量带 Range 断点续传");
+ok(/code == 206 && have > 0/.test(main), "206 续传·200 全量从头写");
+ok(/new java\.io\.FileOutputStream\(tmp, resume\)/.test(main), "续传以追加写入 .part");
+ok(/key \+ "\.len"/.test(main), "总长落 .len 供跨次校验");
+ok(!/if \(tmp\.exists\(\) && !dst\.exists\(\)\) tmp\.delete\(\);/.test(main), "失败不再删 .part (留待续传)");
+
 // ── ③ RPC 添加/导入账号 → 后台自动登录解锁 (与面板 doAdd autoActivateAdded 同律) ──
 ok(/function _bgUnlock\(list\)/.test(engine), "_bgUnlock 存在");
 ok(/_bgUnlock\(\[saved\]\)/.test(engine), "addAccount 添加即后台解锁");
