@@ -1036,7 +1036,7 @@ function test(name, fn) {
   console.log("\n[/shell 板块菜单 · 六大板块无残留]");
   test("/shell: PAGES/BOARD_META 板块键 = {home}∪六大板块, 无死板块 computer (双副本)", () => {
     const fs = require("fs"), path = require("path");
-    const SOLO = ["overview", "switch", "bridge", "backups", "inject", "mcp", "windows"]; // 宿主 _solo 白名单
+    const SOLO = ["overview", "switch", "bridge", "backups", "inject", "mcp"]; // 宿主 _solo 白名单
     const ALLOWED = new Set(["home", ...SOLO]); // home = 六合一整块(非 solo, 合法回落)
     for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
       const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
@@ -1051,7 +1051,7 @@ function test(name, fn) {
       // 菜单入口齐全: home(六合一·含 overview) + 其余五大 solo 板块各一入口
       // (overview 经 home 整块/面板左导航进入, 不单列菜单项)
       assert.ok(pageKeys.includes("home"), r + ": PAGES 缺六合一主页入口 board:home");
-      for (const k of ["switch", "bridge", "backups", "inject", "mcp", "windows"]) assert.ok(pageKeys.includes(k), r + ": PAGES 缺板块入口 board:" + k);
+      for (const k of ["switch", "bridge", "backups", "inject", "mcp"]) assert.ok(pageKeys.includes(k), r + ": PAGES 缺板块入口 board:" + k);
     }
   });
 
