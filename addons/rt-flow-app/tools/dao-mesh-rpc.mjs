@@ -20,6 +20,12 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+// Node<22 无全局 WebSocket → 回落 ws 包 (有则用, 无则报明确指引)。
+if (typeof globalThis.WebSocket === "undefined") {
+  try { globalThis.WebSocket = (await import("ws")).WebSocket; }
+  catch (e) { console.error("此 Node 无全局 WebSocket 且未装 ws 包: 请升级 Node>=22 或 npm i ws"); process.exit(1); }
+}
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // signal.js 与 p2p-client.html 同源, 位于 ../app/src/main/assets/engine/signal.js
 const SIGNAL = path.resolve(HERE, "..", "app", "src", "main", "assets", "engine", "signal.js");
