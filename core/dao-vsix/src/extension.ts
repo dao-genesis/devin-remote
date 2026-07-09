@@ -14500,6 +14500,7 @@ async function genericWebProxy(targetUrl, depth = 0, reqCtx: any = null, isSub =
             if (sc >= 300 && sc < 400 && headers && headers['location']) {
                 let loc = String(headers['location']);
                 try { loc = new URL(loc, u.href).href; } catch (e363) { /* 守柔 */ }
+                loc = fixS3DualstackUrl(loc);
                 // 跳转后一律以 GET 续取(浏览器语义), 但沿用 isSub 以免子资源跳转被注壳。
                 finish(genericWebProxy(loc, depth + 1, null, isSub));
                 return;
@@ -14544,6 +14545,21 @@ async function genericWebProxy(targetUrl, depth = 0, reqCtx: any = null, isSub =
 //   attachments_token(POST /api/users/set-attachment-cookie 用 Bearer 铸造)。Bearer 对该
 //   路径无效 → <img>/<video> 原生加载(不经 SPA fetch·无 Cookie)必 401 → 图片/视频不显示。
 //   反代须代铸 Cookie 并按 /attachments/ 转发, 401 时作废重铸重试一次。缓存按 org(回落 auth1 前缀)。
+// ═══ S3 dualstack 域国内 DNS 污染适配 ═══════════════════════════════════════════
+// 实测(DESKTOP-MASTER·国内网): `*.s3.dualstack.us-west-2.amazonaws.com` 被解析到伪 IP
+//   (Facebook 段) → 连接黑洞, 附件 307 跳转后取不到字节(图片/视频/下载全断)。而同桶
+//   非 dualstack 域 `*.s3.<region>.amazonaws.com` 解析正常可达。预签名为 SigV2
+//   (AWSAccessKeyId+Signature+Expires, host 不入签) → 换域签名仍有效; SigV4
+//   (X-Amz-Signature, host 入签)不可换域, 原样放行。
+function fixS3DualstackUrl(u: string): string {
+    try {
+        if (u && /\.s3\.dualstack\.[a-z0-9-]+\.amazonaws\.com\//i.test(u) && !/X-Amz-Signature=/i.test(u)) {
+            return u.replace(/\.s3\.dualstack\.([a-z0-9-]+)\.amazonaws\.com\//i, '.s3.$1.amazonaws.com/');
+        }
+    } catch { /* 守柔 */ }
+    return u;
+}
+
 const _attCookieCache = new Map<string, { cookie: string; mintAt: number }>();
 const _attCookieInflight = new Map<string, Promise<string>>();
 const _ATT_COOKIE_TTL = 9 * 60 * 1000;
@@ -14715,7 +14731,7 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                     const location = proxyRes.headers['location'] || '';
                     if (location) {
                         // 改写重定向URL: app.devin.ai / api / backend → 同源代理(本地或公网隧道, 随 localBase)
-                        const rewritten = location
+                        const rewritten = fixS3DualstackUrl(location)
                             .replace(DEVIN_APP + '/', `${localBase}/devin-cloud/`)
                             .replace(DEVIN_API + '/', `${localBase}/devin-cloud-api/`)
                             .replace(DEVIN_BACKEND + '/', `${localBase}/devin-cloud-backend/`);
