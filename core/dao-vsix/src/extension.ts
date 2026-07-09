@@ -5384,9 +5384,9 @@ async function bridgeStartTunnel(named: boolean, manual = false): Promise<{ ok: 
     if (named) {
         const tok = bridgeReadNamedToken();
         if (!tok) { return { ok: false, reason: 'no-named-token' }; }
-        args = ['tunnel', 'run', '--token', tok];
+        args = ['tunnel', 'run', '--protocol', 'http2', '--token', tok];
     } else {
-        args = ['tunnel', '--url', localUrl, '--no-autoupdate'];
+        args = ['tunnel', '--url', localUrl, '--no-autoupdate', '--protocol', 'http2'];
     }
     // 帛书·「無死地」: detached:true + stdio 重定向到日志文件 + unref()
     //   → cloudflared 脱离扩展宿主独立存活; 宿主重载/重启不再带走隧道与 URL。
