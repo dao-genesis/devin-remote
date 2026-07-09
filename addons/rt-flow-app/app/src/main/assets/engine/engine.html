@@ -225,6 +225,26 @@
   }
   function _convClassifyEnd(){ return null; }   // 单测切片哨兵(勿删): 上面两纯函数到此为止
 
+  // 后台自动解锁: RPC 添加/导入的账号若未登录且有密码或令牌, 立即在后台补登 (限 2 路并发·不阻回包)。
+  //   与切号面板 doAdd 的 autoActivateAdded 同律 —— 任何入库路径的账号都不该以灰行示人。
+  var _bgUnlockBusy = {};
+  function _bgUnlock(list){
+    try{
+      var todo=(list||[]).map(function(o){ return findAcc(o&&(o.id||o.email)); })
+        .filter(function(a){ return a && !a.auth1 && a.email && a.password; })
+        .filter(function(a){ return !_bgUnlockBusy[a.id]; });
+      todo.forEach(function(a){ _bgUnlockBusy[a.id]=1; });
+      var i=0;
+      function worker(){
+        if(i>=todo.length) return Promise.resolve();
+        var a=todo[i++];
+        return DaoCore.loginAndStore(a.email,a.password).catch(function(){})
+          .then(function(){ delete _bgUnlockBusy[a.id]; return worker(); });
+      }
+      Promise.all([worker(), worker()]).catch(function(){});
+    }catch(e){}
+  }
+
   // ── 25+ RPC + 管理命令 dispatch (与扩展同名, 行为按 APP 适配) ──────────────
   var CMDS = {
     getState: async function(){
@@ -235,6 +255,7 @@
       var acc=a.account||a;
       if(!acc||(!acc.email&&!acc.auth1)) return {ok:false,error:"缺 email 或 auth1"};
       var saved=DaoCore.upsertAcc(acc);
+      _bgUnlock([saved]);   // 添加即自动登录解锁(后台不阻回包) → 切号面板不再灰行等手点
       return {ok:true, id:saved.id, count:loadAcc().length};
     },
     // 邮箱+密码 真登录 → 解锁 auth1/org/额度 (修复核心: 此前缺这条链)
@@ -403,7 +424,8 @@
       var list=a.accounts||a.list||[]; if(!Array.isArray(list)) return {ok:false,error:"accounts 非数组"};
       var accs=loadAcc();
       list.forEach(function(acc){ acc.id=acc.id||acc.email||("acc"+Math.random().toString(36).slice(2,8)); var i=accs.findIndex(function(x){return x.id===acc.id;}); if(i>=0)accs[i]=acc; else accs.push(acc); });
-      saveAcc(accs); return {ok:true, count:accs.length};
+      saveAcc(accs); _bgUnlock(list);   // 批量导入同样自动解锁, 限 2 路并发逐个登
+      return {ok:true, count:accs.length};
     },
     removeAccount: async function(a){ var accs=loadAcc().filter(function(x){return x.id!==a.id&&x.email!==a.id;}); saveAcc(accs); return {ok:true,count:accs.length}; },
     activate: async function(a){ var acc=findAcc(a.id); if(!acc) return {ok:false,error:"无此账号"}; setActive(acc.id); return {ok:true, active:acc.id}; },
