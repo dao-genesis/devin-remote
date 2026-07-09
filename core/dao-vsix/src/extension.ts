@@ -1772,6 +1772,8 @@ async function daoRelaySetPersistent(rawUrl: string): Promise<{ ok: boolean; url
     try { if (ws.relayWs) { ws.relayWs.close(); ws.relayWs = null; } } catch { /* 守柔 */ }
     ws.relayConnected = false; ws.relayConnecting = false;
     try { connectRelay(ws.port, ws.token); } catch { /* 守柔 */ }
+    // 双通道 MD 自更: 持久通道登记/变更即重注, 云端文档恒含最新两套接入。
+    try { bridgeScheduleReinject('relay-persistent-set'); } catch { /* 守柔 */ }
     return { ok: true, url, healthy };
 }
 
@@ -1863,6 +1865,8 @@ async function daoRelayOAuthLogout(): Promise<{ ok: boolean; error?: string }> {
     try { if (ws.relayWs) { ws.relayWs.close(); ws.relayWs = null; } } catch { /* 守柔 */ }
     ws.relayConnected = false; ws.relayConnecting = false;
     try { connectRelay(ws.port, ws.token); } catch { /* 守柔 */ }
+    // 双通道 MD 自更: 通道删除后重注, 云端文档收敛回仅快速通道。
+    try { bridgeScheduleReinject('relay-removed'); } catch { /* 守柔 */ }
     try { refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ }
     return { ok: true };
 }
@@ -5497,6 +5501,30 @@ function bridgeWriteArtifacts() {
     fs.writeFileSync(path.join(BRIDGE_DIR, 'workspace.md'), bridgeGenerateCloudMd(), 'utf8');
 }
 
+// 双通道并存(Module 3): 持久化 Worker 已配时, 云端 MD 同时给出「快速通道(CloudFlare 隧道)」与
+//   「持久化通道(Worker 中继·恒定地址)」两套接入; 未配置时守柔返回空(仅快速通道)。
+function bridgePersistentChannelSectionMd(tok: string): string {
+    const relayUrl = getPersistentRelayUrl();
+    if (!relayUrl) return '';
+    const rs = bridgeRelayState();
+    return [
+        '## 接入信息 · 持久化通道 (Worker 中继·恒定地址)',
+        '',
+        '> 你自己的固定 Worker 地址·**永不漂**。与快速通道同 Token 同 API, 二者互为备份:',
+        '> 快速通道 URL 轮换/不可达时, 直接改用本通道地址继续操作(无需重读等待)。',
+        '',
+        '```',
+        `中继URL:   ${relayUrl}`,
+        `Token:     ${tok}`,
+        `Auth:      Authorization: Bearer ${tok}`,
+        `鉴权方式: ${rs.oauth ? 'OAuth(自动续期)' : (rs.auth === 'token' ? 'API Token' : '已登记')}   健康: ${rs.healthy ? '就绪' : '边缘传播中'}${rs.deployedAt ? '   部署于: ' + rs.deployedAt : ''}`,
+        '```',
+        '',
+        '优先级建议: 平时任选其一(持久化通道恒定不变更省心); 自动化脚本建议先试持久化通道, 失败再回落快速通道, 最后 mesh 兜底。',
+        '',
+    ].join('\n');
+}
+
 function bridgeGenerateCloudMd(pair?: { url: string; token: string }): string {
     const wsInfo = { name: vscode.workspace.workspaceFolders?.[0]?.name || 'workspace', root: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', host: os.hostname() };
     const ts = new Date().toISOString();
@@ -5516,7 +5544,7 @@ function bridgeGenerateCloudMd(pair?: { url: string; token: string }): string {
         '> 本文档供云端 Agent(Devin Cloud 等)读取，经内网穿透**直连并远程操作用户本地电脑**(整机)。',
         '> 插件启动即零配置打通整机公网穿透；**端口和 URL 会随隧道重启而变化，以本文档为准**。',
         '',
-        '## 接入信息',
+        '## 接入信息 · 快速通道 (CloudFlare 隧道)',
         '',
         '```',
         `公网URL:   ${url}`,
@@ -5529,6 +5557,7 @@ function bridgeGenerateCloudMd(pair?: { url: string; token: string }): string {
         '',
         '所有请求 Header: `Authorization: Bearer <Token>`(`/api/health` 免鉴权)。',
         '',
+        bridgePersistentChannelSectionMd(tok),
         '## ⚡ 云端 Agent · 断线零人工自愈(务必先读)',
         '',
         '> **公网URL 会随隧道重启而变。本插件已自带闭环:自动识别端口 → 打不通自动刷新隧道 → 自动把新 URL 反向注入回本知识条目。**',
@@ -5678,14 +5707,20 @@ function bridgeGenerateCloudMd(pair?: { url: string; token: string }): string {
         'print(api("POST","/api/exec",{"cmd":"hostname"}))',
         '```',
         '',
-        '## 需要更深层的专业操作？',
-        '',
-        '浏览器自动化(CDP) / GUI 鼠键截屏 / 窗口控件树 / VSCode 命令等**四大模块**能力，已独立为',
-        '**DAO Bridge MCP**(已随账号反向注入，HTTP 传输，无需手动配置)。直接以 MCP 工具调用即可，',
-        '用法见知识库另一篇「DAO Bridge MCP 使用文档(四大模块)」。',
+        bridgeMcpSectionMd(),
         '',
         '*道法自然 · 无为而无不为*',
     ].join('\n');
+}
+
+// 归一: MCP 使用文档并入内穿云端 MD(知识库 3→2), 标题整体降一级后内嵌。
+function bridgeMcpSectionMd(): string {
+    try {
+        return bridgeGenerateMcpUsageMd()
+            .replace(/\n\*道法自然 · 无为而无不为\*\s*$/, '')
+            .replace(/^## /gm, '### ')
+            .replace(/^# /m, '## ');
+    } catch { return ''; }
 }
 
 // 道法自然 · MCP 使用文档 (四大模块) — 反向注入为第三篇知识。讲清四大模块 MCP「是什么/怎么用」,
@@ -5788,8 +5823,6 @@ async function bridgeInjectKnowledge(manual = false): Promise<boolean> {
     //   内穿自愈的回写与档案注入永不交错跑各自的 list→删→建 → 杜绝竞态堆积。
     let okFlag = false;
     await withOrgInjectLock(orgId, async () => {
-        // 知识③ MCP 使用文档(四大模块) 一并幂等回写到当前账号 (守 manual 锁由批量框架统一处理)
-        try { await devinUpsertKnowledge(orgId, DAO_MCP_KB_NAME, bridgeGenerateMcpUsageMd(), DAO_MCP_KB_TRIGGER, auth1, true); } catch { /* 守柔 */ }
         // 幂等回写 (帛书·「少则得·多则惑」): 保留首个规范条目 → 原地 PATCH 更新, 多余重复全删 →
         // 收敛为唯一条目。杜绝旧法「删后建」在多窗口/最终一致下竞态堆积出几十条重复。
         //   注意: 收敛只针对内穿文档(同前缀), 必须排除 MCP 使用文档(独立一篇), 否则会被误删后再造成 flap。
@@ -5797,7 +5830,7 @@ async function bridgeInjectKnowledge(manual = false): Promise<boolean> {
             const listResult = await devinListKnowledge(orgId, auth1);
             let matches: any[] = [];
             if (listResult.ok && listResult.learnings) {
-                matches = listResult.learnings.filter((k: any) => typeof k.name === 'string' && k.name !== DAO_MCP_KB_NAME && (k.name === knowledgeName || /^DAO Bridge/.test(k.name) || (k.trigger_description || '').includes('远程操作用户本地电脑')));
+                matches = listResult.learnings.filter((k: any) => typeof k.name === 'string' && (k.name === knowledgeName || /^DAO Bridge/.test(k.name) || (k.trigger_description || '').includes('远程操作用户本地电脑')));
             }
             if (matches.length) {
                 // 取最早(稳定锚点)为留存条目; 其余重复删除。
@@ -6824,8 +6857,13 @@ function rBridgeRelayCard(r){
     h+='<div class="cr"><span class="l">授权方式</span><span class="v" style="font-size:10px">'+esc(authTxt)+'</span></div>';
     if(r.deployedAt)h+='<div class="cr"><span class="l">部署于</span><span class="v" style="font-size:10px">'+esc(r.deployedAt)+'</span></div>';
     h+='</div>';
+    // 持久通道控制台 · 一排全功能按钮(复制地址/复制Token/接入信息/重启/刷新Token/重建/删除)。
     h+='<div class="br"><button class="btn sm primary" onclick="cmd(&#39;copyRelayUrl&#39;)">📋 复制地址</button>';
-    if(r.oauth)h+='<button class="btn sm" onclick="cmd(&#39;relayOAuthRefresh&#39;)" title="用 refresh_token 续期并重部署(自愈)">↻ 续期/重部署</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;copyRelayToken&#39;)" title="复制持久通道鉴权 Token(Bearer)">🔑 复制 Token</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;copyRelayInfo&#39;)" title="复制完整接入信息: 中继地址 + Token + 去中心化 mesh 兜底">🧾 接入信息</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;relayRestart&#39;)" title="重启持久通道连接(断开重连·不重部署)">🔄 重启 Worker</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;relayOAuthRefresh&#39;)" title="刷新 Token: 用 refresh_token 续期并重部署 Worker(自愈·轮换令牌)"'+(r.oauth?'':' disabled style="opacity:.5"')+'>↻ 刷新 Token</button>';
+    h+='<button class="btn sm" onclick="if(confirm(&#39;重建 Worker: 先撤销并删除现通道, 再重新登录全自动打通。确认?&#39;))cmd(&#39;relayRebuild&#39;)" title="完全清理后从零重建持久 Worker 通道" style="background:#b8860b;color:#fff">🛠 重建 Worker</button>';
     h+='<button class="btn sm danger" onclick="if(confirm(&#39;撤销 Cloudflare 授权并删除本持久通道，回退到快速隧道/mesh？&#39;))cmd(&#39;relayOAuthLogout&#39;)">🗑 删除通道/切号</button></div>';
   } else {
     h+='<div class="card"><div style="font-size:11px;color:var(--muted);margin-bottom:6px">想要<b style="color:var(--fg)">永不漂的固定公网地址</b>？点下面按钮 → 浏览器打开 Cloudflare 登录页 → 点一次授权即可。后端<b style="color:var(--fg)">全自动</b>注册 Token、部署 Worker、落盘并置顶接管，<b style="color:var(--fg)">无需手搓 Token</b>；令牌到期自动续期，出问题自愈。</div>';
@@ -7262,7 +7300,8 @@ function rT(tab,items,err,fallbackProxy){
     // 官网 MCP 整图给到本地: 已装(★)+ 全市场目录; 每项可「装到本账号 / +档案(批量注入) / 卸载」
     // 对齐官网: 顶部「+ 自定义 MCP」(直接装到本账号) + 搜索/筛选框 (名称/简介即时过滤)。
     window._mcp=[];window._mcpIde=[];
-    h+='<div class="br" style="margin-bottom:6px"><button class="btn sm primary" onclick="mcpAddCustom()">+ 自定义 MCP</button><button class="btn sm" onclick="mcpProbeAll()" title="逐项接测所有 MCP 连接(连通性验证)">🔍 全部接测</button><button class="btn sm" onclick="mcpRepairLocal()" title="一键修复本机 MCP: 自动识别 node 运行时与模块路径、修正命令并启用(先备份, 通用·强鲁棒)。重载窗口后生效" style="background:#b8860b;color:#fff">🔧 一键修复本机 MCP</button><button class="btn sm" onclick="mcpVerifyLocal()" title="实测使用: 真起进程 initialize+tools/list 拿真实工具数" style="background:#1a7f5a;color:#fff">🧪 实测使用</button><button class="btn sm" onclick="mcpInstallLocalAll()" title="把 Devin Desktop(或当前选中来源)内部 MCP 一键直装到本账号 — 跳过已装与缺密钥项, 装毕自动接测" style="background:#0e639c;color:#fff">⚡ 直装 Devin Desktop MCP</button></div>';
+    // 归一·无为而无不为: 面板只留「自定义 MCP + MD 文档」; 接测/修复/实测/直装全部内化为后台自动静默运行。
+    h+='<div class="br" style="margin-bottom:6px"><button class="btn sm primary" onclick="mcpAddCustom()">+ 自定义 MCP</button><button class="btn sm" onclick="cmd(&#39;copyMcpMd&#39;)" title="生成并复制 MCP 使用 MD 文档(四大模块·实时端点) — 交给任意 Agent 即可接管" style="background:#0e639c;color:#fff">📄 MD 文档</button></div>';
     h+='<input id="mcpq" placeholder="🔍 搜索 MCP (名称 / 简介)" oninput="mcpFilter(this.value)" style="width:100%;margin:0 0 8px;padding:6px 8px;box-sizing:border-box;background:var(--card,#222);color:var(--fg);border:1px solid var(--border);border-radius:4px">';
     var _curG='';
     var _ideSrcs=[];items.forEach(function(x){if(x.group==='ide'&&x.source&&_ideSrcs.indexOf(x.source)<0)_ideSrcs.push(x.source);});
@@ -7299,6 +7338,8 @@ function rT(tab,items,err,fallbackProxy){
     setTimeout(function(){try{(window._mcpIde||[]).forEach(function(i){mcpProbe(i)})}catch(e){}},150);
     // 默认直装: 本机 IDE MCP 自动装到当前账号(每账号一次·跳过已装/缺密钥项)
     setTimeout(function(){try{mcpAutoInstallLocal()}catch(e){}},600);
+    // 内化后台: 面板打开即静默自动 修复+实测 本机 MCP(无弹窗·无感自愈)
+    setTimeout(function(){try{cmd('autoMaintainLocalMcp',{})}catch(e){}},900);
   }else if(tab==='usage'||tab==='org'||tab==='automations'){
     items.forEach(it=>{
       const nm=it.name||it.title||'';const dt=it.detail||'';
@@ -7568,7 +7609,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'relayProvisionToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -8465,6 +8506,40 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 refreshReply({ type: 'actionResult', command: 'mcpSetAuth', ok });
                 break;
             }
+            case 'copyMcpMd': {
+                // 面板「MD 文档」: 生成+复制 MCP 使用文档(四大模块·实时端点) — 镜像 bridgeCopyCloudMd。
+                const mcpDocMd = bridgeGenerateMcpUsageMd();
+                try { fs.mkdirSync(path.join(os.homedir(), '.dao', 'bridge'), { recursive: true }); fs.writeFileSync(path.join(os.homedir(), '.dao', 'bridge', 'mcp-usage.md'), mcpDocMd, 'utf8'); } catch { /* 守柔 */ }
+                await vscode.env.clipboard.writeText(mcpDocMd);
+                vscode.window.showInformationMessage('已复制 MCP 使用 MD 文档(四大模块·实时端点) 到剪贴板');
+                reply({ type: 'actionResult', command: 'copyMcpMd', ok: true });
+                break;
+            }
+            case 'autoMaintainLocalMcp': {
+                // 内化后台(无为而无不为): 面板打开即静默 修复+实测 本机 MCP — 不弹任何通知。
+                try {
+                    const r = daoRepairLocalMcp({ allIdes: false, enable: true, dryRun: false });
+                    const n = r.results.reduce((a: number, x: any) => a + (x.changes ? x.changes.length : 0), 0);
+                    daoLoopLog('mcp', 'autoMaintain: 修复 ' + n + ' 项 (静默)');
+                    // 静默实测(尽力而为·仅记日志): 真起进程 tools/list 拿工具数, 不弹任何通知。
+                    (async () => {
+                        try {
+                            const hostSrc = daoHostIdeSource();
+                            let ideV = scanIdeMcps().filter((e) => e.source === hostSrc);
+                            if (!ideV.length) ideV = scanIdeMcps().filter((e) => e.source === 'Devin Desktop');
+                            const vres = await Promise.all(ideV.map(async (e) => {
+                                if (e.transport === 'HTTP') { const rr = await daoProbeMcp({ transport: 'HTTP', url: e.url, headers: e.headers }); return { name: e.name, ok: rr.ok, toolCount: 0 }; }
+                                const rr = await daoVerifyMcpStdio({ command: e.command, args: e.args, env: e.env }, 15000);
+                                return { name: e.name, ok: rr.ok, toolCount: rr.toolCount };
+                            }));
+                            const okN = vres.filter((x) => x.ok).length;
+                            daoLoopLog('mcp', 'autoMaintain 实测(静默): ' + okN + '/' + vres.length + ' 可用 — ' + vres.map((x) => x.name + (x.ok ? '✓' + x.toolCount : '✗')).join(' · '));
+                        } catch { /* 守柔 */ }
+                    })();
+                    reply({ type: 'actionResult', command: 'autoMaintainLocalMcp', ok: true });
+                } catch (e: any) { daoLoopLog('mcp', 'autoMaintain 失败(守柔): ' + String(e && e.message || e)); reply({ type: 'actionResult', command: 'autoMaintainLocalMcp', ok: false }); }
+                break;
+            }
             case 'repairLocalMcp': {
                 // 一键修复本机 MCP(通用·强鲁棒): 自动识别 node 运行时与模块路径, 修正命令并启用(先备份)。
                 try {
@@ -8809,6 +8884,59 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 if (url) await vscode.env.clipboard.writeText(url);
                 vscode.window.showInformationMessage(url ? ('持久通道地址已复制: ' + url) : '暂无持久通道地址');
                 reply({ type: 'actionResult', command: 'copyRelayUrl', ok: !!url });
+                break;
+            }
+            case 'copyRelayToken': {
+                // 复制持久通道鉴权 Token(与整机 Bridge 同一权威牌·Bearer)。
+                const tk = bridgeAuthoritativeToken() || ws.token || '';
+                if (tk) await vscode.env.clipboard.writeText(tk);
+                vscode.window.showInformationMessage(tk ? '持久通道 Token 已复制到剪贴板' : '暂无可用 Token');
+                reply({ type: 'actionResult', command: 'copyRelayToken', ok: !!tk });
+                break;
+            }
+            case 'copyRelayInfo': {
+                // 接入信息: 中继地址 + Token + 去中心化 mesh 兜底, 一并组装复制(交给云端 Agent 即可接管)。
+                const url = getPersistentRelayUrl() || '';
+                const tk = bridgeAuthoritativeToken() || ws.token || '';
+                const rs = bridgeRelayState();
+                const lines = [
+                    '# DAO Bridge · 持久化通道 (Worker 中继) 接入信息',
+                    '',
+                    '中继地址: ' + (url || '(未配置)'),
+                    'Token:    ' + (tk || '(无)'),
+                    'Auth:     Authorization: Bearer ' + (tk || '<token>'),
+                    '鉴权方式: ' + (rs.oauth ? 'OAuth(自动续期)' : (rs.auth === 'token' ? 'API Token' : '已登记')),
+                    '健康:     ' + (rs.healthy ? '就绪' : '边缘传播中'),
+                    (rs.deployedAt ? '部署于:   ' + rs.deployedAt : ''),
+                    '',
+                    '## 去中心化路线C(mesh 兜底)',
+                    '即使 Worker 与快速隧道同时全挂, 仍可经公共 ntfy pub/sub 加密直达(载荷 AES-256-GCM)。',
+                    '详见知识库「DAO Bridge 内网穿透远程操作文档」的「去中心化路线C」章节。',
+                ].filter(Boolean);
+                const info = lines.join('\n');
+                await vscode.env.clipboard.writeText(info);
+                vscode.window.showInformationMessage('持久通道接入信息已复制(地址 + Token + mesh 兜底)');
+                reply({ type: 'actionResult', command: 'copyRelayInfo', ok: !!url });
+                break;
+            }
+            case 'relayRestart': {
+                // 重启 Worker: 断开现有中继连接并重连(不重部署), 持久 Worker 通道即重新置顶接管。
+                const url = getPersistentRelayUrl() || '';
+                if (!url) { vscode.window.showWarningMessage('暂无持久通道可重启'); reply({ type: 'actionResult', command: 'relayRestart', ok: false }); break; }
+                vscode.window.showInformationMessage('DAO 持久通道: 正在重启连接(断开重连·置顶接管)…');
+                const r = await daoRelaySetPersistent(url);
+                vscode.window[r.ok ? 'showInformationMessage' : 'showErrorMessage']('DAO 持久通道: ' + (r.ok ? ('✓ 已重启 ' + (r.healthy ? '(就绪)' : '(传播中)')) : ('重启失败: ' + (r.error || ''))));
+                refreshReply({ type: 'actionResult', command: 'relayRestart', ok: !!r.ok });
+                break;
+            }
+            case 'relayRebuild': {
+                // 重建 Worker: 完全清理(撤销授权+清态) → 重新登录全自动打通, 从零重建持久通道。
+                vscode.window.showInformationMessage('DAO 持久通道: 正在重建(先删除现通道, 再重新登录打通)…');
+                try { await daoRelayOAuthLogout(); } catch { /* 守柔: 清态失败也继续尝试重建 */ }
+                const r = await daoRelayOAuthLogin();
+                if (r.ok && r.url) { try { await vscode.env.clipboard.writeText(r.url); } catch { /* 守柔 */ } vscode.window.showInformationMessage('重建: 登录链接已打开(并复制)。授权后后端将全自动重新部署并置顶接管。'); }
+                else vscode.window.showErrorMessage('DAO 持久通道重建失败: ' + (r.error || '未知错误'));
+                refreshReply({ type: 'actionResult', command: 'relayRebuild', ok: !!r.ok, url: r.url, error: r.error });
                 break;
             }
             case 'bridgeHealth': {
@@ -11084,7 +11212,7 @@ async function devinDedupeOrg(orgId: string, auth1: string): Promise<{ ok: boole
 
 // 老旧异名 dao 知识 — 历史版本以不同命名注入的同源残留(规则/连接信息),
 // 收敛为唯二(道法自然准则 + 内网穿透板块)时一并清除 → 老旧知识库覆盖成唯二。
-const DAO_LEGACY_KB_NAMES = ['Dao Workspace Server', '道法约束·帛书规则'];
+const DAO_LEGACY_KB_NAMES = ['Dao Workspace Server', '道法约束·帛书规则', 'DAO Bridge MCP 使用文档(四大模块)'];
 async function devinCleanLegacyDaoKnowledge(orgId: string, auth1: string): Promise<number> {
     let removed = 0;
     try {
@@ -12674,10 +12802,6 @@ function daoSeedDefaultInjectProfile(): void {
         if (!p.knowledge.some(k => k.name === DAO_BRIDGE_KB_NAME)) {
             p.knowledge.push({ name: DAO_BRIDGE_KB_NAME, body: DAO_BRIDGE_KB_SENTINEL, trigger: DAO_BRIDGE_KB_TRIGGER });
         }
-        // 知识③ MCP 使用文档(四大模块) — 需要浏览器/GUI/VSCode 等更深层专业操作时触发 (注入时实时生成最新)
-        if (!p.knowledge.some(k => k.name === DAO_MCP_KB_NAME)) {
-            p.knowledge.push({ name: DAO_MCP_KB_NAME, body: DAO_MCP_KB_SENTINEL, trigger: DAO_MCP_KB_TRIGGER });
-        }
         // 剧本①合订 ②帛书老子 ③阴符经 — 全部默认自动注入
         if (combined && !p.playbooks.some(x => x.title === '道法自然 · 帛书《老子》·道藏《阴符经》')) {
             p.playbooks.push({ title: '道法自然 · 帛书《老子》·道藏《阴符经》', body: combined });
@@ -12702,10 +12826,9 @@ function daoMigrateKnowledgeTrinity(): void {
         let changed = false;
         const b = p.knowledge.find(k => k && k.name === DAO_BRIDGE_KB_NAME);
         if (b && b.trigger !== DAO_BRIDGE_KB_TRIGGER) { b.trigger = DAO_BRIDGE_KB_TRIGGER; changed = true; }
-        if (!p.knowledge.some(k => k && k.name === DAO_MCP_KB_NAME)) {
-            p.knowledge.push({ name: DAO_MCP_KB_NAME, body: DAO_MCP_KB_SENTINEL, trigger: DAO_MCP_KB_TRIGGER });
-            changed = true;
-        }
+        // 知识库 3→2: MCP 使用文档并入内穿 MD, 档案里的独立条目一并撤下(账号侧由 legacy 清理收敛)。
+        const mi = p.knowledge.findIndex(k => k && k.name === DAO_MCP_KB_NAME);
+        if (mi >= 0) { p.knowledge.splice(mi, 1); changed = true; }
         // 剧本老三样补齐(合订/帛书老子/道藏阴符经) — 老档案常仅有合订一条
         try {
             const combined = getDaoRulesText();
@@ -12909,7 +13032,6 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
         // 同步 MCP 档案条目(URL 轮换自更) → 取最新钉住条目
         try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
         const md = bridgeGenerateCloudMd(livePair);
-        const mcpMd = bridgeGenerateMcpUsageMd();
         const p = loadInjectProfile();
         const mcpEntry = (p.mcps || []).find(m => m && m.name === DAO_MCP_NAME) || null;
         const store = loadAccountsAuthStore();
@@ -12925,9 +13047,9 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
             if (!isManualLocked(a.orgId, 'knowledge', DAO_BRIDGE_KB_NAME)) {
                 try { const r = await devinUpsertKnowledge(a.orgId, DAO_BRIDGE_KB_NAME, md, DAO_BRIDGE_KB_TRIGGER, a.auth1); if (!r || !r.ok) failed++; } catch { failed++; }
             }
-            // KB③: 幂等 upsert 最新 MCP 使用文档(四大模块·URL 随隧道自更) (守 manual 锁)
+            // 知识库 3→2: 旧独立 MCP 文档条目随重注收敛清除(内容已并入内穿 MD)。
             if (!isManualLocked(a.orgId, 'knowledge', DAO_MCP_KB_NAME)) {
-                try { const r = await devinUpsertKnowledge(a.orgId, DAO_MCP_KB_NAME, mcpMd, DAO_MCP_KB_TRIGGER, a.auth1); if (!r || !r.ok) failed++; } catch { failed++; }
+                try { await devinCleanLegacyDaoKnowledge(a.orgId, a.auth1); } catch { /* 守柔 */ }
             }
             // MCP: URL 已变 → 先删旧同名安装再建新 (守 manual 锁)
             if (mcpEntry && !isManualLocked(a.orgId, 'mcps', DAO_MCP_NAME)) {
@@ -13092,7 +13214,7 @@ async function resetOrgInjectables(orgId: string, auth1: string, p: InjectProfil
     const lc = (s: string) => String(s || '').toLowerCase();
     // 期望保留集
     const keepK = new Set<string>(p.knowledge.map(k => k.name).filter(Boolean));
-    [DAO_RULES_KB_NAME, DAO_BRIDGE_KB_NAME, DAO_MCP_KB_NAME].forEach(n => keepK.add(n));
+    [DAO_RULES_KB_NAME, DAO_BRIDGE_KB_NAME].forEach(n => keepK.add(n));
     const keepP = new Set<string>(p.playbooks.map(x => x.title).filter(Boolean));
     const keepS = new Set<string>(p.secrets.map(s => s.name).filter(Boolean));
     keepS.add('DAO_TOKEN');
@@ -13243,16 +13365,16 @@ async function applyInjectProfileToOrgInner(orgId: string, auth1: string, p: Inj
         let kb = k.body || '';
         const isBridge = (kb === DAO_BRIDGE_KB_SENTINEL || k.name === DAO_BRIDGE_KB_NAME);
         const isMcpDoc = (kb === DAO_MCP_KB_SENTINEL || k.name === DAO_MCP_KB_NAME);
-        if (isMcpDoc) { try { kb = bridgeGenerateMcpUsageMd(); } catch { /* 守柔 */ } }
+        // 知识库 3→2: 独立 MCP 文档条目不再下发(内容已并入内穿 MD), 残档守柔跳过。
+        if (isMcpDoc) continue;
         if (isBridge) {
             try { kb = bridgeGenerateCloudMd(); } catch { /* 守柔 */ }
-            // 帛书·「少则得·多则惑」: 收敛历史异名「DAO Bridge」内穿残条(含早期带「·」变体) → 唯一规范条目;
-            //   保留 MCP 使用文档(同前缀但独立一篇), 不误删。
+            // 帛书·「少则得·多则惑」: 收敛历史异名「DAO Bridge」内穿残条(含早期带「·」变体) → 唯一规范条目。
             try {
                 const list = await devinListKnowledge(orgId, auth1);
                 if (list.ok && list.learnings) {
                     for (const e of list.learnings) {
-                        if (e && e.id && typeof e.name === 'string' && /^DAO Bridge/.test(e.name) && e.name !== DAO_MCP_KB_NAME) {
+                        if (e && e.id && typeof e.name === 'string' && /^DAO Bridge/.test(e.name)) {
                             try { await devinDeleteKnowledge(orgId, String(e.id), auth1); } catch { /* 守柔 */ }
                         }
                     }

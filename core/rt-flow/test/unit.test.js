@@ -812,14 +812,16 @@ function test(name, fn) {
     assert.ok(/function _dvBackupVerifiedFull\(/.test(src), "须有 _dvBackupVerifiedFull 严格校验");
     assert.ok(/backupOk = _dvBackupVerifiedFull\(backupRes\)/.test(src), "清理前 backupOk 须由校验函数赋值");
     // v4.10.2 先门控后备份: 清理三重闸拆为 外闸(autoCleanup+阈值) + 备份闸(else if (!backupOk) 跳过) — 语义不变
-    assert.ok(/if \(autoCleanup && totalCredits <= cleanupThreshold\)/.test(src), "清理外闸须同时满足 autoCleanup+阈值");
+    // 7号板块·闲置触发: 外闸 = autoCleanup + (额度阈值 ∨ 24h 无活跃 idleTrigger)
+    assert.ok(/if \(autoCleanup && \(_credits <= cleanupThreshold \|\| idleTrigger\)\)/.test(src), "清理外闸须同时满足 autoCleanup+(阈值∨闲置)");
     assert.ok(/\} else if \(!backupOk\) \{/.test(src), "清理前须有 backupOk 闸 (未全量备份不删)");
     assert.ok(/if \(res\.convError\) return false;/.test(src) && /\(c\.failed \|\| 0\) > 0\) return false/.test(src) && /if \(!s \|\| s\.partial\) return false;/.test(src), "校验须覆盖对话异常/失败/快照部分");
   });
   test("extension.js: 归零移除仅在权威归零+清理无残留时触发, 且循环外统一 removeBatch", () => {
     const fs = require("fs");
     const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
-    assert.ok(/if \(autoRemoveZero && wipeClean && !_addedRecently && totalCredits <= removeThreshold\)/.test(src), "移除须 autoRemoveZero+wipeClean+addedAt冷却+归零阈值四重闸");
+    // 7号板块·闲置触发: 出库阈值闸扩为 (归零阈值 ∨ 24h 无活跃 idleTrigger), 其余三重闸不变
+    assert.ok(/if \(autoRemoveZero && wipeClean && !_addedRecently && \(_credits <= removeThreshold \|\| idleTrigger\)\)/.test(src), "移除须 autoRemoveZero+wipeClean+addedAt冷却+(归零阈值∨闲置)四重闸");
     assert.ok(/const wipeClean = .*rep\.sessions\.failed === 0 && rep\.knowledge\.failed === 0 && rep\.playbooks\.failed === 0 && rep\.secrets\.failed === 0/.test(src), "wipeClean 须确认四类痕迹全清无失败");
     assert.ok(/_store\.removeBatch\(idx\)/.test(src), "循环外兜底须走 removeBatch (单次IO+持久化)");
     // v4.26.6 · 即时出库: 条件满足当即 _store.remove 落盘 (中途断不丢), 循环末批处理仅兜底

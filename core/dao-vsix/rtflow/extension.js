@@ -1,4 +1,4 @@
-// WAM · 万法归宗 v4.10.1 · 归零清理闭环终于会触发: 24h 冷却锚点本源起算(不再每周期重置)+全量备份+清理后自动出库·备份严格校验 · 道法自然
+// WAM · 万法归宗 v4.11.0 · 7号板块闲置闭环: 24h 无活跃对话即触发 全量备份→清理→出库(与低额触发并联·软编码开关) · 道法自然
 // WAM · 万法归宗 v4.9.0 · 自动清理默认开 + 归零移除(额度归零账号全量备份+清理后自动出库·备份严格校验) · 道法自然
 // WAM · 万法归宗 v4.5.0 · 对话额度上限(余额-缓冲·自动中停)·自动清理阈值$1·余额精确到分 · 道法自然
 // WAM · 万法归宗 v4.4.0 · 文件夹备份·HTML/MD双视图·自动备份阈值·自动清理 · 道法自然
@@ -12285,6 +12285,20 @@ function _dvStopAuto() {
     log("devin-cloud: auto-backup 定时器停止");
   }
 }
+// 7号板块(切号)·远端本源闲置度: 返回该号最新非终态会话距今的毫秒数(全无活跃会话 → Infinity)。
+//   终态会话(挂起/过期/停止/完成/归档)不计活跃 — 平台会周期性触碰终态会话的 updated_at。
+async function _dvRemoteIdleMs(auth) {
+  const _ls = await devinCloud.listSessions(auth);
+  const _ss = (_ls && _ls.sessions) || [];
+  const _TERM = { suspended: 1, expired: 1, stopped: 1, finished: 1, archived: 1, interrupted: 1, deleted: 1 };
+  let _mx = 0;
+  for (const _s of _ss) {
+    const _st = String(_s.status_enum || _s.status || "").toLowerCase();
+    if (_TERM[_st] || _s.is_archived === true || _s.is_archived === "true") continue;
+    const _t = Date.parse(_s.updated_at || _s.created_at || "") || 0; if (_t > _mx) _mx = _t;
+  }
+  return _mx === 0 ? Infinity : Date.now() - _mx;
+}
 async function _dvAutoBackupRun() {
   // v4.10.0 · 修复: 不再仅依赖 cachedEmails(12h TTL), 改为遍历全池逐号按需登录 (同 devinCleanupZeroQuota 模式)
   //   旧逻辑: cachedEmails() 只返回 12h 内活跃账号 → 闲置(恰好需要清理的)账号永远被跳过 → 归零清理「根本没有用」。
@@ -12337,7 +12351,20 @@ async function _dvAutoBackupRun() {
       let billing = null;
       try { billing = await devinCloud.getBilling(auth); } catch {}
       const totalCredits = _billingTotalDollars(billing);
-      if (totalCredits !== null && totalCredits < threshold) {
+      // 7号板块(切号)·闲置触发: 24h 无活跃对话 → 全量自动备份 → 清理出库 (与低额触发并联·同一闭环)。
+      //   软编码: wam.devinCloudIdleCleanup(默 true) · wam.devinCloudIdleHours(默 24)。
+      const lowCredit = totalCredits !== null && totalCredits < threshold;
+      let idleTrigger = false;
+      if (!lowCredit && !!_cfg("devinCloudIdleCleanup", true)) {
+        try {
+          const _idleMs = await _dvRemoteIdleMs(auth);
+          const _idleWin = Math.max(1, +_cfg("devinCloudIdleHours", 24) || 24) * 3600000;
+          idleTrigger = _idleMs >= _idleWin;
+          if (idleTrigger) log("idle-cleanup: " + acc.email + " 远端无活跃对话" + (isFinite(_idleMs) ? "~" + Math.round(_idleMs / 3600000) + "h" : "(全无活跃会话)") + " ≥ " + Math.round(_idleWin / 3600000) + "h → 触发 全量备份→清理→出库");
+        } catch {}
+      }
+      if (lowCredit || idleTrigger) {
+        const _credits = totalCredits !== null ? totalCredits : 0;
         // v4.10.2 · 先门控后备份(根治「老号清不动」): 旧法对每个低额号每周期都先跑一遍全量备份,
         //   再查冷却门 — 百余归零号 × 全量备份(分钟级/号) → 单轮扫描以小时计, 窗口一 reload 又从头,
         //   队尾老号永远轮不到清理。修法: 冷却门/本源判老(廉价·一次 listSessions)先行, 全量备份只在
@@ -12351,7 +12378,7 @@ async function _dvAutoBackupRun() {
         //   与账号真实活跃无关 — 陈年归零号锚点新落也得干等 24h。故锚点未满时再看远端本源:
         //   该号最新对话 updated_at 已早于冷却窗(或全无对话) → 账号本就沉寂, 直接视为冷却已满。
         //   活跃归零号(远端近 24h 有更新)由此门天然豁免 — 只清老号, 绝不动近期在用的号。
-        if (autoCleanup && !cleanupCheck.ready && cleanupCheck.reason === "cooldown" && !_addedRecently && totalCredits <= cleanupThreshold) {
+        if (autoCleanup && !cleanupCheck.ready && cleanupCheck.reason === "cooldown" && !_addedRecently && (_credits <= cleanupThreshold || idleTrigger)) {
           try {
             const _ls = await devinCloud.listSessions(auth);
             const _ss = (_ls && _ls.sessions) || [];
@@ -12370,11 +12397,11 @@ async function _dvAutoBackupRun() {
             }
           } catch {}
         }
-        const _willClean = autoCleanup && cleanupCheck.ready && totalCredits <= cleanupThreshold;
+        const _willClean = autoCleanup && cleanupCheck.ready && (_credits <= cleanupThreshold || idleTrigger);
         const _needAnchor = cleanupCheck.reason === "no_backup" || cleanupCheck.reason === "already_cleaned";
         let backupRes = null, backupOk = false;
         if (_needAnchor || _willClean || !autoCleanup) {
-          log("auto-backup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " < $" + threshold + " → 全量备份(" + (_willClean ? "清理前留底" : _needAnchor ? "首备落锚" : "仅留底") + ")");
+          log("auto-backup: " + acc.email + (idleTrigger ? " 闲置触发(24h 无活跃)" : " 额度 $" + _credits.toFixed(2) + " < $" + threshold) + " → 全量备份(" + (_willClean ? "清理前留底" : _needAnchor ? "首备落锚" : "仅留底") + ")");
           try {
             backupRes = (mode === "folder")
               ? await devinCloud.backupAccountFullFolders(auth, Object.assign({ targetDir: dir, incremental: false }, naming))
@@ -12394,7 +12421,7 @@ async function _dvAutoBackupRun() {
             log("auto-backup full error: " + acc.email + ": " + (be.message || be) + " → 跳过自动清理(未备份不删)");
           }
         }
-        if (autoCleanup && totalCredits <= cleanupThreshold) {
+        if (autoCleanup && (_credits <= cleanupThreshold || idleTrigger)) {
           if (!cleanupCheck.ready) {
             // 补出库: 上一轮已清理但未出库(旧版无出库/中途断) 的归零账号 —— 备份已校验、
             //   痕迹已清、24h 无新对话 → 直接出库, 不再卡死在 already_cleaned 永久滞留态。
@@ -12405,7 +12432,7 @@ async function _dvAutoBackupRun() {
               autoRemoveZero &&
               !_addedRecently &&
               _staleConv &&
-              totalCredits <= removeThreshold
+              (_credits <= removeThreshold || idleTrigger)
             ) {
               if (_evictNow(acc.email, "额度归零·痕迹已清(上轮)·补出库")) _abIdx--;
               _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零·痕迹已清(上轮) → 补出库");
@@ -12416,7 +12443,7 @@ async function _dvAutoBackupRun() {
           } else if (!backupOk) {
             log("auto-cleanup: " + acc.email + " 冷却已满但清理前留底备份未通过校验 → 跳过(未全量备份不删·守柔)");
           } else {
-            log("auto-cleanup: " + acc.email + " 额度 $" + totalCredits.toFixed(2) + " ≤ $" + cleanupThreshold + " 且全量备份已校验+24h冷却期已满 → 自动清理");
+            log("auto-cleanup: " + acc.email + (idleTrigger ? " 闲置触发(24h 无活跃)" : " 额度 $" + _credits.toFixed(2) + " ≤ $" + cleanupThreshold) + " 且全量备份已校验+24h冷却期已满 → 自动清理");
             try {
               const rep = await devinCloud.wipeAccount(auth, { onProgress: (m) => log("auto-cleanup: " + m) });
               log("auto-cleanup: " + acc.email + " 完成 · 对话已清理" + rep.sessions.deleted + " 知识" + rep.knowledge.deleted + " 剧本" + rep.playbooks.deleted + " 密钥" + rep.secrets.deleted);
@@ -12424,12 +12451,12 @@ async function _dvAutoBackupRun() {
               _dvOverviewCache.delete(acc.email.toLowerCase());
               devinCloud.setCleanupState(acc.email, { cleanedAt: Date.now() });
               const wipeClean = !!rep && rep.sessions.failed === 0 && rep.knowledge.failed === 0 && rep.playbooks.failed === 0 && rep.secrets.failed === 0;
-              if (autoRemoveZero && wipeClean && !_addedRecently && totalCredits <= removeThreshold) {
+              if (autoRemoveZero && wipeClean && !_addedRecently && (_credits <= removeThreshold || idleTrigger)) {
                 if (_evictNow(acc.email, "已全量备份+清理无残留")) _abIdx--;
                 _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零 · 已全量备份+清理 → 从账号库移除");
               } else {
                 // 出库决策落盘可见可验(旧法仅 toast → 静默跳过无从排查)
-                log("auto-remove: " + acc.email + " 不出库 · autoRemoveZero=" + autoRemoveZero + " wipeClean=" + wipeClean + (wipeClean ? "" : "(对话残" + rep.sessions.failed + " 知识残" + rep.knowledge.failed + " 剧本残" + rep.playbooks.failed + " 密钥残" + rep.secrets.failed + ")") + " addedRecently=" + !!_addedRecently + " credits=$" + totalCredits.toFixed(2) + " vs 出库阈值$" + removeThreshold);
+                log("auto-remove: " + acc.email + " 不出库 · autoRemoveZero=" + autoRemoveZero + " wipeClean=" + wipeClean + (wipeClean ? "" : "(对话残" + rep.sessions.failed + " 知识残" + rep.knowledge.failed + " 剧本残" + rep.playbooks.failed + " 密钥残" + rep.secrets.failed + ")") + " addedRecently=" + !!_addedRecently + " idleTrigger=" + idleTrigger + " credits=$" + _credits.toFixed(2) + " vs 出库阈值$" + removeThreshold);
                 _notify("info", "[" + acc.email.split("@")[0] + "] 自动清理完成 · 已回归本源(对话已清理" + rep.sessions.deleted + "条·本地已留底)");
               }
             } catch (ce) {
