@@ -1932,13 +1932,39 @@ function connectRelay(port: number, token: string) {
     tryNext();
 }
 
+// Node ≥22 内建 WebSocket(undici) → ws 风格适配(on/send/close/terminate), 仅补 relay 客户端所需子集。
+function daoNativeWebSocketAdapter(): any {
+    const Native: any = (globalThis as any).WebSocket;
+    if (typeof Native !== 'function') return null;
+    return class DaoWsAdapter {
+        private _ws: any;
+        constructor(url: string, _opts?: any) {
+            this._ws = new Native(url);
+            this._ws.binaryType = 'arraybuffer';
+        }
+        on(ev: string, cb: (...args: any[]) => void) {
+            if (ev === 'open') this._ws.addEventListener('open', () => cb());
+            else if (ev === 'message') this._ws.addEventListener('message', (e: any) => cb(typeof e.data === 'string' ? Buffer.from(e.data) : Buffer.from(e.data)));
+            else if (ev === 'close') this._ws.addEventListener('close', (e: any) => cb(e && typeof e.code === 'number' ? e.code : 1006));
+            else if (ev === 'error') this._ws.addEventListener('error', (e: any) => cb(e && e.error ? e.error : new Error('ws error')));
+        }
+        send(data: any) { this._ws.send(data); }
+        close(code?: number) { try { this._ws.close(code); } catch { /* 守柔 */ } }
+        terminate() { try { this._ws.close(); } catch { /* 守柔 */ } }
+    };
+}
+
 function connectSingleRelay(wsUrl: string, relayUrl: string, sessionId: string, port: number, token: string, onFail: () => void) {
     try {
-        // 动态require ws — VSIX bundle可能不包含
+        // 动态require ws — VSIX bundle可能不包含; 缺失时回退 Node 内建 WebSocket(undici·Node≥22)
+        //   经适配层补齐 on/terminate 语义 → 手工部署漏拷 node_modules/ws 也不致持久通道全瘫。
         let WebSocket: any;
         try { WebSocket = require('ws'); } catch (e: any) {
-            console.error('[relay] ws 模块缺失(手工部署未带 node_modules/ws?): ' + (e && e.message || e));
-            onFail(); return;
+            WebSocket = daoNativeWebSocketAdapter();
+            if (!WebSocket) {
+                console.error('[relay] ws 模块缺失且无内建 WebSocket: ' + (e && e.message || e));
+                onFail(); return;
+            }
         }
         const relayHostname = new URL(relayUrl).hostname;
         const isCfHost = relayHostname.includes('workers.dev') || relayHostname.includes('cloudflare');
@@ -6323,9 +6349,14 @@ async function bridgeResolveLiveConn(timeoutMs: number = 5000): Promise<{ url: s
     if (bridgeUrl) cands.push({ url: bridgeUrl, token: machTok, source: 'inprocess' });
     try {
         const pub = bridgeReadPublishedConn();
-        if (pub && pub.url && /^https?:\/\//.test(pub.url) && pub.ageMs < BRIDGE_CONN_FRESH_MS && pub.url !== bridgeUrl) {
-            // 常驻桥发布的活隧道地址 —— 恒配机器权威牌(不取 pub.token 那一域), 交下方 /api/exec 实测裁决。
-            cands.push({ url: pub.url, token: machTok, source: 'published:' + pub.source });
+        if (pub && pub.url && /^https?:\/\//.test(pub.url) && pub.ageMs < BRIDGE_CONN_FRESH_MS) {
+            // 常驻桥发布的活隧道: 先试机器权威牌, 再试该文件自身的配对牌(桥自生牌·URL 与 token 同文件同源),
+            //   交下方 /api/exec 实测裁决 — 桥牌与机器牌可为两域(实测 dao-bridge 自生牌≠插件牌),
+            //   只配机器牌会 401 → 落入「隧道尚活」兜底把错配对发布出去, 云端 exec 恒 401。
+            if (pub.url !== bridgeUrl) cands.push({ url: pub.url, token: machTok, source: 'published:' + pub.source });
+            if (pub.token && pub.token.length >= 16 && pub.token !== machTok) {
+                cands.push({ url: pub.url, token: pub.token, source: 'published-pair:' + pub.source });
+            }
         }
     } catch { /* 守柔 */ }
     const seen = new Set<string>();
@@ -6342,7 +6373,8 @@ async function bridgeResolveLiveConn(timeoutMs: number = 5000): Promise<{ url: s
                 _bridgePublishedPair = { url: c.url, token: tok, source: c.source };
                 return { url: c.url, token: tok, source: c.source };
             }
-            if (!firstAlive && pe.reason !== 'timeout' && pe.reason !== 'unreachable' && pe.reason !== 'tunnel-down') {
+            // token-stale(401/403) 不入兜底: 发布一对已知鉴权失败的配对只会让云端恒 401(比「未连接」更糟)。
+            if (!firstAlive && pe.reason !== 'timeout' && pe.reason !== 'unreachable' && pe.reason !== 'tunnel-down' && pe.reason !== 'token-stale') {
                 firstAlive = { url: c.url, token: tok, source: c.source + ':alive-only(' + pe.reason + ')' };
             }
         } catch { /* 守柔 */ }
@@ -13755,6 +13787,8 @@ function openRoutedAccountPanel(context: vscode.ExtensionContext, email: string,
         }
     );
     routedAccountPanels.set(key, panel);
+    // 预热该号 auth: 他号首开需密码登录取号(可 >9s), 与 iframe 加载并行预取 → 首屏不吃登录时延。
+    if (email) { try { void ensureAccountAuth(email); } catch { /* 守柔 */ } }
     panel.webview.html = getDevinCloudPanelHtml(url, localBase || url);
     // 缺陷根治: 此前多实例路由面板(切号/对话备份)未挂 onDidReceiveMessage → 工具栏/回退按钮全是死键,
     //   iframe 卡「Loading…」即无从恢复。今挂同款消息处理: 刷新 / Simple Browser / 外部 / 电脑浏览器独立窗口。
@@ -13976,12 +14010,25 @@ function onError() {
 }
 
 // 守柔自愈: X-Frame 拦截/超慢加载时 iframe 常既不 onload 也不 onerror → 永卡「Loading…」。
-//   超时(9s)仍未 load → 自动呈现回退(主推电脑浏览器独立窗口), 杜绝「加载不出无从恢复」。
+//   他号首开要先经密码登录取 auth(ensureAccountAuth 可 >9s), 旧 9s 即弹回退会把用户推向外部浏览器。
+//   今两段式: 15s 未 load 先自动重试一次 iframe(不打扰), 再 20s 仍未 load 才呈现回退。
+var _loadWatchTimer = null, _loadRetried = false;
 function _startLoadWatch() {
   _loaded = false;
   document.getElementById('loading').style.display = 'block';
   document.getElementById('fallback').style.display = 'none';
-  setTimeout(function(){ if (!_loaded) { onError(); } }, 9000);
+  if (_loadWatchTimer) clearTimeout(_loadWatchTimer);
+  _loadWatchTimer = setTimeout(function(){
+    if (_loaded) return;
+    if (!_loadRetried) {
+      _loadRetried = true;
+      var f = document.getElementById('devin-frame');
+      try { f.src = f.src; } catch (e) { /* 守柔 */ }
+      _loadWatchTimer = setTimeout(function(){ if (!_loaded) { onError(); } }, 20000);
+    } else {
+      onError();
+    }
+  }, 15000);
 }
 _startLoadWatch();
 
@@ -14002,13 +14049,6 @@ window.addEventListener('message', function(e) {
   }
 });
 
-// 超时检测: 10秒后如果仍在loading则显示fallback
-setTimeout(function() {
-  var loading = document.getElementById('loading');
-  if (loading && loading.style.display !== 'none') {
-    onError();
-  }
-}, 10000);
 </script>
 </body></html>`;
 }
@@ -14663,6 +14703,8 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                     if (kl === 'content-security-policy') continue;
                     if (kl === 'strict-transport-security') continue;
                     if (kl === 'x-content-type-options') continue;
+                    // 剥 Permissions-Policy: 上游若下发 microphone=() 会连带禁掉内嵌页语音输入(即便 iframe 已 allow)
+                    if (kl === 'permissions-policy' || kl === 'feature-policy') continue;
                     // 缺陷10: 移除content-encoding，因为我们改写了内容
                     if (kl === 'content-encoding') continue;
                     // 移除content-length，因为改写后长度变化
