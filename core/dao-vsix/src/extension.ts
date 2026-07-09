@@ -14564,32 +14564,54 @@ function fixS3DualstackUrl(u: string): string {
 // 附件 307 落点是 S3 预签名 URL: 浏览器直连受 CORS(无 ACAO 头·SPA fetch 必败)与国内
 //   到 AWS 的劣质路由双重制约。正解: 宿主服务端跟随重定向代取字节, 同源回吐(无 CORS),
 //   并按 uuid 路径落 L1/L2 缓存(附件不可变) → 首取之后任何端秒开。
+// 直连与经本机代理(Clash/V2Ray) CONNECT 双赛道齐发, 谁先成谁用(国内到 S3 直连时有 SYN
+//   黑洞/龟速, 代理路反而通 — 与 genericWebProxy 并行赛道同策)。
 function _fetchAttachmentBytes(rawUrl: string, hops: number): Promise<{ status: number; ct: string; buf: Buffer } | null> {
     return new Promise((resolve) => {
         try {
             if (hops > 3) return resolve(null);
             const su = new URL(fixS3DualstackUrl(rawUrl));
+            let done = false, fails = 0;
+            const proxyPort = detectedProxyPort || detectProxyPort();
+            const tracks = proxyPort ? 2 : 1;
+            const settle = (v: { status: number; ct: string; buf: Buffer } | null) => {
+                if (done) return;
+                if (v === null) { if (++fails >= tracks) { done = true; resolve(null); } return; }
+                done = true;
+                if (v.status >= 300 && v.status < 400 && (v as any).loc) { resolve(_fetchAttachmentBytes(String((v as any).loc), hops + 1)); return; }
+                resolve(v);
+            };
             const rq = https.request({
                 hostname: su.hostname, port: 443, path: su.pathname + su.search, method: 'GET',
-                headers: { 'User-Agent': 'Mozilla/5.0', Host: su.hostname }, rejectUnauthorized: false,
+                headers: { 'User-Agent': 'Mozilla/5.0', Host: su.hostname }, rejectUnauthorized: false, timeout: 20000,
             }, (rs: any) => {
                 const sc = rs.statusCode || 0;
                 if (sc >= 300 && sc < 400 && rs.headers['location']) {
                     rs.resume();
-                    resolve(_fetchAttachmentBytes(String(rs.headers['location']), hops + 1));
+                    settle({ status: sc, ct: '', buf: Buffer.alloc(0), loc: String(rs.headers['location']) } as any);
                     return;
                 }
                 const chunks: Buffer[] = [];
                 // 逐块滑动空转闸(非总时长闸): 国内到 S3 路由慢但仍在流动, 只要字节在来就不掐。
                 let idle: any = null;
-                const arm = () => { try { if (idle) clearTimeout(idle); } catch { /* 守柔 */ } idle = setTimeout(() => { try { rq.destroy(); } catch { /* 守柔 */ } resolve(null); }, 60000); };
+                const arm = () => { try { if (idle) clearTimeout(idle); } catch { /* 守柔 */ } idle = setTimeout(() => { try { rq.destroy(); } catch { /* 守柔 */ } settle(null); }, 60000); };
                 arm();
                 rs.on('data', (c: Buffer) => { chunks.push(c); arm(); });
-                rs.on('end', () => { try { if (idle) clearTimeout(idle); } catch { /* 守柔 */ } resolve({ status: sc || 200, ct: String(rs.headers['content-type'] || 'application/octet-stream'), buf: Buffer.concat(chunks) }); });
-                rs.on('error', () => { try { if (idle) clearTimeout(idle); } catch { /* 守柔 */ } resolve(null); });
+                rs.on('end', () => { try { if (idle) clearTimeout(idle); } catch { /* 守柔 */ } settle({ status: sc || 200, ct: String(rs.headers['content-type'] || 'application/octet-stream'), buf: Buffer.concat(chunks) }); });
+                rs.on('error', () => { try { if (idle) clearTimeout(idle); } catch { /* 守柔 */ } settle(null); });
             });
-            rq.on('error', () => resolve(null));
+            rq.on('timeout', () => { try { rq.destroy(); } catch { /* 守柔 */ } settle(null); });
+            rq.on('error', () => settle(null));
             rq.end();
+            if (proxyPort) {
+                fetchViaTunnel(su, { 'User-Agent': 'Mozilla/5.0', Host: su.hostname }, 240000).then((tr: any) => {
+                    if (!tr) { settle(null); return; }
+                    const sc = tr.status || 200;
+                    const loc = tr.headers && (tr.headers['location'] || tr.headers['Location']);
+                    if (sc >= 300 && sc < 400 && loc) { settle({ status: sc, ct: '', buf: Buffer.alloc(0), loc: String(loc) } as any); return; }
+                    settle({ status: sc, ct: String((tr.headers && (tr.headers['content-type'] || tr.headers['Content-Type'])) || 'application/octet-stream'), buf: tr.raw || Buffer.alloc(0) });
+                }).catch(() => settle(null));
+            }
         } catch { resolve(null); }
     });
 }

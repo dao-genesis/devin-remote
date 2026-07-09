@@ -88,14 +88,55 @@ function fixS3DualstackUrl(u) {
 //   与国内到 AWS 劣质路由双制约。宿主服务端跟随重定向边取边吐(同源·无 CORS), 并按 uuid 路径
 //   落不变缓存(L2 磁盘) → 首取之后任何端秒开。逐块滑动空转闸: 字节在流就不掩。
 const _ATT_BODY_CACHE_MAX = 16 * 1024 * 1024;
+const _ATT_PROXY_PORTS = [7890, 10809, 7891, 1080, 10808, 8080, 8118];
+// 直连与经本机代理(Clash/V2Ray CONNECT)双赛道齐发, 谁先出响应头谁赢(败者即毁)。
+//   国内到 S3 直连时有 SYN 黑洞/龟速, 代理路反而通 — 与 genericWebProxy 并行赛道同策。
+function _attRequest(su, viaProxyPort, onRes, onFail) {
+  let settled = false;
+  const fail = (rq) => { if (settled) return; settled = true; try { rq && rq.destroy(); } catch {} onFail(); };
+  if (!viaProxyPort) {
+    const rq = https.request({
+      hostname: su.hostname, port: 443, path: su.pathname + su.search, method: "GET",
+      headers: { "User-Agent": DEVIN_UA, Host: su.hostname }, rejectUnauthorized: false, timeout: 20000,
+    }, (rs) => { if (settled) { try { rs.destroy(); } catch {} return; } settled = true; onRes(rs, () => { try { rq.destroy(); } catch {} }); });
+    rq.on("timeout", () => fail(rq));
+    rq.on("error", () => fail(rq));
+    rq.end();
+    return () => fail(rq);
+  }
+  const sock = net.connect({ host: "127.0.0.1", port: viaProxyPort, timeout: 3000 }, () => {
+    sock.write("CONNECT " + su.hostname + ":443 HTTP/1.1\r\nHost: " + su.hostname + ":443\r\n\r\n");
+  });
+  let rqRef = null;
+  sock.once("data", (buf) => {
+    if (settled) { try { sock.destroy(); } catch {} return; }
+    if (!/^HTTP\/1\.[01] 200/.test(buf.toString("utf8"))) { fail(null); try { sock.destroy(); } catch {} return; }
+    const tsock = tls.connect({ socket: sock, servername: su.hostname, rejectUnauthorized: false });
+    const rq = https.request({
+      createConnection: () => tsock, path: su.pathname + su.search, method: "GET",
+      headers: { "User-Agent": DEVIN_UA, Host: su.hostname }, timeout: 30000,
+    }, (rs) => { if (settled) { try { rs.destroy(); } catch {} return; } settled = true; onRes(rs, () => { try { rq.destroy(); } catch {} try { sock.destroy(); } catch {} }); });
+    rqRef = rq;
+    rq.on("timeout", () => fail(rq));
+    rq.on("error", () => fail(rq));
+    rq.end();
+  });
+  sock.on("timeout", () => { fail(null); try { sock.destroy(); } catch {} });
+  sock.on("error", () => fail(null));
+  return () => { fail(rqRef); try { sock.destroy(); } catch {} };
+}
 function _streamAttachment(rawUrl, res, cacheKey, hops) {
   if (hops > 3) { try { res.writeHead(502); res.end(); } catch {} return; }
   let su;
   try { su = new URL(fixS3DualstackUrl(rawUrl)); } catch { try { res.writeHead(502); res.end(); } catch {} return; }
-  const rq = https.request({
-    hostname: su.hostname, port: 443, path: su.pathname + su.search, method: "GET",
-    headers: { "User-Agent": DEVIN_UA, Host: su.hostname }, rejectUnauthorized: false,
-  }, (rs) => {
+  let won = false, failCount = 0;
+  const cancels = [];
+  const tracks = 1 + _ATT_PROXY_PORTS.length;
+  const onFail = () => { if (won) return; if (++failCount >= tracks) { try { res.writeHead(502); res.end(); } catch {} } };
+  const onRes = (rs, destroy) => {
+    if (won) { try { rs.destroy(); } catch {} return; }
+    won = true;
+    for (const c of cancels) { try { c(); } catch {} }
     const sc = rs.statusCode || 0;
     if (sc >= 300 && sc < 400 && rs.headers["location"]) {
       rs.resume();
@@ -109,7 +150,7 @@ function _streamAttachment(rawUrl, res, cacheKey, hops) {
     const chunks = [];
     let total = 0;
     let idle = null;
-    const arm = () => { try { if (idle) clearTimeout(idle); } catch {} idle = setTimeout(() => { try { rq.destroy(); } catch {} try { res.end(); } catch {} }, 60000); };
+    const arm = () => { try { if (idle) clearTimeout(idle); } catch {} idle = setTimeout(() => { try { destroy(); } catch {} try { res.end(); } catch {} }, 60000); };
     arm();
     rs.on("data", (c) => { arm(); total += c.length; if (total <= _ATT_BODY_CACHE_MAX) chunks.push(c); try { res.write(c); } catch {} });
     rs.on("end", () => {
@@ -120,9 +161,9 @@ function _streamAttachment(rawUrl, res, cacheKey, hops) {
       }
     });
     rs.on("error", () => { try { if (idle) clearTimeout(idle); } catch {} try { res.end(); } catch {} });
-  });
-  rq.on("error", () => { try { res.writeHead(502); res.end(); } catch {} });
-  rq.end();
+  };
+  cancels.push(_attRequest(su, 0, onRes, onFail));
+  for (const p of _ATT_PROXY_PORTS) cancels.push(_attRequest(su, p, onRes, onFail));
 }
 
 const _attachCookie = new Map();      // key → { cookie, mintAt }
