@@ -95,6 +95,10 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREF_SEARCH = "search_engine";
     // 顶部页签每号实时美金 (id / 小写 email → "$X") — 持久化键: 进程被杀/重建/标签恢复后即时回显, 不必等引擎重探
     private static final String PREF_TAB_DOLLARS = "tabDollars";
+    // 页签「对话名+状态」持久化键: 与美金同理, 重启/重建后即时回显上次值, 不必等引擎首轮心跳(~6-8s)
+    private static final String PREF_TAB_STATUS = "tabStatus";
+    // 账号池序号表持久化键: 重启后切号板块尚未加载时也能立刻显示【N】序号
+    private static final String PREF_ACCT_NOS = "acctNos";
     // 账号标签实时状态: accountId → {convName, status}  (由切号面板追踪轮询经 Native.setTabStatus 推送)
     private static final java.util.Map<String, String[]> sTabStatus = new java.util.concurrent.ConcurrentHashMap<>();
     // 账号标签实时剩余美金: accountId/email → "$5"  (由切号面板 render() 随额度刷新经 Native.setTabDollars 推送, 显示在状态点左侧)
@@ -479,11 +483,16 @@ public class MainActivity extends AppCompatActivity {
         purgeUpdateRecords();     // 净化历史误记进「下载库」的更新包条目 (旧版遗留, 现一次性清掉)
         resumePendingUpdate();    // 上次更新下载若在 App 被杀时完成 (广播漏收) → 启动时认领并续装
         loadTabDollars();         // 先回读上次页签美金 → 标签恢复即带金额显示, 不闪空白
+        loadTabStatus();          // 回读上次对话名+状态点 → 恢复即显, 不必等引擎首轮心跳
+        loadAcctNos();            // 回读账号池序号表 → 切号板块未加载完也先显【N】
         // 恢复上次标签 (持久化) 或首屏切号
         if (!restoreTabs()) {
             newTab(SWITCH, null);
         }
         autoCheckUpdate();   // 冷启动静默检查新版 (有则弹一次确认; 安装仍需用户点一次)
+        new Thread(this::reconcileSystemDownloads).start();   // 认领 App 被杀期间完成的下载(广播漏收) → 补记下载库+同步系统下载
+        // 启动即强刷一轮开着的账号(绕过引擎心跳等待) → 页签金额/状态点尽快由「持久化旧值」换成实时值
+        main.postDelayed(() -> { pushOpenAcctsToSwitch(); triggerEngineRefresh(""); }, 4000);
     }
 
     /** 冷启动后台静默检查更新; 有新版则弹一次确认框, 用户点「立即更新」即下载+唤起安装。 */
@@ -1810,14 +1819,18 @@ public class MainActivity extends AppCompatActivity {
                 // 标签标题优先显示该账号最活跃对话名 + 实时状态点 (运行/卡顿/结束)
                 String emailLc = email.toLowerCase();
                 // 最左账号池序号【N】(切号板块列表同序·紧凑小占位)
-                Integer no = a.has("no") ? a.optInt("no", 0) : null;
-                if (no == null || no <= 0) no = sAcctNo.get(id.toLowerCase());
+                // 序号真源 = 切号板块账号池当前排序(sAcctNo·随出入库实时同步); accountJson 里的 no 是开标签
+                // 时的陈旧快照, 只作兜底 —— 否则他号出库后序号平移, 页签仍显旧序号。
+                Integer no = sAcctNo.get(id.toLowerCase());
                 if (no == null) no = sAcctNo.get(emailLc);
+                if ((no == null || no <= 0) && a.has("no")) no = a.optInt("no", 0);
                 String nop = (no != null && no > 0) ? (no + "\u00B7") : "";
                 String money = sTabDollars.get(id);
+                if (money == null) money = sTabDollars.get(id.toLowerCase());
                 if (money == null) money = sTabDollars.get(emailLc);
                 String pre = nop + ((money != null && !money.isEmpty()) ? money + " " : "");
                 String[] sta = sTabStatus.get(id);
+                if (sta == null) sta = sTabStatus.get(id.toLowerCase());
                 if (sta == null) sta = sTabStatus.get(email);
                 if (sta == null) sta = sTabStatus.get(emailLc);
                 if (sta != null && sta[0] != null && !sta[0].isEmpty()) {
@@ -2086,7 +2099,7 @@ public class MainActivity extends AppCompatActivity {
                         Integer old = sAcctNo.put(k, n);
                         if (old == null || old != n) ch = true;
                     }
-                    if (ch) scheduleRenderTabStrip();
+                    if (ch) { scheduleRenderTabStrip(); scheduleSaveAcctNos(); }
                 } catch (Exception ignored) {}
             });
         } catch (Exception ignored) {}
@@ -2141,10 +2154,78 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
     }
 
-    /** 页签「对话名+状态」推送 (切号面板 Native 桥与常驻引擎 RelayService 桥共用同一入口)。 */
+    // ── 页签「对话名+状态」与账号序号表持久化: 与美金同理, 重启/重建/刷新后即时回显上次值 ──────
+    private final Runnable saveTabStatusTask = () -> {
+        try {
+            org.json.JSONObject o = new org.json.JSONObject();
+            for (java.util.Map.Entry<String, String[]> e : sTabStatus.entrySet()) {
+                String[] v = e.getValue();
+                if (e.getKey() == null || v == null) continue;
+                org.json.JSONArray a = new org.json.JSONArray();
+                a.put(v[0] == null ? "" : v[0]); a.put(v.length > 1 && v[1] != null ? v[1] : "");
+                o.put(e.getKey(), a);
+            }
+            final String s = o.toString();
+            ioExec.execute(() -> {
+                try { getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_TAB_STATUS, s).apply(); } catch (Exception ignored) {}
+            });
+        } catch (Exception ignored) {}
+    };
+    private void scheduleSaveTabStatus() {
+        main.removeCallbacks(saveTabStatusTask);
+        main.postDelayed(saveTabStatusTask, 1000);
+    }
+    private void loadTabStatus() {
+        try {
+            String s = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_TAB_STATUS, "");
+            if (s == null || s.isEmpty()) return;
+            org.json.JSONObject o = new org.json.JSONObject(s);
+            java.util.Iterator<String> it = o.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                org.json.JSONArray a = o.optJSONArray(k);
+                if (k == null || k.isEmpty() || a == null) continue;
+                sTabStatus.put(k, new String[]{ a.optString(0, ""), a.optString(1, "") });
+            }
+        } catch (Exception ignored) {}
+    }
+    private final Runnable saveAcctNosTask = () -> {
+        try {
+            org.json.JSONObject o = new org.json.JSONObject();
+            for (java.util.Map.Entry<String, Integer> e : sAcctNo.entrySet())
+                if (e.getKey() != null && e.getValue() != null && e.getValue() > 0) o.put(e.getKey(), (int) e.getValue());
+            final String s = o.toString();
+            ioExec.execute(() -> {
+                try { getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_ACCT_NOS, s).apply(); } catch (Exception ignored) {}
+            });
+        } catch (Exception ignored) {}
+    };
+    private void scheduleSaveAcctNos() {
+        main.removeCallbacks(saveAcctNosTask);
+        main.postDelayed(saveAcctNosTask, 1000);
+    }
+    private void loadAcctNos() {
+        try {
+            String s = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_ACCT_NOS, "");
+            if (s == null || s.isEmpty()) return;
+            org.json.JSONObject o = new org.json.JSONObject(s);
+            java.util.Iterator<String> it = o.keys();
+            while (it.hasNext()) { String k = it.next(); int n = o.optInt(k, 0); if (k != null && !k.isEmpty() && n > 0) sAcctNo.put(k, n); }
+        } catch (Exception ignored) {}
+    }
+
+    /** 页签「对话名+状态」推送 (切号面板 Native 桥与常驻引擎 RelayService 桥共用同一入口)。
+     *  键同时落原样与小写两份: 推送方(switch/engine)与读取方(chipTitle/tabMetaJson)对 id 大小写口径不一,
+     *  大小写错位即「推了但查不到 → 页签只剩序号+对话名」之根; 并持久化 → 重启/刷新即显上次值。 */
     public void ipcSetTabStatus(String accountId, String convName, String status) {
         if (accountId == null || accountId.isEmpty()) return;
-        sTabStatus.put(accountId, new String[]{ convName == null ? "" : convName, status == null ? "" : status });
+        String[] v = new String[]{ convName == null ? "" : convName, status == null ? "" : status };
+        String lc = accountId.toLowerCase(java.util.Locale.US);
+        String[] old = sTabStatus.get(accountId);
+        if (old != null && old[0].equals(v[0]) && old[1].equals(v[1]) && sTabStatus.containsKey(lc)) return;   // 未变: 免重渲染/重落盘
+        sTabStatus.put(accountId, v);
+        sTabStatus.put(lc, v);
+        scheduleSaveTabStatus();
         main.post(this::scheduleRenderTabStrip);
     }
     /** 页签实时剩余美金推送 ("$5"/空) — 同上双桥共用入口。 */
@@ -2153,8 +2234,10 @@ public class MainActivity extends AppCompatActivity {
         if (dollars == null) dollars = "";
         // 空值 = 引擎此刻无该号额度(未刷/暂取不到) → 保留上次金额, 绝不抹空 (页签金额「一直显示」之本); 仅真有数值才更新。
         if (dollars.isEmpty()) return;
-        if (dollars.equals(sTabDollars.get(accountId))) return;   // 未变: 免重渲染/重落盘
+        String lc = accountId.toLowerCase(java.util.Locale.US);
+        if (dollars.equals(sTabDollars.get(accountId)) && dollars.equals(sTabDollars.get(lc))) return;   // 未变: 免重渲染/重落盘
         sTabDollars.put(accountId, dollars);
+        sTabDollars.put(lc, dollars);
         scheduleSaveTabDollars();
         main.post(this::scheduleRenderTabStrip);
     }
@@ -2206,6 +2289,10 @@ public class MainActivity extends AppCompatActivity {
             if (host == null || path == null || !host.equalsIgnoreCase("app.devin.ai")) return null;
             if (!path.startsWith("/attachments/")) return null;
             java.util.Map<String, String> rh = req.getRequestHeaders();
+            // 已整取落盘的附件(视频/录屏等) → 直接本地供给(含 Range/seek), 零网络零鉴权秒开,
+            //   弱网/国内网络/离线皆可播 —— 视频「只有境外好网络反复重启才能看」之解。
+            WebResourceResponse cached = mediaCacheServe(u, rh);
+            if (cached != null) return cached;
             if (rh != null) for (String k : rh.keySet())
                 if (k != null && k.equalsIgnoreCase("Authorization")) return null;   // fetch/XHR 已带鉴权 → 不重复代取
             // 本源: /attachments/ 的真鉴权是 httpOnly Cookie attachments_token。Cookie 就绪时应
@@ -2217,6 +2304,9 @@ public class MainActivity extends AppCompatActivity {
             boolean isRange = false;
             if (rh != null) for (String k : rh.keySet())
                 if (k != null && k.equalsIgnoreCase("Range")) { isRange = true; break; }
+            // 媒体型请求(Range = <video>/<audio> 分段拉流)首见即后台整取落盘:
+            //   本次仍走原生网络, 下次(重进/刷新/换网)即命中磁盘缓存秒开。
+            if (isRange) mediaCachePrefetch(auth1, orgId, u.toString(), path);
             if (ensureAttachmentCookie(auth1, orgId, u.toString())) return null;   // 原生直取(带 Cookie)
             if (isRange) return null;   // Cookie 铸造失败的流媒体: 代取必坏 seek, 交原生(至多 401)不更差
             java.net.HttpURLConnection c;
@@ -2305,6 +2395,156 @@ public class MainActivity extends AppCompatActivity {
         }
         return c;
     }
+    // ── 附件媒体磁盘缓存: 视频/录屏等大附件首次播放时后台整取落盘(单飞去重),
+    //   此后同一附件直接本地供给(支持 Range/206/seek) —— 弱网/国内网络/离线皆秒开。
+    //   键 = 附件路径 sha1 (内容按路径不变, 与鉴权 token 无关); LRU 限容 512MB。
+    private static final long MEDIA_CACHE_MAX_TOTAL = 512L * 1024 * 1024;
+    private static final long MEDIA_CACHE_MAX_ONE = 300L * 1024 * 1024;
+    private static final java.util.Set<String> sMediaFetching =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+    static File mediaCacheDir() {
+        try {
+            android.content.Context ctx = HttpBridge.appCtx;
+            if (ctx == null) return null;
+            File d = new File(ctx.getExternalFilesDir(null), "media-cache");
+            if (!d.exists() && !d.mkdirs()) return null;
+            return d;
+        } catch (Exception e) { return null; }
+    }
+    static String mediaCacheKey(String path) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-1");
+            byte[] h = md.digest(path.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : h) sb.append(String.format(java.util.Locale.US, "%02x", b));
+            return sb.toString();
+        } catch (Exception e) { return Integer.toHexString(path.hashCode()); }
+    }
+    /** 有限长度流: 从完整缓存文件中只供给 Range 区间。 */
+    private static final class BoundedFileStream extends java.io.InputStream {
+        private final java.io.FileInputStream in; private long left;
+        BoundedFileStream(File f, long skip, long len) throws java.io.IOException {
+            in = new java.io.FileInputStream(f);
+            long s = 0; while (s < skip) { long n = in.skip(skip - s); if (n <= 0) break; s += n; }
+            left = len;
+        }
+        @Override public int read() throws java.io.IOException {
+            if (left <= 0) return -1;
+            int b = in.read(); if (b >= 0) left--; return b;
+        }
+        @Override public int read(byte[] buf, int off, int len) throws java.io.IOException {
+            if (left <= 0) return -1;
+            int n = in.read(buf, off, (int) Math.min(len, left));
+            if (n > 0) left -= n;
+            return n;
+        }
+        @Override public void close() throws java.io.IOException { in.close(); }
+    }
+    /** 命中完整缓存即本地供给 (200 / Range→206), 未命中返 null 交网络路径。 */
+    static WebResourceResponse mediaCacheServe(Uri u, java.util.Map<String, String> rh) {
+        try {
+            File dir = mediaCacheDir(); if (dir == null) return null;
+            String key = mediaCacheKey(u.getPath());
+            File f = new File(dir, key + ".bin");
+            if (!f.exists() || f.length() == 0) return null;
+            long total = f.length();
+            String mime = "application/octet-stream";
+            try {
+                File mf = new File(dir, key + ".mime");
+                if (mf.exists()) { String m = new String(readAllBytes(mf), StandardCharsets.UTF_8).trim(); if (!m.isEmpty()) mime = m; }
+            } catch (Exception ignored) {}
+            f.setLastModified(System.currentTimeMillis());   // LRU 触碰
+            String range = null;
+            if (rh != null) for (java.util.Map.Entry<String, String> e : rh.entrySet())
+                if (e.getKey() != null && e.getKey().equalsIgnoreCase("Range")) { range = e.getValue(); break; }
+            java.util.Map<String, String> hdrs = new java.util.HashMap<>();
+            hdrs.put("Accept-Ranges", "bytes");
+            hdrs.put("X-Dao-Media-Cache", "hit");
+            if (range != null && range.startsWith("bytes=")) {
+                String spec = range.substring(6).trim(); int dash = spec.indexOf('-');
+                if (dash > 0) {
+                    long start = Long.parseLong(spec.substring(0, dash).trim());
+                    long end = total - 1;
+                    String es = spec.substring(dash + 1).trim();
+                    if (!es.isEmpty()) end = Math.min(Long.parseLong(es), total - 1);
+                    if (start >= 0 && start <= end) {
+                        long len = end - start + 1;
+                        hdrs.put("Content-Range", "bytes " + start + "-" + end + "/" + total);
+                        hdrs.put("Content-Length", String.valueOf(len));
+                        WebResourceResponse r = new WebResourceResponse(mime, null, new BoundedFileStream(f, start, len));
+                        r.setStatusCodeAndReasonPhrase(206, "Partial Content");
+                        r.setResponseHeaders(hdrs);
+                        return r;
+                    }
+                }
+            }
+            hdrs.put("Content-Length", String.valueOf(total));
+            WebResourceResponse r = new WebResourceResponse(mime, null, new BoundedFileStream(f, 0, total));
+            r.setStatusCodeAndReasonPhrase(200, "OK");
+            r.setResponseHeaders(hdrs);
+            return r;
+        } catch (Exception e) { return null; }
+    }
+    /** 后台整取一份落盘 (单飞去重·完整性校验·LRU 限容); 失败不扰, 下次播放再试。 */
+    static void mediaCachePrefetch(final String auth1, final String orgId, final String url, final String path) {
+        final File dir = mediaCacheDir(); if (dir == null) return;
+        final String key = mediaCacheKey(path);
+        final File dst = new File(dir, key + ".bin");
+        if (dst.exists()) return;
+        if (!sMediaFetching.add(key)) return;
+        new Thread(() -> {
+            java.net.HttpURLConnection c = null;
+            File tmp = new File(dir, key + ".part");
+            try {
+                c = fetchAttachment(auth1, orgId, url, null, false);
+                if (c == null || c.getResponseCode() != 200) return;
+                long clen = -1;
+                try { clen = c.getContentLengthLong(); } catch (Throwable ignored) {}
+                if (clen > MEDIA_CACHE_MAX_ONE) return;
+                String ctype = c.getContentType();
+                String mime = "application/octet-stream";
+                if (ctype != null && !ctype.isEmpty()) { int sc = ctype.indexOf(';'); mime = (sc >= 0 ? ctype.substring(0, sc) : ctype).trim(); }
+                java.io.InputStream in = c.getInputStream();
+                java.io.FileOutputStream out = new java.io.FileOutputStream(tmp);
+                try {
+                    byte[] buf = new byte[65536]; int n; long w = 0;
+                    while ((n = in.read(buf)) > 0) { out.write(buf, 0, n); w += n; if (w > MEDIA_CACHE_MAX_ONE) { return; } }
+                } finally { try { out.close(); } catch (Exception ignored) {} try { in.close(); } catch (Exception ignored) {} }
+                if (clen > 0 && tmp.length() != clen) return;   // 断流半成品不入缓存
+                if (tmp.length() == 0) return;
+                java.io.FileOutputStream mo = new java.io.FileOutputStream(new File(dir, key + ".mime"));
+                try { mo.write(mime.getBytes(StandardCharsets.UTF_8)); } finally { mo.close(); }
+                if (!tmp.renameTo(dst)) return;
+                mediaCacheTrim(dir);
+            } catch (Exception ignored) {}
+            finally {
+                try { if (tmp.exists() && !dst.exists()) tmp.delete(); } catch (Exception ignored) {}
+                if (c != null) try { c.disconnect(); } catch (Exception ignored) {}
+                sMediaFetching.remove(key);
+            }
+        }, "media-cache").start();
+    }
+    /** LRU 限容: 超额时从最久未用的缓存逐个剔除。 */
+    static void mediaCacheTrim(File dir) {
+        try {
+            File[] fs = dir.listFiles((d, n) -> n.endsWith(".bin"));
+            if (fs == null) return;
+            long total = 0;
+            for (File f : fs) total += f.length();
+            if (total <= MEDIA_CACHE_MAX_TOTAL) return;
+            java.util.Arrays.sort(fs, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+            for (File f : fs) {
+                if (total <= MEDIA_CACHE_MAX_TOTAL) break;
+                long len = f.length();
+                String n = f.getName();
+                if (f.delete()) {
+                    total -= len;
+                    new File(dir, n.substring(0, n.length() - 4) + ".mime").delete();
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
     /** attachments_token Cookie 是否存在、未过期、且属于目标组织。Token 是组织级作用域的不透明值，
      *  多账号多标签共用同一 CookieManager —— 他组织铸的 Cookie 对本标签附件必 403，
      *  故需记录铸造时的组织并按组织判新鲜 (JWT 则另解 exp, 留 60s 余量; 非 JWT 只判组织)。 */
@@ -3881,6 +4121,42 @@ public class MainActivity extends AppCompatActivity {
             } finally { cur.close(); }
         } catch (Exception ignored) {}
     }
+    /** 启动对账: App 被杀期间完成的下载收不到完成广播, 文件留在沙箱却从未入「下载库」/系统下载
+     *  → 用户只在通知里见过一眼便再也找不到。此处扫 DownloadManager 已成功记录, 凡本应用下载目录
+     *  内仍存在的成品(未搬走 = 未处理过)补走完整落地链: 搬保险箱 + 发布系统下载 + 记下载库。后台线程调用。 */
+    private void reconcileSystemDownloads() {
+        try {
+            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm == null) return;
+            File base = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+            if (base == null) return;
+            android.database.Cursor cur = dm.query(new DownloadManager.Query().setFilterByStatus(DownloadManager.STATUS_SUCCESSFUL));
+            if (cur == null) return;
+            try {
+                while (cur.moveToNext()) {
+                    long id = cur.getLong(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_ID));
+                    if (dlPending.containsKey(id)) continue;   // 在途/刚完成的由完成广播正路处理
+                    String localUri = cur.getString(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI));
+                    String mediaType = cur.getString(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_MEDIA_TYPE));
+                    if (localUri == null) continue;
+                    String p = Uri.parse(localUri).getPath();
+                    if (p == null) continue;
+                    File f = new File(p);
+                    // 已搬走/被清 = 已处理过; 只认本应用下载目录里的成品 (persistToVault 会把源文件移走, 天然幂等)
+                    if (!f.exists() || f.length() == 0) continue;
+                    if (f.getParentFile() == null || !f.getParentFile().equals(base)) continue;
+                    if (isUpdateDownload(id, p)) continue;   // 更新包走自更新分支, 不入下载库
+                    final String name = f.getName();
+                    final String mime = (mediaType == null || mediaType.isEmpty() || "*/*".equals(mediaType)) ? guessMime(name) : mediaType;
+                    File persisted = persistToVault(f, name);
+                    String pu = "";
+                    try { byte[] b = readAllBytes(persisted); android.net.Uri pub = publishToDownloads(name, mime, b); if (pub != null) pu = pub.toString(); } catch (Exception ignored) {}
+                    final String puri = pu; final String path = persisted.getAbsolutePath(); final long size = persisted.length();
+                    main.post(() -> addDownloadRecord(name, path, puri, mime, size));
+                }
+            } finally { cur.close(); }
+        } catch (Exception ignored) {}
+    }
     // ── 在线自动更新 ────────────────────────────────────────────────────────
     /** 当前已安装版本号。 */
     int currentVersionCode() {
@@ -4197,7 +4473,7 @@ public class MainActivity extends AppCompatActivity {
         return src;
     }
     /** 读整个文件为字节数组 (供同步进系统下载用)。 */
-    private byte[] readAllBytes(File f) throws Exception {
+    private static byte[] readAllBytes(File f) throws Exception {
         try (java.io.FileInputStream in = new java.io.FileInputStream(f);
              ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
             byte[] buf = new byte[65536]; int r;
@@ -4814,11 +5090,41 @@ public class MainActivity extends AppCompatActivity {
             main.post(() -> fastPanelExtractInject(sid, accJson, target, x, y, fallback));
         }).start();
     }
+    /** 对话落地文件名统一口径: 「序号_对话名_账号_密码」—— 凡 APK 内产出的对话记录 MD/ZIP 皆用此名。
+     *  序号取账号池当前排序(sAcctNo·随出入库实时同步), accJson 里的陈旧 no 仅作兜底;
+     *  对话名缺失时退回 sid; 邮箱/密码缺失则略过该段。 */
+    private String convFileBase(String accJson, String sid, String title) {
+        String email = "", password = "", id = ""; Integer no = null;
+        if (accJson != null) {
+            try {
+                JSONObject a = new JSONObject(accJson);
+                email = a.optString("email", "");
+                password = a.optString("password", "");
+                id = a.optString("id", "");
+                if (a.has("no") && a.optInt("no", 0) > 0) no = a.optInt("no", 0);
+            } catch (Exception ignored) {}
+        }
+        Integer live = null;
+        if (!id.isEmpty()) live = sAcctNo.get(id.toLowerCase());
+        if (live == null && !email.isEmpty()) live = sAcctNo.get(email.toLowerCase());
+        if (live != null && live > 0) no = live;
+        String t = (title == null) ? "" : title.trim();
+        if (t.isEmpty()) t = sid.startsWith("devin-") ? sid.substring(6) : sid;
+        if (t.length() > 40) t = t.substring(0, 40);
+        StringBuilder b = new StringBuilder();
+        if (no != null && no > 0) b.append(no).append('_');
+        b.append(t);
+        if (!email.isEmpty()) b.append('_').append(email);
+        if (!password.isEmpty()) b.append('_').append(password);
+        // 只剔文件系统非法字符, 保留中文对话名与邮箱原样
+        return b.toString().replaceAll("[\\\\/:*?\"<>|\\r\\n\\t]+", "_").replaceAll("\\s+", " ").trim();
+    }
+
     /** 取数失败兜底: 至少注入「取数指引 MD」—— 目标页 Agent 可据指引自行登录取回。 */
     private void injectGuideOnly(String accJson, String sid, WebView target, float x, float y) {
-        String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
+        String base = convFileBase(accJson, sid, "");
         java.util.List<String[]> gf = new java.util.ArrayList<>();
-        gf.add(new String[]{ base + "-files-access.md", b64Utf8(buildAccessGuideMd(accJson, sid, sid)) });
+        gf.add(new String[]{ base + "_取数指引.md", b64Utf8(buildAccessGuideMd(accJson, sid, sid)) });
         dropB64FilesIntoPage(target, x, y, gf);
         toast("对话取数失败, 已注入取数指引 (可据此自行取回)");
     }
@@ -4874,11 +5180,11 @@ public class MainActivity extends AppCompatActivity {
         final String sid = fastConvSid, accJson = fastConvAccJson;
         final Runnable fb = fastConvFallback; fastConvFallback = null;
         if (md == null || md.isEmpty() || !md.contains("## ")) { if (fb != null) fb.run(); return; }
-        String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
+        String base = convFileBase(accJson, sid, title);
         String guide = buildAccessGuideMd(accJson, sid, (title == null || title.isEmpty()) ? sid : title);
         java.util.List<String[]> files = new java.util.ArrayList<>();
-        files.add(new String[]{ base + "-conversation.md", b64Utf8(md) });
-        files.add(new String[]{ base + "-files-access.md", b64Utf8(guide) });
+        files.add(new String[]{ base + ".md", b64Utf8(md) });
+        files.add(new String[]{ base + "_取数指引.md", b64Utf8(guide) });
         dropB64FilesIntoPage(target, x, y, files);
         toast("已导入 对话MD + 取数指引");
     }
@@ -4945,7 +5251,7 @@ public class MainActivity extends AppCompatActivity {
             String mdName = ent.optString("md", "");
             String zipName = ent.optString("zip", "");
             final int hasFiles = ent.optInt("hasFiles", 0);
-            final String base = (sid.startsWith("devin-") ? sid : "devin-" + sid).replaceAll("[^A-Za-z0-9_\\-]", "_");
+            final String base = convFileBase(accJson, sid, title);
             final String guide = buildAccessGuideMd(accJson, sid, title);
             // 单包 ZIP 为本源: 整包直注(内含对话MD+指引+产出文件); 同时从包内取出「对话_人类可读.md」
             // 一并注入 → 拖拽落地 = ZIP + 对话MD + 取数指引 (无需对方先解包即可直读对话全文)
@@ -4956,8 +5262,8 @@ public class MainActivity extends AppCompatActivity {
                     main.post(() -> {
                         java.util.List<String[]> files = new java.util.ArrayList<>();
                         files.add(new String[]{ base + ".zip", zb64 });
-                        if (zmd != null && !zmd.isEmpty()) files.add(new String[]{ base + "-conversation.md", zmd });
-                        files.add(new String[]{ base + "-files-access.md", b64Utf8(guide) });
+                        if (zmd != null && !zmd.isEmpty()) files.add(new String[]{ base + ".md", zmd });
+                        files.add(new String[]{ base + "_取数指引.md", b64Utf8(guide) });
                         dropB64FilesIntoPage(target, x, y, files);
                         toast("本地备份·秒注入 对话整包ZIP" + (hasFiles > 0 ? ("(" + hasFiles + "件产出)") : "") + ((zmd != null && !zmd.isEmpty()) ? " + 对话MD" : "") + " + 取数指引");
                     });
@@ -4970,8 +5276,8 @@ public class MainActivity extends AppCompatActivity {
                 if (md != null && !md.isEmpty() && md.contains("## ")) {
                     main.post(() -> {
                         java.util.List<String[]> files = new java.util.ArrayList<>();
-                        files.add(new String[]{ base + "-conversation.md", b64Utf8(md) });
-                        files.add(new String[]{ base + "-files-access.md", b64Utf8(guide) });
+                        files.add(new String[]{ base + ".md", b64Utf8(md) });
+                        files.add(new String[]{ base + "_取数指引.md", b64Utf8(guide) });
                         dropB64FilesIntoPage(target, x, y, files);
                         toast("本地备份·秒注入 对话MD + 取数指引");
                     });
@@ -5030,7 +5336,7 @@ public class MainActivity extends AppCompatActivity {
         StringBuilder b = new StringBuilder();
         b.append("# 查看该对话的全部文件 · 取数指引\n\n");
         b.append("> 本文件随对话拖拽自动生成, 仅针对**当前停留的这一条对话**。\n");
-        b.append("> 配套同时拖出的 `").append((sid.startsWith("devin-") ? sid : "devin-" + sid)).append("-conversation.md` 为该对话**全量文本**。\n\n");
+        b.append("> 配套同时拖出的 `").append(convFileBase(accJson, sid, title)).append(".md` 为该对话**全量文本**。\n\n");
         String fullSid = sid.startsWith("devin-") ? sid : "devin-" + sid;
         String emailRef = email.isEmpty() ? "<email>" : email;
         // 0、给读到本文的 Agent 的一句话执行: 账号 + 对话ID + 后端最快全额提取那一行, 置顶, 不必往下翻。
@@ -6442,9 +6748,11 @@ public class MainActivity extends AppCompatActivity {
                 String email = a.optString("email", id);
                 String emailLc = email.toLowerCase();
                 String money = sTabDollars.get(id);
+                if (money == null) money = sTabDollars.get(id.toLowerCase());
                 if (money == null) money = sTabDollars.get(emailLc);
                 if (money != null) dollars = money;
                 String[] sta = sTabStatus.get(id);
+                if (sta == null) sta = sTabStatus.get(id.toLowerCase());
                 if (sta == null) sta = sTabStatus.get(email);
                 if (sta == null) sta = sTabStatus.get(emailLc);
                 if (sta != null) {

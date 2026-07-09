@@ -171,7 +171,7 @@ function _seedFromCache(){
 function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
 function toast(m,bad){ var t=document.getElementById("toast"); t.textContent=m; t.className="toast show"+(bad?" fail":" ok"); setTimeout(function(){t.className="toast";},2000); }
 function stClass(s){ s=String(s||"").toLowerCase(); if(/run|work|active/.test(s))return"running"; if(/finish|complete|done/.test(s))return"finished"; if(/block|wait|stuck/.test(s))return"blocked"; if(/expir|fail|error/.test(s))return"expired"; return""; }
-function safeName(s){ return String(s||"").replace(/[\\\/:*?"<>|]/g,"_").slice(0,60); }
+function safeName(s){ return String(s||"").replace(/[\\\/:*?"<>|]/g,"_").slice(0,120); }
 function accList(){ try{ return DaoCore.loadAcc(); }catch(e){ return []; } }
 function hasAuth(a){ return !!(a&&a.auth1&&a.orgId); }
 function sidOf(s){ return s.devin_id||s.session_id||s.id||""; }
@@ -348,10 +348,12 @@ async function uploadConv(idx){
     var md="", title="", err="";
     try{ var r=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
          if(r&&r.ok){ md=r.md||""; title=r.title||""; } else err=(r&&r.error)||""; }catch(e){ err=""+e; }
-    var base=safeName(title||it.title||it.sid);
+    // 统一命名口径: 序号_对话名_账号_密码 (与原生拖拽 convFileBase 同构)
+    var acc=it.acc||{}; var no=(it.no>0&&it.no)||(acc.no>0&&acc.no)||"";
+    var base=safeName([no,(title||it.title||it.sid),acc.email||acc.id||"",acc.password||""].filter(Boolean).join("_"));
     var files=[];
-    if(md) files.push({name:base+"-conversation.md", b64:_b64utf8(md)});
-    if(guide) files.push({name:base+"-files-access.md", b64:_b64utf8(guide)});
+    if(md) files.push({name:base+".md", b64:_b64utf8(md)});
+    if(guide) files.push({name:base+"_取数指引.md", b64:_b64utf8(guide)});
     if(!files.length){ toast("提取失败: "+err,true); return; }
     if(!md) toast("对话提取失败("+err+"), 仅投递取数指引",true);
     // APK: 原生直投当前活动 Devin 标签的上传框; 网页端走父页 postMessage
