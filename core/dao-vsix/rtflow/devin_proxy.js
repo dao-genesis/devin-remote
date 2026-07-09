@@ -64,6 +64,58 @@ const _servers = new Map();
 let _bridgeServe = null;
 function setBridgeServe(fn) { _bridgeServe = (typeof fn === "function") ? fn : null; }
 
+// ═══ 附件鉴权 Cookie (attachments_token) · 移植手机 APK ══════════════════════════
+// 帛书·「无有入于无间」: app.devin.ai/attachments/* 的真鉴权是 httpOnly Cookie
+//   `attachments_token`(POST /api/users/set-attachment-cookie 用 Bearer 铸造)。Bearer
+//   对该路径无效 → <img>/<video> 由渲染器原生发起(不经 JS·无 Cookie)必 401 → 「电脑端
+//   图片显示不了、视频放不了」(手机端因 WebView 层已代铸 Cookie 故正常)。反代须同样代铸
+//   Cookie 并按 /attachments/ 转发, 401 时重铸重试一次(自愈)。Cookie 组织级作用域 →
+//   缓存键按 orgId(无 org 回落 auth1 前缀), 保守判活 9min(不透明 token 无 exp 可解)。
+const _attachCookie = new Map();      // key → { cookie, mintAt }
+const _attachMintInflight = new Map(); // key → Promise (单飞防铸造风暴)
+const _ATTACH_TTL = 9 * 60 * 1000;
+function _attachKey(auth) { return (auth && auth.orgId) || ("a1:" + String((auth && auth.auth1) || "").slice(0, 24)); }
+function _mintAttachCookie(auth) {
+  return new Promise((resolve) => {
+    try {
+      if (!auth || !auth.auth1) return resolve("");
+      const opt = {
+        hostname: "app.devin.ai", port: 443, path: "/api/users/set-attachment-cookie", method: "POST",
+        headers: { Authorization: "Bearer " + auth.auth1, "Content-Type": "application/json", "Content-Length": 2, "User-Agent": DEVIN_UA, Host: "app.devin.ai" },
+        timeout: 15000, rejectUnauthorized: false, agent: _httpsAgent,
+      };
+      if (auth.orgId) opt.headers["x-cog-org-id"] = auth.orgId;
+      const r = https.request(opt, (rs) => {
+        let ck = "";
+        const sc = rs.headers["set-cookie"] || [];
+        for (const line of (Array.isArray(sc) ? sc : [sc])) {
+          const m = /(?:^|;\s*)(attachments_token=[^;]+)/.exec(String(line || ""));
+          if (m) ck = m[1];
+        }
+        rs.resume();
+        resolve((rs.statusCode >= 200 && rs.statusCode < 300) ? ck : "");
+      });
+      r.on("error", () => resolve(""));
+      r.on("timeout", () => { try { r.destroy(); } catch {} resolve(""); });
+      r.end("{}");
+    } catch { resolve(""); }
+  });
+}
+async function _ensureAttachCookie(auth, force) {
+  const key = _attachKey(auth);
+  const hit = _attachCookie.get(key);
+  if (!force && hit && hit.cookie && (Date.now() - hit.mintAt < _ATTACH_TTL)) return hit.cookie;
+  if (_attachMintInflight.has(key)) return _attachMintInflight.get(key);
+  const p = (async () => {
+    const ck = await _mintAttachCookie(auth);
+    if (ck) _attachCookie.set(key, { cookie: ck, mintAt: Date.now() });
+    _attachMintInflight.delete(key);
+    return ck || (hit && hit.cookie) || "";
+  })();
+  _attachMintInflight.set(key, p);
+  return p;
+}
+
 // 帛书·「为之于其未有·治之于其未乱」— 静态资源改写结果缓存。
 //   Devin SPA 的 JS/CSS/字体 bundle 皆哈希不可变, 改写结果恒定 → 缓存后多标签/重载
 //   免重复取上游 + 免重复多次全量 split/join (根治"很慢很卡")。键 = 上游 path,
@@ -685,6 +737,12 @@ async function handleRequest(req, res, auth, opts, _log) {
   else if (auth.auth1) fwdHeaders["Authorization"] = "Bearer " + auth.auth1;
   if (auth.orgId) fwdHeaders["x-cog-org-id"] = auth.orgId;
 
+  const fire = async (isRetry) => {
+  // 附件路径: 代铸并转发 attachments_token Cookie (Bearer 对 /attachments/ 无效)。
+  if (_isAttachPath) {
+    const _ck = await _ensureAttachCookie(auth, !!isRetry);
+    if (_ck) fwdHeaders["Cookie"] = _ck;
+  }
   const proxyReq = https.request(
     {
       hostname: u.hostname,
@@ -790,7 +848,7 @@ async function handleRequest(req, res, auth, opts, _log) {
       const _clen = parseInt(proxyRes.headers["content-length"] || "0", 10) || 0;
       const _isMediaCt = /^(video|audio|image)\//i.test(ct) || ct.includes("application/pdf") || ct.includes("application/octet-stream") || ct.includes("application/zip");
       // 注: cacheable(哈希不可变 /assets 静态资源)不走流式 — 仍入 L1/L2 缓存提速多实例。
-      const _streamPass = !res.headersSent && !cacheable && (
+      const _streamPass = !res.headersSent && !cacheable && status < 400 && (
         status === 206 || !!_clientRange || _isAttachPath || /attachment/i.test(_cd) || _isMediaCt ||
         (_clen > 4 * 1024 * 1024 && !ct.includes("text/") && !ct.includes("json") && !ct.includes("javascript"))
       );
@@ -820,6 +878,11 @@ async function handleRequest(req, res, auth, opts, _log) {
       const chunks = [];
       proxyRes.on("data", (c) => chunks.push(c));
       proxyRes.on("end", async () => {
+        // 附件 401/403: Cookie 缺失/过期 → 作废重铸并重试一次 (自愈), 头未发才可重试。
+        if (_isAttachPath && (status === 401 || status === 403) && !isRetry && !res.headersSent) {
+          _attachCookie.delete(_attachKey(auth));
+          try { return void fire(true); } catch {}
+        }
         const raw = Buffer.concat(chunks);
         const body = await decode(raw, enc);
         const isHtml = ct.includes("text/html");
@@ -961,6 +1024,8 @@ async function handleRequest(req, res, auth, opts, _log) {
   });
   if (reqBody.length) proxyReq.write(reqBody);
   proxyReq.end();
+  };
+  await fire(false);
 }
 
 // 帛书·「为之于其未有」— 确保某账号的注入反代在跑, 返回其本地端口。
