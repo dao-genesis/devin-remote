@@ -2304,9 +2304,10 @@ public class MainActivity extends AppCompatActivity {
             boolean isRange = false;
             if (rh != null) for (String k : rh.keySet())
                 if (k != null && k.equalsIgnoreCase("Range")) { isRange = true; break; }
-            // 媒体型请求(Range = <video>/<audio> 分段拉流)首见即后台整取落盘:
-            //   本次仍走原生网络, 下次(重进/刷新/换网)即命中磁盘缓存秒开。
-            if (isRange) mediaCachePrefetch(auth1, orgId, u.toString(), path);
+            // 一切附件(视频/音频的 Range 分段流 + 图片/截图等整取)首见即后台整取落盘:
+            //   本次仍走原生网络, 下次(重进/刷新/换网/离线)即命中磁盘缓存秒开 ——
+            //   「图片时有时无」与视频重播慢的本源同解(单飞去重·限容, 见 mediaCachePrefetch)。
+            mediaCachePrefetch(auth1, orgId, u.toString(), path);
             if (ensureAttachmentCookie(auth1, orgId, u.toString())) return null;   // 原生直取(带 Cookie)
             if (isRange) return null;   // Cookie 铸造失败的流媒体: 代取必坏 seek, 交原生(至多 401)不更差
             java.net.HttpURLConnection c;

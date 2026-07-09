@@ -1274,17 +1274,44 @@ function doAdd(){
 async function autoActivateAdded(ids){
   var todo=loadAcc().filter(function(a){ return a && ids.indexOf(a.id)>=0 && !hasAuth(a) && (a.password||a.auth1); });
   if(!todo.length){ render(); return; }
-  var done=0, fail=0;
-  for(var i=0;i<todo.length;i++){ var a=todo[i];
-    toast("自动登录 "+(i+1)+"/"+todo.length+" · "+String(a.email||a.id).split("@")[0]);
+  var done=0, fail=0, seen=0;
+  async function one(a){
     try{
       var r = (a.email&&a.password) ? await DaoCore.loginAndStore(a.email,a.password)
             : (a.auth1 ? await DaoCore.hydrateAuth1(a.id) : {ok:false,error:"无邮箱密码/令牌"});
       if(r&&r.ok)done++; else fail++;
     }catch(e){ fail++; }
-    render();
+    seen++; toast("自动登录 "+seen+"/"+todo.length+" · "+String(a.email||a.id).split("@")[0]); render();
   }
+  await _poolRun(todo, one, 3);
   toast("✓ 自动登录完成 · 成功 "+done+(fail?(" · 失败 "+fail):""));
+}
+// 有限并发跑批: 登录/补全互不依赖, 3 路并行让「添加→可用」在大批量时也秒级完成。
+async function _poolRun(items, fn, limit){
+  var i=0;
+  async function worker(){ while(i<items.length){ var it=items[i++]; try{ await fn(it); }catch(e){} } }
+  var ws=[]; for(var k=0;k<Math.min(limit||3,items.length);k++) ws.push(worker());
+  await Promise.all(ws);
+}
+// 后台自动解锁(无为而无不为): 库里有邮箱密码却未登录的号, 心跳周期自动补登 ——
+//   重装/重启/登录态过期后无需任何手点 🔑, 灰行自动翻为可注入态并带出美金额度。
+//   节流: 全局 5 分钟一轮; 单号失败 60 分钟内不重试(密码错的号不无限打接口)。
+var _unlockTickTs=0, _unlockBusy=false, _unlockFail={};
+async function autoUnlockTick(){
+  var now=Date.now();
+  if(_unlockBusy || now-_unlockTickTs<300000) return;
+  var todo=loadAcc().filter(function(a){ return a && !hasAuth(a) && ((a.email&&a.password)||a.auth1)
+    && !(_unlockFail[a.id] && now-_unlockFail[a.id]<3600000); });
+  if(!todo.length){ _unlockTickTs=now; return; }
+  _unlockBusy=true; _unlockTickTs=now;
+  try{
+    await _poolRun(todo, async function(a){
+      var r = (a.email&&a.password) ? await DaoCore.loginAndStore(a.email,a.password)
+            : await DaoCore.hydrateAuth1(a.id);
+      if(!(r&&r.ok)) _unlockFail[a.id]=Date.now(); else { delete _unlockFail[a.id]; render(); }
+    }, 3);
+  }catch(e){}
+  _unlockBusy=false; render();
 }
 
 // ── 工具条配置 (localStorage 持久·对照桌面 _cfg 模式) ──
@@ -1741,7 +1768,9 @@ function engineHeartbeat(){
   try{ pollTrk(); }catch(e){}
   try{ autoQuotaTick(); }catch(e){}
   try{ autoQuotaLiveTick(); }catch(e){}
+  try{ autoUnlockTick(); }catch(e){}
 }
+setTimeout(function(){ try{ autoUnlockTick(); }catch(e){} }, 4000);
 // 已打开账号的实时心跳: 不受可见性门控(只刷用户正开着的少数号), ~6s 一轮带抖动。
 //   原生 APK 另由 Native 侧每 ~6s 直接驱动 setOpenAccts() (后台 webview 自身计时器被 onPause 暂停时的兜底)。
 setTimeout(function(){ _loop(function(){ refreshOpenAccts(); }, 6000, 1500); }, 5000);
