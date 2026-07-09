@@ -14512,6 +14512,53 @@ async function genericWebProxy(targetUrl, depth = 0, reqCtx: any = null, isSub =
     });
 }
 
+// ═══ 附件鉴权 Cookie (attachments_token) · 同源反代同样代铸(移植手机 APK) ══════════
+// 帛书·「无有入于无间」: app.devin.ai/attachments/* 的真鉴权是 httpOnly Cookie
+//   attachments_token(POST /api/users/set-attachment-cookie 用 Bearer 铸造)。Bearer 对该
+//   路径无效 → <img>/<video> 原生加载(不经 SPA fetch·无 Cookie)必 401 → 图片/视频不显示。
+//   反代须代铸 Cookie 并按 /attachments/ 转发, 401 时作废重铸重试一次。缓存按 org(回落 auth1 前缀)。
+const _attCookieCache = new Map<string, { cookie: string; mintAt: number }>();
+const _attCookieInflight = new Map<string, Promise<string>>();
+const _ATT_COOKIE_TTL = 9 * 60 * 1000;
+function _attCookieKey(org: string, auth1: string): string { return org || ('a1:' + String(auth1 || '').slice(0, 24)); }
+function _attCookieDel(org: string, auth1: string): void { _attCookieCache.delete(_attCookieKey(org, auth1)); }
+function _mintAttachmentCookie(auth1: string, org: string): Promise<string> {
+    return new Promise((resolve) => {
+        try {
+            if (!auth1) return resolve('');
+            const hdrs: any = { Authorization: 'Bearer ' + auth1, 'Content-Type': 'application/json', 'Content-Length': 2, 'User-Agent': DEVIN_UA, Host: 'app.devin.ai' };
+            if (org) hdrs['x-cog-org-id'] = org;
+            const r = https.request({ hostname: 'app.devin.ai', port: 443, path: '/api/users/set-attachment-cookie', method: 'POST', headers: hdrs, timeout: 15000, rejectUnauthorized: false }, (rs: any) => {
+                let ck = '';
+                const sc = rs.headers['set-cookie'] || [];
+                for (const line of (Array.isArray(sc) ? sc : [sc])) {
+                    const m = /(?:^|;\s*)(attachments_token=[^;]+)/.exec(String(line || ''));
+                    if (m) ck = m[1];
+                }
+                rs.resume();
+                resolve((rs.statusCode >= 200 && rs.statusCode < 300) ? ck : '');
+            });
+            r.on('error', () => resolve(''));
+            r.on('timeout', () => { try { r.destroy(); } catch { /* 守柔 */ } resolve(''); });
+            r.end('{}');
+        } catch { resolve(''); }
+    });
+}
+async function ensureAttachmentCookie(auth1: string, org: string, force?: boolean): Promise<string> {
+    const key = _attCookieKey(org, auth1);
+    const hit = _attCookieCache.get(key);
+    if (!force && hit && hit.cookie && (Date.now() - hit.mintAt < _ATT_COOKIE_TTL)) return hit.cookie;
+    if (_attCookieInflight.has(key)) return _attCookieInflight.get(key)!;
+    const p = (async () => {
+        const ck = await _mintAttachmentCookie(auth1, org);
+        if (ck) _attCookieCache.set(key, { cookie: ck, mintAt: Date.now() });
+        _attCookieInflight.delete(key);
+        return ck || (hit && hit.cookie) || '';
+    })();
+    _attCookieInflight.set(key, p);
+    return p;
+}
+
 async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: string = 'devin', res?: any): Promise<any> {
     // 帛书·「天下之至柔驰骋于天下之致坚」— 反向代理不需要Devin API认证
     // 代理只做三件事: 剥安全头 + 改写URL + 透传请求
@@ -14597,6 +14644,8 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
     // 判断是静态资源还是页面请求
     const isPageRequest = !targetPath.match(/\.(js|css|png|jpg|svg|ico|woff2?|ttf|eot|map|json|wasm)(\?|$)/i);
     const isApiRequest = targetPath.startsWith('/api/');
+    // 附件路径(app.devin.ai/attachments/*): Bearer 无效, 须代铸并转发 attachments_token Cookie。
+    const _isAttachPath = mode === 'devin' && /\/attachments\//i.test(targetPath);
 
     // 道·「不辱以靜」— 仅对内容哈希的不变资源(/assets/*)缓存: 哈希变则键变, 绝不陈旧
     const isImmutableAsset = /\/assets\/.+\.(js|css|woff2?|ttf|png|jpg|jpeg|svg|ico|wasm)(\?|$)/i.test(targetPath);
@@ -14621,7 +14670,7 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
         const u = new URL(targetUrl);
         // 道·直连优先 + 代理兜底: 未被墙站(app.devin.ai 等)直连最快(实测 ~0.3s), 经 Clash 反而 3.7~7.9s 冷开白屏;
         //   仅当直连被 RST/超时(GFW) 才回退本机代理隧道。与 genericWebProxy/#4 同策。两向各只试一次, 不空转。
-        let _triedProxy = false, _triedDirect = false;
+        let _triedProxy = false, _triedDirect = false, _attRetried = false;
 
         const makeRequest = (hostname: string, port: number, reqPath: string, h: any, isProxyTunnel: boolean = false) => {
             const options: any = {
@@ -14737,6 +14786,17 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                 const chunks: Buffer[] = [];
                 proxyRes.on('data', (chunk: Buffer) => chunks.push(chunk));
                 proxyRes.on('end', async () => {
+                    // 附件 401/403: Cookie 缺失/过期 → 作废重铸并按原路重发一次 (自愈)。
+                    if (_isAttachPath && (proxyRes.statusCode === 401 || proxyRes.statusCode === 403) && !_attRetried && _apiAuth1) {
+                        _attRetried = true;
+                        try {
+                            _attCookieDel(_apiOrg, _apiAuth1);
+                            const _fck = await ensureAttachmentCookie(_apiAuth1, _apiOrg, true);
+                            if (_fck) h['Cookie'] = h['Cookie'] ? (String(h['Cookie']).replace(/(^|;\s*)attachments_token=[^;]*/g, '$1').replace(/;\s*;/g, ';').replace(/^;\s*|;\s*$/g, '') + '; ' + _fck) : _fck;
+                            makeRequest(hostname, port, reqPath, h, isProxyTunnel);
+                            return;
+                        } catch { /* 守柔: 重铸失败则按原响应继续 */ }
+                    }
                     const rawBody = Buffer.concat(chunks);
                     // localBase 已在函数顶部按访问者来源(本地/公网隧道)归一计算, 此处复用
                     const okCache = isImmutableAsset && proxyRes.statusCode === 200;
@@ -15091,8 +15151,18 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
         fwdHeaders['Referer'] = upstreamBase + '/';
 
         // 直连优先(快); 失败再由 _fallback 回退本机代理隧道(被墙站兜底)。
-        _triedDirect = true;
-        makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, fwdHeaders, false);
+        const _fireDirect = () => {
+            _triedDirect = true;
+            makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, fwdHeaders, false);
+        };
+        // 附件路径: 先代铸 attachments_token Cookie 再发 (Bearer 对 /attachments/ 无效)。
+        if (_isAttachPath && _apiAuth1) {
+            ensureAttachmentCookie(_apiAuth1, _apiOrg).then((ck) => {
+                if (ck) fwdHeaders['Cookie'] = fwdHeaders['Cookie'] ? (fwdHeaders['Cookie'] + '; ' + ck) : ck;
+            }).catch(() => { /* 守柔 */ }).then(_fireDirect);
+        } else {
+            _fireDirect();
+        }
     });
 }
 
