@@ -1370,20 +1370,12 @@ function toggleTranslate(){var t=tabs[active];var fr=t?t.frame:(isBoard()&&BOARD
   if(!fr){daoToast('请先打开一个页面再翻译',true);return;}
   var doc;try{doc=fr.contentDocument||(fr.contentWindow&&fr.contentWindow.document);}catch(e){doc=null;}
   if(!doc||!doc.documentElement){
-    // 跨源自愈: 页面在代理外(整页跳转逃逸/直连外站) → 经站内同源代理 /__web 重载同一 URL, 载毕自动续译。
+    // 跨源自愈: 页面在代理外(整页跳转逃逸/直连外站) → 问宿主要一条同源可达地址再重载续译。
+    //   (旧病灶: 前端自拼 /__web?u= — webview 里相对路径落在 vscode-webview 源、Devin SPA 经 /__web
+    //    又被 ES module CORS 全拦 → 点译即整页白屏。现由宿主按运行态选同源反代/代理地址, 无可达地址则不动原页。)
     var ru=t&&t.url?String(t.url):'';
     if(t&&ru&&t.__trRerouted!==ru){ // 按 URL 记重载: 换页后又可自愈, 同页只重载一次不无限循环
-      var rl=ru.toLowerCase();
-      var target=ru.indexOf('/__web')===0?ru:((rl.indexOf('http://')===0||rl.indexOf('https://')===0)?'/__web?u='+encodeURIComponent(ru):'');
-      if(target){t.__trRerouted=ru;daoToast('🌐 经站内代理重载后自动翻译…');
-        var fr2=t.frame,tid=active;
-        // 载毕轮询等 doc 就绪(SPA 水合/重定向可能晚于 load), 最多 10s, 就绪即续译
-        var onl=function(){fr2.removeEventListener('load',onl);var n=0;(function poll(){if(active!==tid)return;
-          var d2=null;try{d2=fr2.contentDocument||(fr2.contentWindow&&fr2.contentWindow.document);}catch(e){}
-          if(d2&&d2.documentElement){toggleTranslate();return;}
-          if(++n<20)setTimeout(poll,500);else daoToast('本页不可翻译(代理重载后仍跨源)',true);})();};
-        fr2.addEventListener('load',onl);
-        t.url=target;t._loaded=true;fr2.setAttribute('src',target);setLoading(tid,true);return;}}
+      t.__trRerouted=ru;window.__trPendTid=active;vscode.postMessage({type:'trReroute',url:ru});return;}
     daoToast('本页不可翻译(跨源)',true);return;}
   if(t)t.__trRerouted=null;
   var win=fr.contentWindow;var S=win.__daoTrans;
@@ -1510,6 +1502,15 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}
   else if(m.type==='toast'){try{daoToast(m.text||'',!!m.bad);}catch(e){}}
   else if(m.type==='translated'){try{var _tc=_trCbs[m.reqId];if(_tc){delete _trCbs[m.reqId];_tc(m.arr||null);}}catch(e){}}
+  else if(m.type==='trRerouteRes'){try{var _ttid=window.__trPendTid;window.__trPendTid=null;var _tt=_ttid?tabs[_ttid]:null;
+    if(!m.ok||!m.src||!_tt){daoToast('本页不可翻译(跨源·无同源通道)',true);}
+    else{daoToast('🌐 经同源通道重载后自动翻译…');var fr2=_tt.frame;
+      var onl=function(){fr2.removeEventListener('load',onl);var n=0;(function poll(){if(active!==_ttid)return;
+        var d2=null;try{d2=fr2.contentDocument||(fr2.contentWindow&&fr2.contentWindow.document);}catch(e){}
+        if(d2&&d2.documentElement){toggleTranslate();return;}
+        if(++n<20)setTimeout(poll,500);else daoToast('本页不可翻译(重载后仍跨源)',true);})();};
+      fr2.addEventListener('load',onl);
+      _tt.url=m.src;_tt._loaded=true;fr2.setAttribute('src',m.src);setLoading(_ttid,true);}}catch(e){}}
   else if(m.type==='winOpen'&&m.url){try{window.open(m.url,'_blank','noopener');}catch(e){}}});
 buildMenu();
 vscode.postMessage({type:'ready',mobile:MOBILE});
@@ -1990,6 +1991,15 @@ async function shellHandleMessage(sid, m) {
         await _handleShellStatus(m, send);
         return;
       }
+      case 'trReroute': {
+        // 翻译跨源自愈: 前端碰到跨源页 → 宿主选同源可达地址(Devin 站 → 同源反代相对路径; 其余 http(s) → /__web 同源代理)。
+        const ru = String(m.url || '');
+        let src = '';
+        try { src = (await _shellDevinSameOrigin(ru)) || ''; } catch (e) { src = ''; }
+        if (!src && /^https?:\/\//i.test(ru) && !/^https?:\/\/(localhost|127\.0\.0\.1)[:/]/i.test(ru)) src = '/__web?u=' + encodeURIComponent(ru);
+        send({ type: 'trRerouteRes', ok: !!src, src });
+        return;
+      }
       case 'translate': {
         // 归一 · 整页翻译(对照手机 APK TranslateBridge): 宿主做 HTTP → Edge 免费引擎(无 key·国内可直连)。
         const reqId = String(m.reqId || ''); if (!reqId) return;
@@ -2376,6 +2386,20 @@ function _wireMultiPanel(panel) {
       if (m.type === "openExternal" && m.url) {
         if (m.hist) { try { _pushMultiHist(m.url, m.label || m.url, "web"); panel.webview.postMessage({ type: "history", list: _getMultiHist() }); } catch (e) {} }
         try { await vscode.env.openExternal(vscode.Uri.parse(m.url)); } catch (e) {}
+        return;
+      }
+      if (m.type === "trReroute" && m.url) {
+        // 翻译跨源自愈(webview): Devin 站 → 主口同源反代绝对地址; 其余 http(s) → /__web 绝对地址。
+        const ru = String(m.url || "");
+        let src = "";
+        try {
+          const rel = await _shellDevinSameOrigin(ru);
+          let base = "";
+          try { if (_cloudProvider && typeof _cloudProvider.webUrl === "function") { const probe = _cloudProvider.webUrl("https://x") || ""; const mm = probe.match(/^https?:\/\/[^/]+/i); if (mm) base = mm[0]; } } catch (e) {}
+          if (rel && base) src = base + rel;
+          else if (/^https?:\/\//i.test(ru) && !/^https?:\/\/(localhost|127\.0\.0\.1)[:/]/i.test(ru)) { try { src = (_cloudProvider && _cloudProvider.webUrl(ru)) || ""; } catch (e) {} }
+        } catch (e) {}
+        try { panel.webview.postMessage({ type: "trRerouteRes", ok: !!src, src }); } catch (e) {}
         return;
       }
       if (m.type === "openWebTab" && m.url) {
@@ -13279,7 +13303,8 @@ async function handleWebviewMessage(msg) {
       // v4.16.0 · 对话级直达: 对话追踪行「IDE内多实例」→ 直接开此对话(注入该号登录)的 IDE 标签
       case "convRouteToIde": {
         const email = String(msg.email || "").trim();
-        const did = String(msg.devinId || "").trim();
+        // Ask/ada 查询 id(非 devin- 前缀)无 /sessions/<id> 页 → 降级开该号主页(仍可用)
+        const did = (function (v) { return /^devin-/.test(v) ? v : ""; })(String(msg.devinId || "").trim());
         if (!email) break;
         _toast("⏳ 此对话→IDE · " + email.split("@")[0]);
         try {
@@ -13294,7 +13319,8 @@ async function handleWebviewMessage(msg) {
       // v4.16.0 · 对话级直达: 对话追踪行「浏览器多实例」→ 独立隔离实例直开此对话(注入该号登录)
       case "convOpenSysBrowser": {
         const email = String(msg.email || "").trim();
-        const did = String(msg.devinId || "").trim();
+        // Ask/ada 查询 id(非 devin- 前缀)无 /sessions/<id> 页 → 降级开该号主页(仍可用)
+        const did = (function (v) { return /^devin-/.test(v) ? v : ""; })(String(msg.devinId || "").trim());
         if (!email) break;
         const who = email.split("@")[0];
         _toast("⏳ 此对话→系统浏览器 · " + who);

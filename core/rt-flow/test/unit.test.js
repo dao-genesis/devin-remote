@@ -1293,6 +1293,37 @@ function test(name, fn) {
     assert.deepStrictEqual(cloud.resolveSwitchActivation(false, false), { activate: false, degraded: false });
   });
 
+  // ── 对话追踪首行幽灵 (Ask/ada 查询: status=finished 却被判 running · 且无 devin_id) ──
+  console.log("\n[对话追踪 · Ask/ada 幽灵行修复]");
+  test("classifySession: 顶层 status=finished (ada 查询) → finished 终态, 不再判 running", () => {
+    assert.strictEqual(cloud.classifySession({ session_type: "ada", query_id: "-ask_x", status: "finished" }), "finished");
+    assert.strictEqual(cloud.classifySession({ status: "done" }), "finished");
+    assert.strictEqual(cloud.classifySession({ status: "completed" }), "finished");
+  });
+  test("devin_cloud.js: _extractDevinId 广谱候选须含 query_id (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "devin_cloud.js"], ["..", "..", "dao-vsix", "rtflow", "devin_cloud.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/function _extractDevinId\(/.test(src), rel.join("/") + " 须有 _extractDevinId 广谱提取");
+      assert.ok(/s\.query_id/.test(src), rel.join("/") + " 候选字段须含 query_id (ada 查询无 devin_id)");
+    }
+  });
+
+  // ── 整页翻译跨源自愈: 宿主选同源地址 (旧: 前端自拼 /__web?u= → 点译白屏) ──
+  console.log("\n[整页翻译 · 跨源白屏修复]");
+  test("extension.js: 翻译跨源重载须走宿主 trReroute, 前端不再自拼 /__web?u= (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/type:'trReroute'/.test(src), rel.join("/") + " 前端跨源须 postMessage trReroute 问宿主");
+      assert.ok(/trRerouteRes/.test(src), rel.join("/") + " 须处理宿主回包 trRerouteRes");
+      assert.ok(/case 'trReroute':/.test(src), rel.join("/") + " /shell 宿主须有 trReroute 处理");
+      assert.ok(!/t\.__trRerouted=ru;daoToast\('🌐 经站内代理重载后自动翻译…'\)/.test(src), rel.join("/") + " 旧病灶(前端自拼 /__web 重载)须已移除");
+      // Devin 站优先同源反代相对路径(ES module CORS 之避), 其余 http(s) 才走 /__web
+      assert.ok(/_shellDevinSameOrigin\(ru\)/.test(src), rel.join("/") + " 宿主须先试 Devin 同源反代路径");
+    }
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
