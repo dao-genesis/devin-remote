@@ -14560,6 +14560,41 @@ function fixS3DualstackUrl(u: string): string {
     return u;
 }
 
+// ═══ 附件字节·宿主代取(免浏览器直连 S3) ═══════════════════════════════════════
+// 附件 307 落点是 S3 预签名 URL: 浏览器直连受 CORS(无 ACAO 头·SPA fetch 必败)与国内
+//   到 AWS 的劣质路由双重制约。正解: 宿主服务端跟随重定向代取字节, 同源回吐(无 CORS),
+//   并按 uuid 路径落 L1/L2 缓存(附件不可变) → 首取之后任何端秒开。
+function _fetchAttachmentBytes(rawUrl: string, hops: number): Promise<{ status: number; ct: string; buf: Buffer } | null> {
+    return new Promise((resolve) => {
+        try {
+            if (hops > 3) return resolve(null);
+            const su = new URL(fixS3DualstackUrl(rawUrl));
+            const rq = https.request({
+                hostname: su.hostname, port: 443, path: su.pathname + su.search, method: 'GET',
+                headers: { 'User-Agent': 'Mozilla/5.0', Host: su.hostname }, rejectUnauthorized: false,
+            }, (rs: any) => {
+                const sc = rs.statusCode || 0;
+                if (sc >= 300 && sc < 400 && rs.headers['location']) {
+                    rs.resume();
+                    resolve(_fetchAttachmentBytes(String(rs.headers['location']), hops + 1));
+                    return;
+                }
+                const chunks: Buffer[] = [];
+                // 逐块滑动空转闸(非总时长闸): 国内到 S3 路由慢但仍在流动, 只要字节在来就不掐。
+                let idle: any = null;
+                const arm = () => { try { if (idle) clearTimeout(idle); } catch { /* 守柔 */ } idle = setTimeout(() => { try { rq.destroy(); } catch { /* 守柔 */ } resolve(null); }, 60000); };
+                arm();
+                rs.on('data', (c: Buffer) => { chunks.push(c); arm(); });
+                rs.on('end', () => { try { if (idle) clearTimeout(idle); } catch { /* 守柔 */ } resolve({ status: sc || 200, ct: String(rs.headers['content-type'] || 'application/octet-stream'), buf: Buffer.concat(chunks) }); });
+                rs.on('error', () => { try { if (idle) clearTimeout(idle); } catch { /* 守柔 */ } resolve(null); });
+            });
+            rq.on('error', () => resolve(null));
+            rq.end();
+        } catch { resolve(null); }
+    });
+}
+const _ATT_BODY_CACHE_MAX = 16 * 1024 * 1024; // 单附件落盘上限
+
 const _attCookieCache = new Map<string, { cookie: string; mintAt: number }>();
 const _attCookieInflight = new Map<string, Promise<string>>();
 const _ATT_COOKIE_TTL = 9 * 60 * 1000;
@@ -14700,6 +14735,12 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
         const hit = staticAssetCache.get(cacheKey) || staticCacheGetDisk(cacheKey);
         if (hit) return { _proxy: true, status: hit.status, headers: hit.headers, body: hit.body, contentType: hit.contentType, binary: hit.binary };
     }
+    // 附件不变(uuid 键) → 同样享 L1/L2 (键不分 localBase: 字节与回链无关)
+    const attCacheKey = 'att|' + targetPath.split('?')[0];
+    if (_isAttachPath && (req.method || 'GET') === 'GET') {
+        const hit = staticAssetCache.get(attCacheKey) || staticCacheGetDisk(attCacheKey);
+        if (hit) return { _proxy: true, status: hit.status, headers: hit.headers, body: hit.body, contentType: hit.contentType, binary: hit.binary };
+    }
 
     // 帛书·「执天之行」: 预读请求体 — 必须在 https.request 之前读取并据此设 Content-Length。
     // 否则 proxyReq.write 无 Content-Length 走 chunked 编码, app.devin.ai 网关挂起 → 15s 超时。
@@ -14729,6 +14770,22 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                 // 缺陷4修复: 处理3xx重定向 — 改写Location头指向代理
                 if (proxyRes.statusCode && proxyRes.statusCode >= 300 && proxyRes.statusCode < 400) {
                     const location = proxyRes.headers['location'] || '';
+                    // 附件 307 落点是 S3 预签名 URL: 宿主代取字节同源回吐(免浏览器直连 S3 的 CORS/路由双制约), 并落不变缓存。
+                    if (_isAttachPath && location && /\.amazonaws\.com\//i.test(location) && (req.method || 'GET') === 'GET') {
+                        proxyRes.resume();
+                        _fetchAttachmentBytes(location, 0).then((got) => {
+                            if (got && got.status >= 200 && got.status < 300 && got.buf.length) {
+                                const b64 = got.buf.toString('base64');
+                                const hdrs = { 'Content-Type': got.ct, 'Cache-Control': 'public, max-age=31536000, immutable' };
+                                if (got.buf.length <= _ATT_BODY_CACHE_MAX) staticCachePut(attCacheKey, { status: 200, headers: hdrs, body: b64, contentType: got.ct, binary: true });
+                                resolve({ _proxy: true, status: 200, headers: hdrs, body: b64, contentType: got.ct, binary: true });
+                            } else {
+                                // 代取失败 → 退回原重定向(浏览器自行尝试, 好过无响应)
+                                resolve({ _proxy: true, status: 307, headers: { 'Location': fixS3DualstackUrl(location) }, body: '', contentType: 'text/html' });
+                            }
+                        });
+                        return;
+                    }
                     if (location) {
                         // 改写重定向URL: app.devin.ai / api / backend → 同源代理(本地或公网隧道, 随 localBase)
                         const rewritten = fixS3DualstackUrl(location)

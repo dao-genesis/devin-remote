@@ -84,6 +84,47 @@ function fixS3DualstackUrl(u) {
   return u;
 }
 
+// 附件字节·宿主代取(免浏览器直连 S3): 307 落点是 S3 预签名 URL, 浏览器直连受 CORS(无 ACAO 头)
+//   与国内到 AWS 劣质路由双制约。宿主服务端跟随重定向边取边吐(同源·无 CORS), 并按 uuid 路径
+//   落不变缓存(L2 磁盘) → 首取之后任何端秒开。逐块滑动空转闸: 字节在流就不掩。
+const _ATT_BODY_CACHE_MAX = 16 * 1024 * 1024;
+function _streamAttachment(rawUrl, res, cacheKey, hops) {
+  if (hops > 3) { try { res.writeHead(502); res.end(); } catch {} return; }
+  let su;
+  try { su = new URL(fixS3DualstackUrl(rawUrl)); } catch { try { res.writeHead(502); res.end(); } catch {} return; }
+  const rq = https.request({
+    hostname: su.hostname, port: 443, path: su.pathname + su.search, method: "GET",
+    headers: { "User-Agent": DEVIN_UA, Host: su.hostname }, rejectUnauthorized: false,
+  }, (rs) => {
+    const sc = rs.statusCode || 0;
+    if (sc >= 300 && sc < 400 && rs.headers["location"]) {
+      rs.resume();
+      _streamAttachment(String(rs.headers["location"]), res, cacheKey, hops + 1);
+      return;
+    }
+    const ct = rs.headers["content-type"] || "application/octet-stream";
+    const hdrs = { "Content-Type": ct, "Cache-Control": "public, max-age=31536000, immutable" };
+    if (rs.headers["content-length"]) hdrs["Content-Length"] = rs.headers["content-length"];
+    try { res.writeHead(sc || 200, hdrs); } catch {}
+    const chunks = [];
+    let total = 0;
+    let idle = null;
+    const arm = () => { try { if (idle) clearTimeout(idle); } catch {} idle = setTimeout(() => { try { rq.destroy(); } catch {} try { res.end(); } catch {} }, 60000); };
+    arm();
+    rs.on("data", (c) => { arm(); total += c.length; if (total <= _ATT_BODY_CACHE_MAX) chunks.push(c); try { res.write(c); } catch {} });
+    rs.on("end", () => {
+      try { if (idle) clearTimeout(idle); } catch {}
+      try { res.end(); } catch {}
+      if (cacheKey && sc >= 200 && sc < 300 && total > 0 && total <= _ATT_BODY_CACHE_MAX) {
+        _diskPut(cacheKey, { status: 200, headers: { "Content-Type": ct, "Cache-Control": "public, max-age=31536000, immutable" }, body: Buffer.concat(chunks) }, "");
+      }
+    });
+    rs.on("error", () => { try { if (idle) clearTimeout(idle); } catch {} try { res.end(); } catch {} });
+  });
+  rq.on("error", () => { try { res.writeHead(502); res.end(); } catch {} });
+  rq.end();
+}
+
 const _attachCookie = new Map();      // key → { cookie, mintAt }
 const _attachMintInflight = new Map(); // key → Promise (单飞防铸造风暴)
 const _ATTACH_TTL = 9 * 60 * 1000;
@@ -720,6 +761,17 @@ async function handleRequest(req, res, auth, opts, _log) {
     }
   }
 
+  // 附件不变(uuid 键) → L2 磁盘缓存命中即直发(免上游 + 免 S3)。键不含 query。
+  const _attCacheKey = "att|" + u.pathname;
+  if ((req.method === "GET" || !req.method) && /\/attachments\//i.test(targetPath)) {
+    const attHit = await _diskGet(_attCacheKey);
+    if (attHit) {
+      res.writeHead(attHit.status, attHit.headers);
+      res.end(attHit.body);
+      return;
+    }
+  }
+
   let reqBody = Buffer.alloc(0);
   if (req.method && req.method !== "GET" && req.method !== "HEAD") {
     reqBody = await readBody(req);
@@ -775,6 +827,12 @@ async function handleRequest(req, res, auth, opts, _log) {
       // 3xx 重定向 → 改写 Location 指回本地代理。
       if (status >= 300 && status < 400) {
         let loc = proxyRes.headers["location"] || "";
+        // 附件 307 落点 S3 → 宿主代取边流边吐 + 落不变缓存(免浏览器直连 S3)。
+        if (_isAttachPath && loc && /\.amazonaws\.com\//i.test(loc) && (req.method === "GET" || !req.method)) {
+          proxyRes.resume();
+          _streamAttachment(loc, res, _attCacheKey, 0);
+          return;
+        }
         if (loc) {
           loc = fixS3DualstackUrl(loc)
             .split(DEVIN_APP).join(localBase)
