@@ -71,6 +71,19 @@ function setBridgeServe(fn) { _bridgeServe = (typeof fn === "function") ? fn : n
 //   图片显示不了、视频放不了」(手机端因 WebView 层已代铸 Cookie 故正常)。反代须同样代铸
 //   Cookie 并按 /attachments/ 转发, 401 时重铸重试一次(自愈)。Cookie 组织级作用域 →
 //   缓存键按 orgId(无 org 回落 auth1 前缀), 保守判活 9min(不透明 token 无 exp 可解)。
+// ═══ S3 dualstack 域国内 DNS 污染适配 ═══════════════════════════════════════════
+// 实测(国内网): `*.s3.dualstack.<region>.amazonaws.com` 被解析到伪 IP → 连接黑洞,
+//   附件 307 跳转后取不到字节(图片/视频/下载全断)。同桶非 dualstack 域解析正常。
+//   预签名 SigV2(host 不入签)换域签名仍有效; SigV4(X-Amz-Signature, host 入签)原样放行。
+function fixS3DualstackUrl(u) {
+  try {
+    if (u && /\.s3\.dualstack\.[a-z0-9-]+\.amazonaws\.com\//i.test(u) && !/X-Amz-Signature=/i.test(u)) {
+      return u.replace(/\.s3\.dualstack\.([a-z0-9-]+)\.amazonaws\.com\//i, ".s3.$1.amazonaws.com/");
+    }
+  } catch {}
+  return u;
+}
+
 const _attachCookie = new Map();      // key → { cookie, mintAt }
 const _attachMintInflight = new Map(); // key → Promise (单飞防铸造风暴)
 const _ATTACH_TTL = 9 * 60 * 1000;
@@ -763,7 +776,7 @@ async function handleRequest(req, res, auth, opts, _log) {
       if (status >= 300 && status < 400) {
         let loc = proxyRes.headers["location"] || "";
         if (loc) {
-          loc = loc
+          loc = fixS3DualstackUrl(loc)
             .split(DEVIN_APP).join(localBase)
             .split(DEVIN_WS + "/").join(localBase + "/__ws/")
             .split(DEVIN_REG + "/").join(localBase + "/__reg/")
