@@ -1224,6 +1224,7 @@ public class MainActivity extends AppCompatActivity {
                     installBackspaceGuard(v);   // 退格护栏: 拦下输入法误发的左右两侧同删
                     installVideoFit(v);         // 录像播放器窄屏适配: 视频区与步骤栏纵向堆叠同屏
                     installMediaRetry(v);       // 媒体加载自愈: 附件/对象存储直链瞬断→退避自动重载
+                    installAttachmentPrefetch(v); // 附件预热: DOM 一出现附件即后台整取落盘 → 首次点开即秒开
                     harvestPageAuth(v, tab, u); // 非账号标签从页面登录态采收 auth → 媒体代取可用
                     warmAttachmentCookie(tab.auth1, tab.orgId, u);   // 预铸附件 Cookie → 首次图片/视频即已授权
                     if (tab.translated) applyTranslate(v); // 翻译态跨页保持
@@ -1238,7 +1239,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
+                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -2403,6 +2404,10 @@ public class MainActivity extends AppCompatActivity {
     private static final long MEDIA_CACHE_MAX_ONE = 300L * 1024 * 1024;
     private static final java.util.Set<String> sMediaFetching =
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+    // 整取下载走固定 3 线程池: 预热一次可能同时看到几十个附件, 每个开一条裸线程会挤爆弱网带宽
+    //   (互相抢带宽 → 全部超时半途而废), 有界并发让逐个落盘稳定完成。
+    private static final java.util.concurrent.ExecutorService sMediaPfPool =
+            java.util.concurrent.Executors.newFixedThreadPool(3, r -> { Thread t = new Thread(r, "media-cache"); t.setDaemon(true); return t; });
     static File mediaCacheDir() {
         try {
             android.content.Context ctx = HttpBridge.appCtx;
@@ -2493,7 +2498,7 @@ public class MainActivity extends AppCompatActivity {
         final File dst = new File(dir, key + ".bin");
         if (dst.exists()) return;
         if (!sMediaFetching.add(key)) return;
-        new Thread(() -> {
+        sMediaPfPool.execute(() -> {
             java.net.HttpURLConnection c = null;
             File tmp = new File(dir, key + ".part");
             try {
@@ -2523,7 +2528,7 @@ public class MainActivity extends AppCompatActivity {
                 if (c != null) try { c.disconnect(); } catch (Exception ignored) {}
                 sMediaFetching.remove(key);
             }
-        }, "media-cache").start();
+        });
     }
     /** LRU 限容: 超额时从最久未用的缓存逐个剔除。 */
     static void mediaCacheTrim(File dir) {
@@ -3955,6 +3960,30 @@ public class MainActivity extends AppCompatActivity {
             + "try{if(t>0)el.currentTime=t;if(playing&&el.play)el.play().catch(function(){});}catch(e){}});}"
             + "}catch(e){}},[1500,4000,9000][n]||9000);"
             + "}catch(e){}},true);"
+            + "}catch(e){}})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    // 附件预热: Devin 对话页的图片/视频往往在用户滚到/点开时才被渲染器请求 → 首见必然走网络(慢/弱网即卡)。
+    //   此处在页面侧装 MutationObserver: DOM 一出现 /attachments/ 链接(img/video/source/a·含未入视口的),
+    //   即发 1 字节 Range 探测请求 —— 它经 shouldInterceptRequest 触发 mediaCachePrefetch 后台整取落盘,
+    //   用户真正点开时已命中磁盘缓存秒开。同源 fetch 零 CORS 问题; 限并发 2·每页去重·上限 300。
+    static void installAttachmentPrefetch(WebView w) {
+        if (w == null) return;
+        String js = "(function(){try{if(window.__daoPf)return;"
+            + "if(location.host!=='app.devin.ai')return;window.__daoPf=1;"
+            + "var seen={},q=[],act=0,total=0;"
+            + "function pump(){while(act<2&&q.length){var u=q.shift();act++;"
+            + "fetch(u,{headers:{'Range':'bytes=0-0'},cache:'no-store'}).catch(function(){}).then(function(){act--;pump();});}}"
+            + "function add(u){try{if(!u)return;var i=u.indexOf('/attachments/');if(i<0)return;"
+            + "if(u.indexOf('http')===0&&u.indexOf('app.devin.ai')<0)return;"
+            + "var p=u.split('#')[0];if(seen[p]||total>=300)return;seen[p]=1;total++;q.push(p);pump();}catch(e){}}"
+            + "function scan(root){try{var els=(root.querySelectorAll?root:document).querySelectorAll("
+            + "'img[src*=\"/attachments/\"],video[src*=\"/attachments/\"],video[poster*=\"/attachments/\"],"
+            + "source[src*=\"/attachments/\"],a[href*=\"/attachments/\"]');"
+            + "for(var i=0;i<els.length;i++){var el=els[i];add(el.src||'');add(el.href||'');add(el.poster||'');}}catch(e){}}"
+            + "var T=null;function later(){clearTimeout(T);T=setTimeout(function(){scan(document);},800);}"
+            + "new MutationObserver(later).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['src','href','poster']});"
+            + "scan(document);"
             + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
