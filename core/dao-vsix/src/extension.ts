@@ -1343,14 +1343,14 @@ async function startServer(context: vscode.ExtensionContext) {
                 }
                 return;
             }
-            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify(result, null, 2));
         } catch (err: any) {
             if (err.message === 'unauthorized') {
-                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
                 res.end(JSON.stringify({ error: 'unauthorized' }));
             } else if (err.message === 'not found') {
-                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
                 res.end(JSON.stringify({ error: 'not found', available: [
                     '/api/health', '/api/connection', '/api/workspace', '/api/exec', '/api/command',
                     '/api/file', '/api/write', '/api/search', '/api/edit',
@@ -1361,7 +1361,7 @@ async function startServer(context: vscode.ExtensionContext) {
                     '/devin-cloud/*', '/api/devin/*'
                 ]}));
             } else {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
                 res.end(JSON.stringify({ error: err.message || String(err) }));
             }
         }
