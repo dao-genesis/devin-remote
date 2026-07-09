@@ -188,14 +188,15 @@ function makeEnv(opts) {
   ok(/installDownloadHook\(v\); installKbHelper\(v\); installBackspaceGuard\(v\);/.test(mainSrc), "退格护栏: SPA 路由后重装 (doUpdateVisitedHistory)");
   {
     const bsg = mainSrc.slice(mainSrc.indexOf("installBackspaceGuard(WebView w)"), mainSrc.indexOf("// 语音输入根治"));
-    ok(/beforeinput/.test(bsg) && /stopImmediatePropagation/.test(bsg) && /data-slate-editor/.test(bsg), "退格根治 v4: 捕获层 sIP 拦下 slate 删除类 beforeinput (Slate 二次记账)");
-    ok(!/selectionchange/.test(bsg), "退格根治 v4: 无 selectionchange 光标干预");
-    ok(/NotFoundError/.test(bsg), "退格根治 v4: 保留白屏兜底");
+    ok(/beforeinput/.test(bsg) && /stopImmediatePropagation/.test(bsg) && /data-slate-editor/.test(bsg), "退格根治 v5: 捕获层 sIP 拦下 slate 删除类 beforeinput (Slate 二次记账)");
+    ok(/getTargetRanges/.test(bsg) && /__reactFiber/.test(bsg) && /set_selection/.test(bsg), "退格根治 v5: 删除落地后经 fiber 取 editor 归正模型光标 (二阶连锁之解)");
+    ok(!/selectionchange/.test(bsg), "退格根治 v5: 无 selectionchange 光标干预");
+    ok(/NotFoundError/.test(bsg), "退格根治 v5: 保留白屏兜底");
   }
   // ── 源级护栏: 重加号消幽灵 (doAdd 落 addedAt + 立即镜像金库·不被回拉覆盖) ──
   ok(/addedAt:Date\.now\(\)/.test(switchSrc), "doAdd 落 addedAt (重加号 24h 免移出保护)");
   ok(/saveAcc\(accs\); try\{ mirrorAccountsToVault\(\); \}catch\(e\)\{\}/.test(switchSrc), "doAdd 后立即镜像金库 (重加号不被金库回拉抓回幽灵态)");
-  ok(/window\.__rtBsGuard4\)return/.test(mainSrc), "退格护栏: 幂等守卫 v4");
+  ok(/window\.__rtBsGuard5\)return/.test(mainSrc), "退格护栏: 幂等守卫 v5");
 
   // ── 源级护栏: 拖拽提取取数链归一 (与「下MD」同源同路 + 头部-only 拒注入 + 旧降级腿已移除 + 引擎自动登录解锁) ──
   ok(/fastPanelExtractInject\(sid, accJson, target, x, y, fallback\)/.test(mainSrc), "取数归一: engineExtractInject 只走 本地备份→面板快路径(与下MD同源)");

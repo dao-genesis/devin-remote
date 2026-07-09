@@ -3729,25 +3729,39 @@ public class MainActivity extends AppCompatActivity {
             + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
-    // 退格根治 v4(AVD+受控测试输入法+CDP 全链路实证的唯一真根源): 一次退格左右两侧同删
-    //   = Slate Android 路径对同一记删除的「双重记账」。链路: IME 发 deleteSurroundingText(1,0)
-    //   → Chromium 落为不可取消的 beforeinput(deleteContentBackward) 并直改 DOM(删左侧字符)
-    //   → Slate 的 MutationObserver 对账把这次 DOM 变更收编进模型(第一次记账·正确)
-    //   → Slate 的 beforeinput 处理器又调度一次模型删除(第二次记账) → 第二刀落在光标右侧。
-    //   修法(最小干预): document 捕获阶段对 deleteContentBackward/Forward 一律
-    //   stopImmediatePropagation —— 浏览器原生 DOM 删除照常发生, Slate 经 MutationObserver
-    //   对账收编(单次·正确), 只是不再收到 beforeinput、不再重复调度模型删除。
-    //   AVD 实测: 中英文提交/拼音组合/连续退格/中段退格全部单删且模型与 DOM 一致。
-    //   (v2 之败在于同时拦 input+光标归位, 掐断了 MutationObserver 对账; 此处只拦 beforeinput,
-    //   对账链路完整保留。)另保留 React removeChild/insertBefore NotFoundError 白屏兜底。
-    //   幂等(window.__rtBsGuard4)。
+    // 退格根治 v5(AVD+受控测试输入法+CDP 全链路实证·在 v4 上闭环二阶连锁):
+    //   根源不变(v4 已实证): 一次退格左右同删 = Slate Android 路径对同一记删除「双重记账」
+    //   (Chromium 直改 DOM + Slate beforeinput 处理器再删一刀) → 捕获阶段 stopImmediatePropagation
+    //   拦下二次记账。但 v4 只拦不补: Slate 模型 selection 从此失养, 后续对账/重渲把光标甩到段尾,
+    //   引发三大二阶病灶(真机实录+AVD 复现): ①中段退格后光标跳末尾 ②末尾退格键盘割裂
+    //   ③长按连删时后续删除落在错位光标上→整段误删。
+    //   修法(既止双删又养模型): 拦截时先从 beforeinput.getTargetRanges() 取删除区起点的
+    //   全文绝对偏移(TreeWalker 数文本), input 落地后经 React fiber 取到 Slate editor 实例,
+    //   把偏移映射回模型点(path,offset), editor.apply(set_selection) 直接归正模型光标 ——
+    //   DOM 与模型双同步, 重渲不再甩尾, 连删各刀各归其位, 键盘会话无扰。
+    //   AVD 实测: 中段单删光标定格删除点、连发 6 刀快删(模拟长按)逐字左删无整段误删、
+    //   删到空再续输键盘不收(mInputShown=true 恒持), 拼音组合/中文提交回归全通过。
+    //   另保留 React removeChild/insertBefore NotFoundError 白屏兜底。幂等(window.__rtBsGuard5)。
     static void installBackspaceGuard(WebView w) {
         if (w == null) return;
-        String js = "(function(){if(window.__rtBsGuard4)return;window.__rtBsGuard4=1;"
+        String js = "(function(){if(window.__rtBsGuard5)return;window.__rtBsGuard5=1;"
+            + "function absOff(ed,node,off){var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n,a=0;while((n=w.nextNode())){if(n===node)return a+off;a+=n.length;}return -1;}"
+            + "function getEditor(ed){var k=Object.keys(ed).find(function(x){return x.indexOf('__reactFiber')===0});if(!k)return null;var f=ed[k],d=0;while(f&&d<60){var p=f.memoizedProps;if(p&&p.editor&&typeof p.editor.apply==='function')return p.editor;f=f.return;d++;}return null;}"
+            + "function absToPoint(editor,abs){var out=[];(function walk(node,path){if(typeof node.text==='string'){out.push({path:path,len:node.text.length});return;}(node.children||[]).forEach(function(c,i){walk(c,path.concat(i))});})({children:editor.children},[]);var a=0;for(var i=0;i<out.length;i++){if(a+out[i].len>=abs)return{path:out[i].path,offset:abs-a};a+=out[i].len;}var l=out[out.length-1];return l?{path:l.path,offset:l.len}:null;}"
+            + "var pend=null;"
             + "document.addEventListener('beforeinput',function(e){"
             + "var t=e.inputType;if(t!=='deleteContentBackward'&&t!=='deleteContentForward')return;"
             + "var a=e.target;if(!(a&&a.getAttribute&&a.getAttribute('data-slate-editor')==='true'))return;"
+            + "var tr=e.getTargetRanges&&e.getTargetRanges();"
+            + "pend=(tr&&tr[0])?{ed:a,abs:absOff(a,tr[0].startContainer,tr[0].startOffset)}:null;"
             + "e.stopImmediatePropagation();},true);"
+            + "document.addEventListener('input',function(e){"
+            + "var t=e.inputType;if(t!=='deleteContentBackward'&&t!=='deleteContentForward')return;"
+            + "var a=e.target;if(!(a&&a.getAttribute&&a.getAttribute('data-slate-editor')==='true'))return;"
+            + "if(!pend||pend.ed!==a||pend.abs<0){pend=null;return;}"
+            + "var abs=pend.abs;pend=null;var editor=getEditor(a);if(!editor)return;"
+            + "var fix=function(){try{var pt=absToPoint(editor,abs);if(!pt)return;editor.apply({type:'set_selection',properties:editor.selection,newProperties:{anchor:pt,focus:pt}});}catch(_){}};"
+            + "Promise.resolve().then(fix);setTimeout(fix,60);setTimeout(fix,180);},true);"
             + "if(!window.__rtDomSafe){window.__rtDomSafe=1;"
             + "var rc=Node.prototype.removeChild,ib=Node.prototype.insertBefore;"
             + "Node.prototype.removeChild=function(c){try{return rc.apply(this,arguments);}catch(e){if(e&&e.name==='NotFoundError')return c;throw e;}};"
@@ -4550,7 +4564,11 @@ public class MainActivity extends AppCompatActivity {
         try {
             Uri u = resolveOpenUri(path, uri); if (u == null) { toast("文件已不存在"); return; }
             Intent i = new Intent(Intent.ACTION_SEND);
-            String mt = (mime == null || mime.isEmpty()) ? "*/*" : mime;
+            // 目标齐平系统文件管理器: 媒体类型保留具体 MIME(微信等按 image/video/audio 过滤出更优入口),
+            // 其余(md/zip/txt 等)一律 */* —— 具体文档类 MIME(如 text/markdown)会把未声明该类型的
+            // 微信/QQ 等从分享面板整个过滤掉
+            String mt = (mime == null || mime.isEmpty() || "*/*".equals(mime)) ? guessMime(new File(path).getName()) : mime;
+            if (!(mt.startsWith("image/") || mt.startsWith("video/") || mt.startsWith("audio/"))) mt = "*/*";
             i.setType(mt);
             i.putExtra(Intent.EXTRA_STREAM, u);
             i.putExtra(Intent.EXTRA_SUBJECT, new File(path).getName());
