@@ -2830,16 +2830,19 @@ async function _routeAccountToIde(i) {
     if (!(_switching && Date.now() - _switchingStartTime < 10000)) {
       try { await loginAccount(_store, i); } catch {}
     }
+    // 登录取号后 auth1 已入缓存 → 重试自足反代(命中缓存即秒开·仍留在 IDE 内)。
+    try {
+      const r2 = await openMultiInstance({ email: a.email, password: a.password });
+      if (r2 && r2.ok) { _toast("🖥 已注入登录态·IDE标签已开 · " + a.email.split("@")[0]); return; }
+    } catch (e) {}
     try {
       await vscode.commands.executeCommand("dao.routeOfficialForAccount", { email: a.email, mode: "ide" });
-    } catch {
-      try {
-        await vscode.commands.executeCommand("simpleBrowser.show", "https://app.devin.ai");
-      } catch {
-        await vscode.env.openExternal(vscode.Uri.parse("https://app.devin.ai"));
-      }
+      _toast("🖥 已路由官网→IDE(兜底) · " + a.email.split("@")[0]);
+    } catch (e) {
+      // 「路由官网→IDE」永不跳系统浏览器: 未注入的外部官网页毫无意义(掉登录), 只会造成
+      // 「点 IDE 却弹出外面」的错乱。打不开就明说, 让用户重试或改用系统浏览器按钮。
+      _toast("✗ IDE 内路由失败(该号登录未取到) · 请重试或改用「系统浏览器」按钮 · " + a.email.split("@")[0]);
     }
-    _toast("🖥 已路由官网→IDE(兜底) · " + a.email.split("@")[0]);
   } catch (e) {
     _toast("✗ 路由失败: " + (e && e.message));
   }
