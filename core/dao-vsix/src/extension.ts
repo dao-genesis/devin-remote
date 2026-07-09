@@ -3084,7 +3084,7 @@ async function daoCdpEnsureChrome() {
         ...(process.platform !== 'win32' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
         daoBrowserHomeUrl(),
     ];
-    try { const child = childProcess.spawn(exe, args, { detached: true, stdio: 'ignore' }); child.unref(); } catch (e) { throw new Error('chrome-spawn: ' + (e && e.message)); }
+    try { const child = childProcess.spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: true }); child.unref(); } catch (e) { throw new Error('chrome-spawn: ' + (e && e.message)); }
     for (let i = 0; i < 40; i++) { await daoMcpSleep(250); try { return await daoCdpHttpGet('/json/version'); } catch (e11) { /* 等就绪 */ } }
     // 自起隔离 Chrome 未就绪(权限/沙箱/损坏): 退而复用宿主已运行的 Chrome CDP, 守柔不致全失。
     const reused = await daoCdpTryReuseExisting();
@@ -9212,7 +9212,7 @@ function launchIsolatedBrowser(targetUrl: string, profileKey: string): boolean {
                 '--new-window',
                 targetUrl,
             ];
-            const child = cp.spawn(exe, args, { detached: true, stdio: 'ignore' });
+            const child = cp.spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: true });
             child.unref();
             return true;
         }
