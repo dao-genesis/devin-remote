@@ -3779,7 +3779,13 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             const uaMobile = /Android|iPhone|iPad|iPod|Mobile|Silk|Kindle|BlackBerry|Opera Mini|IEMobile|webOS/i.test(ua);
             const mobile = mOverride === '1' ? true : (mOverride === '0' ? false : uaMobile);
             let html = '';
-            try { html = (rtint && typeof rtint.getStandaloneShellHtml === 'function') ? rtint.getStandaloneShellHtml({ token: ws.token, port: ws.port, mobile }) : ''; } catch (e) { html = ''; }
+            // 双重兜底: 把全部公网源(Worker 恒定地址 + CF 快速隧道)注入页面 DAO_ALTS ——
+            //   当前源持续打不通时页面自行探活备用源并整页转移(参照手机 APK 多路失效转移)。
+            const shellAlts: string[] = [];
+            try { const pr = getPersistentRelayUrl(); if (pr) shellAlts.push(pr); } catch { /* 守柔 */ }
+            try { const bc = readBridgeConn(); if (bc && bc.url) shellAlts.push(String(bc.url).replace(/\/+$/, '')); } catch { /* 守柔 */ }
+            if (ws.publicUrl) shellAlts.push(String(ws.publicUrl).replace(/\/+$/, ''));
+            try { html = (rtint && typeof rtint.getStandaloneShellHtml === 'function') ? rtint.getStandaloneShellHtml({ token: ws.token, port: ws.port, mobile, alts: dedupeUrls(shellAlts) }) : ''; } catch (e) { html = ''; }
             if (!html) html = '<!DOCTYPE html><meta charset="utf-8"><body style="font:14px sans-serif;padding:24px;background:#0e1116;color:#cdd3de">归一外壳未就绪 · rt-flow 多实例模块未加载</body>';
             return { _proxy: true, status: 200, contentType: 'text/html; charset=utf-8', body: html };
         }
@@ -6857,13 +6863,12 @@ function rBridgeRelayCard(r){
     h+='<div class="cr"><span class="l">授权方式</span><span class="v" style="font-size:10px">'+esc(authTxt)+'</span></div>';
     if(r.deployedAt)h+='<div class="cr"><span class="l">部署于</span><span class="v" style="font-size:10px">'+esc(r.deployedAt)+'</span></div>';
     h+='</div>';
-    // 持久通道控制台 · 一排全功能按钮(复制地址/复制Token/接入信息/重启/刷新Token/重建/删除)。
-    h+='<div class="br"><button class="btn sm primary" onclick="cmd(&#39;copyRelayUrl&#39;)">📋 复制地址</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;copyRelayToken&#39;)" title="复制持久通道鉴权 Token(Bearer)">🔑 复制 Token</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;copyRelayInfo&#39;)" title="复制完整接入信息: 中继地址 + Token + 去中心化 mesh 兜底">🧾 接入信息</button>';
-    h+='<button class="btn sm" onclick="cmd(&#39;relayRestart&#39;)" title="重启持久通道连接(断开重连·不重部署)">🔄 重启 Worker</button>';
+    // 持久通道控制台 · 为学者日益闻道者日损 — 与下方快速通道同构归一:
+    //   复制地址/复制Token/接入信息 三合一 → 「复制接入信息」; 重启/重建 二合一 → 「重启 Worker」(连不上后端自动升级重建)。
+    h+='<div class="br"><button class="btn sm primary" onclick="cmd(&#39;copyBridgeShell&#39;)" title="复制公网单页地址(/shell)·双重兜底: Worker 恒定地址为主·快速通道自动兜底·任意浏览器打开即用">🌐 复制公网单页网址</button>';
+    h+='<button class="btn sm primary" onclick="cmd(&#39;copyRelayInfo&#39;)" title="一键复制完整接入信息: 恒定地址 + Token + Auth 头 + 快速通道/mesh 兜底">📋 复制接入信息</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;relayOAuthRefresh&#39;)" title="刷新 Token: 用 refresh_token 续期并重部署 Worker(自愈·轮换令牌)"'+(r.oauth?'':' disabled style="opacity:.5"')+'>↻ 刷新 Token</button>';
-    h+='<button class="btn sm" onclick="if(confirm(&#39;重建 Worker: 先撤销并删除现通道, 再重新登录全自动打通。确认?&#39;))cmd(&#39;relayRebuild&#39;)" title="完全清理后从零重建持久 Worker 通道" style="background:#b8860b;color:#fff">🛠 重建 Worker</button>';
+    h+='<button class="btn sm" onclick="cmd(&#39;relayRestart&#39;)" title="重启 Worker 通道(断开重连); 连不上则自动升级为从零重建·后端自愈">🔄 重启 Worker</button>';
     h+='<button class="btn sm danger" onclick="if(confirm(&#39;撤销 Cloudflare 授权并删除本持久通道，回退到快速隧道/mesh？&#39;))cmd(&#39;relayOAuthLogout&#39;)">🗑 删除通道/切号</button></div>';
   } else {
     h+='<div class="card"><div style="font-size:11px;color:var(--muted);margin-bottom:6px">想要<b style="color:var(--fg)">永不漂的固定公网地址</b>？点下面按钮 → 浏览器打开 Cloudflare 登录页 → 点一次授权即可。后端<b style="color:var(--fg)">全自动</b>注册 Token、部署 Worker、落盘并置顶接管，<b style="color:var(--fg)">无需手搓 Token</b>；令牌到期自动续期，出问题自愈。</div>';
@@ -7625,12 +7630,17 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             // 归一 · 复制「实时公网单页地址」(<url>/shell · 免 token) — 在任意电脑/手机浏览器打开即可操作整个六合一面板。
+            //   双重兜底: 主链接优先用持久化 Worker 恒定地址(永不漂·链接长期有效), 快速隧道作 ?dao_alt= 备用源;
+            //   无 Worker 时用快速隧道为主。页面侧探活失效自动转移, 任一通道死不影响使用。
             case 'copyBridgeShell': {
+                const relay = getPersistentRelayUrl();
                 const c = readBridgeConn();
-                const base = (c && c.url)
+                const quick = (c && c.url)
                     ? String(c.url).replace(/\/+$/, '')
-                    : (ws.publicUrl ? String(ws.publicUrl).replace(/\/+$/, '') : ('http://localhost:' + (ws.port || DEFAULT_PORT)));
-                const u = base + '/shell';
+                    : (ws.publicUrl ? String(ws.publicUrl).replace(/\/+$/, '') : '');
+                const base = relay || quick || ('http://localhost:' + (ws.port || DEFAULT_PORT));
+                const alt = (relay && quick && quick !== relay) ? quick : '';
+                const u = base + '/shell' + (alt ? ('?dao_alt=' + encodeURIComponent(alt)) : '');
                 await vscode.env.clipboard.writeText(u);
                 reply({ type: 'actionResult', command: 'copyBridgeShell', ok: !!u });
                 break;
@@ -8895,10 +8905,14 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             case 'copyRelayInfo': {
-                // 接入信息: 中继地址 + Token + 去中心化 mesh 兜底, 一并组装复制(交给云端 Agent 即可接管)。
+                // 接入信息三合一(原 复制地址/复制Token/接入信息 归一): 恒定地址 + Token + Auth 头
+                //   + 公网单页 + 快速通道兜底 + mesh 兜底, 一并组装复制(交给云端 Agent 即可接管)。
                 const url = getPersistentRelayUrl() || '';
                 const tk = bridgeAuthoritativeToken() || ws.token || '';
                 const rs = bridgeRelayState();
+                const bc = readBridgeConn();
+                const quickUrl = (bc && bc.url && String(bc.url).replace(/\/+$/, '') !== url) ? String(bc.url).replace(/\/+$/, '') : '';
+                const shellBase = url || quickUrl;
                 const lines = [
                     '# DAO Bridge · 持久化通道 (Worker 中继) 接入信息',
                     '',
@@ -8908,6 +8922,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     '鉴权方式: ' + (rs.oauth ? 'OAuth(自动续期)' : (rs.auth === 'token' ? 'API Token' : '已登记')),
                     '健康:     ' + (rs.healthy ? '就绪' : '边缘传播中'),
                     (rs.deployedAt ? '部署于:   ' + rs.deployedAt : ''),
+                    (quickUrl ? '快速通道: ' + quickUrl + ' (互为备份·同 Token 同 API)' : ''),
+                    (shellBase ? '公网单页: ' + shellBase + '/shell' + (url && quickUrl ? ('?dao_alt=' + encodeURIComponent(quickUrl)) : '') + ' (免 token · 双重兜底)' : ''),
                     '',
                     '## 去中心化路线C(mesh 兜底)',
                     '即使 Worker 与快速隧道同时全挂, 仍可经公共 ntfy pub/sub 加密直达(载荷 AES-256-GCM)。',
@@ -8920,13 +8936,23 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 break;
             }
             case 'relayRestart': {
-                // 重启 Worker: 断开现有中继连接并重连(不重部署), 持久 Worker 通道即重新置顶接管。
+                // 重启/重建二合一: 先断开重连(不重部署); 连不上 = Worker 本体已坏 → 自动升级为从零重建
+                //   (撤销+清态 → 重新登录全自动打通) — 后端承担升级决策, 用户只需一个按钮。
                 const url = getPersistentRelayUrl() || '';
                 if (!url) { vscode.window.showWarningMessage('暂无持久通道可重启'); reply({ type: 'actionResult', command: 'relayRestart', ok: false }); break; }
                 vscode.window.showInformationMessage('DAO 持久通道: 正在重启连接(断开重连·置顶接管)…');
                 const r = await daoRelaySetPersistent(url);
-                vscode.window[r.ok ? 'showInformationMessage' : 'showErrorMessage']('DAO 持久通道: ' + (r.ok ? ('✓ 已重启 ' + (r.healthy ? '(就绪)' : '(传播中)')) : ('重启失败: ' + (r.error || ''))));
-                refreshReply({ type: 'actionResult', command: 'relayRestart', ok: !!r.ok });
+                if (r.ok) {
+                    vscode.window.showInformationMessage('DAO 持久通道: ✓ 已重启 ' + (r.healthy ? '(就绪)' : '(传播中)'));
+                    refreshReply({ type: 'actionResult', command: 'relayRestart', ok: true });
+                    break;
+                }
+                vscode.window.showWarningMessage('DAO 持久通道: 重启未成功(' + (r.error || '') + '), 自动升级为重建(删除现通道 → 重新登录打通)…');
+                try { await daoRelayOAuthLogout(); } catch { /* 守柔: 清态失败也继续尝试重建 */ }
+                const rb = await daoRelayOAuthLogin();
+                if (rb.ok && rb.url) { try { await vscode.env.clipboard.writeText(rb.url); } catch { /* 守柔 */ } vscode.window.showInformationMessage('重建: 登录链接已打开(并复制)。授权后后端将全自动重新部署并置顶接管。'); }
+                else vscode.window.showErrorMessage('DAO 持久通道重建失败: ' + (rb.error || '未知错误'));
+                refreshReply({ type: 'actionResult', command: 'relayRestart', ok: !!rb.ok, rebuilt: true, url: rb.url, error: rb.error });
                 break;
             }
             case 'relayRebuild': {

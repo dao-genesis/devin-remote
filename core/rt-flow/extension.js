@@ -1540,11 +1540,26 @@ if(MOBILE){try{openBoard('switch');}catch(e){}}
 const SHELL_HTTP_SHIM = "(function(){"
   + "var SID='sh_'+Math.random().toString(36).slice(2)+Date.now().toString(36);"
   + "var _st={};var lastSeq=0;var gotAny=false;var polling=false;"
+  // 双重兜底(参照手机 APK P2P/中继多路失效转移): 当前源持续打不通 → 探测备用公网源(Worker 恒定地址
+  //   / CF 快速隧道, 由宿主注入 DAO_ALTS + 链接携带 ?dao_alt=), 探活成功即整页跳转到备用源 /shell 续用。
+  + "var _foFails=0,_foT=0,_foBusy=false;"
+  + "function _foAlts(){var a=[];try{(window.DAO_ALTS||[]).forEach(function(u){a.push(u);});}catch(e){}"
+  + "try{var qa=new URLSearchParams(location.search).get('dao_alt');if(qa)a.push(qa);}catch(e){}"
+  + "var seen={},out=[];a.forEach(function(u){u=String(u||'').replace(/\\/+$/,'');if(!/^https?:\\/\\//i.test(u))return;"
+  + "if(u.toLowerCase()===String(location.origin).toLowerCase())return;if(seen[u])return;seen[u]=1;out.push(u);});return out;}"
+  + "function _foOk(){_foFails=0;_foT=0;}"
+  + "function _foTry(){if(_foBusy)return;var alts=_foAlts();if(!alts.length)return;_foBusy=true;"
+  + "(function next(i){if(i>=alts.length){_foBusy=false;_foFails=0;_foT=0;return;}var base=alts[i];"
+  + "fetch(base+'/api/health',{mode:'no-cors'}).then(function(){"
+  + "var m='';try{m=new URLSearchParams(location.search).get('m')||'';}catch(e){}"
+  + "location.replace(base+'/shell?dao_alt='+encodeURIComponent(location.origin)+(m?('&m='+m):''));"
+  + "}).catch(function(){next(i+1);});})(0);}"
+  + "function _foFail(){_foFails++;if(!_foT)_foT=Date.now();if(_foFails>=6&&(Date.now()-_foT)>15000)_foTry();}"
   + "function post(m){try{fetch('/api/shell/msg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:SID,msg:m})}).catch(function(){});}catch(e){}}"
   + "function apply(m){if(!m)return;if(typeof m._q==='number'){if(m._q<=lastSeq)return;lastSeq=m._q;}gotAny=true;"
   + "if(m.type==='__copy'){try{navigator.clipboard.writeText(m.text||'');}catch(e){}return;}"
   + "try{window.postMessage(m,'*');}catch(e){}}"
-  + "function pollLoop(){fetch('/api/shell/poll?sid='+encodeURIComponent(SID)+'&after='+lastSeq).then(function(r){return r.json();}).then(function(j){if(j){if(typeof j.last==='number'&&j.last<lastSeq){lastSeq=0;}if(j.msgs){j.msgs.forEach(apply);}}setTimeout(pollLoop,40);}).catch(function(){setTimeout(pollLoop,2000);});}"
+  + "function pollLoop(){fetch('/api/shell/poll?sid='+encodeURIComponent(SID)+'&after='+lastSeq).then(function(r){return r.json();}).then(function(j){_foOk();if(j){if(typeof j.last==='number'&&j.last<lastSeq){lastSeq=0;}if(j.msgs){j.msgs.forEach(apply);}}setTimeout(pollLoop,40);}).catch(function(){_foFail();setTimeout(pollLoop,2000);});}"
   + "function startPoll(){if(polling)return;polling=true;pollLoop();}"
   + "window.acquireVsCodeApi=function(){return{postMessage:function(m){try{"
   + "if(m&&m.type==='openExternal'&&m.url){window.open(m.url,'_blank');return;}"
@@ -1557,14 +1572,20 @@ const SHELL_HTTP_SHIM = "(function(){"
   + "startPoll();"
   + "})();";
 // 直出独立外壳: 复用 _multiShellHtml, 放开 CSP 的 connect-src(同源 fetch/SSE) 并注入 HTTP 传输垫片。
+//   opts.alts: 备用公网源列表(Worker 恒定地址 / CF 快速隧道) — 注入 DAO_ALTS 供双重兜底失效转移;
+//   connect-src 放开 https:(仅用于对备用源 /api/health 的 no-cors 探活)。
 function _standaloneShellHtml(opts) {
   opts = opts || {};
   let html = _multiShellHtml({ mobile: !!opts.mobile });
   html = html.replace(
     /<meta http-equiv="Content-Security-Policy"[^>]*>/i,
-    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; connect-src \'self\' http://localhost:* http://127.0.0.1:*; img-src data: https: http://localhost:* http://127.0.0.1:*; frame-src blob: \'self\' http://localhost:* http://127.0.0.1:*;">'
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; connect-src \'self\' https: http://localhost:* http://127.0.0.1:*; img-src data: https: http://localhost:* http://127.0.0.1:*; frame-src blob: \'self\' http://localhost:* http://127.0.0.1:*;">'
   );
-  const shim = '<scr' + 'ipt>' + SHELL_HTTP_SHIM + '</scr' + 'ipt>';
+  const alts = (Array.isArray(opts.alts) ? opts.alts : [])
+    .map((u) => String(u || '').replace(/\/+$/, ''))
+    .filter((u) => /^https?:\/\//i.test(u))
+    .slice(0, 4);
+  const shim = '<scr' + 'ipt>window.DAO_ALTS=' + JSON.stringify(alts) + ';' + SHELL_HTTP_SHIM + '</scr' + 'ipt>';
   html = html.replace(/<head([^>]*)>/i, '<head$1>' + shim);
   return html;
 }
