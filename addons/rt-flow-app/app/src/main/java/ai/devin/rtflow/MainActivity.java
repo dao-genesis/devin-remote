@@ -3729,22 +3729,23 @@ public class MainActivity extends AppCompatActivity {
             + "})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
-    // 退格根治 v5(AVD+受控测试输入法+CDP 全链路实证·在 v4 上闭环二阶连锁):
+    // 退格根治 v6(AVD+受控测试输入法+CDP 全链路实证·纯模型路线):
     //   根源不变(v4 已实证): 一次退格左右同删 = Slate Android 路径对同一记删除「双重记账」
-    //   (Chromium 直改 DOM + Slate beforeinput 处理器再删一刀) → 捕获阶段 stopImmediatePropagation
-    //   拦下二次记账。但 v4 只拦不补: Slate 模型 selection 从此失养, 后续对账/重渲把光标甩到段尾,
-    //   引发三大二阶病灶(真机实录+AVD 复现): ①中段退格后光标跳末尾 ②末尾退格键盘割裂
-    //   ③长按连删时后续删除落在错位光标上→整段误删。
-    //   修法(既止双删又养模型): 拦截时先从 beforeinput.getTargetRanges() 取删除区起点的
-    //   全文绝对偏移(TreeWalker 数文本), input 落地后经 React fiber 取到 Slate editor 实例,
-    //   把偏移映射回模型点(path,offset), editor.apply(set_selection) 直接归正模型光标 ——
-    //   DOM 与模型双同步, 重渲不再甩尾, 连删各刀各归其位, 键盘会话无扰。
-    //   AVD 实测: 中段单删光标定格删除点、连发 6 刀快删(模拟长按)逐字左删无整段误删、
-    //   删到空再续输键盘不收(mInputShown=true 恒持), 拼音组合/中文提交回归全通过。
-    //   另保留 React removeChild/insertBefore NotFoundError 白屏兜底。幂等(window.__rtBsGuard5)。
+    //   (Chromium 直改 DOM + Slate beforeinput 处理器再删一刀)。
+    //   v5 之弊(真机实录): 「先让 Chromium 落 DOM·再事后补刀归正模型光标(微任务+60/180ms)」
+    //   → Slate 重渲仍先甩尾再被拉回 —— 肉眼可见光标跳末尾又跳回、一卡一卡, 连删时补刀窗互踩。
+    //   v6 正解(反者道之动·由堵改疏): AVD 实证 WebView 的 deleteContentBackward beforeinput
+    //   cancelable=true → 直接 preventDefault 掐掉 Chromium 的 DOM 直改, 删除全权交给 Slate 模型:
+    //   getTargetRanges() 起止映射回模型点(path,offset) → set_selection → 塌缩点 deleteBackward/
+    //   deleteForward('character'), 选区则 deleteFragment。单一记账·单次重渲·选区天然正确,
+    //   零事后补刀 → 无跳动无卡顿, 与原生输入框同律。
+    //   不可取消/取不到 editor 时回退 v5 兜底(拦二次记账+落地后归正)。
+    //   AVD 实测(selectionchange 全程留痕): 连发 6 刀快删选区单调左移 8→2 无一次甩尾;
+    //   中段删/前向删/选区删/删空续输键盘不收(mInputShown=true)/拼音组合提交全通过。
+    //   另保留 React removeChild/insertBefore NotFoundError 白屏兜底。幂等(window.__rtBsGuard6)。
     static void installBackspaceGuard(WebView w) {
         if (w == null) return;
-        String js = "(function(){if(window.__rtBsGuard5)return;window.__rtBsGuard5=1;"
+        String js = "(function(){if(window.__rtBsGuard6)return;window.__rtBsGuard6=1;"
             + "function absOff(ed,node,off){var w=document.createTreeWalker(ed,NodeFilter.SHOW_TEXT),n,a=0;while((n=w.nextNode())){if(n===node)return a+off;a+=n.length;}return -1;}"
             + "function getEditor(ed){var k=Object.keys(ed).find(function(x){return x.indexOf('__reactFiber')===0});if(!k)return null;var f=ed[k],d=0;while(f&&d<60){var p=f.memoizedProps;if(p&&p.editor&&typeof p.editor.apply==='function')return p.editor;f=f.return;d++;}return null;}"
             + "function absToPoint(editor,abs){var out=[];(function walk(node,path){if(typeof node.text==='string'){out.push({path:path,len:node.text.length});return;}(node.children||[]).forEach(function(c,i){walk(c,path.concat(i))});})({children:editor.children},[]);var a=0;for(var i=0;i<out.length;i++){if(a+out[i].len>=abs)return{path:out[i].path,offset:abs-a};a+=out[i].len;}var l=out[out.length-1];return l?{path:l.path,offset:l.len}:null;}"
@@ -3753,6 +3754,18 @@ public class MainActivity extends AppCompatActivity {
             + "var t=e.inputType;if(t!=='deleteContentBackward'&&t!=='deleteContentForward')return;"
             + "var a=e.target;if(!(a&&a.getAttribute&&a.getAttribute('data-slate-editor')==='true'))return;"
             + "var tr=e.getTargetRanges&&e.getTargetRanges();"
+            + "var editor=getEditor(a);"
+            + "if(e.cancelable&&editor){"
+            + "e.preventDefault();e.stopImmediatePropagation();pend=null;"
+            + "try{"
+            + "if(tr&&tr[0]){var s=absOff(a,tr[0].startContainer,tr[0].startOffset),en=absOff(a,tr[0].endContainer,tr[0].endOffset);"
+            + "if(s>=0&&en>=0){var ps=absToPoint(editor,s),pe=absToPoint(editor,en);"
+            + "editor.apply({type:'set_selection',properties:editor.selection,newProperties:{anchor:ps,focus:pe}});"
+            + "if(s===en){t==='deleteContentBackward'?editor.deleteBackward('character'):editor.deleteForward('character');}else{editor.deleteFragment();}"
+            + "return;}}"
+            + "t==='deleteContentBackward'?editor.deleteBackward('character'):editor.deleteForward('character');"
+            + "}catch(_){}"
+            + "return;}"
             + "pend=(tr&&tr[0])?{ed:a,abs:absOff(a,tr[0].startContainer,tr[0].startOffset)}:null;"
             + "e.stopImmediatePropagation();},true);"
             + "document.addEventListener('input',function(e){"
