@@ -6636,7 +6636,7 @@ function getDaoCloudMiddlePanelHtml(st: any, soloBoard?: string): string {
     const { loggedIn, email, orgName, orgId, hasWindsurfCreds, apiKeyType, tokenType, canUseApi, port, relay, relayUrl, hostname, injecting, bridge, hostCaps } = st;
     // 归一·分而治之: 单板块模式 — 归一外壳为「六大板块」各开一张独立子网页(各自一个 iframe),
     // 每张只锁定渲染一个板块并隐藏左侧导航条 → 板块不再挤在一个全功能面板里, 真正网页套网页·平级并排。
-    const _solo = ['overview', 'switch', 'bridge', 'backups', 'inject', 'mcp', 'windows'].includes(soloBoard || '') ? (soloBoard as string) : '';
+    const _solo = ['overview', 'switch', 'bridge', 'backups', 'inject', 'mcp'].includes(soloBoard || '') ? (soloBoard as string) : '';
     // 帛书·「道生一，一生二，二生三，三生万物」
     // Overview: Codeium API 数据（已工作 — devin-session-token$ 对 Codeium API 有效）
     // Sessions/Knowledge/Secrets/Integrations: simpleBrowser 打开 app.devin.ai（共享 Electron session）
@@ -6732,7 +6732,6 @@ body.solo .sb{display:none}
 <div class="ni" data-tab="inject" onclick="sw('inject')" title="反向注入 · 全账号批量(Knowledge/Playbook/Secret/MCP/自动化/蓝图 一处整合)">💉</div>
 <!-- ② 收腰归一: 单账号 K/P/S/Git/自动化/蓝图 均并入主页(overview); 全账号批量在反向注入(inject); MCP 仍保留专用面板 -->
 <div class="ni" data-tab="mcp" onclick="sw('mcp')" title="MCP 服务器 · 专用面板">🧩</div>
-<div class="ni" data-tab="windows" onclick="sw('windows')" title="Windows 总控 · 远程桌面连接管理 + 本机账号 + 子板块(第7板块)">🪟</div>
 
 <div class="sp"></div>
 <div class="ni" onclick="cmd('refresh')" title="Refresh">⟳</div>
@@ -6753,7 +6752,6 @@ body.solo .sb{display:none}
 <div class="tv" id="v-mcp"></div>
 <div class="tv" id="v-bridge"></div>
 <div class="tv" id="v-inject"></div>
-<div class="tv" id="v-windows"></div>
 
 </div>
 <div class="ft" id="ft">
@@ -6817,7 +6815,6 @@ function sw(t){
   if(t==='inject'){ cmd('getInjectProfile'); cmd('loadTabData',{tab:'secrets'}); return; }
   if(t==='switch'){ if(!S._wamReady){ var _sv=document.getElementById('v-switch'); if(_sv&&!document.getElementById('wamFrame'))_sv.innerHTML='<div class="empty"><div class="ic">🔀</div><p style="color:var(--muted)">加载切号面板…</p></div>'; wamKick(); } return; }
   if(t==='bridge'){ rBridgeFull(); return; }
-  if(t==='windows'){ rWindows(); return; }
   if(t==='backups'){ rBackups(); return; }
   if(t!=='overview'&&S.auth.loggedIn){
     const v=document.getElementById('v-'+t);
@@ -6836,12 +6833,12 @@ function sw(t){
     }
   }
 }
-function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull();if(S.tab==='windows')rWindows()}
+function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull()}
 // 帛书·「见小曰明」: 凭证就绪后(login/autoAcquire 使 canUseApi 转真), 当前数据 tab 仍停在「获取凭证」占位
 // (该占位故意不标记 loaded) — 此处自动重载, 拉取真实数据, 用户无需再次点击。
 function reloadActiveDataTab(){
   var t=S.tab;
-  if(t==='overview'||t==='bridge'||t==='inject'||t==='switch'||t==='backups'||t==='windows')return;
+  if(t==='overview'||t==='bridge'||t==='inject'||t==='switch'||t==='backups')return;
   if(!S.auth.loggedIn||!S.auth.canUseApi)return;
   var v=document.getElementById('v-'+t);
   if(!v||v.dataset.loaded)return;
@@ -7040,75 +7037,6 @@ function bridgeCfLogin(){var e=document.getElementById('cfEmail'),k=document.get
 // 兜底通道·单一接口: 贴 API Token → 后端全自动 provision 持久 Worker(+尽力绑定凭证/命名隧道)。
 function relayTokenGo(){var k=document.getElementById('cfKey');var token=k?k.value.trim():'';if(!token){toast('请先贴入 Cloudflare API Token',false);return}toast('全自动打通中…(取账号→部署 Worker→落盘置顶, 约 1-2 分钟)',true);cmd('relayProvisionToken',{token:token})}
 function bridgeExec(){var c=document.getElementById('bridgeCmd');var v=c?c.value.trim():'';if(!v)return;var o=document.getElementById('bridgeOut');if(o)o.textContent='执行中…';cmd('bridgeExec',{cmd:v})}
-// ── 第7板块 · 🪟 Windows 总控 (远程桌面连接管理 + 本机账号 + 子板块) ──
-//   本源: 把整台 Windows 做进 IDE — 主页统领 RDP 连接配置(常规/显示/本地资源/体验/高级 全收编)、
-//   本机 Windows 账号盘点、以及 FreeCAD/KiCad/嘉立创EDA/智能家居 等可装可卸的子板块(类 VS Code 插件)。
-function rWindows(){
-  var v=document.getElementById('v-windows');if(!v)return;
-  if(!S.windows){v.innerHTML='<div class="empty"><div class="ic">🪟</div><p style="margin:8px 0;color:var(--muted)">正在读取 Windows 总控数据…</p></div>';cmd('winInfo');return}
-  rWindowsData(S.windows);
-}
-function rWindowsData(d){
-  S.windows=d;
-  var v=document.getElementById('v-windows');if(!v||S.tab!=='windows')return;
-  var isWin=(d.platform==='win32');
-  var h='<div class="st">🪟 Windows 总控 · 第7板块</div>';
-  h+='<div class="card" style="font-size:11px;color:var(--muted)">道并行而不相悖 · 把整台 Windows 桌面路由进 IDE：本页统领 <b style="color:var(--fg)">远程桌面连接</b>(官方 mstsc 全配置收编)、<b style="color:var(--fg)">本机账号</b> 与 <b style="color:var(--fg)">子板块</b>(FreeCAD / KiCad / 嘉立创EDA / 智能家居, 类 VS Code 插件可装可卸)。</div>';
-  h+='<div class="card"><div class="cr"><span class="l">主机</span><span class="v">'+esc(d.host||'—')+'</span></div>';
-  h+='<div class="cr"><span class="l">当前用户</span><span class="v">'+esc(d.user||'—')+'</span></div>';
-  h+='<div class="cr"><span class="l">系统</span><span class="v">'+esc(d.os||'—')+(isWin?'':' <span style="color:var(--warn)">(非 Windows · RDP 启动降级)</span>')+'</span></div></div>';
-  // ── RDP 连接管理 ──
-  h+='<div class="st" style="margin-top:14px">🖥️ 远程桌面连接 · RDP 配置管理 <button class="btn sm primary" style="float:right;margin-top:-3px" onclick="winRdpEdit()">➕ 新建连接</button></div>';
-  var rdp=d.rdp||[];
-  if(!rdp.length)h+='<div class="card" style="font-size:11px;color:var(--muted)">暂无已保存的连接 — 点「➕ 新建连接」创建。官方远程桌面 常规/显示/本地资源/体验/高级 各页配置均已收编为表单字段, 保存即生成标准 .rdp 文件。</div>';
-  for(var i=0;i<rdp.length;i++){var p=rdp[i];
-    h+='<div class="card"><div class="cr"><span class="l">'+esc(p.name)+'</span><span class="v">'+esc(p.host)+(p.port&&p.port!==3389?(':'+p.port):'')+(p.username?(' · '+esc(p.username)):'')+'</span></div>';
-    h+='<div style="font-size:10px;color:var(--muted);margin:2px 0 6px">'+(p.fullscreen?'全屏':((p.width||1920)+'×'+(p.height||1080)))+' · '+(p.bpp||32)+'位色 · 剪贴板'+(p.clipboard!==false?'✓':'✗')+' · 驱动器'+(p.drives?'✓':'✗')+' · 打印机'+(p.printers?'✓':'✗')+(p.admin?' · 管理会话':'')+'</div>';
-    h+='<div class="br"><button class="btn sm primary" onclick="cmd(&#39;winRdpLaunch&#39;,{name:&#39;'+esc(p.name)+'&#39;})">▶ 连接</button>';
-    h+='<button class="btn sm" onclick="winRdpEdit(&#39;'+esc(p.name)+'&#39;)">✏ 编辑</button>';
-    h+='<button class="btn sm danger" onclick="if(confirm(&#39;删除连接 '+esc(p.name)+'?&#39;))cmd(&#39;winRdpDelete&#39;,{name:&#39;'+esc(p.name)+'&#39;})">删</button></div></div>';
-  }
-  // ── 本机 Windows 账号 ──
-  h+='<div class="st" style="margin-top:14px">👥 本机 Windows 账号 <button class="btn sm ghost" style="float:right;margin-top:-3px" onclick="S.windows=null;rWindows()">⟳ 刷新</button></div>';
-  var accs=d.accounts||[];
-  if(!accs.length)h+='<div class="card" style="font-size:11px;color:var(--muted)">'+(isWin?'未读取到本机账号':'非 Windows 主机 — 账号盘点仅在用户 Windows 机上可用')+'</div>';
-  for(var a=0;a<accs.length;a++){var u=accs[a];
-    h+='<div class="card"><div class="cr"><span class="l">'+esc(u.name)+(u.session?' <span class="tag session">会话 '+esc(u.session)+'</span>':'')+'</span><span class="v" style="color:'+(u.enabled?'var(--success)':'var(--muted)')+'">'+(u.enabled?'● 启用':'○ 禁用')+(u.active?' · 活动':'')+'</span></div>'+(u.lastLogon?'<div style="font-size:10px;color:var(--muted)">上次登录 '+esc(u.lastLogon)+'</div>':'')+'</div>';
-  }
-  // ── 子板块 (类 VS Code 插件 · 可装可卸) ──
-  h+='<div class="st" style="margin-top:14px">🧩 子板块 · 专用领域模块 <button class="btn sm ghost" style="float:right;margin-top:-3px" onclick="cmd(&#39;winRevealDir&#39;,{which:&#39;subplugins&#39;})">📁 打开目录</button></div>';
-  h+='<div class="card" style="font-size:11px;color:var(--muted)">樸散則為器 · 一份描述符(spec JSON)= 一个子板块：放入 <code>~/.dao/subplugins/</code> 即被自动收编为 @领域层, AI 经其纵深操作对应软件(FreeCAD 建模 / KiCad·嘉立创 PCB / Home Assistant 智能家居)。</div>';
-  var subs=d.subplugins||[];
-  for(var s=0;s<subs.length;s++){var sp=subs[s];
-    h+='<div class="card"><div class="cr"><span class="l">'+esc(sp.name||sp.id)+(sp.mention?' <span class="tag devin">@'+esc(sp.mention)+'</span>':'')+'</span><span class="v" style="color:'+(sp.installed?'var(--success)':'var(--muted)')+'">'+(sp.installed?'✓ 已安装':'未安装')+'</span></div>';
-    h+='<div style="font-size:10px;color:var(--muted);margin:2px 0">'+esc(sp.desc||'')+(sp.verbs?(' · '+sp.verbs+' 个动词'):'')+(sp.endpoint?(' · '+esc(sp.endpoint)):'')+'</div>';
-    if(!sp.installed&&sp.repo)h+='<div style="font-size:10px;color:var(--muted)">源仓库: '+esc(sp.repo)+' — 部署其驱动后写入描述符即装</div>';
-    h+='</div>';
-  }
-  v.innerHTML=h;
-}
-// RDP 连接编辑弹窗 — 官方远程桌面五页配置(常规/显示/本地资源/体验/高级)收编为一张表单。
-function winRdpEdit(name){
-  var p=(name&&(S.windows&&S.windows.rdp||[]).find(function(x){return x.name===name}))||{name:'',host:'',port:3389,username:'',fullscreen:true,width:1920,height:1080,bpp:32,audio:true,clipboard:true,drives:false,printers:false,autoreconnect:true,admin:false};
-  var ck=function(id,on,lb){return '<label style="font-size:11px;display:inline-flex;align-items:center;gap:4px;margin:4px 10px 4px 0"><input type="checkbox" id="'+id+'"'+(on?' checked':'')+'>'+lb+'</label>'};
-  var b='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">常规</div>';
-  b+='<input id="w1" value="'+esc(p.name)+'" placeholder="连接名称" '+(name?'disabled':'')+' style="width:100%;margin:3px 0">';
-  b+='<input id="w2" value="'+esc(p.host)+'" placeholder="计算机 (主机名或 IP)" style="width:70%;margin:3px 0"> <input id="w3" value="'+(p.port||3389)+'" placeholder="端口" style="width:26%;margin:3px 0">';
-  b+='<input id="w4" value="'+esc(p.username||'')+'" placeholder="用户名 (可选)" style="width:100%;margin:3px 0">';
-  b+='<div style="font-size:11px;color:var(--muted);margin:8px 0 4px">显示</div>';
-  b+=ck('w5',p.fullscreen!==false,'全屏')+' <input id="w6" value="'+(p.width||1920)+'" placeholder="宽" style="width:20%"> × <input id="w7" value="'+(p.height||1080)+'" placeholder="高" style="width:20%"> <select id="w8" style="width:30%"><option value="32"'+((p.bpp||32)===32?' selected':'')+'>32位色</option><option value="24"'+(p.bpp===24?' selected':'')+'>24位色</option><option value="16"'+(p.bpp===16?' selected':'')+'>16位色</option></select>';
-  b+='<div style="font-size:11px;color:var(--muted);margin:8px 0 4px">本地资源</div>';
-  b+=ck('w9',p.audio!==false,'音频')+ck('wa',p.clipboard!==false,'剪贴板')+ck('wb',!!p.drives,'驱动器')+ck('wc',!!p.printers,'打印机');
-  b+='<div style="font-size:11px;color:var(--muted);margin:8px 0 4px">体验 / 高级</div>';
-  b+=ck('wd',p.autoreconnect!==false,'断线自动重连')+ck('we',!!p.admin,'管理会话 (/admin)');
-  sm((name?'✏ 编辑':'➕ 新建')+' RDP 连接',b,function(){
-    var nm=document.getElementById('w1').value.trim();var hs=document.getElementById('w2').value.trim();
-    if(!nm||!hs){toast('名称与计算机地址必填',false);return false}
-    var g=function(id){return document.getElementById(id)};
-    cmd('winRdpSave',{profile:{name:nm,host:hs,port:parseInt(g('w3').value)||3389,username:g('w4').value.trim(),fullscreen:g('w5').checked,width:parseInt(g('w6').value)||1920,height:parseInt(g('w7').value)||1080,bpp:parseInt(g('w8').value)||32,audio:g('w9').checked,clipboard:g('wa').checked,drives:g('wb').checked,printers:g('wc').checked,autoreconnect:g('wd').checked,admin:g('we').checked}});
-    toast('保存中…',true);
-  });
-}
 // 问题②③ · 备份板块: 全账号×全对话备份成果 + 查看/下载 (路由 rt-flow 同源备份 · 纯本地·免 cog_ key)
 function rBackups(){
   var v=document.getElementById('v-backups');if(!v)return;
@@ -7342,7 +7270,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets()}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='windowsData'){rWindowsData(d)}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets()}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -7775,109 +7703,6 @@ function refreshDaoCloudMiddlePanel() {
     postMiddle(data);
 }
 
-// ── 第7板块 · 🪟 Windows 总控 宿主侧 (RDP 配置管理 + 本机账号盘点 + 子板块清单) ──
-const WIN_RDP_DIR = path.join(DAO_DIR, 'rdp');
-const WIN_SUBPLUGIN_DIR = path.join(DAO_DIR, 'subplugins');
-// 子板块目录(catalog): 已有专用仓库的领域模块 — 安装 = 将其驱动包成描述符放入 ~/.dao/subplugins/。
-const WIN_SUBPLUGIN_CATALOG = [
-    { id: 'freecad', name: 'FreeCAD · 3D 建模', mention: 'freecad', desc: 'AI 纵深操作 FreeCAD 参数化建模', repo: 'Dao-3D-Modeling-Agent' },
-    { id: 'kicad', name: 'KiCad · PCB 设计', mention: 'kicad', desc: '原理图/布线/制造文件全流程', repo: 'Dao-PCB-Design-Agent' },
-    { id: 'jlceda', name: '嘉立创EDA · PCB 设计', mention: 'jlceda', desc: '嘉立创EDA 专业版驱动', repo: 'Dao-PCB-Design-Agent' },
-    { id: 'homeassistant', name: 'Home Assistant · 智能家居', mention: 'ha', desc: '状态/服务调用/自动化管理', repo: 'ha-copilot' },
-];
-function winRdpProfiles(): any[] {
-    try {
-        if (!fs.existsSync(WIN_RDP_DIR)) return [];
-        return fs.readdirSync(WIN_RDP_DIR).filter(f => f.endsWith('.json')).map(f => {
-            try { return JSON.parse(fs.readFileSync(path.join(WIN_RDP_DIR, f), 'utf8')); } catch { return null; }
-        }).filter(Boolean);
-    } catch { return []; }
-}
-// 官方 mstsc .rdp 文件生成 — 常规/显示/本地资源/体验/高级 五页配置全收编。
-function winRdpFileContent(p: any): string {
-    const L: string[] = [];
-    L.push('full address:s:' + p.host + ((p.port && p.port !== 3389) ? (':' + p.port) : ''));
-    if (p.username) L.push('username:s:' + p.username);
-    L.push('screen mode id:i:' + (p.fullscreen !== false ? 2 : 1));
-    L.push('desktopwidth:i:' + (p.width || 1920));
-    L.push('desktopheight:i:' + (p.height || 1080));
-    L.push('session bpp:i:' + (p.bpp || 32));
-    L.push('audiomode:i:' + (p.audio !== false ? 0 : 2));
-    L.push('redirectclipboard:i:' + (p.clipboard !== false ? 1 : 0));
-    L.push('drivestoredirect:s:' + (p.drives ? '*' : ''));
-    L.push('redirectprinters:i:' + (p.printers ? 1 : 0));
-    L.push('autoreconnection enabled:i:' + (p.autoreconnect !== false ? 1 : 0));
-    if (p.admin) L.push('administrative session:i:1');
-    L.push('networkautodetect:i:1');
-    L.push('connection type:i:7');
-    L.push('compression:i:1');
-    L.push('smart sizing:i:1');
-    L.push('authentication level:i:2');
-    L.push('prompt for credentials:i:' + (p.username ? 0 : 1));
-    return L.join('\r\n') + '\r\n';
-}
-function winRdpSafeName(name: string): string { return String(name || '').replace(/[^\w\u4e00-\u9fff.-]/g, '_').slice(0, 64); }
-// 本机 Windows 账号盘点: Get-LocalUser(启用/上次登录) + quser(活动会话) — 非 Windows 优雅降空。
-async function winListAccounts(): Promise<any[]> {
-    if (process.platform !== 'win32') return [];
-    const run = (cmd: string) => new Promise<string>(res => {
-        childProcess.exec(cmd, { timeout: 8000, windowsHide: true }, (_e: any, out: string) => res(String(out || '')));
-    });
-    const accounts: any[] = [];
-    try {
-        const raw = await run('powershell -NoProfile -NonInteractive -Command "Get-LocalUser | Select-Object Name,Enabled,LastLogon | ConvertTo-Json -Compress"');
-        const j = JSON.parse(raw.trim() || '[]');
-        for (const u of (Array.isArray(j) ? j : [j])) {
-            accounts.push({ name: u.Name, enabled: !!u.Enabled, lastLogon: u.LastLogon ? String(u.LastLogon).replace(/\/Date\((\d+)\)\//, (_m, t) => new Date(Number(t)).toLocaleString()) : '' });
-        }
-    } catch { /* 守柔 */ }
-    try {
-        const q = await run('quser');
-        for (const line of q.split('\n').slice(1)) {
-            const m = line.trim().split(/\s{2,}/);
-            if (m.length >= 2) {
-                const uname = m[0].replace(/^>/, '').trim().toLowerCase();
-                const acct = accounts.find(a => String(a.name).toLowerCase() === uname);
-                if (acct) { acct.session = m[1]; acct.active = /active|运行中/i.test(line); }
-            }
-        }
-    } catch { /* 守柔 */ }
-    return accounts;
-}
-// 子板块清单: 已安装(~/.dao/subplugins/*.json 描述符) ∪ 目录(catalog 未安装项)。
-function winListSubplugins(): any[] {
-    const installed: any[] = [];
-    try {
-        if (fs.existsSync(WIN_SUBPLUGIN_DIR)) {
-            for (const f of fs.readdirSync(WIN_SUBPLUGIN_DIR).filter(x => x.endsWith('.json'))) {
-                try {
-                    const d = JSON.parse(fs.readFileSync(path.join(WIN_SUBPLUGIN_DIR, f), 'utf8'));
-                    installed.push({ id: d.app_id || f.replace(/\.json$/, ''), name: d.name || d.app_id || f, mention: d.mention || '', verbs: Array.isArray(d.verbs) ? d.verbs.length : Object.keys(d.verbs || {}).length, endpoint: d.endpoint || d.invoke_url || '', desc: d.description || '', installed: true });
-                } catch { /* 守柔 */ }
-            }
-        }
-    } catch { /* 守柔 */ }
-    const out = installed.slice();
-    for (const c of WIN_SUBPLUGIN_CATALOG) {
-        if (!installed.some(i => String(i.id).toLowerCase().includes(c.id) || String(i.mention).toLowerCase() === c.mention)) {
-            out.push({ ...c, installed: false });
-        }
-    }
-    return out;
-}
-async function winInfoPayload(): Promise<any> {
-    return {
-        type: 'windowsData',
-        platform: process.platform,
-        host: os.hostname(),
-        user: (() => { try { return os.userInfo().username; } catch { return ''; } })(),
-        os: os.type() + ' ' + os.release() + ' · ' + os.arch(),
-        accounts: await winListAccounts(),
-        rdp: winRdpProfiles(),
-        subplugins: winListSubplugins(),
-    };
-}
-
 // 备份树缓存(秒开): loadBackups 全盘同步扫描慢, 先渲缓存树再后台重扫覆盖。
 let _backupsTreeCache: { root: string; tree: any } | null = null;
 
@@ -7885,7 +7710,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose', 'winInfo', 'winRdpSave', 'winRdpDelete', 'winRdpLaunch', 'winRevealDir'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -7925,65 +7750,6 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                         await fn({ type: 'dlRecent', perAcc: 12 }, (x: any) => { try { if (x && x.type === 'dlRecentData') reply({ type: 'recentLiveData', list: x.list || [], partial: !!x.partial }); } catch { /* 守柔 */ } });
                     } else reply({ type: 'recentLiveData', list: [], partial: false });
                 } catch { try { reply({ type: 'recentLiveData', list: [], partial: false }); } catch { /* 守柔 */ } }
-                break;
-            }
-            // ── 第7板块 · 🪟 Windows 总控 ──
-            case 'winInfo': {
-                reply(await winInfoPayload());
-                break;
-            }
-            case 'winRdpSave': {
-                const p = msg.profile || {};
-                const nm = winRdpSafeName(p.name);
-                if (!nm || !p.host) { reply({ type: 'actionResult', command: 'winRdpSave', ok: false }); break; }
-                try {
-                    fs.mkdirSync(WIN_RDP_DIR, { recursive: true });
-                    p.name = nm; p.updated = new Date().toISOString();
-                    fs.writeFileSync(path.join(WIN_RDP_DIR, nm + '.json'), JSON.stringify(p, null, 2));
-                    fs.writeFileSync(path.join(WIN_RDP_DIR, nm + '.rdp'), winRdpFileContent(p));
-                    reply({ type: 'actionResult', command: 'winRdpSave', ok: true });
-                } catch { reply({ type: 'actionResult', command: 'winRdpSave', ok: false }); }
-                reply(await winInfoPayload());
-                break;
-            }
-            case 'winRdpDelete': {
-                const nm = winRdpSafeName(msg.name);
-                try {
-                    for (const ext of ['.json', '.rdp']) { const f = path.join(WIN_RDP_DIR, nm + ext); if (fs.existsSync(f)) fs.unlinkSync(f); }
-                    reply({ type: 'actionResult', command: 'winRdpDelete', ok: true });
-                } catch { reply({ type: 'actionResult', command: 'winRdpDelete', ok: false }); }
-                reply(await winInfoPayload());
-                break;
-            }
-            case 'winRdpLaunch': {
-                const nm = winRdpSafeName(msg.name);
-                const rdpFile = path.join(WIN_RDP_DIR, nm + '.rdp');
-                if (!fs.existsSync(rdpFile)) { reply({ type: 'actionResult', command: 'winRdpLaunch', ok: false }); break; }
-                try {
-                    if (process.platform === 'win32') {
-                        childProcess.spawn('mstsc.exe', [rdpFile], { detached: true, stdio: 'ignore', windowsHide: false }).unref();
-                        reply({ type: 'actionResult', command: 'winRdpLaunch', ok: true });
-                    } else {
-                        // 非 Windows 宿主: 尝试 xfreerdp(如存在), 否则如实拒绝——不臆造成功。
-                        const probe = childProcess.spawnSync('which', ['xfreerdp'], { timeout: 3000 });
-                        if (probe.status === 0) {
-                            childProcess.spawn('xfreerdp', [rdpFile], { detached: true, stdio: 'ignore' }).unref();
-                            reply({ type: 'actionResult', command: 'winRdpLaunch', ok: true });
-                        } else {
-                            vscode.window.showWarningMessage('非 Windows 主机且未装 xfreerdp — 无法启动 RDP 客户端');
-                            reply({ type: 'actionResult', command: 'winRdpLaunch', ok: false });
-                        }
-                    }
-                } catch { reply({ type: 'actionResult', command: 'winRdpLaunch', ok: false }); }
-                break;
-            }
-            case 'winRevealDir': {
-                const dir = msg.which === 'rdp' ? WIN_RDP_DIR : WIN_SUBPLUGIN_DIR;
-                try {
-                    fs.mkdirSync(dir, { recursive: true });
-                    await vscode.env.openExternal(vscode.Uri.file(dir));
-                    reply({ type: 'actionResult', command: 'winRevealDir', ok: true });
-                } catch { reply({ type: 'actionResult', command: 'winRevealDir', ok: false }); }
                 break;
             }
             // ── 切号模块 (全功能面板第2网页 · 内嵌真 WAM 切号面板 buildHtml) ──
