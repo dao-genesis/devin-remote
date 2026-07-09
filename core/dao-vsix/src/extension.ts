@@ -1394,7 +1394,9 @@ async function startServer(context: vscode.ExtensionContext) {
         //   一条耐用隧道即暴露二合一插件全部底层(单网页公网操作全功能)。
         bridgePublishPluginApi();
         // 桥: 自动建桥 — 出站WebSocket绕过NAT
-        if (cfg.autoBridge) {
+        //   持久通道(用户已登记的恒定 Worker)一经登记即视同常开: 激活即重连,
+        //   不受已废弃的 autoBridge 开关钳制 —— 否则 IDE 重启后持久通道永不自动回连。
+        if (cfg.autoBridge || getRelayConfig().urls.length > 0) {
             connectRelay(ws.port, ws.token);
         }
         // 去中心化信令中继(路线C·零中心 ntfy): 与 cloudflared/Worker 并行的第二条公网入口, 任一 broker 活即可达
