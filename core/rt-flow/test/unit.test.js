@@ -1111,7 +1111,44 @@ function test(name, fn) {
     const ts = fs.readFileSync(path.join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts"), "utf8");
     assert.ok(/Android\|iPhone\|iPad/.test(ts), "src/extension.ts: 须按 User-Agent 判定移动端");
     assert.ok(/mOverride === '1' \? true : \(mOverride === '0' \? false : uaMobile\)/.test(ts), "src/extension.ts: 须 ?m=1/0 覆盖 UA");
-    assert.ok(/getStandaloneShellHtml\(\{ token: ws\.token, port: ws\.port, mobile \}\)/.test(ts), "src/extension.ts: 须把 mobile 传入 getStandaloneShellHtml");
+    assert.ok(/getStandaloneShellHtml\(\{ token: ws\.token, port: ws\.port, mobile, alts: dedupeUrls\(shellAlts\) \}\)/.test(ts), "src/extension.ts: 须把 mobile + alts(双重兜底源) 传入 getStandaloneShellHtml");
+  });
+
+  // ── /shell 公网单页「双重兜底」失效转移 (参照手机 APK 多路失效转移·双副本源级护栏) ──
+  // 病灶: 单页只绑一个公网源, CF 快速隧道轮换/Worker 挂掉 → 整页死链, 无法继续操作。
+  // 正法: 宿主把全部公网源注入 DAO_ALTS + 链接携带 ?dao_alt=; 页面长轮询持续失败(≥6次且>15s)
+  //   → 逐个 no-cors 探活备用源 /api/health → 探活成功即整页 location.replace 转移续用。
+  console.log("\n[/shell 双重兜底失效转移]");
+  test("/shell: DAO_ALTS 注入 + 失效转移垫片 + copyBridgeShell 双通道链接 (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      const r = rel.join("/");
+      assert.ok(/window\.DAO_ALTS='\s*\+\s*JSON\.stringify\(alts\)/.test(src), r + ": _standaloneShellHtml 须注入 window.DAO_ALTS");
+      assert.ok(/dao_alt/.test(src), r + ": 垫片须支持 ?dao_alt= 备用源");
+      assert.ok(/_foFails>=6&&\(Date\.now\(\)-_foT\)>15000/.test(src), r + ": 须持续失败(≥6次且>15s)才触发转移(防抖·本地瞬断不转移)");
+      assert.ok(/mode:'no-cors'/.test(src), r + ": 备用源探活须 no-cors fetch /api/health");
+      assert.ok(/location\.replace\(base\+'\/shell\?dao_alt='/.test(src), r + ": 探活成功须整页转移到备用源 /shell 并回携原源");
+      assert.ok(/connect-src \\'self\\' https:/.test(src), r + ": CSP connect-src 须放开 https:(供备用源探活)");
+    }
+    const ts = fs.readFileSync(path.join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts"), "utf8");
+    assert.ok(/const relay = getPersistentRelayUrl\(\);\s*\n\s*const c = readBridgeConn\(\);/.test(ts), "src/extension.ts: copyBridgeShell 须优先持久化 Worker 地址为主链接");
+    assert.ok(/'\/shell' \+ \(alt \? \('\?dao_alt=' \+ encodeURIComponent\(alt\)\) : ''\)/.test(ts), "src/extension.ts: copyBridgeShell 须携带 ?dao_alt= 快速通道兜底");
+  });
+
+  // ── Worker 持久通道控制台「为学者日益·闻道者日损」按钮归一 (与快速通道同构) ──
+  // 复制地址/复制Token/接入信息 三合一 → 复制接入信息; 重启/重建 二合一 → 重启 Worker(连不上自动升级重建)。
+  console.log("\n[Worker 控制台按钮归一]");
+  test("Worker 控制台: 三合一复制接入信息 + 重启自动升级重建 (源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    const ts = fs.readFileSync(path.join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts"), "utf8");
+    const card = ts.match(/function rBridgeRelayCard\(r\)\{[\s\S]*?\n\}/);
+    assert.ok(card, "src/extension.ts: 须有 rBridgeRelayCard");
+    assert.ok(!/copyRelayUrl&#39;\)">/.test(card[0]), "Worker 卡片: 不得再有独立「复制地址」按钮");
+    assert.ok(!/copyRelayToken/.test(card[0]), "Worker 卡片: 不得再有独立「复制 Token」按钮");
+    assert.ok(!/relayRebuild/.test(card[0]), "Worker 卡片: 不得再有独立「重建 Worker」按钮(并入重启)");
+    assert.ok(/copyRelayInfo/.test(card[0]) && /copyBridgeShell/.test(card[0]), "Worker 卡片: 须有 复制接入信息 + 复制公网单页网址");
+    assert.ok(/自动升级为重建/.test(ts), "relayRestart: 重启失败须自动升级为重建(后端自愈)");
   });
 
   // ── 反向注入「道并行而不相悖」并发收口 (跨窗口/多IDE/多账号知识库不翻倍) ──
