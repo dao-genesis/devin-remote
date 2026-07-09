@@ -172,6 +172,11 @@ function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){retu
 function toast(m,bad){ var t=document.getElementById("toast"); t.textContent=m; t.className="toast show"+(bad?" fail":" ok"); setTimeout(function(){t.className="toast";},2000); }
 function stClass(s){ s=String(s||"").toLowerCase(); if(/run|work|active/.test(s))return"running"; if(/finish|complete|done/.test(s))return"finished"; if(/block|wait|stuck/.test(s))return"blocked"; if(/expir|fail|error/.test(s))return"expired"; return""; }
 function safeName(s){ return String(s||"").replace(/[\\\/:*?"<>|]/g,"_").slice(0,120); }
+// 统一命名口径: 序号_对话名_账号_密码 (与原生拖拽 convFileBase 同构) — 一切对话记录下载/打包/投递皆此名
+function convBase(it, title){
+  var acc=(it&&it.acc)||{}; var no=(it&&it.no>0&&it.no)||(acc.no>0&&acc.no)||"";
+  return safeName([no,(title||(it&&it.title)||(it&&it.sid)),acc.email||acc.id||"",acc.password||""].filter(Boolean).join("_"));
+}
 function accList(){ try{ return DaoCore.loadAcc(); }catch(e){ return []; } }
 function hasAuth(a){ return !!(a&&a.auth1&&a.orgId); }
 function sidOf(s){ return s.devin_id||s.session_id||s.id||""; }
@@ -349,8 +354,7 @@ async function uploadConv(idx){
     try{ var r=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
          if(r&&r.ok){ md=r.md||""; title=r.title||""; } else err=(r&&r.error)||""; }catch(e){ err=""+e; }
     // 统一命名口径: 序号_对话名_账号_密码 (与原生拖拽 convFileBase 同构)
-    var acc=it.acc||{}; var no=(it.no>0&&it.no)||(acc.no>0&&acc.no)||"";
-    var base=safeName([no,(title||it.title||it.sid),acc.email||acc.id||"",acc.password||""].filter(Boolean).join("_"));
+    var base=convBase(it, title);
     var files=[];
     if(md) files.push({name:base+".md", b64:_b64utf8(md)});
     if(guide) files.push({name:base+"_取数指引.md", b64:_b64utf8(guide)});
@@ -426,7 +430,8 @@ function renderConvTabs(){
 }
 function cvDl(ti){ var t=CONV_TABS[ti]; if(!t){ toast("无内容",true); return; }
   if(!t.md){ toast("对话为空, 重新提取…"); loadConvMd(ti).then(function(){ if(CONV_TABS[ti]&&CONV_TABS[ti].md) cvDl(ti); else toast("提取失败",true); }); return; }
-  var fn=safeName(t.title||t.sid)+".md";
+  var it=null; for(var i2=0;i2<REC.length;i2++){ if(REC[i2].sid===t.sid){ it=REC[i2]; break; } }
+  var fn=(it?convBase(it, t.title):safeName(t.title||t.sid))+".md";
   try{
     if(N.saveTextFile){ var p=N.saveTextFile(fn, t.md); toast(p?"✓ 已存入系统「下载/DevinCloud」, 文件管理器可见":"下载失败", !p); }
     else if(IS_WEB){ _webSaveText(fn, t.md||"")?toast("✓ 已下载: "+fn):toast("下载失败",true); }
@@ -451,7 +456,7 @@ async function dlMd(idx){
   try{
     var r=await DaoCloud.exportSession(it.acc, it.sid, "conversation");
     if(!r.ok){ toast("提取失败: "+(r.error||""),true); return; }
-    var fn=it.no+"_"+safeName(it.acc.email||it.acc.id)+"_"+safeName(r.title||it.sid)+".md";
+    var fn=convBase(it, r.title)+".md";
     if(N.saveTextFile){ var p=N.saveTextFile(fn, r.md); toast(p?"✓ 已存入系统「下载/DevinCloud」, 文件管理器可见":"下载失败", !p); }
     else if(IS_WEB){ _webSaveText(fn, r.md||"")?toast("✓ 已下载: "+fn):toast("下载失败",true); }
     else { toast("当前版本不支持下载 · 请更新 APK",true); }
@@ -476,7 +481,7 @@ async function dlZip(idx){
       if(cf&&cf.index&&cf.index.length) files.push({name:"files/_index.json", data:JSON.stringify(cf.index,null,2)});
     }catch(e){}
     files.push({name:"_meta.json", data:JSON.stringify({account:it.acc.email,accountNo:it.no,session:it.sid,title:it.title,status:it.status,anchor:"对话_完整记录.md",exportedAt:new Date().toISOString()},null,2)});
-    var zipName=it.no+"_"+safeName(it.acc.email||it.acc.id)+"_"+safeName(it.title||it.sid)+".zip";
+    var zipName=convBase(it, it.title)+".zip";
     var b64=window.buildZipBase64(files);
     var path=""; try{ path=N.saveBase64File ? N.saveBase64File(zipName, b64) : ""; }catch(e){}
     if(!path && IS_WEB){
