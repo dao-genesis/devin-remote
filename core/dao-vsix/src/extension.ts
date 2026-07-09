@@ -7213,7 +7213,8 @@ function rO(){
     const bal=(q.overageDollars!=null)?q.overageDollars:null;
     const balStr=(bal!=null)?('$'+Number(bal).toFixed(2)):'—';
     const bc=(bal==null)?'var(--muted)':(bal>5?'var(--success)':bal>1?'var(--warn)':'var(--danger)');
-    qh='<div class="st">余额</div><div class="card"><div class="cr"><span class="l">美金余额</span><span class="v" style="color:'+bc+';font-weight:700;font-size:15px">'+balStr+'</span></div>'+(q.planName?'<div class="cr"><span class="l">Plan</span><span class="v">'+esc(q.planName)+'</span></div>':'')+'</div>';
+    const stale=(q.overageKnown===false)||(q.overageTs&&(Date.now()-q.overageTs>10*60*1000));
+    qh='<div class="st">余额</div><div class="card"><div class="cr"><span class="l">美金余额</span><span class="v" style="color:'+bc+';font-weight:700;font-size:15px">'+balStr+(stale?' <span style="font-size:10px;color:var(--muted);font-weight:400">(待刷新)</span>':'')+'</span></div>'+(q.planName?'<div class="cr"><span class="l">Plan</span><span class="v">'+esc(q.planName)+'</span></div>':'')+'</div>';
   }
   // v3.17.4 · 去芜存菁: 主页「注入状态」板块(S/K/P/G ✓✗)已移除 —
   //   反向注入实况以左侧「反向注入」面板 + 底部状态点(Server/Relay/Injected)为准, 主页不再重复呈现。
@@ -7628,8 +7629,34 @@ function daoMiddleAuthPayload(): any {
     return live;
 }
 
+// 额度显旧值之根: ws.devinQuota 为登录时落盘的持久值, 面板只回显、从不自动刷新 →
+// 「显示 $2 实际已归零」。修法: 面板每次刷新时若额度已陈旧(>2min 或余额未确知)后台重取,
+// 取到即回推重渲(守柔: 取失败保旧值不清)。单飞防风暴。
+let _quotaRefreshInflight = false;
+let _quotaRefreshLastAt = 0;
+function maybeRefreshQuotaBg() {
+    try {
+        const key = ws.devinApiKey || ws.devinAuth1;
+        if (_quotaRefreshInflight || !key) return;
+        if (Date.now() - _quotaRefreshLastAt < 60 * 1000) return; // 节流: 取失败/余额未知也不空转
+        const q: any = ws.devinQuota;
+        if (q && q.overageKnown && q.overageTs && (Date.now() - q.overageTs < 2 * 60 * 1000)) return;
+        _quotaRefreshLastAt = Date.now();
+        _quotaRefreshInflight = true;
+        devinFetchQuota(key, ws.devinApiServerUrl).then((nq: any) => {
+            _quotaRefreshInflight = false;
+            if (nq) {
+                ws.devinQuota = nq; ws.devinSaveConfig();
+                try { refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ }
+                try { sidebarCloudPanel?.refresh(); } catch { /* 守柔 */ }
+            }
+        }).catch(() => { _quotaRefreshInflight = false; });
+    } catch { /* 守柔 */ }
+}
+
 function refreshDaoCloudMiddlePanel() {
     if (!daoCloudMiddlePanel && !_middlePostTarget) return;
+    maybeRefreshQuotaBg();
     const data: any = { type: 'init' };
     data.auth = daoMiddleAuthPayload();
     data.server = {
