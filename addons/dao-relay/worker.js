@@ -686,6 +686,34 @@ export default {
       }
     }
 
+    // 归一 Devin Cloud 网页 (双重兜底落地页) —— 「公网单页」恒定地址入口:
+    //   二合一插件对外分发的公网单页 URL 形如 /shell?dao_alt=<快速隧道>。本 Worker 不承载
+    //   /shell 本体(它由桌面插件本地 API 直出), 但恒定地址必须可落地: 此处返回一张极小引导页,
+    //   逐一探活 dao_alt 携带的备用公网源(可多个·逗号分隔), 首个 /api/health 可达者即整页跳其
+    //   /shell 续用(与 SHELL_HTTP_SHIM 失效转移同构)。全部不可达则 10s 周期重探·永不死链。
+    //   旧病灶: 恒定地址 /shell 直接 404 → 「公网单页·双重兜底」名存实亡(页面根本载不起来,
+    //   页内失效转移逻辑无从运行)。
+    if (path === "/shell") {
+      const alts = String(url.searchParams.get("dao_alt") || "")
+        .split(",").map((s) => s.trim().replace(/\/+$/, ""))
+        .filter((s) => /^https?:\/\//i.test(s));
+      const html = "<!doctype html><html><head><meta charset=\"utf-8\"><title>DAO \u00b7 \u5f52\u4e00\u5165\u53e3</title>"
+        + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        + "<style>body{background:#101014;color:#9aa;font:14px/1.8 system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}div{text-align:center}</style>"
+        + "</head><body><div><p>\u2638 \u6b63\u5728\u63a2\u6d3b\u53ef\u7528\u516c\u7f51\u901a\u9053\u2026</p><p id=\"s\" style=\"font-size:12px;color:#667\"></p></div>"
+        + "<script>var ALTS=" + JSON.stringify(alts) + ";var el=document.getElementById('s');"
+        + "function go(){if(!ALTS.length){el.textContent='\u94fe\u63a5\u672a\u643a\u5e26 dao_alt \u5907\u7528\u6e90 \u00b7 \u8bf7\u7528\u63d2\u4ef6\u91cd\u65b0\u590d\u5236\u516c\u7f51\u5355\u9875\u7f51\u5740';return;}"
+        + "(function next(i){if(i>=ALTS.length){el.textContent='\u5168\u90e8\u5907\u7528\u6e90\u6682\u4e0d\u53ef\u8fbe \u00b7 10s \u540e\u91cd\u63a2';setTimeout(go,10000);return;}"
+        + "var b=ALTS[i];el.textContent='\u63a2\u6d3b '+b+' \u2026';"
+        + "fetch(b+'/api/health',{mode:'no-cors'}).then(function(){"
+        + "var q=new URLSearchParams(location.search);q.delete('dao_alt');var rest=q.toString();"
+        + "location.replace(b+'/shell?dao_alt='+encodeURIComponent(location.origin+location.pathname)+(rest?('&'+rest):''));"
+        + "}).catch(function(){next(i+1);});})(0);}go();<\/script></body></html>";
+      return new Response(html, {
+        headers: { "content-type": "text/html; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "no-store" },
+      });
+    }
+
     // 去中心化 P2P 客户端 (路线C): 任意公网设备打开 /p2p 即得 0账号直连页;
     //   仅填 session+token 即经公共 ntfy 信令 P2P 直连手机, 全程不经本 Worker。
     //   p2p-client.html 内相对引用 signal.js → 一并经 /signal.js 代理 raw。

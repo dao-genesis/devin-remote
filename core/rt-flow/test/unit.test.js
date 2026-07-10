@@ -830,6 +830,20 @@ function test(name, fn) {
     assert.ok(/_ei >= 0 && _store\.remove\(_ei\)/.test(src) && /_evictNow\(acc\.email/.test(src), "归零账号即时 _store.remove 落盘出库");
     assert.ok(/removeEmails\.push\(email\)/.test(src), "即时出库失败回落 removeEmails · 循环外兜底再删");
   });
+  test("extension.js: v4.30 守柔·破坏性自动化默认关 (清理/出库/闲置触发须显式勾选)", () => {
+    const fs = require("fs");
+    const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
+    assert.ok(/const autoCleanup = !!_cfg\("devinCloudAutoCleanup", false\);/.test(src), "autoCleanup 默认须为 false (守柔·止血)");
+    assert.ok(/const autoRemoveZero = !!_cfg\("devinCloudAutoRemoveZeroQuota", false\);/.test(src), "autoRemoveZero 默认须为 false (默认绝不自动出库)");
+    assert.ok(/_cfg\("devinCloudIdleCleanup", false\)/.test(src), "idleCleanup 默认须为 false (有余额账号绝不因沉寂被清)");
+    assert.ok(!/_cfg\("devinCloudAutoCleanup", true\)/.test(src), "禁止任何处把 autoCleanup 默认翻回 true");
+    assert.ok(!/_cfg\("devinCloudAutoRemoveZeroQuota", true\)/.test(src), "禁止任何处把 autoRemoveZero 默认翻回 true");
+    assert.ok(!/_cfg\("devinCloudIdleCleanup", true\)/.test(src), "禁止任何处把 idleCleanup 默认翻回 true");
+    // 手动「清理归零账号」按钮出库阈值亦唯归零 $0 (与自动环对齐·残留 $0.x 有效号不误出)
+    assert.ok(/const _zqRaw = \+_cfg\("devinCloudAutoRemoveThreshold", 0\);/.test(src), "手动清零出库阈值默认须为 0");
+    // 备份(不破坏·只留底)保持默认开
+    assert.ok(/_cfg\("devinCloudAutoBackup", true\)/.test(src), "autoBackup(非破坏) 保持默认开");
+  });
   test("extension.js: 24h冷却锚点不得每周期重置 (v4.10.1 修复归零清理从不触发)", () => {
     const fs = require("fs");
     const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
