@@ -150,15 +150,15 @@ public class MainActivity extends AppCompatActivity {
     private volatile String dragConvAccJson = null; // 全服通近期对话拖拽: 该对话所属账号 (含 email/密码/org → 引擎取数+指引md)
     private volatile String dragConvSid = null;     // 全服通近期对话拖拽: 该对话 sid
     // ── 在线自动更新 ──
-    static final String UPDATE_MANIFEST = "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json";
+    static final String UPDATE_MANIFEST = "https://raw.githubusercontent.com/dao-devin/devin-remote/main/addons/rt-flow-app/latest.json";
     // 去中心化更新: 多镜像源轮询 (任一可达即可检查/下载, 不依赖单一服务器或穿透通道)。
     // GitHub raw + jsDelivr/Fastly/Statically CDN + ghproxy 反代 — 覆盖国内外网络。
     static final String[] UPDATE_MIRRORS = {
-        "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json",
-        "https://cdn.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/latest.json",
-        "https://fastly.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/latest.json",
-        "https://cdn.statically.io/gh/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json",
-        "https://ghproxy.net/https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/latest.json"
+        "https://raw.githubusercontent.com/dao-devin/devin-remote/main/addons/rt-flow-app/latest.json",
+        "https://cdn.jsdelivr.net/gh/dao-devin/devin-remote@main/addons/rt-flow-app/latest.json",
+        "https://fastly.jsdelivr.net/gh/dao-devin/devin-remote@main/addons/rt-flow-app/latest.json",
+        "https://cdn.statically.io/gh/dao-devin/devin-remote/main/addons/rt-flow-app/latest.json",
+        "https://ghproxy.net/https://raw.githubusercontent.com/dao-devin/devin-remote/main/addons/rt-flow-app/latest.json"
     };
     static final String UPDATE_APK_NAME = "DevinCloud-update.apk";   // 更新包固定文件名 (落 app 私有 Download, 据此识别更新下载, 不受进程重建/字段丢失影响)
     private volatile long updateDlId = -1;          // 当前更新下载任务 id (区别于普通网页下载)
