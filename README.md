@@ -22,10 +22,23 @@
 
 <p align="center">
   ▶ <b><a href="https://github.com/dao-devin/devin-remote/releases/download/demo-assets/devin-remote-demo.mp4">点击播放完整高清演示（含声音 · MP4 · 全球直达）</a></b>
-  &nbsp;·&nbsp; 原视频来源：<a href="https://www.bilibili.com/video/BV1HbjP6oE77">哔哩哔哩 BV1HbjP6oE77</a>
+  &nbsp;·&nbsp; 原视频来源：<a href="https://www.bilibili.com/video/BV1uQ5W6dEDJ">哔哩哔哩 BV1uQ5W6dEDJ · 超越所有 IDE 的超级 AI 平台</a>
 </p>
 
-> 上方为**自动循环播放**的预览动图（打开页面即动，无需点击）。想看带声音的全程录屏，**优先点「完整高清演示（MP4）」**：自托管于本仓库 [demo-assets](https://github.com/dao-devin/devin-remote/releases/tag/demo-assets) Release，**全球直达、不受 B 站风控 / 分区限制**。B 站为原片出处（`BV1HbjP6oE77`，已核验有效），需在可正常访问哔哩哔哩的网络环境下打开；若 B 站提示「412 安全风控」属其对部分网络的拦截，与本链接无关，用上面的 MP4 直链即可稳定观看。
+**📱 手机版 IDE · 走到哪开发到哪**（辅助 ② `rt-flow-app`）：
+
+<p align="center">
+  <a href="https://github.com/dao-devin/devin-remote/releases/download/demo-assets/devin-remote-mobile-demo.mp4" title="点击播放手机版完整高清演示（含声音 · MP4 · 全球直达）">
+    <img src="https://github.com/dao-devin/devin-remote/releases/download/demo-assets/devin-remote-mobile-demo.gif" alt="手机版 IDE · 走到哪开发到哪 · Devin Cloud 安卓 APK 演示" width="900" />
+  </a>
+</p>
+
+<p align="center">
+  ▶ <b><a href="https://github.com/dao-devin/devin-remote/releases/download/demo-assets/devin-remote-mobile-demo.mp4">点击播放手机版完整高清演示（含声音 · MP4 · 全球直达）</a></b>
+  &nbsp;·&nbsp; 原视频来源：<a href="https://www.bilibili.com/video/BV1wgTm64Ef5">哔哩哔哩 BV1wgTm64Ef5 · 手机版 IDE，走到哪开发到哪</a>
+</p>
+
+> 上方为**自动循环播放**的预览动图（打开页面即动，无需点击）。想看带声音的全程录屏，**优先点「完整高清演示（MP4）」**：自托管于本仓库 [demo-assets](https://github.com/dao-devin/devin-remote/releases/tag/demo-assets) Release，**全球直达、不受 B 站风控 / 分区限制**。B 站为原片出处，需在可正常访问哔哩哔哩的网络环境下打开；若 B 站提示「412 安全风控」属其对部分网络的拦截，与本链接无关，用上面的 MP4 直链即可稳定观看。
 
 ---
 
