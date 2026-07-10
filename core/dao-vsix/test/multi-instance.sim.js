@@ -33,13 +33,14 @@ Module._load = function (request, parent, isMain) {
 const S = require("../out/extension.js").__selftest;
 assert.ok(S, "__selftest seam missing");
 
-const MACHINE_TOKEN = "dao-vsix-REDACTED"; // leader 机器权威
-const FOREIGN_TOKEN = "dao-vsix-REDACTED"; // 他者进程令牌
+// 纯沙盒假令牌(无真凭证·勿用 dao-vsix- 前缀以免被密钥清洗器抹平成同一串)。各令牌必须彼此相异, 跨实例隔离断言才有意义。
+const MACHINE_TOKEN = "selftest-machine-e40b6c0011223344"; // leader 机器权威
+const FOREIGN_TOKEN = "selftest-foreign-4092e0aabbccddee"; // 他者进程令牌
 // 3 个实例, 各有自己的窗口私牌; leader = 实例0
 const INSTANCES = [
-  { name: "IDE#0 (leader)", wsToken: "dao-vsix-REDACTED" },
-  { name: "IDE#1", wsToken: "dao-vsix-REDACTED" },
-  { name: "IDE#2", wsToken: "dao-vsix-REDACTED" },
+  { name: "IDE#0 (leader)", wsToken: "selftest-ws0-1111aaaa2222bbbb33" },
+  { name: "IDE#1", wsToken: "selftest-ws1-4444cccc5555dddd66" },
+  { name: "IDE#2", wsToken: "selftest-ws2-7777eeee8888ffff99" },
 ];
 
 function writeJson(p, o) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(o), "utf8"); }

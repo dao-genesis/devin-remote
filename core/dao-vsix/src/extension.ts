@@ -5252,6 +5252,88 @@ async function daoGhPoolGitDisconnect(emails: string[]): Promise<{ ok: boolean; 
     return { ok: results.some(x => x.ok), results };
 }
 
+// ── GitHub 板块 · 独立舰队 (GitHub 账号·与 Devin 池完全分离) ──────────────────
+// 舰队成员 = 纯 GitHub 账号(login + 各自 PAT + 组织角色), 存于注入档 ghFleet, 不碰 Devin 账号池。
+// 首个默认管理者, 其余默认成员; 用户可随意在管理者↔成员互转, 或移出组织。封号即删, 换一个即可。
+// 校验一个 GitHub PAT → 返回真 login/scopes(GET /user)。
+async function daoGhAccountVerify(pat: string): Promise<{ ok: boolean; login?: string; scopes?: string; error?: string }> {
+    pat = String(pat || '').trim();
+    if (!/^(ghp_|github_pat_|gho_|ghu_)/.test(pat)) return { ok: false, error: 'PAT 格式无效(应以 ghp_ / github_pat_ 开头)' };
+    const u = await ghApiRequest('GET', '/user', pat);
+    if (u.status !== 200 || !u.json || !u.json.login) return { ok: false, error: 'PAT 无效或不可用 (HTTP ' + u.status + (u.json && u.json.message ? ' · ' + u.json.message : '') + ')' };
+    return { ok: true, login: u.json.login, scopes: String(u.scopes || '') };
+}
+// 批量把 GitHub 账号加入独立舰队: 每行 "login pat" 或仅 "pat"(自动解析 login)。逐个校验 PAT, 按 login 去重(同名更新 PAT)。
+async function daoGhFleetAdd(lines: string[], defaultRole: string): Promise<{ ok: boolean; results: { login: string; ok: boolean; role?: string; error?: string }[] }> {
+    const prof = loadInjectProfile();
+    if (!Array.isArray(prof.ghFleet)) prof.ghFleet = [];
+    const role = (defaultRole === 'admin') ? 'admin' : 'member';
+    const results: { login: string; ok: boolean; role?: string; error?: string }[] = [];
+    const raw = (lines || []).map(s => String(s || '').trim()).filter(Boolean);
+    for (let i = 0; i < raw.length; i++) {
+        const parts = raw[i].split(/[\s,]+/).filter(Boolean);
+        const pat = (parts.find(p => /^(ghp_|github_pat_|gho_|ghu_)/.test(p)) || '').trim();
+        let login = (parts.find(p => !/^(ghp_|github_pat_|gho_|ghu_)/.test(p)) || '').replace(/^@/, '').trim();
+        if (!pat) { results.push({ login: login || raw[i].slice(0, 20), ok: false, error: '本行缺 PAT' }); continue; }
+        const v = await daoGhAccountVerify(pat);
+        if (!v.ok) { results.push({ login: login || '(未知)', ok: false, error: v.error }); if (i < raw.length - 1) await _ghSleep(1000); continue; }
+        login = v.login || login;
+        const ex = prof.ghFleet.find(a => a.login.toLowerCase() === login.toLowerCase());
+        if (ex) { ex.pat = pat; ex.role = ex.role || role; }
+        else prof.ghFleet.push({ login, pat, role: prof.ghFleet.length === 0 ? 'admin' : role, addedAt: new Date().toISOString() });
+        results.push({ login, ok: true, role: (ex ? ex.role : (prof.ghFleet[prof.ghFleet.length - 1].role)) });
+        if (i < raw.length - 1) await _ghSleep(1000);
+    }
+    saveInjectProfile(prof);
+    return { ok: results.some(x => x.ok), results };
+}
+// 舰队清单 + 组织在线角色核对(用本体组织 admin PAT 查每人 membership state/role)。
+async function daoGhFleetList(orgPat: string, org: string): Promise<{ login: string; role: string; note?: string; addedAt?: string; orgState?: string; orgRole?: string }[]> {
+    const prof = loadInjectProfile();
+    const fleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
+    orgPat = String(orgPat || '').trim(); org = String(org || '').trim();
+    type FleetRow = { login: string; role: string; note?: string; addedAt?: string; orgState?: string; orgRole?: string };
+    const out: FleetRow[] = [];
+    for (const a of fleet) {
+        const row: FleetRow = { login: a.login, role: a.role || 'member', note: a.note || '', addedAt: a.addedAt || '' };
+        if (orgPat && org) {
+            const r = await ghApiRequest('GET', '/orgs/' + encodeURIComponent(org) + '/memberships/' + encodeURIComponent(a.login), orgPat);
+            if (r.status === 200 && r.json) { row.orgState = r.json.state; row.orgRole = r.json.role; }
+            else row.orgState = (r.status === 404) ? 'none' : ('HTTP ' + r.status);
+        }
+        out.push(row);
+    }
+    return out;
+}
+// 组织内角色互转(管理者↔成员): 用本体组织 admin PAT PUT membership role, 并同步舰队存档。
+async function daoGhFleetSetRole(orgPat: string, org: string, login: string, role: string): Promise<{ ok: boolean; state?: string; error?: string }> {
+    orgPat = String(orgPat || '').trim(); org = String(org || '').trim(); login = String(login || '').trim().replace(/^@/, '');
+    role = (role === 'admin') ? 'admin' : 'member';
+    if (!orgPat || !org || !login) return { ok: false, error: '需 组织 admin PAT + 组织名 + login' };
+    const r = await ghApiRequest('PUT', '/orgs/' + encodeURIComponent(org) + '/memberships/' + encodeURIComponent(login), orgPat, { role });
+    if (r.status !== 200 || !r.json) return { ok: false, error: (r.json && r.json.message) || r.error || ('HTTP ' + r.status) };
+    const prof = loadInjectProfile();
+    const ex = (prof.ghFleet || []).find(a => a.login.toLowerCase() === login.toLowerCase());
+    if (ex) { ex.role = role; saveInjectProfile(prof); }
+    return { ok: true, state: r.json.state };
+}
+// 移出组织(DELETE membership) — 不删舰队存档(封号即删走 daoGhFleetForget)。
+async function daoGhFleetRemoveFromOrg(orgPat: string, org: string, login: string): Promise<{ ok: boolean; error?: string }> {
+    orgPat = String(orgPat || '').trim(); org = String(org || '').trim(); login = String(login || '').trim().replace(/^@/, '');
+    if (!orgPat || !org || !login) return { ok: false, error: '需 组织 admin PAT + 组织名 + login' };
+    const r = await ghApiRequest('DELETE', '/orgs/' + encodeURIComponent(org) + '/memberships/' + encodeURIComponent(login), orgPat);
+    if (r.status === 204 || r.status === 404) return { ok: true };
+    return { ok: false, error: (r.json && r.json.message) || r.error || ('HTTP ' + r.status) };
+}
+// 从本地舰队存档移除(封号/换号)。
+function daoGhFleetForget(login: string): { ok: boolean } {
+    login = String(login || '').trim().replace(/^@/, '');
+    const prof = loadInjectProfile();
+    prof.ghFleet = (prof.ghFleet || []).filter(a => a.login.toLowerCase() !== login.toLowerCase());
+    saveInjectProfile(prof);
+    return { ok: true };
+}
+
 // 命名隧道固定域名 — 从 named-tunnel.json 读回(供 URL 直显与重启复用)。
 function bridgeReadNamedHost(): string {
     try { const j = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, 'named-tunnel.json'), 'utf8')); return String(j.cfHostname || j.hostname || '').trim(); } catch { return ''; }
@@ -7673,7 +7755,7 @@ function orgOnResult(d){
     orgMsg(h)
   }}
 // ═══ GitHub 板块 · 统一管理 (PAT/登录 → 组织 → 迁仓/公私 → 多账号舰队 → 批量连Git → MCP) ═══
-function _ghState(){if(!S.gh)S.gh={detect:null,repos:[],reposTarget:'',fleet:[]};return S.gh}
+function _ghState(){if(!S.gh)S.gh={detect:null,repos:[],reposTarget:'',fleet:[],ghFleet:[]};return S.gh}
 function ghPat(){return (document.getElementById('ghPat')||{}).value||''}
 function ghOrgName(){return ((document.getElementById('ghOrgName')||{}).value||'').trim()}
 function ghRole(){return (document.getElementById('ghRole')||{}).value||'member'}
@@ -7716,6 +7798,13 @@ function ghRenderFleet(){
   });
   h+='</div>';v.innerHTML=h;
 }
+// 独立 GitHub 舰队(与 Devin 池分离)
+function ghFleetAdd(){var t=(document.getElementById('ghFleetLines')||{}).value||'';if(!t.trim()){toast('填至少一行 login PAT / PAT',false);return}var role=(document.getElementById('ghFleetRole')||{}).value||'member';ghMsg('ghFleetAddOut','⏳ 逐个校验 PAT 并加入舰队(限速)…');cmd('daoGhFleetAdd',{lines:t,role:role})}
+function ghFleetRefresh(){ghMsg('ghFleetAddOut','⏳ 拉取舰队并核对组织角色…');cmd('daoGhFleetList',{})}
+function ghFleetRole(login,role){if(!login)return;toast('⏳ '+login+' → '+(role==='admin'?'管理者':'成员'),true);cmd('daoGhFleetRole',{login:login,role:role})}
+function ghFleetRemoveOrg(login){if(!login)return;if(typeof confirm==='function'&&!confirm('把 '+login+' 移出本体组织?'))return;cmd('daoGhFleetRemoveOrg',{login:login})}
+function ghFleetForget(login){if(!login)return;if(typeof confirm==='function'&&!confirm('从本地舰队删除 '+login+'?(不影响其 GitHub 账号)'))return;cmd('daoGhFleetForget',{login:login})}
+function ghRenderGhFleet(){var st=_ghState();var v=document.getElementById('ghGhFleetList');if(!v)return;var fs=st.ghFleet||[];if(!fs.length){v.innerHTML='<p style="font-size:11px;color:var(--muted);margin:4px 0">（独立 GitHub 舰队为空 · 上方粘贴 login PAT 加入）</p>';return}var h='<div class="card">';fs.forEach(function(a){var isAdmin=(a.role==='admin');var badge=isAdmin?'<span style="color:var(--warn)">★ 管理者</span>':'<span style="color:var(--muted)">成员</span>';var os='';if(a.orgState){var col=(a.orgState==='active')?'var(--success)':(a.orgState==='pending'?'var(--warn)':'var(--muted)');os=' · <span style="color:'+col+'">org:'+esc(a.orgState)+(a.orgRole?('/'+esc(a.orgRole)):'')+'</span>'}var btn=isAdmin?('<button class="btn sm" onclick="ghFleetRole(&#39;'+esc(a.login)+'&#39;,&#39;member&#39;)">设为成员</button>'):('<button class="btn sm" onclick="ghFleetRole(&#39;'+esc(a.login)+'&#39;,&#39;admin&#39;)">设为管理者</button>');h+='<div class="cr"><span class="l" style="font-size:11px">'+esc(a.login)+' · '+badge+os+'</span><span class="v" style="font-size:10px">'+btn+' <button class="btn sm" onclick="ghFleetRemoveOrg(&#39;'+esc(a.login)+'&#39;)" title="从本体组织移除membership">移出组织</button> <button class="btn sm danger" onclick="ghFleetForget(&#39;'+esc(a.login)+'&#39;)" title="从本地舰队删除">删</button></span></div>'});h+='</div>';v.innerHTML=h;}
 function ghOnProgress(d){ghMsg('ghFleetOut','⏳ 入组进度 '+d.done+'/'+d.total+(d.last?(' · '+esc(d.last.login||'')+' '+(d.last.ok?'✓':'✗')):''))}
 function ghOnResult(d){
   var st=_ghState();
@@ -7746,6 +7835,11 @@ function ghOnResult(d){
     var rs2=d.results||[];var okN2=rs2.filter(function(x){return x.ok}).length;
     ghMsg('ghReposOut','<b>迁移完成 '+okN2+'/'+rs2.length+' → '+esc(d.org||'')+'</b><br>'+rs2.map(function(x){return (x.ok?'✓ ':'✗ ')+esc(x.repo||'')+(x.error?(' — '+esc(x.error)):'')}).join('<br>'));
   }else if(d.kind==='fleet'){st.fleet=d.accounts||[];ghRenderFleet();}
+  else if(d.kind==='fleetAdd'){var rs3=d.results||[];var okN3=rs3.filter(function(x){return x.ok}).length;ghMsg('ghFleetAddOut','<b>加入舰队 '+okN3+'/'+rs3.length+'</b><br>'+rs3.map(function(x){return (x.ok?'✓ ':'✗ ')+esc(x.login||'')+(x.role?(' ('+esc(x.role)+')'):'')+(x.error?(' — '+esc(x.error)):'')}).join('<br>'));cmd('daoGhFleetList',{});}
+  else if(d.kind==='fleetGh'){st.ghFleet=d.accounts||[];ghRenderGhFleet();if(!d.org)ghMsg('ghFleetAddOut','<span style="color:var(--warn)">提示: 未记住本体组织(上方②「记住本体」), 组织角色状态暂不可核对。</span>');else ghMsg('ghFleetAddOut','<span style="color:var(--success)">✓ 舰队 '+((d.accounts||[]).length)+' 号 · 已核对 @ '+esc(d.org)+'</span>');}
+  else if(d.kind==='fleetRole'){if(d.ok){toast('✓ '+d.login+' → '+(d.role==='admin'?'管理者':'成员')+(d.state?(' ('+d.state+')'):''),true);cmd('daoGhFleetList',{})}else toast('✗ '+esc(d.error||'改角色失败'),false);}
+  else if(d.kind==='fleetRemoveOrg'){if(d.ok){toast('✓ '+d.login+' 已移出组织',true);cmd('daoGhFleetList',{})}else toast('✗ '+esc(d.error||'移出失败'),false);}
+  else if(d.kind==='fleetForget'){if(d.ok){toast('✓ 已从舰队删除 '+d.login,true);cmd('daoGhFleetList',{})}}
   else if(d.kind==='injectPat'){
     if(d.ok){ghMsg('ghInjectOut','<span style="color:var(--success)">✓ GITHUB_PAT 已存入注入清单(security)+钉住 GitHub MCP · 已同步 '+(d.okCount||0)+'/'+(d.total||0)+' 账号</span>');cmd('getInjectProfile')}
     else ghMsg('ghInjectOut','<span style="color:var(--danger)">✗ '+esc(d.error||'注入失败')+'</span>');
@@ -7797,6 +7891,13 @@ function rGitHub(){
   h+='<div class="br" style="margin:4px 0"><button class="btn sm primary" onclick="ghInvite()" title="把上面用户名以选定角色批量拉入上方②的组织(限速防风控)">👥 批量添号入组(按角色)</button><button class="btn sm" onclick="ghOpen(&#39;https://github.com/settings/tokens/new?scopes=admin:org,repo,workflow&amp;description=dao-member&#39;)" title="打开建 PAT 页(预置权限)·当前登录账号即建">🔑 批量建 PAT</button></div>';
   h+='<div id="ghFleetOut" style="font-size:11px;line-height:1.6;margin-top:4px"></div>';
   h+='<div class="st" style="margin-top:8px">舰队账号池 (本机 Devin 账号)</div><div id="ghAcctList"></div></div>';
+  // 4b) GitHub 独立舰队 (纯 GitHub 账号·与 Devin 完全分离·管理者↔成员随意互转)
+  h+='<div class="st">④\u200b 独立 GitHub 舰队 (与 Devin 分离 · 管理者↔成员互转)</div><div class="card" style="border-left:3px solid var(--accent,#0e639c)">';
+  h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 6px">这里是<b>纯 GitHub 账号</b>舰队(login+各自 PAT), 与切号板块的 Devin 账号池毫无关系。首个默认管理者, 其余成员; 用「设为管理者/设为成员」在上方②记住的本体组织内幂等互转, 「移出组织」踢出组织, 「删」从本地舰队移除(封号即删换新)。角色变更用本体组织的 admin PAT(GITHUB_PAT)执行。</p>';
+  h+='<textarea id="ghFleetLines" placeholder="批量加入(每行一个): 「login PAT」或仅「PAT」(自动解析 login)&#10;例: alice ghp_xxx&#10;ghp_yyy" style="width:100%;height:56px;margin:2px 0;box-sizing:border-box;font-family:monospace;font-size:11px"></textarea>';
+  h+='<div class="br" style="margin:4px 0"><select id="ghFleetRole" style="width:96px"><option value="member">成员</option><option value="admin">管理者</option></select><button class="btn sm primary" onclick="ghFleetAdd()" title="逐个校验 PAT(GET /user)后加入独立舰队·限速防风控">➕ 校验并加入舰队</button><button class="btn sm" onclick="ghFleetRefresh()" title="拉取舰队并核对每人在本体组织的在线角色/状态">⟳ 刷新舰队+组织角色</button></div>';
+  h+='<div id="ghFleetAddOut" style="font-size:11px;line-height:1.6;margin:4px 0"></div>';
+  h+='<div id="ghGhFleetList"></div></div>';
   // 5) GitHub MCP · 全量同步镜像 (道并行而不相悖: 与 MCP 板块同数据同命令, 两边操作实时双端同步)
   //    注: 批量连/断 Git 属切号板块(Devin 模式)·已从本板块移除, 本板块只管 GitHub 本体。
   h+='<div class="st">⑤ GitHub MCP · 与 MCP 板块完全同步</div><div class="card">';
@@ -7805,7 +7906,7 @@ function rGitHub(){
   h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 6px">下方即 MCP 板块的完整镜像(同一份数据·同一套命令): 在这里装/卸/搜索与在 MCP 板块操作完全等价, 任一边更新另一边即时同步。</p>';
   h+='<div id="ghMcpMirror"><div class="empty" style="padding:12px"><div class="ic">🧩</div><p style="color:var(--muted);font-size:11px">正在加载 MCP 镜像…</p></div></div></div>';
   v.innerHTML=h;
-  ghRenderRepos();ghRenderFleet();
+  ghRenderRepos();ghRenderFleet();ghRenderGhFleet();cmd('daoGhFleetList',{});
   try{var _vm=document.getElementById('v-mcp');var _g=document.getElementById('ghMcpMirror');if(_g&&_vm&&_vm.innerHTML&&S.data&&S.data.mcp&&S.data.mcp.length)_g.innerHTML=_vm.innerHTML}catch(e){}
 }
 function ipAddSecret(){sm('添加 Secret','<input id="m1" placeholder="名称 KEY" style="width:100%;margin:4px 0"><input id="m2" placeholder="值 value" style="width:100%;margin:4px 0">',function(){const n=document.getElementById('m1').value.trim(),val=document.getElementById('m2').value;if(!n)return false;S.injectProfile.secrets.push({name:n,value:val});ipSave();rInject()})}
@@ -8767,6 +8868,44 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // 登录链接/建 PAT/建组织 网页直达(免用户手动找路径)。
                 try { vscode.env.openExternal(vscode.Uri.parse(String(msg.url || 'https://github.com'))); } catch { /* 守柔 */ }
                 reply({ type: 'daoGhResult', kind: 'openUrl', ok: true, url: String(msg.url || '') });
+                break;
+            }
+            case 'daoGhFleetAdd': {
+                // 批量把 GitHub 账号(login+PAT)加入独立舰队(与 Devin 池分离)。
+                const lines = String(msg.lines || '').split(/\r?\n/);
+                await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '校验并加入 GitHub 舰队…' }, async () => {
+                    const r = await daoGhFleetAdd(lines, msg.role === 'admin' ? 'admin' : 'member');
+                    reply({ type: 'daoGhResult', kind: 'fleetAdd', ...r });
+                });
+                break;
+            }
+            case 'daoGhFleetList': {
+                const prof = loadInjectProfile();
+                const org = (prof.orgBody && prof.orgBody.org) || '';
+                const orgPat = String((prof.secrets.find(s => s.name === 'GITHUB_PAT') || { value: '' }).value || '').trim();
+                const rows = await daoGhFleetList(orgPat, org);
+                reply({ type: 'daoGhResult', kind: 'fleetGh', ok: true, org, accounts: rows });
+                break;
+            }
+            case 'daoGhFleetRole': {
+                const prof = loadInjectProfile();
+                const org = String(msg.org || (prof.orgBody && prof.orgBody.org) || '').trim();
+                const orgPat = String((prof.secrets.find(s => s.name === 'GITHUB_PAT') || { value: '' }).value || '').trim();
+                const r = await daoGhFleetSetRole(orgPat, org, String(msg.login || ''), msg.role === 'admin' ? 'admin' : 'member');
+                reply({ type: 'daoGhResult', kind: 'fleetRole', login: String(msg.login || ''), role: msg.role === 'admin' ? 'admin' : 'member', ...r });
+                break;
+            }
+            case 'daoGhFleetRemoveOrg': {
+                const prof = loadInjectProfile();
+                const org = String(msg.org || (prof.orgBody && prof.orgBody.org) || '').trim();
+                const orgPat = String((prof.secrets.find(s => s.name === 'GITHUB_PAT') || { value: '' }).value || '').trim();
+                const r = await daoGhFleetRemoveFromOrg(orgPat, org, String(msg.login || ''));
+                reply({ type: 'daoGhResult', kind: 'fleetRemoveOrg', login: String(msg.login || ''), ...r });
+                break;
+            }
+            case 'daoGhFleetForget': {
+                const r = daoGhFleetForget(String(msg.login || ''));
+                reply({ type: 'daoGhResult', kind: 'fleetForget', login: String(msg.login || ''), ...r });
                 break;
             }
             case 'devinLogin': {
@@ -13369,6 +13508,8 @@ interface InjectProfile {
     daoSeeded?: boolean;
     // 组织管理 body/glove: 记住用户选定的中枢组织 + 手套 GitHub 号清单(仅本地·供批量入组复用)
     orgBody?: { org: string; role?: string; gloves?: string[]; savedAt?: string };
+    // GitHub 独立舰队(与 Devin 池完全分离): 纯 GitHub 账号 login+PAT+组织角色, 供管理者↔成员互转/移出组织。
+    ghFleet?: { login: string; pat?: string; role?: string; note?: string; addedAt?: string }[];
 }
 function mcpSlug(m: InjectProfileItemM): string {
     return String(m.slug || m.name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -13396,6 +13537,13 @@ function loadInjectProfile(): InjectProfile {
                 gloves: Array.isArray(j.orgBody.gloves) ? j.orgBody.gloves.map((x: any) => String(x || '')).filter(Boolean) : [],
                 savedAt: j.orgBody.savedAt || '',
             } : undefined,
+            ghFleet: Array.isArray(j.ghFleet) ? j.ghFleet.map((a: any) => ({
+                login: String((a && a.login) || '').trim(),
+                pat: String((a && a.pat) || '').trim(),
+                role: (a && a.role === 'admin') ? 'admin' : 'member',
+                note: String((a && a.note) || ''),
+                addedAt: String((a && a.addedAt) || ''),
+            })).filter((a: any) => a.login) : undefined,
         };
     } catch {
         return { enabled: false, autoCleanup: true, secrets: [], knowledge: [], playbooks: [], mcps: [], automations: [], messageLimit: null, messageLimitAuto: true, messageLimitOffset: 3, lastInjectedOrg: '', daoSeeded: false };
