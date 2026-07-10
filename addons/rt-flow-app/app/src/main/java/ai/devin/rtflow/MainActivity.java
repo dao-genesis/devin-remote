@@ -2491,7 +2491,10 @@ public class MainActivity extends AppCompatActivity {
             return r;
         } catch (Exception e) { return null; }
     }
-    /** 后台整取一份落盘 (单飞去重·完整性校验·LRU 限容); 失败不扰, 下次播放再试。 */
+    // 弱网/国内网络下单次整取常被中途掐断: 任务内退避重试 + .part 断点续传(Range),
+    //   已到手的字节永不作废 —— 大附件在反复断流的链路上也能分片累积到完整落盘。
+    private static final int MEDIA_PF_TRIES = 5;
+    /** 后台整取一份落盘 (单飞去重·断点续传·退避重试·完整性校验·LRU 限容)。 */
     static void mediaCachePrefetch(final String auth1, final String orgId, final String url, final String path) {
         final File dir = mediaCacheDir(); if (dir == null) return;
         final String key = mediaCacheKey(path);
@@ -2499,36 +2502,67 @@ public class MainActivity extends AppCompatActivity {
         if (dst.exists()) return;
         if (!sMediaFetching.add(key)) return;
         sMediaPfPool.execute(() -> {
-            java.net.HttpURLConnection c = null;
-            File tmp = new File(dir, key + ".part");
             try {
-                c = fetchAttachment(auth1, orgId, url, null, false);
-                if (c == null || c.getResponseCode() != 200) return;
+                for (int attempt = 0; attempt < MEDIA_PF_TRIES && !dst.exists(); attempt++) {
+                    if (attempt > 0) try { Thread.sleep(2000L << Math.min(attempt - 1, 3)); } catch (InterruptedException ie) { return; }
+                    if (mediaCacheFetchOnce(auth1, orgId, url, dir, key, dst)) { mediaCacheTrim(dir); return; }
+                }
+                // 重试耗尽也保留 .part/.len: 下次任何触发(重进/换网)从断点继续
+            } finally { sMediaFetching.remove(key); }
+        });
+    }
+    /** 单次(续)取: .part 存量即带 Range 续传, 服务端回 200 全量则从头写; 取全即封盘返 true。 */
+    static boolean mediaCacheFetchOnce(String auth1, String orgId, String url, File dir, String key, File dst) {
+        java.net.HttpURLConnection c = null;
+        File tmp = new File(dir, key + ".part");
+        File lenf = new File(dir, key + ".len");
+        try {
+            long expect = -1;
+            try { if (lenf.exists()) expect = Long.parseLong(new String(readAllBytes(lenf), StandardCharsets.UTF_8).trim()); } catch (Exception ignored) {}
+            long have = tmp.exists() ? tmp.length() : 0;
+            if (have > 0 && (expect <= 0 || have > expect)) { tmp.delete(); have = 0; }   // 总长未知的半成品无从校验 → 重来
+            if (!(expect > 0 && have == expect)) {   // 恰好已取全则免网封盘
+                java.util.Map<String, String> rh = null;
+                if (have > 0) { rh = new java.util.HashMap<>(); rh.put("Range", "bytes=" + have + "-"); }
+                c = fetchAttachment(auth1, orgId, url, rh, false);
+                if (c == null) return false;
+                int code = c.getResponseCode();
+                boolean resume = (code == 206 && have > 0);
+                if (code != 200 && !resume) return false;
+                if (!resume) have = 0;
                 long clen = -1;
                 try { clen = c.getContentLengthLong(); } catch (Throwable ignored) {}
-                if (clen > MEDIA_CACHE_MAX_ONE) return;
-                String ctype = c.getContentType();
-                String mime = "application/octet-stream";
-                if (ctype != null && !ctype.isEmpty()) { int sc = ctype.indexOf(';'); mime = (sc >= 0 ? ctype.substring(0, sc) : ctype).trim(); }
+                if (!resume) {
+                    if (clen > MEDIA_CACHE_MAX_ONE) return false;
+                    String ctype = c.getContentType();
+                    String mime = "application/octet-stream";
+                    if (ctype != null && !ctype.isEmpty()) { int sc = ctype.indexOf(';'); mime = (sc >= 0 ? ctype.substring(0, sc) : ctype).trim(); }
+                    java.io.FileOutputStream mo = new java.io.FileOutputStream(new File(dir, key + ".mime"));
+                    try { mo.write(mime.getBytes(StandardCharsets.UTF_8)); } finally { mo.close(); }
+                    if (clen > 0) {
+                        java.io.FileOutputStream lo = new java.io.FileOutputStream(lenf);
+                        try { lo.write(String.valueOf(clen).getBytes(StandardCharsets.UTF_8)); } finally { lo.close(); }
+                        expect = clen;
+                    } else { try { lenf.delete(); } catch (Exception ignored) {} expect = -1; }
+                }
                 java.io.InputStream in = c.getInputStream();
-                java.io.FileOutputStream out = new java.io.FileOutputStream(tmp);
+                java.io.FileOutputStream out = new java.io.FileOutputStream(tmp, resume);
+                long w = have;
                 try {
-                    byte[] buf = new byte[65536]; int n; long w = 0;
-                    while ((n = in.read(buf)) > 0) { out.write(buf, 0, n); w += n; if (w > MEDIA_CACHE_MAX_ONE) { return; } }
-                } finally { try { out.close(); } catch (Exception ignored) {} try { in.close(); } catch (Exception ignored) {} }
-                if (clen > 0 && tmp.length() != clen) return;   // 断流半成品不入缓存
-                if (tmp.length() == 0) return;
-                java.io.FileOutputStream mo = new java.io.FileOutputStream(new File(dir, key + ".mime"));
-                try { mo.write(mime.getBytes(StandardCharsets.UTF_8)); } finally { mo.close(); }
-                if (!tmp.renameTo(dst)) return;
-                mediaCacheTrim(dir);
-            } catch (Exception ignored) {}
-            finally {
-                try { if (tmp.exists() && !dst.exists()) tmp.delete(); } catch (Exception ignored) {}
-                if (c != null) try { c.disconnect(); } catch (Exception ignored) {}
-                sMediaFetching.remove(key);
+                    byte[] buf = new byte[65536]; int n;
+                    while ((n = in.read(buf)) > 0) {
+                        out.write(buf, 0, n); w += n;
+                        if (w > MEDIA_CACHE_MAX_ONE) { try { out.close(); } catch (Exception ignored) {} tmp.delete(); lenf.delete(); return false; }
+                    }
+                } catch (Exception brk) { /* 断流: 已写入字节留在 .part 供续传 */ }
+                finally { try { out.close(); } catch (Exception ignored) {} try { in.close(); } catch (Exception ignored) {} }
+                if (expect > 0 ? tmp.length() != expect : tmp.length() == 0) return false;   // 未取全 → 留 .part 续传
             }
-        });
+            if (!tmp.exists() || tmp.length() == 0) return false;
+            try { lenf.delete(); } catch (Exception ignored) {}
+            return tmp.renameTo(dst);
+        } catch (Exception e) { return false; }
+        finally { if (c != null) try { c.disconnect(); } catch (Exception ignored) {} }
     }
     /** LRU 限容: 超额时从最久未用的缓存逐个剔除。 */
     static void mediaCacheTrim(File dir) {
