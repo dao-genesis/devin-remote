@@ -11,23 +11,24 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 
-const SIX = ["overview", "switch", "bridge", "backups", "inject", "mcp"]; // AGENTS §二 六大板块
+// AGENTS §二 六大板块 + 独立 GitHub 纵向板块(第七板块·纯 GitHub 账号/组织/舰队·与 Devin 分离)。
+const BOARDS = ["overview", "switch", "bridge", "backups", "inject", "mcp", "github"];
 const src = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
 
 let pass = 0;
 function ok(cond, msg) { assert.ok(cond, msg); console.log("  ✓ " + msg); pass++; }
 
-console.log("[dao-vsix 六大板块 _solo 白名单 · 源级护栏]");
+console.log("[dao-vsix 板块 _solo 白名单 · 源级护栏]");
 
 // 1) 提取 getDaoCloudMiddlePanelHtml 顶部的 _solo 白名单数组字面量
 const m = src.match(/const\s+_solo\s*=\s*\[([^\]]*)\]\s*\.includes\s*\(\s*soloBoard/);
 ok(!!m, "找到 _solo 白名单声明 (const _solo = [...].includes(soloBoard ...))");
 const keys = m[1].split(",").map((s) => s.trim().replace(/^['"]|['"]$/g, "")).filter(Boolean);
 
-// 2) 白名单 ≡ 恰好六大板块 (顺序无关·不多不少)
-assert.deepStrictEqual([...keys].sort(), [...SIX].sort(),
-  "_solo 白名单必须恰好为六大板块, 实为: [" + keys.join(", ") + "]");
-console.log("  ✓ _solo ≡ 六大板块 {" + SIX.join(", ") + "}");
+// 2) 白名单 ≡ 恰好 六大板块 + github (顺序无关·不多不少)
+assert.deepStrictEqual([...keys].sort(), [...BOARDS].sort(),
+  "_solo 白名单必须恰好为 六大板块+github, 实为: [" + keys.join(", ") + "]");
+console.log("  ✓ _solo ≡ {" + BOARDS.join(", ") + "}");
 pass++;
 
 // 3) 严禁死板块 computer 复活 (无论在 _solo 还是别处的 solo 键位)

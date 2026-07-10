@@ -55,10 +55,12 @@ assert.ok(S, "__selftest seam 未暴露 (DAO_SELFTEST 未生效?)");
 
 // ── 令牌样本 (≥16 字符方被 machineToken/publishedToken 采纳) ──
 const OWN_URL = "https://own-tunnel-abc.trycloudflare.com";
-const MACHINE_TOKEN = "dao-vsix-REDACTED"; // leader·机器权威(dao-conn-current)
-const WINDOW_TOKEN = "dao-vsix-REDACTED"; // 本窗口私牌(ws.token)
-const BRIDGE_TUNNEL_TOKEN = "dao-vsix-REDACTED"; // 内穿刷新令牌(bridgeToken)
-const FOREIGN_TOKEN = "dao-vsix-REDACTED"; // 他者进程(独立 dao-bridge)写共享文件的令牌
+// 注: 以下为**纯沙盒假令牌**(无真凭证·勿用 dao-vsix- 前缀以免被密钥清洗器再次抹平成同一串)。
+//     四者必须彼此相异, 隔离断言才有意义(FOREIGN ≠ MACHINE)。
+const MACHINE_TOKEN = "selftest-machine-e40b6c0011223344"; // leader·机器权威(dao-conn-current)
+const WINDOW_TOKEN = "selftest-window-aa11bb22cc334455"; // 本窗口私牌(ws.token)
+const BRIDGE_TUNNEL_TOKEN = "selftest-bridge-dd44ee55ff667788"; // 内穿刷新令牌(bridgeToken)
+const FOREIGN_TOKEN = "selftest-foreign-4092e0aabbccddee"; // 他者进程(独立 dao-bridge)写共享文件的令牌
 const FOREIGN_URL = "https://foreign-bridge-xyz.trycloudflare.com";
 
 const P = S.paths;
@@ -71,7 +73,7 @@ writeJson(P.DAO_CONN_CURRENT, {
   alive: [
     { port: 9920, pid: 1111, url: OWN_URL, token: MACHINE_TOKEN },
     { port: 9921, pid: 2222, url: "", token: WINDOW_TOKEN },
-    { port: 9923, pid: 3333, url: "", token: "dao-vsix-REDACTED" },
+    { port: 9923, pid: 3333, url: "", token: "selftest-w3-99887766554433221100" },
   ],
 });
 // 2) 他者进程(独立 dao-bridge)写的共享 conn.json: url 恒空, 却带自己的令牌 4092e0 (跨域污染源)
@@ -102,7 +104,7 @@ test("放行 本窗口私牌 (ws.token)", () => assert.strictEqual(S.checkAuth(r
 test("放行 内穿刷新令牌 (bridgeToken)", () => assert.strictEqual(S.checkAuth(req("POST", "/api/exec", BRIDGE_TUNNEL_TOKEN)), true));
 test("拒绝 他者进程令牌 (4092e0·独立 dao-bridge 共享文件) → 根病修复核心", () => assert.strictEqual(S.checkAuth(req("POST", "/api/exec", FOREIGN_TOKEN)), false));
 test("拒绝 无令牌 非环回请求", () => assert.strictEqual(S.checkAuth(req("POST", "/api/exec", "")), false));
-test("拒绝 随机错误令牌", () => assert.strictEqual(S.checkAuth(req("POST", "/api/exec", "dao-vsix-REDACTED")), false));
+test("拒绝 随机错误令牌", () => assert.strictEqual(S.checkAuth(req("POST", "/api/exec", "selftest-random-wrong-0000000000")), false));
 test("master_token query 亦只认机器权威牌", () => assert.strictEqual(S.checkAuth(req("GET", "/api/exec?master_token=" + MACHINE_TOKEN, "")), true));
 test("master_token query 拒绝他者令牌", () => assert.strictEqual(S.checkAuth(req("GET", "/api/exec?master_token=" + FOREIGN_TOKEN, "")), false));
 
