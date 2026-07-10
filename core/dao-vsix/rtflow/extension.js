@@ -812,7 +812,7 @@ var tabs={},order=[],active=null,favs=[],history=[],accounts=[],bridge=null,user
 // 归一·分而治之: 六大板块各开一张独立子网页(各自一个 iframe), 不再共用一个全功能面板。
 // BOARDS[tab] = {req,mounted,ready,frame,url}; 外壳标签 id = 'board:'+tab。
 var BOARDS={};
-var BOARD_META={home:['🏠','主页·六合一'],overview:['🏠','主页'],switch:['🔀','切号'],bridge:['🌐','公网穿透'],backups:['💬','对话备份'],inject:['💉','反向注入'],mcp:['🧩','MCP']};
+var BOARD_META={home:['🏠','主页·六合一'],overview:['🏠','主页'],switch:['🔀','切号'],bridge:['🌐','公网穿透'],backups:['💬','对话备份'],inject:['💉','反向注入'],mcp:['🧩','MCP'],github:['🐙','GitHub']};
 function boardId(tab){return 'board:'+tab;}
 function isBoard(){return !!active&&active.indexOf('board:')===0;}
 function activeBoardTab(){return isBoard()?active.slice(6):'';}
@@ -968,7 +968,7 @@ function navigate(v){v=(v||'').trim();if(!v)return;var isU=/^https?:\\/\\//i.tes
   if(v.charAt(0)==='/'){var u=curOrigin()+v;t.url=u;t._loaded=true;t.frame.setAttribute('src',u);setLoading(active,true);ADDR.value=u;return;}
   openWebTab(ENG.value+encodeURIComponent(v),v);}
 // 归一 · 设备类型自动识别 (UA / ?m=1·见 _multiShellHtml MOBILE 注入) — 移除手动「切换 电脑版/手机版」(点击会重载致整体失效)。
-var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🔌','用户脚本 / 扩展','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
+var PAGES=[['🏠','主页 · 六合一(含全部板块)','board:home'],['🔀','切号 · 账号池','board:switch'],['🌐','公网穿透 · DAO Bridge','board:bridge'],['💬','对话备份','board:backups'],['💉','反向注入 · 全账号','board:inject'],['🧩','MCP 服务器','board:mcp'],['🐙','GitHub · 统一管理','board:github'],['➕','新建 Devin 标签','newDevin'],['🕘','浏览历史','history'],['⭐','书签收藏','favs'],['🔌','用户脚本 / 扩展','userscripts'],['🛠','页面工具','tools'],['❔','关于 · 说明','about']];
 function buildMenu(){var h='';for(var i=0;i<PAGES.length;i++){h+='<div class="mi" data-p="'+PAGES[i][2]+'" data-l="'+esc(PAGES[i][1])+'"><span class="ic">'+PAGES[i][0]+'</span><span>'+PAGES[i][1]+'</span></div>';}MENU.innerHTML=h;
   var items=MENU.querySelectorAll('.mi');for(var j=0;j<items.length;j++){items[j].onclick=function(){MENU.className='';onPage(this.getAttribute('data-p'),this.getAttribute('data-l'));};}}
 function toggleMenu(){MENU.className=MENU.className?'':'on';}
@@ -11198,21 +11198,18 @@ ${_quotaEndpointDead() ? `<div class="endpoint-warn">&#9888;&#65039; <b>GetPlanS
 <button onclick="dvCleanupNow()" class="conv-btn conv-btn-s" title="立即清理(参手机版·无模态): 对已选(无选→全部)账号 先全量备份→对话/账号整体归零→出库, 一气呵成">&#9889; 立即清理</button>
 <button onclick="dvMigrateRoot()" class="conv-btn" title="迁移备份到数据盘: 把 C 盘旧备份整体搬到自动择优的数据盘(非系统盘·剩余最大), 之后默认落该盘·不压系统盘">&#128190;&#10141; 迁移到数据盘</button>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="开启后定时自动增量备份运行/更新过的对话"><input type="checkbox" id="dvAutoBk" ${_cfg("devinCloudAutoBackup", true) ? "checked" : ""} onchange="dvToggleAuto(this.checked)">自动备份</label>
-<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.4.0 · 默认开 · 备份完成且额度低于阈值时自动水过无痕清理"><input type="checkbox" id="dvAutoClean" ${_cfg("devinCloudAutoCleanup", true) ? "checked" : ""} onchange="dvToggleCleanup(this.checked)">自动清理</label>
-<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.9.12 · 默认开·归零移除闭环 · 额度完全归零的账号在全量备份+清理无残留后自动从账号库移除(不再显示). 取消勾选则仅清痕迹+本地留底,账号保留"><input type="checkbox" id="dvRmZero" ${_cfg("devinCloudAutoRemoveZeroQuota", true) ? "checked" : ""} onchange="dvToggleRemoveZero(this.checked)">归零移除</label>
+<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="守柔·默认关(v4.28 止血): 仅手动勾选后, 备份完成且额度低于阈值才自动水过无痕清理. 默认不自动清理任何账号"><input type="checkbox" id="dvAutoClean" ${_cfg("devinCloudAutoCleanup", false) ? "checked" : ""} onchange="dvToggleCleanup(this.checked)">自动清理</label>
+<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="守柔·默认关(v4.28 止血): 仅手动勾选后, 额度完全归零的账号才在全量备份+清理无残留后自动从账号库移除. 默认绝不自动出库任何账号"><input type="checkbox" id="dvRmZero" ${_cfg("devinCloudAutoRemoveZeroQuota", false) ? "checked" : ""} onchange="dvToggleRemoveZero(this.checked)">归零移除</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.4.0 · 额度低于此阈值($)时触发自动备份+清理">$<input type="number" id="dvThreshold" value="${_cfg("devinCloudAutoBackupThreshold", 3)}" min="0" step="1" style="width:30px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetThreshold(this.value)"></label>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.5.0 · 对话额度上限·知止不殆: 每对话上限=余额-缓冲·实时跟随余额; 余额≤停止阈值自动中停运行中对话"><input type="checkbox" id="dvConvCap" ${_cfg("devinCloudConvQuotaCap", true) ? "checked" : ""} onchange="dvToggleConvCap(this.checked)">对话上限</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.5.0 · 对话上限缓冲($): 每对话上限=余额-此缓冲 (余额$70→上限$67)">缓冲$<input type="number" id="dvConvBuf" value="${_cfg("devinCloudConvQuotaBuffer", 3)}" min="0" step="0.01" style="width:34px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetConvBuffer(this.value)"></label>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.7.3 · 耗尽自动重置·将欲予之必故予之: 余额抵缓冲(上限本将归0)时不困住这笔钱, 反向把上限抬回剩余余额, 让美金真正用尽; 仅余额≤抽干地板才最终中停"><input type="checkbox" id="dvConvDrain" ${_cfg("devinCloudConvDrainToZero", true) ? "checked" : ""} onchange="dvToggleDrain(this.checked)">耗尽重置</label>
 <select style="font-size:9px;background:#1e1e1e;color:#888;border:1px solid #444;border-radius:3px;padding:1px 2px" title="v4.4.0 · 备份模式: folder=文件夹(HTML/MD·推荐) zip=传统ZIP" onchange="dvSetMode(this.value)"><option value="folder" ${_cfg("devinCloudBackupMode", "folder") === "folder" ? "selected" : ""}>文件夹</option><option value="zip" ${_cfg("devinCloudBackupMode", "folder") === "zip" ? "selected" : ""}>ZIP</option></select>
 </div>
-<div class="dv-tb dv-tb-git" title="多个 Devin 账号归一连接到同一个 GitHub：先勾选账号，再点批量连Git">
-<span class="dv-git-tag">&#128279; 批量归一</span>
-<input class="dv-git-pat" id="gitBatchPat" type="password" placeholder="批量 PAT (留空→各账号默认/映射)" autocomplete="off" style="max-width:200px"/>
-<button onclick="gitBatchConnect()" class="conv-btn" title="把勾选的多个 Devin 账号全部连接到同一个 GitHub（同一 PAT 注入+落库密钥+核验）">&#128279; 批量连Git</button>
-<button onclick="gitBatchDisconnect()" class="conv-btn conv-btn-s" title="真解绑勾选账号的 Git 连接（复查扫除·连接归零·删密钥）">&#9986; 批量断Git</button>
-<button onclick="gitInjectPatAll()" class="conv-btn" title="PAT 反向注入: 把上面 PAT 框的 PAT 作为 GITHUB_PAT 密钥写入「全部账号」(若已勾选则仅勾选账号)·写后双读确认·dao-vsix 1.3.3 同源">&#128273; PAT注密钥</button>
-<span style="font-size:10px;color:#888">勾选→多 Devin 绑同一 GitHub</span>
+<div class="dv-tb dv-tb-git" title="批量连Git/断Git/PAT注密钥 已迁入专门的 GitHub 板块统一管理">
+<span class="dv-git-tag">&#128025; GitHub</span>
+<span style="font-size:10px;color:#888">批量连Git/断Git/PAT注密钥·组织/迁仓/舰队 已迁入 GitHub 板块 →</span>
+<button onclick="try{parent.postMessage({type:'gotoBoard',board:'github'},'*')}catch(e){}" class="conv-btn" title="打开专门的 GitHub 统一管理板块">&#128025; 打开 GitHub 板块</button>
 </div>
 <div id="list" style="contain:layout style paint">${rows}</div>
 <div class="footer">WAM <span class="v">v${VERSION}</span><br>${_esc(store.accountsSource || "")}</div>
@@ -12365,11 +12362,11 @@ async function _dvAutoBackupRun() {
   const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
   const mode = _cfg("devinCloudBackupMode", "folder");
   const threshold = Math.max(0, +_cfg("devinCloudAutoBackupThreshold", 3) || 3);
-  const autoCleanup = !!_cfg("devinCloudAutoCleanup", true);
+  const autoCleanup = !!_cfg("devinCloudAutoCleanup", false);
   // v4.9.6 · 清理阈值默认对齐备份阈值(动态·默3) → 「额度 < 3 即在全量备份校验后自动清理」(用户可调单一阈值 dvThreshold)
   const cleanupThreshold = Math.max(0, +_cfg("devinCloudAutoCleanupThreshold", threshold) || threshold);
   // v4.9.12 · 归零移除默认开 — 闭合「备份→清理→出库」整套循环: 额度彻底归零的账号在全量备份(严格校验)+清理无残留后自动出库. 取消勾选 (dvRmZero=false) 则仅清痕迹+本地留底·账号保留.
-  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", true);
+  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", false);
   // v4.26.6 · 出库阈值默认对齐清理阈值(清理即出库·闭环): 旧默认0 只出库「分文不剩」的号 →
   //   残留 $0.27~$2 的耗尽号被反复清理却永不出库·永久滞留仓库(实测全池如此)。
   //   用户显式配置仍优先(含显式 0=仅完全归零才出库)。
@@ -12413,7 +12410,7 @@ async function _dvAutoBackupRun() {
       //   软编码: wam.devinCloudIdleCleanup(默 true) · wam.devinCloudIdleHours(默 24)。
       const lowCredit = totalCredits !== null && totalCredits < threshold;
       let idleTrigger = false;
-      if (!lowCredit && !!_cfg("devinCloudIdleCleanup", true)) {
+      if (!lowCredit && !!_cfg("devinCloudIdleCleanup", false)) {
         try {
           const _idleMs = await _dvRemoteIdleMs(auth);
           const _idleWin = Math.max(1, +_cfg("devinCloudIdleHours", 24) || 24) * 3600000;
