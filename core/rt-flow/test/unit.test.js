@@ -913,15 +913,31 @@ function test(name, fn) {
       try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
     }
   });
-  test("package.json: 自动清理默认开; 归零移除默认开(v4.9.12 闭环)", () => {
+  test("package.json: v4.31 守柔 · manifest 默认关 (getConfiguration 以 manifest default 为真源, 代码级 fallback 不生效)", () => {
+    // 本源: vscode getConfiguration().get(k, d) 在 key 已注册于 manifest 时返回 manifest default,
+    // 代码里 _cfg(k, false) 的 false 形同虚设 — 守柔必须锁死 manifest 层。
     const fs = require("fs");
-    const pkg = JSON.parse(fs.readFileSync(require("path").join(__dirname, "..", "package.json"), "utf8"));
-    const props = pkg.contributes.configuration.properties;
-    assert.strictEqual(props["wam.devinCloudAutoCleanup"].default, true, "自动清理默认开");
-    // v4.9.12 · 用户要求: 归零移除默认开 — 闭合 备份→清理→出库 整套循环; 额度彻底归零的账号自动出库
-    assert.strictEqual(props["wam.devinCloudAutoRemoveZeroQuota"].default, true, "归零移除默认开(闭环)");
-    // v4.26.6 · 出库阈值默认对齐清理阈值(清理即出库·闭环): 残留 $0.x~$2 的耗尽号不再永久滞留仓库
-    assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 3, "归零阈值默认3(对齐清理阈值·清理即出库)");
+    const path = require("path");
+    const manifests = [
+      path.join(__dirname, "..", "package.json"),
+      path.join(__dirname, "..", "..", "dao-vsix", "package.json"),
+      path.join(__dirname, "..", "..", "dao-one", "package.json"),
+      path.join(__dirname, "..", "..", "dao-one", "vendor-vsix", "package.json"),
+      path.join(__dirname, "..", "..", "dao-one", "vendor-flow", "package.json"),
+    ];
+    for (const m of manifests) {
+      if (!fs.existsSync(m)) continue;
+      const pkg = JSON.parse(fs.readFileSync(m, "utf8"));
+      const props = (((pkg.contributes || {}).configuration || {}).properties) || {};
+      if (props["wam.devinCloudAutoCleanup"])
+        assert.strictEqual(props["wam.devinCloudAutoCleanup"].default, false, m + ": 自动清理 manifest 默认须关(守柔)");
+      if (props["wam.devinCloudAutoRemoveZeroQuota"])
+        assert.strictEqual(props["wam.devinCloudAutoRemoveZeroQuota"].default, false, m + ": 归零移除 manifest 默认须关(守柔)");
+      if (props["wam.devinCloudAutoRemoveThreshold"])
+        assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 0, m + ": 出库阈值 manifest 默认须 0(出库唯归零)");
+      if (props["wam.devinCloudIdleCleanup"])
+        assert.strictEqual(props["wam.devinCloudIdleCleanup"].default, false, m + ": 闲置清理 manifest 默认须关(守柔)");
+    }
   });
 
   // ── 账号 1:1 同步 (dao-vsix 全能板以 RT Flow 活跃号为唯一权威源 · 源级护栏) ──
