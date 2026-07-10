@@ -145,6 +145,14 @@ test("repairUvJs: 无 __uv.$get 的源码原样返回 (快路径)", () => {
 // —— /i/ 反代 WebSocket 升级代理(根治网页内 Devin「一直连接中/Reconnecting」) ——
 const workerSrc = readFileSync(new URL("../worker.js", import.meta.url), "utf8");
 
+test("/shell 恒定地址落地页: 探活 dao_alt 备用源并跳转 (公网单页双重兜底不 404)", () => {
+  assert.ok(/if \(path === "\/shell"\)/.test(workerSrc), "worker 必有 /shell 落地路由 (恒定地址不 404)");
+  assert.ok(/url\.searchParams\.get\("dao_alt"\)/.test(workerSrc), "落地页须解析 dao_alt 备用源");
+  assert.ok(/\/api\/health/.test(workerSrc), "须逐源探活 /api/health");
+  assert.ok(/location\.replace\(b\+'\/shell\?dao_alt='/.test(workerSrc), "探活成功须整页跳备用源 /shell 并回携 dao_alt");
+  assert.ok(/setTimeout\(go,10000\)/.test(workerSrc), "全部不可达须 10s 周期重探·永不死链");
+});
+
 test("pxWsProxy: 存在且解 /__wsx/<b64> 与 pxResolveUpstream 两路上游", () => {
   assert.ok(/async function pxWsProxy\(req, opts\)/.test(workerSrc), "pxWsProxy 函数存在");
   assert.ok(/pathOnly\.indexOf\("\/__wsx\/"\) === 0/.test(workerSrc), "异源 wss → /__wsx/<b64> 解码路径");
