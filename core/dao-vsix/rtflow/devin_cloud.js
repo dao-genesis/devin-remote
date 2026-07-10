@@ -2465,29 +2465,45 @@ function _scanConvEntries(base, resolveShort) {
       });
     } else if (e.isDirectory() && !e.name.startsWith("_") && e.name !== "账号信息" && e.name !== "对话" && e.name !== "files") {
       const metaPath = path.join(base, e.name, "_meta.json");
-      if (!fs.existsSync(metaPath)) continue;
-      let mtime = 0, meta = {};
-      try { mtime = fs.statSync(metaPath).mtimeMs; } catch {}
-      try { meta = JSON.parse(fs.readFileSync(metaPath, "utf8")); } catch {}
       const htmlPath = path.join(base, e.name, "对话.html");
+      const mdPath = path.join(base, e.name, "对话.md");
+      const hasMeta = fs.existsSync(metaPath);
+      // 旧格式对话文件夹(无 _meta.json 但有 对话.md/对话.html 正文)同样是备份本体,
+      // 绝不因缺元数据而隐身 —— 备份是不可变档案, 列表必须让它可见。
+      if (!hasMeta && !fs.existsSync(mdPath) && !fs.existsSync(htmlPath)) continue;
+      let mtime = 0, meta = {};
+      if (hasMeta) {
+        try { mtime = fs.statSync(metaPath).mtimeMs; } catch {}
+        try { meta = JSON.parse(fs.readFileSync(metaPath, "utf8")); } catch {}
+      } else {
+        try { mtime = fs.statSync(path.join(base, e.name)).mtimeMs; } catch {}
+      }
       // 文件夹名 = <NNN>_<标题>_<ID末8位> → meta 缺失/损坏时据尾段短 ID 反查
       let did = meta.devinId || "";
       if (!did) { const fm = e.name.match(/_([A-Za-z0-9]{8})$/); if (fm) did = rs(fm[1]); }
       convs.push({
         name: e.name, path: path.join(base, e.name), mtime, type: "folder",
-        title: meta.title || "", devinId: did, eventCount: meta.eventCount || 0, num: meta.convNo || 0,
+        title: meta.title || (hasMeta ? "" : e.name.replace(/_[A-Za-z0-9]{8}$/, "")),
+        devinId: did, eventCount: meta.eventCount || 0, num: meta.convNo || 0,
         hasHtml: fs.existsSync(htmlPath), htmlPath,
       });
     }
   }
   return convs;
 }
-function listBackups(root) {
-  root = root || DC_BACKUP_DEFAULT;
-  const out = { root, accounts: [] };
+// 备份根聚合: 主根之外, home 旧根与历史持久化根上的备份同样是不可变档案 ——
+//   备份根切换(如 home → 数据盘)后, 旧根上的备份绝不能从列表"消失"。
+function _knownBackupRoots(primary) {
+  const roots = [primary];
+  const add = (r) => { try { if (r && fs.existsSync(r) && !roots.some((x) => path.resolve(x) === path.resolve(r))) roots.push(r); } catch {} };
+  add(DC_HOME_BACKUP);
+  try { const j = JSON.parse(fs.readFileSync(DC_BACKUP_ROOT_STATE, "utf8")); if (j && j.root) add(j.root); } catch {}
+  return roots;
+}
+function _scanRootAccounts(root, rs) {
+  const accounts = [];
   let dirs = [];
-  try { dirs = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return out; }
-  const rs = _shortIdResolver(); // 整树共享一个短ID解析器(state 只读一次)
+  try { dirs = fs.readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return accounts; }
   for (const d of dirs) {
     if (d.name.startsWith("_")) continue;
     const accDir = path.join(root, d.name);
@@ -2500,15 +2516,38 @@ function listBackups(root) {
       // 兼容: 既有 对话/ 又有根级旧文件夹时, 两者合并
       for (const c of _scanConvEntries(accDir, rs)) convs.push(c);
     }
-    convs.sort((a, b) => (a.num && b.num ? a.num - b.num : b.mtime - a.mtime));
     const infoDir = path.join(accDir, "账号信息");
     const hasInfo = fs.existsSync(infoDir);
-    out.accounts.push({
-      account: d.name, email: acctMeta.email || "", accountNo: acctMeta.accountNo || 0,
+    accounts.push({
+      account: d.name, email: acctMeta.email || (d.name.includes("@") ? d.name : ""), accountNo: acctMeta.accountNo || 0,
       dir: accDir, count: convs.length,
       hasAccountInfo: hasInfo, accountInfoPath: hasInfo ? infoDir : "",
       conversations: convs,
     });
+  }
+  return accounts;
+}
+function listBackups(root) {
+  root = root || DC_BACKUP_DEFAULT;
+  const out = { root, accounts: [] };
+  const rs = _shortIdResolver(); // 整树共享一个短ID解析器(state 只读一次)
+  const byName = new Map(); // 同名账号目录跨根合并(对话按 name 去重·主根优先)
+  for (const r of _knownBackupRoots(root)) {
+    for (const acc of _scanRootAccounts(r, rs)) {
+      const prev = byName.get(acc.account);
+      if (!prev) { byName.set(acc.account, acc); continue; }
+      const seen = new Set(prev.conversations.map((c) => c.name));
+      for (const c of acc.conversations) if (!seen.has(c.name)) { prev.conversations.push(c); seen.add(c.name); }
+      prev.count = prev.conversations.length;
+      if (!prev.email) prev.email = acc.email;
+      if (!prev.accountNo) prev.accountNo = acc.accountNo;
+      if (!prev.hasAccountInfo && acc.hasAccountInfo) { prev.hasAccountInfo = true; prev.accountInfoPath = acc.accountInfoPath; }
+    }
+  }
+  for (const acc of byName.values()) {
+    acc.conversations.sort((a, b) => (a.num && b.num ? a.num - b.num : b.mtime - a.mtime));
+    acc.count = acc.conversations.length;
+    out.accounts.push(acc);
   }
   out.accounts.sort((a, b) => (a.accountNo && b.accountNo ? a.accountNo - b.accountNo : b.count - a.count));
   return out;
