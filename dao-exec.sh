@@ -8,7 +8,7 @@
 #   DAO_TOKEN=ghp_xxx dao-exec.sh --agents
 
 set -u
-REPO="${DAO_REPO:-zhouyoukang1234-spec/devin-remote}"
+REPO="${DAO_REPO:-dao-devin/devin-remote}"
 TOKEN="${DAO_TOKEN:-}"
 TIMEOUT="${DAO_TIMEOUT:-120}"
 API="https://api.github.com/repos/$REPO"

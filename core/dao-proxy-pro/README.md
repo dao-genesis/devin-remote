@@ -25,6 +25,6 @@ node tools/pack-vsix.js core/dao-proxy-pro     # 纯 JS，免转译
 devin-desktop --install-extension dao-proxy-pro-<ver>.vsix --force   # 或 code --install-extension ...
 ```
 
-下载见仓库 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases)（tag 形如 `dao-proxy-pro-v<版本>`）。
+下载见仓库 [Releases](https://github.com/dao-devin/devin-remote/releases)（tag 形如 `dao-proxy-pro-v<版本>`）。
 
 > 去中心化：本模块独立发版，开发它才会刷新 `dao-proxy-pro-v*` Release，与其它插件互不干扰。

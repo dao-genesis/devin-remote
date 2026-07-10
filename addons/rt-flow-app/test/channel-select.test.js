@@ -48,7 +48,7 @@ const ID = { session: "s1", token: "tok1" };   // 真实设备恒自带 session+
 // 死宿主护栏: 默认首字节宿主必须是活的项目方 Pages, 绝不是已 404 的 hdougle (用户实测网页直开 404 之根因·防回归)。
 {
   const mod0 = build({ conn: ID });
-  ok(/zhouyoukang1234-spec\.github\.io/.test(mod0.P2P_WEB_DEFAULT), "0 默认首字节宿主 = 活的项目方 Pages (实测 200 text/html)");
+  ok(/dao-devin\.github\.io/.test(mod0.P2P_WEB_DEFAULT), "0 默认首字节宿主 = 活的项目方 Pages (实测 200 text/html)");
   ok(mod0.P2P_WEB_DEFAULT.indexOf("hdougle.github.io") < 0, "0 默认首字节宿主绝不指向已 404 的 hdougle (网页直开报错之根因·防回归)");
 }
 

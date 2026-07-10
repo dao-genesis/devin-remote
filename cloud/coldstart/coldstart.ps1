@@ -7,7 +7,7 @@
 # 冷启动构建/安装 dao-one; 若只要纯二合一本源, 可单独构建 core/dao-vsix。
 #
 # Usage (run from inside a cloned devin-remote repo):
-#   git clone https://github.com/zhouyoukang1234-spec/devin-remote.git $env:USERPROFILE\repos\devin-remote
+#   git clone https://github.com/dao-devin/devin-remote.git $env:USERPROFILE\repos\devin-remote
 #   powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\cloud\coldstart\coldstart.ps1
 #
 #   -SkipInstall   IDE already installed, skip the Devin Desktop download/install step

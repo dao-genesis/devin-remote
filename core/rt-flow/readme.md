@@ -57,7 +57,7 @@ v4.5.0 配置: `wam.devinCloudConvQuotaCap`(对话上限开关) / `…ConvQuotaB
 Ctrl+Shift+P → Extensions: Install from VSIX → 选择 rt-flow-4.5.0.vsix
 ```
 
-最新 VSIX 见 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases/latest)
+最新 VSIX 见 [Releases](https://github.com/dao-devin/devin-remote/releases/latest)
 
 **方式 B · 开发者部署（从源码）**
 
@@ -444,10 +444,10 @@ Get-Content "$env:USERPROFILE\.wam\wam.log" -Tail 30 | Select-String 'python_'
 
 ## 十一 · GitHub
 
-- 仓库: <https://github.com/zhouyoukang1234-spec/devin-remote>
-- 插件目录: [`plugins/rt-flow/`](https://github.com/zhouyoukang1234-spec/devin-remote/tree/main/plugins/rt-flow)
-- Releases: <https://github.com/zhouyoukang1234-spec/devin-remote/releases>
-- Issues: <https://github.com/zhouyoukang1234-spec/devin-remote/issues>
+- 仓库: <https://github.com/dao-devin/devin-remote>
+- 插件目录: [`plugins/rt-flow/`](https://github.com/dao-devin/devin-remote/tree/main/plugins/rt-flow)
+- Releases: <https://github.com/dao-devin/devin-remote/releases>
+- Issues: <https://github.com/dao-devin/devin-remote/issues>
 
 ---
 
