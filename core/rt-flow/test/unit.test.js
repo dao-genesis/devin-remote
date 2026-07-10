@@ -820,8 +820,10 @@ function test(name, fn) {
   test("extension.js: 归零移除仅在权威归零+清理无残留时触发, 且循环外统一 removeBatch", () => {
     const fs = require("fs");
     const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
-    // 7号板块·闲置触发: 出库阈值闸扩为 (归零阈值 ∨ 24h 无活跃 idleTrigger), 其余三重闸不变
-    assert.ok(/if \(autoRemoveZero && wipeClean && !_addedRecently && \(_credits <= removeThreshold \|\| idleTrigger\)\)/.test(src), "移除须 autoRemoveZero+wipeClean+addedAt冷却+(归零阈值∨闲置)四重闸");
+    // v4.29 守柔·止血: 出库唯归零 — idleTrigger 只可触发清理, 绝不可触发出库; 出库阈值默认 $0
+    assert.ok(/if \(autoRemoveZero && wipeClean && !_addedRecently && _credits <= removeThreshold\)/.test(src), "移除须 autoRemoveZero+wipeClean+addedAt冷却+归零阈值四重闸 (闲置不出库)");
+    assert.ok(!/autoRemoveZero && wipeClean && !_addedRecently && \(_credits <= removeThreshold \|\| idleTrigger\)/.test(src), "禁止 idleTrigger 触发出库 (闲置只清理·有余额账号绝不出库)");
+    assert.ok(/const _rtRaw = \+_cfg\("devinCloudAutoRemoveThreshold", 0\);/.test(src), "出库阈值默认须为 0 (仅额度真正归零才出库)");
     assert.ok(/const wipeClean = .*rep\.sessions\.failed === 0 && rep\.knowledge\.failed === 0 && rep\.playbooks\.failed === 0 && rep\.secrets\.failed === 0/.test(src), "wipeClean 须确认四类痕迹全清无失败");
     assert.ok(/_store\.removeBatch\(idx\)/.test(src), "循环外兜底须走 removeBatch (单次IO+持久化)");
     // v4.26.6 · 即时出库: 条件满足当即 _store.remove 落盘 (中途断不丢), 循环末批处理仅兜底
