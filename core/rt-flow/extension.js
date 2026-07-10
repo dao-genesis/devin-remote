@@ -11198,8 +11198,8 @@ ${_quotaEndpointDead() ? `<div class="endpoint-warn">&#9888;&#65039; <b>GetPlanS
 <button onclick="dvCleanupNow()" class="conv-btn conv-btn-s" title="立即清理(参手机版·无模态): 对已选(无选→全部)账号 先全量备份→对话/账号整体归零→出库, 一气呵成">&#9889; 立即清理</button>
 <button onclick="dvMigrateRoot()" class="conv-btn" title="迁移备份到数据盘: 把 C 盘旧备份整体搬到自动择优的数据盘(非系统盘·剩余最大), 之后默认落该盘·不压系统盘">&#128190;&#10141; 迁移到数据盘</button>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="开启后定时自动增量备份运行/更新过的对话"><input type="checkbox" id="dvAutoBk" ${_cfg("devinCloudAutoBackup", true) ? "checked" : ""} onchange="dvToggleAuto(this.checked)">自动备份</label>
-<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="守柔·默认关(v4.28 止血): 仅手动勾选后, 备份完成且额度低于阈值才自动水过无痕清理. 默认不自动清理任何账号"><input type="checkbox" id="dvAutoClean" ${_cfg("devinCloudAutoCleanup", false) ? "checked" : ""} onchange="dvToggleCleanup(this.checked)">自动清理</label>
-<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="守柔·默认关(v4.28 止血): 仅手动勾选后, 额度完全归零的账号才在全量备份+清理无残留后自动从账号库移除. 默认绝不自动出库任何账号"><input type="checkbox" id="dvRmZero" ${_cfg("devinCloudAutoRemoveZeroQuota", false) ? "checked" : ""} onchange="dvToggleRemoveZero(this.checked)">归零移除</label>
+<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="默认开: 额度低于阈值 或 24h 无活跃对话时, 先全量备份(严格校验)+落地本地, 再水过无痕清理. 备份不通过则绝不清理"><input type="checkbox" id="dvAutoClean" ${_cfg("devinCloudAutoCleanup", true) ? "checked" : ""} onchange="dvToggleCleanup(this.checked)">自动清理</label>
+<label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="默认开·归零移除(守柔): 仅当【额度真正归零$0】且已全量备份+清理无残留+24h无活跃, 才从账号库移除. 有余额的账号绝不因闲置被出库. 本地备份永久保留可在对话备份板块查回"><input type="checkbox" id="dvRmZero" ${_cfg("devinCloudAutoRemoveZeroQuota", true) ? "checked" : ""} onchange="dvToggleRemoveZero(this.checked)">归零移除</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.4.0 · 额度低于此阈值($)时触发自动备份+清理">$<input type="number" id="dvThreshold" value="${_cfg("devinCloudAutoBackupThreshold", 3)}" min="0" step="1" style="width:30px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetThreshold(this.value)"></label>
 <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:3px" title="v4.5.0 · 对话额度上限·知止不殆: 每对话上限=余额-缓冲·实时跟随余额; 余额≤停止阈值自动中停运行中对话"><input type="checkbox" id="dvConvCap" ${_cfg("devinCloudConvQuotaCap", true) ? "checked" : ""} onchange="dvToggleConvCap(this.checked)">对话上限</label>
 <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:2px" title="v4.5.0 · 对话上限缓冲($): 每对话上限=余额-此缓冲 (余额$70→上限$67)">缓冲$<input type="number" id="dvConvBuf" value="${_cfg("devinCloudConvQuotaBuffer", 3)}" min="0" step="0.01" style="width:34px;background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:3px;font-size:9px;padding:1px 2px" onchange="dvSetConvBuffer(this.value)"></label>
@@ -12362,16 +12362,17 @@ async function _dvAutoBackupRun() {
   const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
   const mode = _cfg("devinCloudBackupMode", "folder");
   const threshold = Math.max(0, +_cfg("devinCloudAutoBackupThreshold", 3) || 3);
-  const autoCleanup = !!_cfg("devinCloudAutoCleanup", false);
+  const autoCleanup = !!_cfg("devinCloudAutoCleanup", true);
   // v4.9.6 · 清理阈值默认对齐备份阈值(动态·默3) → 「额度 < 3 即在全量备份校验后自动清理」(用户可调单一阈值 dvThreshold)
   const cleanupThreshold = Math.max(0, +_cfg("devinCloudAutoCleanupThreshold", threshold) || threshold);
   // v4.9.12 · 归零移除默认开 — 闭合「备份→清理→出库」整套循环: 额度彻底归零的账号在全量备份(严格校验)+清理无残留后自动出库. 取消勾选 (dvRmZero=false) 则仅清痕迹+本地留底·账号保留.
-  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", false);
-  // v4.26.6 · 出库阈值默认对齐清理阈值(清理即出库·闭环): 旧默认0 只出库「分文不剩」的号 →
-  //   残留 $0.27~$2 的耗尽号被反复清理却永不出库·永久滞留仓库(实测全池如此)。
-  //   用户显式配置仍优先(含显式 0=仅完全归零才出库)。
-  const _rtRaw = +_cfg("devinCloudAutoRemoveThreshold", cleanupThreshold);
-  const removeThreshold = Math.max(0, Number.isFinite(_rtRaw) ? _rtRaw : cleanupThreshold);
+  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", true);
+  // v4.29 · 守柔·止血: 出库阈值默认 0(仅额度真正归零$0 才出库) —— 旧默认对齐清理阈值($3)
+  //   把残留 $0.27~$2 的有效号一并出库, 致大量有余额账号被误移出库(实测几十→寥寥)。
+  //   出库=从账号库移除(高破坏), 必须严于清理: 清理可在低额/闲置触发, 出库唯归零。
+  //   用户显式配置仍优先(含显式抬高阈值)。
+  const _rtRaw = +_cfg("devinCloudAutoRemoveThreshold", 0);
+  const removeThreshold = Math.max(0, Number.isFinite(_rtRaw) ? _rtRaw : 0);
   const removeEmails = [];
   // v4.26.6 · 即时出库(逐号落盘): 旧法攒到循环末统一出库 — 全池扫描以小时计,
   //   窗口 reload/中途异常即丢 removeEmails → 已清理号永不落盘出库(实测病灶)。
@@ -12410,7 +12411,7 @@ async function _dvAutoBackupRun() {
       //   软编码: wam.devinCloudIdleCleanup(默 true) · wam.devinCloudIdleHours(默 24)。
       const lowCredit = totalCredits !== null && totalCredits < threshold;
       let idleTrigger = false;
-      if (!lowCredit && !!_cfg("devinCloudIdleCleanup", false)) {
+      if (!lowCredit && !!_cfg("devinCloudIdleCleanup", true)) {
         try {
           const _idleMs = await _dvRemoteIdleMs(auth);
           const _idleWin = Math.max(1, +_cfg("devinCloudIdleHours", 24) || 24) * 3600000;
@@ -12487,7 +12488,7 @@ async function _dvAutoBackupRun() {
               autoRemoveZero &&
               !_addedRecently &&
               _staleConv &&
-              (_credits <= removeThreshold || idleTrigger)
+              _credits <= removeThreshold
             ) {
               if (_evictNow(acc.email, "额度归零·痕迹已清(上轮)·补出库")) _abIdx--;
               _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零·痕迹已清(上轮) → 补出库");
@@ -12506,7 +12507,7 @@ async function _dvAutoBackupRun() {
               _dvOverviewCache.delete(acc.email.toLowerCase());
               devinCloud.setCleanupState(acc.email, { cleanedAt: Date.now() });
               const wipeClean = !!rep && rep.sessions.failed === 0 && rep.knowledge.failed === 0 && rep.playbooks.failed === 0 && rep.secrets.failed === 0;
-              if (autoRemoveZero && wipeClean && !_addedRecently && (_credits <= removeThreshold || idleTrigger)) {
+              if (autoRemoveZero && wipeClean && !_addedRecently && _credits <= removeThreshold) {
                 if (_evictNow(acc.email, "已全量备份+清理无残留")) _abIdx--;
                 _notify("info", "[" + acc.email.split("@")[0] + "] 额度归零 · 已全量备份+清理 → 从账号库移除");
               } else {
