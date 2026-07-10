@@ -2,7 +2,7 @@
   "name": "dao-vsix",
   "displayName": "Dao â€” Workspace as Server",
   "description": "Your IDE becomes a remote-control API server. Zero config. Auto token, auto port, auto tunnel.",
-  "version": "3.51.12",
+  "version": "3.51.13",
   "publisher": "dao",
   "engines": {
     "vscode": "^1.80.0"
@@ -203,8 +203,8 @@
         },
         "wam.devinCloudAutoCleanup": {
           "type": "boolean",
-          "default": true,
-          "description": "v4.9.0 · 默认开 · 自动清理(道法自然·水过无痕). 额度低于阈值且全量备份经完整性校验后，自动清理账号全部痕迹(对话/知识/剧本/密钥/Git)回归本源"
+          "default": false,
+          "description": "v4.30 · 守柔·默认关 · 自动清理. 仅手动勾选后, 额度低于阈值且全量备份经完整性校验才自动清理账号痕迹(对话/知识/剧本/密钥/Git). 默认不自动清理任何账号"
         },
         "wam.devinCloudAutoCleanupThreshold": {
           "type": "number",
@@ -218,13 +218,13 @@
         },
         "wam.devinCloudAutoRemoveZeroQuota": {
           "type": "boolean",
-          "default": true,
-          "description": "v4.9.12 · 默认开 · 归零移除闭环(道法自然·水过无痕). 额度完全归零(权威·available+overage≤移除阈值且无订阅)的账号在全量备份+清理无残留后自动从 RT Flow 账号库移除(出库·不再显示), 闭合 备份→清理→出库 整套循环. 取消勾选则仅清痕迹+本地留底, 账号保留由用户手动决定是否出库"
+          "default": false,
+          "description": "v4.30 · 守柔·默认关 · 归零移除闭环. 额度完全归零(权威·available+overage≤移除阈值且无订阅)的账号在全量备份+清理无残留后自动从 RT Flow 账号库移除(出库·不再显示), 闭合 备份→清理→出库 整套循环. 取消勾选则仅清痕迹+本地留底, 账号保留由用户手动决定是否出库"
         },
         "wam.devinCloudAutoRemoveThreshold": {
           "type": "number",
-          "default": 3,
-          "description": "v4.26.6 · 归零移除额度阈值 (美元·默认对齐清理阈值3·清理即出库闭环). 余额 ≤ 此值且全量备份校验+清理无残留时, 账号从账号库出库. 设 0 表示仅在额度完全归零(分文不剩)时移除"
+          "default": 0,
+          "description": "v4.30 · 归零移除额度阈值 (美元·默认0·出库唯归零). 余额 ≤ 此值且全量备份校验+清理无残留时, 账号从账号库出库. 默认 0 表示仅在额度完全归零(分文不剩)时移除"
         },
         "wam.devinCloudConvQuotaCap": {
           "type": "boolean",
