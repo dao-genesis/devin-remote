@@ -5,7 +5,7 @@ version: 1
 
 # 数据本体：真正持有数据的账号或组织。手套只把成果 PR 回这里。
 body:
-  owner: dao-devin              # 数据本体已升级为 Org
+  owner: dao-genesis            # 数据本体已升级为 Org
   is_org: true
 
 # 可信手套账号 allowlist（补充信任源；组织成员/协作者默认已可信）。
@@ -13,6 +13,7 @@ body:
 # 无需改本文件；也可直接往下面加一行登录名。
 gloves:
   - hooperjustin78
+  - anthonytanya08
   - devin-ai-integration[bot]
   # - <下一个 Devin 实例的 GitHub 账号>
 
