@@ -1,6 +1,6 @@
 {
   "versionCode": 292,
   "versionName": "0.37.188",
-  "url": "https://github.com/dao-devin/devin-remote/releases/download/rtflow-v0.37.188/DevinCloud-mobile-v0.37.188.apk",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.188/DevinCloud-mobile-v0.37.188.apk",
   "notes": "v0.37.188 · 迁移 dao-devin 组织: 自动更新/网页直开宿主全量切换 + 弱网断点续传"
 }
