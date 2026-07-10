@@ -844,6 +844,33 @@ function test(name, fn) {
     // 备份(不破坏·只留底)保持默认开
     assert.ok(/_cfg\("devinCloudAutoBackup", true\)/.test(src), "autoBackup(非破坏) 保持默认开");
   });
+  test("package.json: v4.30 manifest 默认亦须守柔 (getConfiguration 以 manifest default 压过代码回退)", () => {
+    const fs = require("fs");
+    const path = require("path");
+    // _cfg 走 vscode getConfiguration: 已注册键返回 manifest default, 代码第二参形同虚设。
+    // 故 manifest 声明的 default 必须与代码回退一致, 否则「默认关」在打包版中无效。
+    const roots = [
+      path.join(__dirname, "..", "package.json"),
+      path.join(__dirname, "..", "..", "dao-vsix", "package.json"),
+      path.join(__dirname, "..", "..", "dao-one", "package.json"),
+    ];
+    for (const p of roots) {
+      const props = (function find(o) {
+        if (!o || typeof o !== "object") return null;
+        if (o["wam.devinCloudAutoCleanup"]) return o;
+        for (const k of Object.keys(o)) { const r = find(o[k]); if (r) return r; }
+        return null;
+      })(JSON.parse(fs.readFileSync(p, "utf8")));
+      assert.ok(props, "找不到 wam.* 配置声明: " + p);
+      assert.strictEqual(props["wam.devinCloudAutoCleanup"].default, false, p + ": AutoCleanup manifest default 须为 false");
+      if (props["wam.devinCloudAutoRemoveZeroQuota"])
+        assert.strictEqual(props["wam.devinCloudAutoRemoveZeroQuota"].default, false, p + ": AutoRemoveZeroQuota manifest default 须为 false");
+      if (props["wam.devinCloudAutoRemoveThreshold"])
+        assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 0, p + ": AutoRemoveThreshold manifest default 须为 0 (出库唯归零)");
+      if (props["wam.devinCloudIdleCleanup"])
+        assert.strictEqual(props["wam.devinCloudIdleCleanup"].default, false, p + ": IdleCleanup manifest default 须为 false");
+    }
+  });
   test("extension.js: 24h冷却锚点不得每周期重置 (v4.10.1 修复归零清理从不触发)", () => {
     const fs = require("fs");
     const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
@@ -913,15 +940,13 @@ function test(name, fn) {
       try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
     }
   });
-  test("package.json: 自动清理默认开; 归零移除默认开(v4.9.12 闭环)", () => {
+  test("package.json: v4.30 守柔 · 自动清理默认关; 归零移除默认关; 出库阈值唯归零", () => {
     const fs = require("fs");
     const pkg = JSON.parse(fs.readFileSync(require("path").join(__dirname, "..", "package.json"), "utf8"));
     const props = pkg.contributes.configuration.properties;
-    assert.strictEqual(props["wam.devinCloudAutoCleanup"].default, true, "自动清理默认开");
-    // v4.9.12 · 用户要求: 归零移除默认开 — 闭合 备份→清理→出库 整套循环; 额度彻底归零的账号自动出库
-    assert.strictEqual(props["wam.devinCloudAutoRemoveZeroQuota"].default, true, "归零移除默认开(闭环)");
-    // v4.26.6 · 出库阈值默认对齐清理阈值(清理即出库·闭环): 残留 $0.x~$2 的耗尽号不再永久滞留仓库
-    assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 3, "归零阈值默认3(对齐清理阈值·清理即出库)");
+    assert.strictEqual(props["wam.devinCloudAutoCleanup"].default, false, "自动清理默认关(守柔)");
+    assert.strictEqual(props["wam.devinCloudAutoRemoveZeroQuota"].default, false, "归零移除默认关(默认绝不自动出库)");
+    assert.strictEqual(props["wam.devinCloudAutoRemoveThreshold"].default, 0, "出库阈值默认0(出库唯归零)");
   });
 
   // ── 账号 1:1 同步 (dao-vsix 全能板以 RT Flow 活跃号为唯一权威源 · 源级护栏) ──

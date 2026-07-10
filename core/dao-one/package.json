@@ -513,8 +513,8 @@
           },
           "wam.devinCloudAutoCleanup": {
             "type": "boolean",
-            "default": true,
-            "description": "v4.9.6 · 默认开 · 自动清理(道法自然·水过无痕). 额度 < 阈值且全量备份经校验后自动清理(对话仅云端归档[无硬删], 知识/剧本/密钥/Git 真删)回归本源"
+            "default": false,
+            "description": "v4.30 · 守柔·默认关 · 自动清理. 仅手动勾选后, 额度 < 阈值且全量备份经校验才自动清理(对话仅云端归档[无硬删], 知识/剧本/密钥/Git 真删). 默认不自动清理任何账号"
           },
           "wam.devinCloudAutoCleanupThreshold": {
             "type": "number",
