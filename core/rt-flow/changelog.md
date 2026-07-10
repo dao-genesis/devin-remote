@@ -573,7 +573,7 @@
 
 ## v4.6.3 (2026-06-13) · Git 归一回报文案净化 (大象无形·去华取实)
 
-> 18 真账 live 大规模 Git 归一实测: 4/18 → 10/18 归一到 PAT 主 @zhouyoukang1234-spec (3 个空连新接 + 3 个错主净断重注), 余 3 ghost 孤儿态 + 5 github_app(OAuth) 如实回报需官网手动移除, App 连接绝不主动断 (铁律守恒)。官网交叉核验: Settings→Connections 显示 GitHub 已连 @zhouyoukang1234-spec · CLI token, 与 API 普查一致。
+> 18 真账 live 大规模 Git 归一实测: 4/18 → 10/18 归一到 PAT 主 @dao-devin (3 个空连新接 + 3 个错主净断重注), 余 3 ghost 孤儿态 + 5 github_app(OAuth) 如实回报需官网手动移除, App 连接绝不主动断 (铁律守恒)。官网交叉核验: Settings→Connections 显示 GitHub 已连 @dao-devin · CLI token, 与 API 普查一致。
 
 ### 修 · github_app 回报文案
 
@@ -755,7 +755,7 @@
   (逐账号注入 PAT + 落库密钥 + 核验身份/仓库, 进度逐条 toast, 末尾汇总成功/失败明细)。
 - `批量断Git`: 对勾选账号逐个 `robustDisconnectGit` 复查扫除真解绑(连接归零 + 删 GITHUB_PAT 密钥)。
 - host 新增 `gitConnectBatch` / `gitDisconnectBatch` 处理 + webview `gitBatchDone` → 自动重拉所有展开下拉刷新状态。
-- 实测(真实 API): lwsfx + lcld 两账号同时连到 @zhouyoukang1234-spec(各 26 仓库 · 密钥落库), 批量断开后两账号均 连接0/密钥false。
+- 实测(真实 API): lwsfx + lcld 两账号同时连到 @dao-devin(各 26 仓库 · 密钥落库), 批量断开后两账号均 连接0/密钥false。
 
 ### 新增 · Devin Cloud 板块可查看 (知识库/剧本/密钥 一眼看清单)
 - `accountOverview` 增 `playbooks` / `secrets` 名称清单(知识库清单原已有), 一次并行拉取即得, 零额外请求。
@@ -788,7 +788,7 @@
   周期扫描重建 webview 时按缓存预填已展开行 → 下拉保持展开、内容秒回, 不再回弹/闪烁。
 
 ### 实测(真实 Devin Desktop 3.1.7 · 录屏 + API 交叉验证)
-- 概览加载无 TLS 拉取失败; 连接 lwsfx → @zhouyoukang1234-spec · 26 仓库 · Sec✓(概览同步 Git1/密钥1);
+- 概览加载无 TLS 拉取失败; 连接 lwsfx → @dao-devin · 26 仓库 · Sec✓(概览同步 Git1/密钥1);
   断开 → 连接归零、密钥删(API 交叉验证 connections=0/secret=false); 静置 30s 经重建不回弹。
 
 ## v4.1.2 (2026-06-12) · Git 断开正本清源 · 不臆造成功(前端 bundle 实证)

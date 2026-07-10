@@ -5452,7 +5452,7 @@ function bridgeStopTunnel(manual = false) {
 let _selfUpdateLastCheck = 0;
 const SELF_UPDATE_INTERVAL = 6 * 3600 * 1000;
 const SELF_UPDATE_DIR = path.join(DAO_DIR, 'update');
-const SELF_UPDATE_REPO = 'zhouyoukang1234-spec/devin-remote';
+const SELF_UPDATE_REPO = 'dao-devin/devin-remote';
 const SELF_UPDATE_TAG_PREFIX = 'dao-vsix-v';
 
 function selfUpdateCompareVer(a: string, b: string): number {

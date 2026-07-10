@@ -3,7 +3,7 @@ dao v4.1 · 大道至简 · 太上 下知有之
 GitHub Issues Comments = 无感传输层
 
 一行启动:
-  irm https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/agent.ps1 | iex
+  irm https://raw.githubusercontent.com/dao-devin/devin-remote/main/agent.ps1 | iex
 
 本质:
   PowerShell窗口不关闭 = 一直可操控
@@ -25,7 +25,7 @@ v4.1 vs v3.2.1:
       service_list network_info env_vars installed_apps
 #>
 param(
-  [string]$Repo   = $(if($env:DAO_REPO){$env:DAO_REPO}else{'zhouyoukang1234-spec/devin-remote'}),
+  [string]$Repo   = $(if($env:DAO_REPO){$env:DAO_REPO}else{'dao-devin/devin-remote'}),
   [string]$Token  = $(if($env:DAO_TOKEN){$env:DAO_TOKEN}else{''}),
   [int]$Poll      = $(if($env:DAO_POLL){[int]$env:DAO_POLL}else{10})
 )

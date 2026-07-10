@@ -1,5 +1,5 @@
 # sync-dao-archive.ps1 — runs ON the 141 desktop (DESKTOP-MASTER).
-# Bidirectional sync between E:\DAO_ARCHIVE and GitHub zhouyoukang1234-spec/devin-remote (branch: archive).
+# Bidirectional sync between E:\DAO_ARCHIVE and GitHub dao-devin/devin-remote (branch: archive).
 #
 # Key discoveries baked in (2026-06-11):
 #   * 141 CAN reach GitHub directly via the local vortex/clash proxy at 127.0.0.1:7890,
@@ -18,7 +18,7 @@
 param(
     [string]$ArchiveDir = 'E:\DAO_ARCHIVE',
     [string]$Branch = 'archive',
-    [string]$Remote = 'https://github.com/zhouyoukang1234-spec/devin-remote.git',
+    [string]$Remote = 'https://github.com/dao-devin/devin-remote.git',
     [switch]$PushOnly,
     [int]$MaxRetries = 15
 )
@@ -53,7 +53,7 @@ git config --local http.postBuffer 524288000
 git config --local credential.helper ''
 git config --local core.quotepath false
 if ($env:DAO_GIT_TOKEN) {
-    git remote set-url --push origin ("https://" + $env:DAO_GIT_TOKEN + "@github.com/zhouyoukang1234-spec/devin-remote.git")
+    git remote set-url --push origin ("https://" + $env:DAO_GIT_TOKEN + "@github.com/dao-devin/devin-remote.git")
 }
 
 # --- pull (GitHub -> local) ---

@@ -1337,7 +1337,7 @@ async function fetchFullStatus(email, auth1, orgId) {
   } catch (e) {}
 
   // 归一可见: PAT 个人令牌连接无 OAuth 用户(githubUsername 为空), 但连接名(gitName)即所绑 GitHub
-  // 账号/组织(如 zhouyoukang1234-spec / hdougle)。回退用 gitName 展示, 让「绑到哪个 GitHub」一目了然,
+  // 账号/组织(如 dao-devin / hdougle)。回退用 gitName 展示, 让「绑到哪个 GitHub」一目了然,
   // A→B 切换在列表/详情中即可肉眼可辨。
   if (!result.githubUsername && result.gitName) result.githubUsername = result.gitName;
 

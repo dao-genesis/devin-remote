@@ -134,19 +134,19 @@ function test(name, fn) {
   // ── 6. Git 已注册态分流 (classifyRegisteredState) ─────────────────────────
   console.log("\n[classifyRegisteredState]");
   test("已连本 PAT 主 + 有仓库 → existing (幂等·不动)", () => {
-    assert.strictEqual(git.classifyRegisteredState({ ownerLogin: "zhouyoukang1234-spec", connections: [{ name: "zhouyoukang1234-spec", type: "github_individual_token" }], hasRepos: true }), "existing");
+    assert.strictEqual(git.classifyRegisteredState({ ownerLogin: "dao-devin", connections: [{ name: "dao-devin", type: "github_individual_token" }], hasRepos: true }), "existing");
   });
   test("已注册但 0 连接 → ghost (平台孤儿·API 不可清)", () => {
     assert.strictEqual(git.classifyRegisteredState({ ownerLogin: "x", connections: [], hasRepos: false }), "ghost");
   });
   test("individual_token 连别身份 → reinject (可断净重注入)", () => {
-    assert.strictEqual(git.classifyRegisteredState({ ownerLogin: "zhouyoukang1234-spec", connections: [{ name: "someone-else", type: "github_individual_token" }], hasRepos: true }), "reinject");
+    assert.strictEqual(git.classifyRegisteredState({ ownerLogin: "dao-devin", connections: [{ name: "someone-else", type: "github_individual_token" }], hasRepos: true }), "reinject");
   });
   test("individual_token 连本主但 0 仓库(陈旧) → reinject", () => {
-    assert.strictEqual(git.classifyRegisteredState({ ownerLogin: "zhouyoukang1234-spec", connections: [{ name: "zhouyoukang1234-spec", type: "github_individual_token" }], hasRepos: false }), "reinject");
+    assert.strictEqual(git.classifyRegisteredState({ ownerLogin: "dao-devin", connections: [{ name: "dao-devin", type: "github_individual_token" }], hasRepos: false }), "reinject");
   });
   test("github_app(OAuth) 连接 → app (绝不主动断)", () => {
-    assert.strictEqual(git.classifyRegisteredState({ ownerLogin: "zhouyoukang1234-spec", connections: [{ name: "hdougle", type: "github_app" }], hasRepos: false }), "app");
+    assert.strictEqual(git.classifyRegisteredState({ ownerLogin: "dao-devin", connections: [{ name: "hdougle", type: "github_app" }], hasRepos: false }), "app");
   });
   test("混合含 app 连接 → app (保守·不断 app)", () => {
     assert.strictEqual(git.classifyRegisteredState({ ownerLogin: "z", connections: [{ name: "a", type: "github_individual_token" }, { name: "b", type: "github_app" }], hasRepos: false }), "app");

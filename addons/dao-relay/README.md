@@ -55,7 +55,7 @@
 点这个按钮，授权 Cloudflare（顺带授权 GitHub 克隆本子目录），它会**自动**建好你**专属**的中继，
 全程**不用手搓 API Token、不用装 wrangler、不用域名**：
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/zhouyoukang1234-spec/devin-remote/tree/main/addons/dao-relay)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/dao-devin/devin-remote/tree/main/addons/dao-relay)
 
 > 子目录 `addons/dao-relay` 自包含（自带 `package.json`/`wrangler.toml`/`worker.js`/`public/`，
 > 无外部依赖），Cloudflare 会把它当独立仓库根克隆后构建部署。DO 用 `new_sqlite_classes`
@@ -148,7 +148,7 @@ npx wrangler deploy
 而且**承载这个客户端页面的也不必是 Worker**——它是纯静态死文件，可经**公共 CDN 直开**：
 
 ```
-https://cdn.jsdelivr.net/gh/zhouyoukang1234-spec/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/p2p-client.html
+https://cdn.jsdelivr.net/gh/dao-devin/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/p2p-client.html
 ```
 
 链接带参数即**一开即填、可选自动直连**（`session`/`token` 兼容短名 `s`/`t`）：

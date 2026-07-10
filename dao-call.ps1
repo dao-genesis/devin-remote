@@ -2,7 +2,7 @@
 dao-call v4.1 · 大道至简 · 太上 下知有之
 Mailbox Pattern commander · Pure HTTPS
 
-  iex ((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/dao-call.ps1'))
+  iex ((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/dao-devin/devin-remote/main/dao-call.ps1'))
 
   dao 179 hostname          # shell command
   dao-shot 179              # screenshot
@@ -15,7 +15,7 @@ v4.1 vs v3.2:
   用labels查询mailbox — 1次API代替20次扫描
 #>
 param(
-  [string]$Repo    = $(if($env:DAO_REPO){$env:DAO_REPO}else{'zhouyoukang1234-spec/devin-remote'}),
+  [string]$Repo    = $(if($env:DAO_REPO){$env:DAO_REPO}else{'dao-devin/devin-remote'}),
   [string]$Token   = $(if($env:DAO_TOKEN){$env:DAO_TOKEN}else{''}),
   [int]$Timeout    = $(if($env:DAO_TIMEOUT){[int]$env:DAO_TIMEOUT}else{120})
 )

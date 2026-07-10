@@ -47,6 +47,6 @@ node ../../tools/pack-vsix.js .      # 或 npx @vscode/vsce package --allow-miss
 devin-desktop --install-extension dao-vsix-<ver>.vsix --force   # 或 code --install-extension ...
 ```
 
-下载见仓库 [Releases](https://github.com/zhouyoukang1234-spec/devin-remote/releases)（tag 形如 `dao-vsix-v<版本>`）。
+下载见仓库 [Releases](https://github.com/dao-devin/devin-remote/releases)（tag 形如 `dao-vsix-v<版本>`）。
 
 > 去中心化：本模块独立发版，开发它才会刷新 `dao-vsix-v*` Release，与其它插件互不干扰。
