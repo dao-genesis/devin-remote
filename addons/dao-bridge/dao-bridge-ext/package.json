@@ -16,7 +16,7 @@
   "main": "./extension.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/zhouyoukang1234-spec/devin-remote"
+    "url": "https://github.com/dao-devin/devin-remote"
   },
   "contributes": {
     "viewsContainers": {

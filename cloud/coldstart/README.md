@@ -15,7 +15,7 @@
 一键脚本：[`tools/coldstart.ps1`](../tools/coldstart.ps1) —— 自动完成 ①③④，账号登录（②）按设计是交互/注入步骤。
 
 ```powershell
-git clone https://github.com/zhouyoukang1234-spec/devin-remote.git $env:USERPROFILE\repos\devin-remote
+git clone https://github.com/dao-devin/devin-remote.git $env:USERPROFILE\repos\devin-remote
 powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\tools\coldstart.ps1
 ```
 

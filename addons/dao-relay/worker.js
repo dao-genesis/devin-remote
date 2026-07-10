@@ -636,7 +636,7 @@ export default {
     // ── Bare v3 传输层 (UV SW 代理引擎专用) ──────────────────────────────────
     if (path === "/bare/" || path === "/bare") {
       // 版本清单 (兼容标准 Bare 客户端探测; bare-as-module3 实际不探, 仍返以防万一)
-      return json({ versions: ["v3"], language: "Cloudflare-Workers", maintainer: { email: "", website: "" }, project: { name: "dao-relay-bare", repository: "https://github.com/zhouyoukang1234-spec/devin-remote", version: VERSION } });
+      return json({ versions: ["v3"], language: "Cloudflare-Workers", maintainer: { email: "", website: "" }, project: { name: "dao-relay-bare", repository: "https://github.com/dao-devin/devin-remote", version: VERSION } });
     }
     if (path === "/bare/v3/" || path === "/bare/v3") {
       return bareV3(req, env);
@@ -669,7 +669,7 @@ export default {
     //   走本 Worker 的 /relay/<session>, 无 CORS)。内容取自仓库内 console.html(单一真源,
     //   不在此重复), 5 分钟边缘缓存; 改 console.html 合并 main 后重新部署即生效。
     if (path === "/console" || path === "/app" || path === "/console.html") {
-      const RAW = "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/console.html";
+      const RAW = "https://raw.githubusercontent.com/dao-devin/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/console.html";
       try {
         const r = await fetch(RAW, { cf: { cacheTtl: 300, cacheEverything: true } });
         if (!r.ok) return json({ error: "console_fetch_failed", status: r.status }, 502);
@@ -691,7 +691,7 @@ export default {
     //   p2p-client.html 内相对引用 signal.js → 一并经 /signal.js 代理 raw。
     if (path === "/p2p" || path === "/p2p-client.html" || path === "/signal.js") {
       const file = (path === "/signal.js") ? "signal.js" : "p2p-client.html";
-      const RAW = "https://raw.githubusercontent.com/zhouyoukang1234-spec/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/" + file;
+      const RAW = "https://raw.githubusercontent.com/dao-devin/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/" + file;
       try {
         const r = await fetch(RAW, { cf: { cacheTtl: 300, cacheEverything: true } });
         if (!r.ok) return json({ error: "p2p_fetch_failed", status: r.status }, 502);

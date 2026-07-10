@@ -8,7 +8,7 @@
 **不再需要通过中继逐块读取 141 的 E 盘。** E:\DAO_ARCHIVE 已完整同步到本仓库的 **`archive` 分支**（隐私数据除外，见 .gitignore），新 VM 冷启动只需一条命令：
 
 ```powershell
-git clone --branch main https://github.com/zhouyoukang1234-spec/devin-remote.git $env:USERPROFILE\repos\devin-remote
+git clone --branch main https://github.com/dao-devin/devin-remote.git $env:USERPROFILE\repos\devin-remote
 powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\tools\coldstart.ps1
 ```
 

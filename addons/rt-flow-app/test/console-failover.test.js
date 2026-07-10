@@ -368,10 +368,10 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     // W2: 从 github.io 静态宿主开页 + Worker 活 → _proxyBase 探活切到 Worker(绝不回静态源)。
     const counter = { total: 0, byBase: {} };
     const routes = { [WORKER]: { status: 200, body: { ok: true, state: "default" } } };
-    const mod = makeModule(baseDeps({ ENDPOINT: "https://zhouyoukang1234-spec.github.io",
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://dao-devin.github.io",
       fetch: makeFetch(routes, counter),
-      location: { origin: "https://zhouyoukang1234-spec.github.io", protocol: "https:" } }));
-    ok(mod.isStaticHost("https://zhouyoukang1234-spec.github.io"), "W2 github.io 判为静态引导宿主");
+      location: { origin: "https://dao-devin.github.io", protocol: "https:" } }));
+    ok(mod.isStaticHost("https://dao-devin.github.io"), "W2 github.io 判为静态引导宿主");
     const base = await mod.proxyBase();
     ok(base === WORKER, "W2 静态宿主开页 → 反代端点解析到活 Worker(非静态源), 实际 " + base);
     ok(!mod.isStaticHost(base), "W2 解析结果绝非静态宿主");
@@ -383,9 +383,9 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     const TUN = "https://dev-tunnel.trycloudflare.com";
     const routes = { [TUN]: { status: 200, body: { ok: true } }, [WORKER]: { status: 200, body: { ok: true } } };
     const ls = makeLocalStorage(); ls.setItem("rtflow.rn.endpoints.direct", JSON.stringify([TUN]));
-    const mod = makeModule(baseDeps({ ENDPOINT: "https://zhouyoukang1234-spec.github.io",
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://dao-devin.github.io",
       fetch: makeFetch(routes, counter), localStorage: ls,
-      location: { origin: "https://zhouyoukang1234-spec.github.io", protocol: "https:" } }));
+      location: { origin: "https://dao-devin.github.io", protocol: "https:" } }));
     const base = await mod.proxyBase();
     ok(base === WORKER, "W3 渲染基址优先稳定中继 Worker(非设备临时隧道), 实际 " + base);
   }
@@ -395,9 +395,9 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     const TUN = "https://dev-tunnel.trycloudflare.com";
     const routes = { [TUN]: { status: 200, body: { ok: true } }, [WORKER]: { status: 503, body: "dead" } };
     const ls = makeLocalStorage(); ls.setItem("rtflow.rn.endpoints.direct", JSON.stringify([TUN]));
-    const mod = makeModule(baseDeps({ ENDPOINT: "https://zhouyoukang1234-spec.github.io",
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://dao-devin.github.io",
       fetch: makeFetch(routes, counter), localStorage: ls,
-      location: { origin: "https://zhouyoukang1234-spec.github.io", protocol: "https:" } }));
+      location: { origin: "https://dao-devin.github.io", protocol: "https:" } }));
     const base = await mod.proxyBase();
     ok(base === TUN, "W3b 稳定中继死 → 渲染回退设备直连隧道(兜底), 实际 " + base);
   }
@@ -405,9 +405,9 @@ const WORKER = "https://dao-relay-do.zhouyoukang.workers.dev";
     // W4: 静态宿主 + 设备隧道与 Worker 全死 → 回 null(由 openInPage 显式提示, 绝不裸 fetch 静态源 404)。
     const counter = { total: 0, byBase: {} };
     const routes = { [WORKER]: { status: 503, body: "dead" } };
-    const mod = makeModule(baseDeps({ ENDPOINT: "https://zhouyoukang1234-spec.github.io",
+    const mod = makeModule(baseDeps({ ENDPOINT: "https://dao-devin.github.io",
       fetch: makeFetch(routes, counter),
-      location: { origin: "https://zhouyoukang1234-spec.github.io", protocol: "https:" } }));
+      location: { origin: "https://dao-devin.github.io", protocol: "https:" } }));
     const base = await mod.proxyBase();
     ok(base === null, "W4 反代端点全不可达 → 回 null(不退化到静态源 404), 实际 " + base);
   }
