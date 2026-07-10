@@ -2,6 +2,18 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.344 · 座席鉴权本地兜底 · 根治「Connecting to server」(釜底抽薪)
+: 病(根因): LS 启动后周期调 SeatManagement/GetUser 座席鉴权 + Heartbeat 心跳。
+  SeatManagement 非 API_SERVER/INFERENCE → 默认归 PASSTHROUGH 路由至 UPSTREAM_MGMT
+  (server.self-serve.windsurf.com), 该端不实现此 RPC → 404/连接断; 同理 Heartbeat
+  走 server.codeium.com。官方 H2/gRPC 长连一旦在本网络被切断(与 cloudflared/relay 同症),
+  座席鉴权即不可达 → LS 判定「未鉴权」→ GetUserSettings 空 → 前端永卡「Connecting to server」。
+  治(反者道之动·釜底抽薪): 新增 `LOCAL_AUTH` 分类 —— `LOCAL_AUTH_SERVICES`(SeatManagementService)
+  与 `LOCAL_AUTH_METHODS`(Heartbeat)命中即本地直返空 gRPC OK(status=0), LS 只验 grpc-status
+  即认「已连接」, 彻底解耦官方可达性。守真: `GetUserStatus` 仍走 PASSTHROUGH 经 proxyToCloud
+  做真解锁改写(去 Pro 锁/补 field20); 模型目录仍由 GetUserSettings(MODEL_UNLOCK)注入;
+  推理仍走 BYOK/INFER_STRIP → 本兜底不夺其真。新增 `_replyGrpcOk()` 本地 gRPC OK 应答器。
+
 v9.9.343 · 根治 Windows 黑窗闪现(windowsHide 补齐)
 : `_readSystemProxy()` 的 `reg query` execSync(经 cmd.exe)、独立版 `_brgProbeLocalProxy()`
   7 端口 `Test-NetConnection` spawnSync(一轮最多闪 7 个 powershell 窗)、`where cloudflared`

@@ -307,7 +307,7 @@ function _originGetProxyAgent(isHttps) {
 const PORT = parseInt(process.env.ORIGIN_PORT || "8889", 10);
 // v9.6.1 · 反者道之动 · 远曰反 · 回归 v9.1.2 之全前端按钮 (七按钮: 道/官/实/原/编/复/卸 + dots/customBadge)
 // 以 v9.1.2 本源哲学为锚 · 守大常不动 · 五细节皆成: isAlreadyInverted · _rawTape+all_fields · 部署不 kill · 前端按钮回归
-const ORIGIN_VERSION_BASE = "v9.9.343"; // v9.9.343 · ⑤内网穿透 第五模块归一(移植 dao-bridge workers.dev 固定中继: 一个 CF API Token 零域名自动部署中继 Worker 到用户账号·出站长连 RelayClient 派回反代 /v1/*·永不轮换持久化·开机自愈; 退出/解绑硬化-即使数据损坏也可清后重绑; 独立会话 pp- 前缀+workers-relay-proxypro.json → 与独立 dao-bridge/dao-one 三插件共存无冲突; handoff.md 反代底层API公网通道改造) · v9.9.342 · 内网穿透大修(移植 dao-bridge 核心: 代理探测7端口+注入·二进制--version验证·断点续传·CONNECT代理隧道下载·6路镜像回退·看门狗15s·resetProxy·命名空间隔离 cloudflared-proxypro.*) · v9.9.339 · 反者道之动·补全(外接api 路由流式亦撤秒数硬限·dao_router 两处 provider 请求 setTimeout(0)+keepalive·revproxy setTimeout(0)+keepalive·routed 模型长推理不再 120s 掐断·AI 自然而止) · v9.9.338 · 反者道之动(撤销一切秒数硬限·两处 H2 stream 超时归零·H1 requestTimeout=0·唯下游离场才回收·AI 自然而止·道并行而不相悖) · v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
+const ORIGIN_VERSION_BASE = "v9.9.344"; // v9.9.344 · 座席鉴权本地兜底·根治「Connecting to server」(SeatManagement/Heartbeat 归 LOCAL_AUTH → 本地即答 gRPC OK status=0·彻底解耦官方可达性; GetUserStatus 仍走 PASSTHROUGH 真解锁·推理仍 BYOK/INFER_STRIP·不夺其真; 反者道之动·釜底抽薪) · v9.9.343 · ⑤内网穿透 第五模块归一(移植 dao-bridge workers.dev 固定中继: 一个 CF API Token 零域名自动部署中继 Worker 到用户账号·出站长连 RelayClient 派回反代 /v1/*·永不轮换持久化·开机自愈; 退出/解绑硬化-即使数据损坏也可清后重绑; 独立会话 pp- 前缀+workers-relay-proxypro.json → 与独立 dao-bridge/dao-one 三插件共存无冲突; handoff.md 反代底层API公网通道改造) · v9.9.342 · 内网穿透大修(移植 dao-bridge 核心: 代理探测7端口+注入·二进制--version验证·断点续传·CONNECT代理隧道下载·6路镜像回退·看门狗15s·resetProxy·命名空间隔离 cloudflared-proxypro.*) · v9.9.339 · 反者道之动·补全(外接api 路由流式亦撤秒数硬限·dao_router 两处 provider 请求 setTimeout(0)+keepalive·revproxy setTimeout(0)+keepalive·routed 模型长推理不再 120s 掐断·AI 自然而止) · v9.9.338 · 反者道之动(撤销一切秒数硬限·两处 H2 stream 超时归零·H1 requestTimeout=0·唯下游离场才回收·AI 自然而止·道并行而不相悖) · v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
 // 印 153 · 唯变所适 · 软编码归宗 · 二十五章「逝曰远 远曰反」· 七十六章「兵强则不胜」
 // 病: 多 ext-host 共端口 :8937 · 旧版 in-process proxy 持续 listen · self_file 锁死旧版目录
 //     → 即便装毕新版 vsix · /ping 仍返 v9.9.19/v9.9.20 之 self_file · canon_name 走旧映射
@@ -3010,7 +3010,32 @@ function routeUpstream(reqUrl) {
 //   CHAT_RAW      · RawGetChatMessage            · field[3] SP 替换 + 深度净化
 //   INFER_STRIP   · 其他 inference RPC           · 仅深度净化 (剥侧信道)
 //   MODEL_UNLOCK  · GetUserSettings/ModelConfigs · 响应注入全量模型目录
+//   LOCAL_AUTH    · SeatManagement/Heartbeat     · 官方不可达时本地兜底
 //   PASSTHROUGH   · 非 inference (mgmt/auth 等)  · 直透
+// ★ v9.9.344 · 根治 · 道法自然 · 天下有始 以为天下母
+//   病(根因): LS 启动后周期调 :8957 SeatManagement/GetUser 验鉴;
+//     SeatManagement 非 API_SERVER/INFERENCE → 默认路由至 UPSTREAM_MGMT
+//     (server.self-serve.windsurf.com) 而非 server.codeium.com;
+//     UPSTREAM_MGMT 对 SeatManagement 回 404 → LS 标记"未鉴权" → 前端永卡"Connecting to server".
+//     同理 Heartbeat 走 API_SERVER → server.codeium.com; 官方不可达时心跳亦断.
+//   解: 对鉴权/心跳 RPC 本地直返 gRPC OK · LS 即刻"已连接" · 无需官方可达.
+//     道义: 五十二章「天下有始 以为天下母 · 既得其母 以知其子」
+//     母=本地鉴权兜底 · 子=LS 连接态 · 得母则子自正.
+//
+// SeatManagement 鉴权服务 · 本地兜底集 (LS 调此验 seat/user 存在性)
+const LOCAL_AUTH_SERVICES = new Set([
+  "exa.seat_management_pb.SeatManagementService",
+]);
+// 心跳 RPC · 官方不可达时本地兜底 (LS 周期心跳; 失败→"Connecting")
+//   注: GetUserStatus 不入此集 · 其响应须经 proxyToCloud 做真解锁改写(去 Pro 锁/补 field20)
+//       故 GetUserStatus 仍走 PASSTHROUGH(reachable 时解锁; unreachable 时由 proxyToCloud 内兜底)
+const LOCAL_AUTH_METHODS = new Set([
+  "Heartbeat",
+]);
+// SeatManagement 内须保留走 PASSTHROUGH 的方法(响应需改写/解锁) · 不本地短路
+const SEATMGMT_PASSTHROUGH_METHODS = new Set([
+  "GetUserStatus",
+]);
 function classifyRPC(reqPath) {
   if (!reqPath) return "PASSTHROUGH";
   const qIdx = reqPath.indexOf("?");
@@ -3026,10 +3051,18 @@ function classifyRPC(reqPath) {
   //   道义: 三十五章「执大象 天下往」· 全量模型即大象 · 执之则天下往
   if (rpc === "GetUserSettings" || rpc === "GetCascadeModelConfigs")
     return "MODEL_UNLOCK";
-  // ★ api_server 工具服务 · 透明直透 (不剥侧信道) · 与原版 LSP 一致
-  //   走 server.codeium.com · 真后端真鉴权 · 无需净化 (净化反致 proto 损坏)
+  // ★ v9.9.344 · 鉴权/心跳兜底 · 既得其母 以知其子
   const svcM = cleanPath.match(/^\/([^/]+)\//);
   const svc = svcM ? svcM[1] : "";
+  if (LOCAL_AUTH_SERVICES.has(svc)) {
+    // GetUserStatus 等须解锁改写的方法保留 PASSTHROUGH · 不本地短路
+    if (SEATMGMT_PASSTHROUGH_METHODS.has(rpc)) return "PASSTHROUGH";
+    return "LOCAL_AUTH";
+  }
+  if (LOCAL_AUTH_METHODS.has(rpc) && API_SERVER_SERVICES.has(svc))
+    return "LOCAL_AUTH";
+  // ★ api_server 工具服务 · 透明直透 (不剥侧信道) · 与原版 LSP 一致
+  //   走 server.codeium.com · 真后端真鉴权 · 无需净化 (净化反致 proto 损坏)
   if (API_SERVER_SERVICES.has(svc)) return "PASSTHROUGH";
   // inference 服务 · 深度净化侧信道
   if (INFERENCE_SERVICES.has(svc)) return "INFER_STRIP";
@@ -8156,6 +8189,31 @@ function _harvestFromLsp(body) {
   } catch (_) {}
   return false;
 }
+// ★ v9.9.344 · 本地 gRPC OK 应答 · 天下有始 以为天下母
+//   SeatManagement/Heartbeat/GetUserStatus 官方不可达时 → 本地直返空 gRPC OK
+//   LS 仅检 grpc-status=0 即视为"已鉴权/已连接" · 无需真实 proto 载荷
+//   gRPC 帧: [0x00(无压缩), 0x00,0x00,0x00,0x00(长度=0)] = 空 protobuf message
+const _GRPC_EMPTY_OK = Buffer.from([0, 0, 0, 0, 0]);
+function _replyGrpcOk(res, rid, rpcName) {
+  try {
+    if (res.headersSent) return;
+    // H2 与 H1 均用 writeHead + write + addTrailers + end
+    res.writeHead(200, {
+      "content-type": "application/grpc",
+    });
+    res.write(_GRPC_EMPTY_OK);
+    try {
+      res.addTrailers({ "grpc-status": "0", "grpc-message": "" });
+    } catch (_) {
+      // H1 无 TE:trailers 时 addTrailers 可能报错 · 忽略(grpc-status 已在 header 隐含)
+    }
+    res.end();
+    log(`#${rid} [local-auth] ${rpcName} → gRPC OK (本地兜底)`);
+  } catch (e) {
+    log(`#${rid} [local-auth] _replyGrpcOk err: ${e.message}`);
+  }
+}
+
 function _rpcName(u) {
   try {
     const q = (u || "").indexOf("?");
@@ -8901,6 +8959,26 @@ const _mainHandler = async (req, res) => {
     const route = routeUpstream(req.url);
     const isInferenceRPC = route.host === UPSTREAM_INFER;
     _recordPath(req.method, req.url, kind, route.host);
+
+    // ★ v9.9.344 · 鉴权/心跳本地兜底(根治) · 天下有始 以为天下母
+    //   病灶: SeatManagement/GetUser(座席鉴权)默认归 PASSTHROUGH → 路由 UPSTREAM_MGMT
+    //        (server.self-serve.windsurf.com) → 该端不实现此 RPC → 404/连接断
+    //        → LS 判定「未鉴权」→ GetUserSettings 空 → 前端永卡「Connecting to server」。
+    //   又: 官方 H2/gRPC 长连在本网络环境被切断(与本机 cloudflared/relay 同症)
+    //        → 即便路由正确, 座席鉴权仍不可达。
+    //   治法(反者道之动·釜底抽薪): 座席鉴权与心跳本地即答 gRPC OK(status=0)。
+    //        LS 只验 grpc-status, 不解 payload → 即认「已连接」, 彻底解耦官方可达性。
+    //   注: 真模型目录仍由 GetUserSettings(MODEL_UNLOCK)注入; GetUserStatus 仍走
+    //        PASSTHROUGH 做真解锁; 推理仍走 BYOK/INFER_STRIP → 本兜底不夺其真。
+    if (kind === "LOCAL_AUTH") {
+      const _authRpc = _rpcName(req.url);
+      // 先采集鉴权信封(LS 请求常携 Bearer) → 供上游模型路由复用 · 利而不害
+      try { _scanAuthHeaders(req); } catch (_) {}
+      // 消费 body 防 socket 泄漏, 再本地即答(零延迟·不依赖官方可达)
+      try { req.resume(); } catch (_) {}
+      _replyGrpcOk(res, rid, _authRpc);
+      return;
+    }
 
     // 3. 非 inference (mgmt/auth 等): 纯透 · 不读 body · 无 SP 可观
     //   v9.9.336 · 根源突破: 信封陈旧时对 PASSTHROUGH 的 POST 缓冲 body 探采鉴权信封
