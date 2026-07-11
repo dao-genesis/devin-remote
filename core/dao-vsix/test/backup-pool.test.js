@@ -16,7 +16,7 @@ const src = fs.readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "
 let pass = 0;
 function ok(cond, msg) { assert.ok(cond, msg); console.log("  ✓ " + msg); pass++; }
 
-console.log("[dao-vsix 出库账号本地可查/加回 · 护栏]");
+console.log("[dao-vsix 出库账号本地可查/加回 + 自动化对话隔离 · 护栏]");
 
 function slice(name) {
     const i = src.indexOf("function " + name);
@@ -61,5 +61,21 @@ ok(byEmail["carol@dao.test"].canReAdd === true, "出库账号有可恢复密码 
 ok(byEmail["dave@dao.test"].inPool === false && byEmail["dave@dao.test"].canReAdd === false,
     "出库账号无可恢复密码 → 不标可加回(引导手动)");
 ok(byEmail["alice@dao.test"].canReAdd === undefined, "在池账号不标 canReAdd(不重复加回)");
+
+// ④ 非本人自动化对话判定 (bkIsAuto · 与手机 APK cloud.html _isAutoConv 同源)
+const verbLine = src.match(/var BK_AUTO_VERB=[^\n]*/)[0];
+const mod2 = verbLine + "\n" + slice("bkIsAuto") + "\nmodule.exports={bkIsAuto};\n";
+const js2 = transform(mod2, { transforms: ["typescript"] }).code;
+const sb2 = { module: { exports: {} }, String };
+new Function("module", "exports", "String", js2)(sb2.module, sb2.module.exports, String);
+const { bkIsAuto } = sb2.module.exports;
+
+ok(bkIsAuto("完善二合一插件账号备份") === false, "含中文标题 → 本人对话(永不判自动化)");
+ok(bkIsAuto("Review PR #123 and fix CI") === true, "英文动词起头(Review) → 非本人自动化");
+ok(bkIsAuto("implement backup parity") === true, "动词 implement → 自动化");
+ok(bkIsAuto("blog-drafts-42") === true, "样板仓库名 blog-drafts-42 → 自动化");
+ok(bkIsAuto("ab") === true, "超短名(<=3) → 自动化");
+ok(bkIsAuto("Devin Cloud 手机端整合方案") === false, "中英混含中文 → 本人对话");
+ok(bkIsAuto("") === false, "空标题 → 非自动化(不下沉)");
 
 console.log("\n全部通过 (" + pass + " 项)");

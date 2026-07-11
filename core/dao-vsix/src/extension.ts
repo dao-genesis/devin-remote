@@ -7564,6 +7564,8 @@ function bkUnlock(i,ci){var a=S.backups.accounts[i];if(!a)return;var c=(a.conver
 function bkReadd(i){var a=S.backups.accounts[i];if(!a)return;var em=a.email||(String(a.account||'').indexOf('@')>=0?a.account:'');if(!em){toast('该备份无可识别邮箱, 请用「添加账号」手动加回',false);return}toast('加回账号库…',true);cmd('reAddBackupAccount',{email:em,account:a.account||''})}
 // 视图切换: 按账号(分组) ↔ 近期对话(跨账号·按时间倒序)
 function bkSetView(mode){S.bkView=mode;rBackupsData(S.backups,null)}
+// 近期对话·隐藏/显示 非本人自动化对话(默认下沉沉底·不删数据)
+function bkToggleAuto(){S.bkHideAuto=!S.bkHideAuto;rBackupsData(S.backups,null)}
 // 对话检索: 按 账号邮箱 / 对话名 / 对话ID 过滤 (再渲染后回焦, 不丢输入位置)
 function bkSearchSet(q){S.bkSearch=q;rBackupsData(S.backups,null);var el=document.getElementById('bkSearch');if(el){el.focus();try{var n=el.value.length;el.setSelectionRange(n,n)}catch(e){}}}
 function bkMatch(c,a,q){if(!q)return true;q=String(q).toLowerCase();var hay=[(c&&(c.title||c.name))||'',(c&&c.devinId)||'',(a&&(a.email||a.account))||'',(a&&a.accountNo?('#'+a.accountNo):'')].join(' ').toLowerCase();return hay.indexOf(q)>=0}
@@ -7618,6 +7620,19 @@ function bkConvRow(c,i,ci,showAcct){
   h+='<div id="'+cid+'" style="display:none;margin-top:4px"></div></div>';
   return h;
 }
+// 非本人「自动化对话」判定 — 与手机 APK cloud.html _isAutoConv 同源(保守·宁漏勿误):
+//   含中文一律判本人; 样板仓库名(blog-drafts-123 等)/超短名/英文动词起头的机器任务名 → 非本人自动化。
+//   仅用于「下沉/可隐藏」, 绝不删数据。
+var BK_AUTO_VERB=/^(review|improve|add|fix|update|refactor|implement|create|investigate|analy[sz]e|debug|optimi[sz]e|test|write|build|set ?up|configure|migrate|remove|delete|clean|security|enhance|document|resolve|merge|deploy|integrate|verify|check|explore|research|design|develop|generate|handle|support|enable|disable|rename|move|extract|inspect|audit|scan|repair|patch|port|sync|convert|validate|ensure|prepare|establish|continue|complete|finish|start|begin)\b/i;
+function bkIsAuto(title){
+  var t=String(title==null?'':title).trim();
+  if(!t)return false;
+  if(/[\u4e00-\u9fff]/.test(t))return false;
+  if(/(blog-drafts|notes|dotfiles|code-snippets|utils-py|learn-cs)-\d+/i.test(t))return true;
+  if(t.length<=3)return true;
+  if(BK_AUTO_VERB.test(t))return true;
+  return false;
+}
 // 实时条目行(尚无本地备份) — 与悬浮窗同源 dlRecent 数据; 可直接多实例进入官网对话。
 function bkLiveRow(li){
   var si=bkStatusInfo(li.statusClass||li.status);
@@ -7662,12 +7677,17 @@ function rBackupsData(tree,err){
     // 实时有而备份树无的对话 → 以实时行并入(数量与新鲜度与悬浮窗一致)
     var extra=live.filter(function(li){var k=String(li.sid||'').replace(/^devin-/,'');return k&&!seen[k]&&bkMatch({title:li.title,devinId:k},{email:li.email,accountNo:li.accNo},q)});
     var rows=[];
-    extra.forEach(function(li){rows.push({ts:li.updatedAt||0,h:bkLiveRow(li)})});
-    flat.forEach(function(it){rows.push({ts:(it.c.liveTs||it.c.mtime||0),h:'<div class="card" style="margin-bottom:4px;padding:6px 8px">'+bkConvRow(it.c,it.i,it.ci,true)+'</div>'})});
-    rows.sort(function(x,y){return (y.ts||0)-(x.ts||0)});
-    if(!rows.length){h+='<div class="empty"><div class="ic">🕒</div><p style="color:var(--muted)">'+(q?'无匹配对话':'暂无对话')+'</p></div>';v.innerHTML=h;return}
-    rows.slice(0,200).forEach(function(r){h+=r.h});
-    if(rows.length>200)h+='<div style="font-size:10px;color:var(--muted);margin-top:4px">仅显示最近 200 条 (匹配 '+rows.length+')</div>';
+    extra.forEach(function(li){rows.push({ts:li.updatedAt||0,auto:bkIsAuto(li.title),h:bkLiveRow(li)})});
+    flat.forEach(function(it){rows.push({ts:(it.c.liveTs||it.c.mtime||0),auto:bkIsAuto(it.c.title||it.c.name),h:'<div class="card" style="margin-bottom:4px;padding:6px 8px">'+bkConvRow(it.c,it.i,it.ci,true)+'</div>'})});
+    // 非本人自动化对话「下沉」(不删): 本人对话恒在前, 自动化沉底; 同档按新鲜度倒序。可一键隐藏。
+    rows.sort(function(x,y){if(!!x.auto!==!!y.auto)return x.auto?1:-1;return (y.ts||0)-(x.ts||0)});
+    var autoN=rows.filter(function(r){return r.auto}).length;
+    var hideAuto=!!S.bkHideAuto;
+    if(autoN)h+='<div class="br" style="margin-bottom:8px"><button class="btn sm'+(hideAuto?' primary':' ghost')+'" onclick="bkToggleAuto()" title="疑似非本人自动化对话默认下沉沉底; 点此'+(hideAuto?'显示':'隐藏')+'">'+(hideAuto?'👁 显示自动化':'🙈 隐藏自动化')+' ('+autoN+')</button></div>';
+    var shown=hideAuto?rows.filter(function(r){return !r.auto}):rows;
+    if(!shown.length){h+='<div class="empty"><div class="ic">🕒</div><p style="color:var(--muted)">'+(q?'无匹配对话':(hideAuto&&autoN?'仅有自动化对话(已隐藏)':'暂无对话'))+'</p></div>';v.innerHTML=h;return}
+    shown.slice(0,200).forEach(function(r){h+=r.auto?('<div style="opacity:.6" title="疑似非本人自动化对话(已下沉)">'+r.h+'</div>'):r.h});
+    if(shown.length>200)h+='<div style="font-size:10px;color:var(--muted);margin-top:4px">仅显示最近 200 条 (匹配 '+shown.length+')</div>';
     v.innerHTML=h;return;
   }
   var anyAcct=false;
