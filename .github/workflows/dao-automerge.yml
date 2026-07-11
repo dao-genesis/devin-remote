@@ -29,6 +29,7 @@ permissions:
   contents: write
   pull-requests: write
   checks: read
+  actions: write   # 合并后 dispatch 发布工作流 (GITHUB_TOKEN 的 push 不触发 on:push, 需显式 dispatch)
 
 concurrency:
   group: dao-automerge
@@ -118,6 +119,7 @@ jobs:
             };
 
             // ③ 合并：带标签 + 可信 + CI 全绿
+            let mergedAny = false;
             for (const pr of prs) {
               if (budget <= 0) { core.info('本小时合并额度已用尽，限速中'); break; }
               await waitGap();
@@ -138,7 +140,7 @@ jobs:
               try {
                 await github.rest.pulls.merge({ owner, repo, pull_number: pr.number, merge_method: A.method });
                 core.info(`已合并 PR #${pr.number}（作者 ${author}）`);
-                budget--; lastMerge = Date.now();
+                budget--; lastMerge = Date.now(); mergedAny = true;
                 if (A.delBranch && pr.head.repo && pr.head.repo.full_name === `${owner}/${repo}`) {
                   await github.rest.git.deleteRef({ owner, repo, ref: `heads/${pr.head.ref}` }).catch(()=>{});
                 }
@@ -155,7 +157,7 @@ jobs:
                   });
                   if (resp.ok) {
                     core.info(`已用备援令牌合并 PR #${pr.number}（含 workflow 改动）`);
-                    budget--; lastMerge = Date.now();
+                    budget--; lastMerge = Date.now(); mergedAny = true;
                     if (A.delBranch && pr.head.repo && pr.head.repo.full_name === `${owner}/${repo}`) {
                       await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${pr.head.ref}`, {
                         method: 'DELETE', headers: { authorization: `token ${fb}` }
@@ -167,5 +169,15 @@ jobs:
                 } else {
                   core.warning(`PR #${pr.number} 合并失败: ${e.message}`);
                 }
+              }
+            }
+
+            // ④ 合并后发布：GITHUB_TOKEN 的 push 不触发 on:push（防递归），显式 dispatch 发布工作流（均幂等）。
+            //   release.yml 发插件、android-release.yml 发手机版 APK、dao-relay-deploy.yml 部署中继 Worker。
+            if (mergedAny) {
+              for (const wf of ['release.yml', 'android-release.yml', 'dao-relay-deploy.yml']) {
+                await github.rest.actions.createWorkflowDispatch({ owner, repo, workflow_id: wf, ref: 'main' })
+                  .then(() => core.notice(`dispatched ${wf}`))
+                  .catch(e => core.warning(`${wf} dispatch failed: ${e.message}`));
               }
             }
