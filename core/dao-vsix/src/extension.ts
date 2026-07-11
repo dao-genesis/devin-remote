@@ -2068,8 +2068,17 @@ function setupRelayHandlers(relaySocket: any, relayUrl: string, sessionId: strin
 
 async function handleRelayRequest(msg: any, relaySocket: any, port: number, token: string) {
     try {
+        // 帛书·「解之即得·不疑其门」(与路线C sig 通道同法): dao-relay Worker 的 DO 按
+        //   relayKey(session, token) 定址, 入站驱动方必须持有相同 (session, token) 才可达本 agent
+        //   (任一不符 → no_agent)。故请求能经中继送达本身即等同鉴权; 而 Worker 转发帧只含
+        //   {path,method,body} 不带 headers → 旧法 fakeReq 无 Authorization, checkAuth 必判
+        //   unauthorized → 持久通道仅能打免鉴权 /api/health, 形同半残。此处注入权威 Bearer,
+        //   令 /api/exec、/api/file、/api/write 等需鉴权整机端点经持久通道照常可用。
+        const relayAuthTok = bridgeAuthoritativeToken() || token || '';
+        const relayHeaders: any = Object.assign({ 'content-type': 'application/json' }, msg.headers || {});
+        if (relayAuthTok) { relayHeaders['authorization'] = 'Bearer ' + relayAuthTok; delete relayHeaders['Authorization']; }
         const fakeReq: any = {
-            headers: msg.headers || {},
+            headers: relayHeaders,
             method: msg.method || 'GET',
             socket: { remoteAddress: 'relay' },
             url: msg.path || '/api/health',
