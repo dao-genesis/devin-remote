@@ -47,6 +47,8 @@ button:active{background:#30363d}
 var ITEMS=[];
 var TYPE_META={img:["🖼","图片"],video:["🎬","视频"],audio:["🎵","音频"],md:["📄","Markdown 文档"],file:["📦","文件 / 附件"]};
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
+// 显示名逐层解码 (附件名常被多层 percent 编码, %25E8… 直显乱码)
+function dn(s){try{var t=String(s==null?"":s);for(var i=0;i<3&&/%[0-9a-fA-F]{2}/.test(t);i++){var d=decodeURIComponent(t);if(d===t)break;t=d;}return t;}catch(e){return String(s==null?"":s);}}
 function renderMedia(json,pageUrl){
   try{ ITEMS=JSON.parse(json||"[]")||[]; }catch(e){ ITEMS=[]; }
   var src=document.getElementById("src");
@@ -62,7 +64,7 @@ function renderMedia(json,pageUrl){
     arr.forEach(function(it){
       var th=(tp==="img")?('<img loading="lazy" src="'+esc(it.u)+'" onerror="this.parentNode.textContent=\'🖼\'">'):(m[0]);
       html+='<div class="item"><div class="th">'+th+'</div>'
-        +'<div class="nm">'+esc(it.n||it.u)+'</div>'
+        +'<div class="nm">'+esc(dn(it.n||it.u))+'</div>'
         +'<div class="ops"><button onclick="doView('+it._i+')">查看</button>'
         +'<button onclick="doDl('+it._i+')">下载</button></div></div>';
     });
@@ -91,7 +93,7 @@ function mdRender(src){
 function openDoc(it){
   var id=++DOCSEQ;
   var d=document.createElement("div"); d.className="doc";
-  d.innerHTML='<div class="dh"><div class="t">'+esc(it.n||it.u)+'</div>'
+  d.innerHTML='<div class="dh"><div class="t">'+esc(dn(it.n||it.u))+'</div>'
     +'<button class="dd">⬇ 下载</button><button class="x2">✕</button></div>'
     +'<div class="db" id="db'+id+'"><div class="ld">⏳ 正在加载文档…</div></div>';
   d.querySelector(".dd").onclick=function(){ try{ MediaHost.download(it.u, it.n||""); }catch(e){} };
@@ -120,13 +122,15 @@ function doView(i){
     d.innerHTML=tag+'<button class="x">✕</button>';
     d.onclick=function(ev){ if(ev.target===d||ev.target.className==="x"){ try{var v=d.querySelector("video,audio");if(v)v.pause();}catch(e){} d.remove(); } };
     document.body.appendChild(d);
+    var mv=d.querySelector("video,audio,img");
+    if(mv) mv.onerror=function(){ d.insertAdjacentHTML("beforeend",'<div style="color:#f85149;font-size:12px;padding:0 12px;text-align:center">⚠ 媒体加载失败 — 可点「下载」取回文件后本地打开</div><button onclick="doDl('+i+')">⬇ 下载</button>'); };
     return;
   }
   var ext=extOf(it.u,it.n);
   if(it.t==="md"||isTextExt(ext)){ openDoc(it); return; }   // MD/文本类 → 悬浮窗内直看正文
   if(ext==="pdf"){   // PDF → 面板内嵌页尝试 (拦截层鉴权代取)
     var p=document.createElement("div"); p.className="doc";
-    p.innerHTML='<div class="dh"><div class="t">'+esc(it.n||it.u)+'</div>'
+    p.innerHTML='<div class="dh"><div class="t">'+esc(dn(it.n||it.u))+'</div>'
       +'<button class="dd">⬇ 下载</button><button class="x2">✕</button></div>'
       +'<iframe src="'+esc(it.u)+'" style="flex:1;border:none;background:#fff"></iframe>';
     p.querySelector(".dd").onclick=function(){ try{ MediaHost.download(it.u, it.n||""); }catch(e){} };
