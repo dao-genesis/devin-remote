@@ -16,6 +16,11 @@ on:
     types: [opened, ready_for_review, labeled, synchronize, reopened]
   check_suite:
     types: [completed]
+  # check_suite 由 GITHUB_TOKEN 驱动的 Actions 套件完成时不会再触发工作流(GitHub 防递归),
+  # 故 CI 绿灯后的即时合并靠 workflow_run 链式触发(不受防递归限制), cron 仅兜底。
+  workflow_run:
+    workflows: [dao-ci, DAO PR Flow]
+    types: [completed]
   workflow_dispatch:
   schedule:
     - cron: '17 * * * *'   # 每小时兜底扫一遍，防事件丢失
