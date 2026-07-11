@@ -81,4 +81,18 @@ ok(/const proxy = ghProxyUrl\(\);/.test(src) && /agent \? \{ agent \} : \{\}/.te
 ok(/!\/\^daoGh\/\.test\(String\(msg\.command \|\| ''\)\)/.test(src),
   "auth gate: daoGh* 命令免 Devin 登录(GitHub 板块独立于 Devin 账号池)");
 
+// 9) 断网守柔 (GitHub 不可达时仍可入队 · 状态显示而非拒收)
+ok(/netFail\?: boolean/.test(src) && /netFail: true/.test(src),
+  "daoGhAccountVerify: HTTP 0 区分为 netFail(网络不可达 ≠ PAT 无效)");
+ok(/v\.netFail && login/.test(src) && /verify: 'pending'/.test(src),
+  "daoGhFleetAdd: 断网且带 login 仍入队(verify=pending)·不因断网拒收");
+ok(/delete \(ex as any\)\.verify/.test(src),
+  "daoGhFleetAdd: 网络恢复后验证通过即清 pending");
+ok(/pending: \(a as any\)\.verify === 'pending'/.test(src) && /a\.pending/.test(src),
+  "daoGhFleetList/前端: 暴露并渲染 ⏳待验证徽章");
+ok(/'offline'/.test(src) && /\ud83c\udf10断网/.test(src),
+  "org 核对 HTTP 0 → offline·前端显示 🌐断网(非账号问题)");
+ok(/a\.verify === 'pending' \? \{ verify: 'pending' \}/.test(src),
+  "loadInjectProfile: ghFleet 归一化保留 verify=pending(重载不丢待验证态)");
+
 console.log("[gh-fleet] " + pass + " assertion(s) passed\n");
