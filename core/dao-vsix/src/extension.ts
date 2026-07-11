@@ -10473,6 +10473,17 @@ function daoWriteFpExtension(profileDir: string, fp: DaoAcctFp): string | null {
             'try{def(navigator,"userAgent",C.ua);def(navigator,"appVersion",C.ua.replace(/^Mozilla\\//,""));def(navigator,"vendor","Google Inc.");}catch(e){}' +
             'try{if(navigator.userAgentData){def(navigator.userAgentData,"platform",C.uaPlatform);}}catch(e){}' +
             'try{def(screen,"width",C.width);def(screen,"height",C.height);def(screen,"availWidth",C.width);def(screen,"availHeight",C.height-40);}catch(e){}' +
+            'try{def(screen,"colorDepth",24);def(screen,"pixelDepth",24);}catch(e){}' +
+            // webdriver 归位 false (隔离环境呈常规浏览器, 无自动化痕迹)
+            'try{def(navigator,"webdriver",false);}catch(e){}' +
+            // UA-CH 品牌与高熵值对齐 (与 UA 主版本+平台一致, 消 userAgentData 与 UA 的矛盾)
+            'try{if(navigator.userAgentData){var mv=(C.ua.match(/Chrome\\/(\\d+)/)||[])[1]||"122";var isMac=C.uaPlatform==="macOS";' +
+            'var brands=[{brand:"Chromium",version:mv},{brand:"Google Chrome",version:mv},{brand:"Not.A/Brand",version:"24"}];' +
+            'def(navigator.userAgentData,"brands",brands);def(navigator.userAgentData,"mobile",false);def(navigator.userAgentData,"platform",C.uaPlatform);' +
+            'navigator.userAgentData.getHighEntropyValues=function(){return Promise.resolve({architecture:"x86",bitness:"64",brands:brands,fullVersionList:brands.map(function(b){return {brand:b.brand,version:b.version+".0.0.0"};}),mobile:false,model:"",platform:C.uaPlatform,platformVersion:isMac?"13.0.0":"10.0.0",uaFullVersion:mv+".0.0.0",wow64:false});};}}catch(e){}' +
+            // AudioContext 指纹加噪 (确定·极微扰动·破解基于音频哈希的指纹, 不改变听感)
+            'try{var AP=window.AnalyserNode&&AnalyserNode.prototype;if(AP&&AP.getFloatFrequencyData){var gf=AP.getFloatFrequencyData;AP.getFloatFrequencyData=function(a){gf.apply(this,arguments);try{for(var i=0;i<a.length;i+=100){a[i]=a[i]+(rnd()*0.0002-0.0001);}}catch(e){}};}}catch(e){}' +
+            'try{var BP=window.AudioBuffer&&AudioBuffer.prototype;if(BP&&BP.getChannelData){var gc=BP.getChannelData;BP.getChannelData=function(){var d=gc.apply(this,arguments);try{if(!this.__dcn){this.__dcn=1;for(var i=0;i<d.length;i+=500){d[i]=d[i]+(rnd()*1e-7-5e-8);}}}catch(e){}return d;};}}catch(e){}' +
             // 时区
             'try{var DTF=Intl.DateTimeFormat;var RO=DTF.prototype.resolvedOptions;DTF.prototype.resolvedOptions=function(){var o=RO.apply(this,arguments);o.timeZone=C.tz;return o;};}catch(e){}' +
             'try{var _go=Date.prototype.getTimezoneOffset;Date.prototype.getTimezoneOffset=function(){return C.tzOffset;};}catch(e){}' +
@@ -10595,7 +10606,12 @@ function daoLaunchChromiumIsolated(targetUrl: string, safeKey: string, fp: DaoAc
                 '--accept-lang=' + fp.acceptLang,
                 '--window-size=' + fp.width + ',' + fp.height,
             ];
-            if (proxy) args.push('--proxy-server=' + proxy);
+            if (proxy) {
+                args.push('--proxy-server=' + proxy);
+                // 配了代理 → 强制 WebRTC 只走代理接口, 杜绝真实内网/公网 IP 经 UDP 泄漏而抵消代理
+                args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp');
+                args.push('--enforce-webrtc-ip-permission-check');
+            }
             if (extDir) { args.push('--disable-extensions-except=' + extDir); args.push('--load-extension=' + extDir); }
             args.push('--new-window', targetUrl);
             // 时区经环境变量传子进程 (Chrome 在 Linux/macOS 尊重 TZ; Windows 侧由注入扩展兜底)
@@ -10623,7 +10639,13 @@ function daoIsolationSummary(keys: string[]): any {
     });
     const adc = daoAntidetectCfg();
     const usingApi = !!(adc.api && adc.provider);
-    return { engine: usingApi ? (adc.provider + '-api') : 'chromium-isolated', antidetectApi: usingApi, provider: adc.provider || null, accounts: list };
+    return {
+        engine: usingApi ? (adc.provider + '-api') : 'chromium-isolated',
+        antidetectApi: usingApi, provider: adc.provider || null,
+        // 原生内建指纹隔离所覆盖的伪装面 (不依赖外部浏览器·随插件本体一体交付)
+        nativeSurfaces: ['userAgent', 'userAgentData', 'platform', 'languages', 'timezone', 'screen', 'colorDepth', 'hardwareConcurrency', 'deviceMemory', 'webgl', 'canvasNoise', 'audioNoise', 'webrtcPolicy', 'webdriver'],
+        accounts: list,
+    };
 }
 const DEVIN_URL_GET_USER_STATUS = [
     'https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus',
