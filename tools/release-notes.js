@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // 单模块 Release 说明生成。用法: node tools/release-notes.js <key>
-// 环境: GITHUB_REPOSITORY=owner/repo (默认 dao-devin/devin-remote)
+// 环境: GITHUB_REPOSITORY=owner/repo (默认 dao-genesis/devin-remote)
 const fs = require("fs");
 const path = require("path");
 
 const repoRoot = path.join(__dirname, "..");
 const reg = JSON.parse(fs.readFileSync(path.join(__dirname, "modules.json"), "utf8"));
-const REPO = process.env.GITHUB_REPOSITORY || "dao-devin/devin-remote";
+const REPO = process.env.GITHUB_REPOSITORY || "dao-genesis/devin-remote";
 
 const key = process.argv[2];
 const m = reg.modules.find((x) => x.key === key);
