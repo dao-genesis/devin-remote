@@ -15706,7 +15706,7 @@ function _isDownloadable(cd: string, ct: string): boolean {
     if (/attachment/i.test(cd || '')) return true;
     const c = String(ct || '').toLowerCase().split(';')[0].trim();
     if (!c) return false;
-    if (/^(text\/html|application\/xhtml|text\/css|application\/javascript|text\/javascript|application\/json|image\/|video\/|audio\/|font\/|text\/plain|text\/xml|application\/xml)/.test(c)) return false;
+    if (/^(text\/html|application\/xhtml|text\/css|application\/(x-)?(javascript|ecmascript)|text\/(javascript|ecmascript)|application\/json|image\/|video\/|audio\/|font\/|text\/plain|text\/xml|application\/xml|application\/wasm|application\/manifest)/.test(c)) return false;
     return /^(application\/(octet-stream|zip|x-zip|pdf|x-pdf|gzip|x-gzip|x-tar|x-7z|x-rar|vnd\.|msword|x-msdownload)|application\/x-)/.test(c);
 }
 function daoSaveDownload(name: string, buf: Buffer, ct: string, src: string): any {

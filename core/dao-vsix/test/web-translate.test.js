@@ -49,4 +49,21 @@ ok(/__daoTransBtn/.test(src), "悬浮「译」按钮注入");
 ok(/window\.__daoTransToggle/.test(src), "翻译/还原切换 __daoTransToggle");
 ok(/window\.__dcTransRestore&&window\.__dcTransRestore\(\)/.test(src), "还原走 __dcTransRestore (对齐手机)");
 
+console.log("[下载捕获 · 内联资源不误判为下载]");
+// 病灶(桌面实测·Bing): 脚本以 application/x-javascript 下发, 旧白名单只排 application/javascript,
+//   落进 application/x- 兜底被误存为下载(下载目录被数十个 .js 塞满)。护栏: 一切 JS/ES 变体皆排除。
+const dlm = src.match(/function _isDownloadable[\s\S]*?\n\}/);
+ok(!!dlm, "_isDownloadable 存在");
+const dl = dlm[0];
+ok(/application\\\/\(x-\)\?\(javascript\|ecmascript\)/.test(dl), "排除 application/(x-)?(javascript|ecmascript)");
+ok(/text\\\/\(javascript\|ecmascript\)/.test(dl), "排除 text/(javascript|ecmascript)");
+// 语义级复核: 用源中两条正则逐一裁决典型 Content-Type
+const exRe = new RegExp(dl.match(/if \(\/(.+?)\/\.test\(c\)\) return false;/)[1]);
+const inRe = new RegExp(dl.match(/return \/(.+?)\/\.test\(c\);/)[1]);
+function isDl(ct) { const c = ct.toLowerCase().split(";")[0].trim(); if (!c) return false; if (exRe.test(c)) return false; return inRe.test(c); }
+["application/x-javascript", "application/javascript", "text/javascript", "image/png", "video/mp4", "text/html"].forEach((ct) =>
+  ok(!isDl(ct), ct + " 不判为下载"));
+["application/zip", "application/pdf", "application/octet-stream"].forEach((ct) =>
+  ok(isDl(ct), ct + " 判为下载"));
+
 console.log("[web-translate] " + pass + " assertion(s) passed\n");
