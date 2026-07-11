@@ -1341,6 +1341,31 @@ function test(name, fn) {
     }
   });
 
+  // ── 富媒体本地化 (对齐手机 APK 附件预热): 备份正文图片/视频/音频落 media/ ──
+  console.log("\n[富媒体本地化 · 备份图片/视频离线可看]");
+  test("extractMediaUrls: 识别图片/视频/音频 URL(含预签 query)·去重·上限", () => {
+    const md = "看图 https://cdn.x.com/a.png?X-Amz-Expires=300 和视频 https://s3.y.com/v.mp4 还有 https://cdn.x.com/a.png?X-Amz-Expires=300 与普通链接 https://example.com/page";
+    const urls = cloud.extractMediaUrls(md);
+    assert.deepStrictEqual(urls, ["https://cdn.x.com/a.png?X-Amz-Expires=300", "https://s3.y.com/v.mp4"]);
+    assert.strictEqual(cloud.extractMediaUrls("无媒体正文").length, 0);
+  });
+  test("applyMediaMap: MD 原样替换 · HTML 按 &amp; 转义形态替换", () => {
+    const url = "https://s3.y.com/v.mp4?a=1&b=2";
+    const map = { [url]: "media/12ab34cd_v.mp4" };
+    assert.strictEqual(cloud.applyMediaMap("视频 " + url + " 完", map, false), "视频 media/12ab34cd_v.mp4 完");
+    const html = '<video src="' + url.replace(/&/g, "&amp;") + '"></video>';
+    assert.strictEqual(cloud.applyMediaMap(html, map, true), '<video src="media/12ab34cd_v.mp4"></video>');
+  });
+  test("devin_cloud.js: 备份落盘前须本地化媒体并计入 _meta (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "devin_cloud.js"], ["..", "..", "dao-vsix", "rtflow", "devin_cloud.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/localizeConvMedia\(auth, convDir, md\)/.test(src), rel.join("/") + " 备份须调用 localizeConvMedia");
+      assert.ok(/applyMediaMap\(html, mmap, true\)/.test(src), rel.join("/") + " HTML 须按转义形态替换");
+      assert.ok(/mediaFiles: mediaCount/.test(src), rel.join("/") + " _meta 须记 mediaFiles");
+    }
+  });
+
   // ── 整页翻译跨源自愈: 宿主选同源地址 (旧: 前端自拼 /__web?u= → 点译白屏) ──
   console.log("\n[整页翻译 · 跨源白屏修复]");
   test("extension.js: 翻译跨源重载须走宿主 trReroute, 前端不再自拼 /__web?u= (双副本源级护栏)", () => {

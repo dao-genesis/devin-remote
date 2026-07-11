@@ -15,6 +15,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const zlib = require("zlib");
+const crypto = require("crypto");
 
 // ── 路径 (与 rt-flow 共用 ~/.wam 根) ──────────────────────────────────────
 const WAM_DIR = path.join(os.homedir(), ".wam");
@@ -2212,6 +2213,58 @@ function _mdToHtml(escaped) {
   return s;
 }
 
+// ── 富媒体本地化 (对齐手机 APK 附件预热/媒体缓存) ────────────────────────────
+//   对话正文里的图片/视频/音频远程 URL(预签 S3/attachments 会过期或需登录)下载进
+//   <对话夹>/media/, HTML 与 MD 同步改指本地相对路径 → 过期/离线后仍可加载显示。
+//   单条失败保留原 URL(不阻备份); 已下载过的按 URL 指纹命中即免重下(增量)。
+const _RE_MEDIA_URL = /https?:\/\/[^\s"'<>()\[\]]+\.(?:png|jpe?g|gif|webp|svg|bmp|avif|ico|mp4|webm|mov|m4v|ogv|mkv|mp3|wav|ogg|m4a|flac|aac)(?:[?#][^\s"'<>)\]]*)?/gi;
+const MEDIA_MAX_PER_CONV = 40; // 每对话本地化媒体上限(防失控 · 对齐手机每页预热上限精神)
+function _mediaLocalName(url) {
+  const clean = String(url).split(/[?#]/)[0];
+  let base = clean.split("/").pop() || "media";
+  try { base = decodeURIComponent(base); } catch {}
+  const h = crypto.createHash("md5").update(clean).digest("hex").slice(0, 8);
+  return h + "_" + (safeName(base, 60) || "media");
+}
+function extractMediaUrls(text) {
+  const seen = new Set();
+  for (const m of String(text || "").match(_RE_MEDIA_URL) || []) {
+    if (!seen.has(m)) seen.add(m);
+    if (seen.size >= MEDIA_MAX_PER_CONV) break;
+  }
+  return Array.from(seen);
+}
+async function localizeConvMedia(auth, convDir, md) {
+  const urls = extractMediaUrls(md);
+  const map = {};
+  if (!urls.length) return map;
+  const mediaDir = path.join(convDir, "media");
+  await runPool(urls, 4, async (url) => {
+    try {
+      const name = _mediaLocalName(url);
+      const dest = path.join(mediaDir, name);
+      if (!fs.existsSync(dest)) {
+        const headers = /^https?:\/\/app\.devin\.ai\//i.test(url) ? authHeaders(auth) : {};
+        const data = await downloadFile(url, headers);
+        if (!data || !data.length) return;
+        ensureDir(mediaDir);
+        fs.writeFileSync(dest, data);
+      }
+      map[url] = "media/" + name;
+    } catch {}
+  });
+  return map;
+}
+// 把 URL→本地相对路径映射应用到正文; escaped=true 时按 HTML 转义形态(& → &amp;)替换。
+function applyMediaMap(text, map, escaped) {
+  let s = String(text || "");
+  for (const url of Object.keys(map)) {
+    const from = escaped ? url.replace(/&/g, "&amp;") : url;
+    s = s.split(from).join(map[url]);
+  }
+  return s;
+}
+
 // 对话备份为文件夹 (v4.4.0: 替代 ZIP · HTML/MD/JSON/files 四位一体)
 // 文件夹名: <对话名称>_<ID末8位>  (可读 + 唯一)
 // sharedState: 账号级共享的 backup_state 对象 (并行备份时由调用方一次性读写·避免并发读改写竞态)。
@@ -2290,11 +2343,19 @@ async function backupOneConversationFolder(auth, sess, accountDir, opts, sharedS
   }
 
   // HTML 视图 (用户看)
-  const html = buildConversationHtml(title, devinId, events, { account: auth.email });
-  try { fs.writeFileSync(path.join(convDir, "对话.html"), html, "utf8"); } catch {}
+  let html = buildConversationHtml(title, devinId, events, { account: auth.email });
 
   // MD 视图 (AI 看)
-  const md = buildConversationMd(title, devinId, events);
+  let md = buildConversationMd(title, devinId, events);
+
+  // 富媒体本地化: 正文图片/视频/音频落 media/, HTML/MD 改指本地相对路径(失败保留原 URL)
+  let mediaCount = 0;
+  try {
+    const mmap = await localizeConvMedia(auth, convDir, md);
+    mediaCount = Object.keys(mmap).length;
+    if (mediaCount) { html = applyMediaMap(html, mmap, true); md = applyMediaMap(md, mmap, false); }
+  } catch {}
+  try { fs.writeFileSync(path.join(convDir, "对话.html"), html, "utf8"); } catch {}
   try { fs.writeFileSync(path.join(convDir, "对话.md"), md, "utf8"); } catch {}
 
   // Agent JSON (全量机器可读)
@@ -2305,7 +2366,7 @@ async function backupOneConversationFolder(auth, sess, accountDir, opts, sharedS
   const meta = {
     devinId, title, account: auth.email, orgId: auth.orgId,
     convNo: opts.convNum || 0,
-    eventCount: events.length, producedFiles: fileIndex.length,
+    eventCount: events.length, producedFiles: fileIndex.length, mediaFiles: mediaCount,
     backedUpAt: new Date().toISOString(),
   };
   writeJson(path.join(convDir, "_meta.json"), meta);
@@ -2906,6 +2967,10 @@ module.exports = {
   backupOneConversationFolder,
   backupAccountFolders,
   archiveSettledConvZips,
+  // 富媒体本地化 (对齐手机 APK 附件预热)
+  extractMediaUrls,
+  localizeConvMedia,
+  applyMediaMap,
   backupAccountFullFolders,
   listBackups,
   unlockBackup,
