@@ -636,7 +636,7 @@ export default {
     // ── Bare v3 传输层 (UV SW 代理引擎专用) ──────────────────────────────────
     if (path === "/bare/" || path === "/bare") {
       // 版本清单 (兼容标准 Bare 客户端探测; bare-as-module3 实际不探, 仍返以防万一)
-      return json({ versions: ["v3"], language: "Cloudflare-Workers", maintainer: { email: "", website: "" }, project: { name: "dao-relay-bare", repository: "https://github.com/dao-devin/devin-remote", version: VERSION } });
+      return json({ versions: ["v3"], language: "Cloudflare-Workers", maintainer: { email: "", website: "" }, project: { name: "dao-relay-bare", repository: "https://github.com/dao-genesis/devin-remote", version: VERSION } });
     }
     if (path === "/bare/v3/" || path === "/bare/v3") {
       return bareV3(req, env);
@@ -669,7 +669,7 @@ export default {
     //   走本 Worker 的 /relay/<session>, 无 CORS)。内容取自仓库内 console.html(单一真源,
     //   不在此重复), 5 分钟边缘缓存; 改 console.html 合并 main 后重新部署即生效。
     if (path === "/console" || path === "/app" || path === "/console.html") {
-      const RAW = "https://raw.githubusercontent.com/dao-devin/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/console.html";
+      const RAW = "https://raw.githubusercontent.com/dao-genesis/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/console.html";
       try {
         const r = await fetch(RAW, { cf: { cacheTtl: 300, cacheEverything: true } });
         if (!r.ok) return json({ error: "console_fetch_failed", status: r.status }, 502);
@@ -719,7 +719,7 @@ export default {
     //   p2p-client.html 内相对引用 signal.js → 一并经 /signal.js 代理 raw。
     if (path === "/p2p" || path === "/p2p-client.html" || path === "/signal.js") {
       const file = (path === "/signal.js") ? "signal.js" : "p2p-client.html";
-      const RAW = "https://raw.githubusercontent.com/dao-devin/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/" + file;
+      const RAW = "https://raw.githubusercontent.com/dao-genesis/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/" + file;
       try {
         const r = await fetch(RAW, { cf: { cacheTtl: 300, cacheEverything: true } });
         if (!r.ok) return json({ error: "p2p_fetch_failed", status: r.status }, 502);
@@ -859,6 +859,43 @@ export default {
         "}catch(e){document.body.textContent=\"SW 接管失败: \"+((e&&e.message)||e);}})();" +
         "</script></body></html>";
       return new Response(boot, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+    }
+
+    // ── /fetch 边缘代理: 手机(国内网络)直连 S3/CloudFront 被墙 → Worker 在 CF 全球边缘代取
+    //   附件字节回传。宿主白名单限定 Devin 附件/对象存储; 转发 Range/回传媒体头, 边缘缓存 600s。
+    if (path === "/fetch" || path === "/f") {
+      let target = url.searchParams.get("u") || url.searchParams.get("url") || "";
+      if (/^https?%3a/i.test(target)) { try { target = decodeURIComponent(target); } catch (e) {} }
+      if (!/^https:\/\//i.test(target)) return json({ error: "bad_target" }, 400);
+      let thost = "";
+      try { thost = new URL(target).hostname; } catch (e) { return json({ error: "bad_url" }, 400); }
+      const okHost = /(^|\.)amazonaws\.com$/i.test(thost) || thost === "app.devin.ai" ||
+        /(^|\.)devinapps\.com$/i.test(thost) || /(^|\.)cloudfront\.net$/i.test(thost);
+      if (!okHost) return json({ error: "host_not_allowed", host: thost }, 403);
+      let fwd = {};
+      const hh = url.searchParams.get("h");
+      if (hh) { try { fwd = JSON.parse(atob(hh.replace(/-/g, "+").replace(/_/g, "/"))); } catch (e) {} }
+      const reqHeaders = new Headers();
+      for (const k in fwd) if (Object.prototype.hasOwnProperty.call(fwd, k)) reqHeaders.set(k, String(fwd[k]));
+      const rng = req.headers.get("Range");
+      if (rng) reqHeaders.set("Range", rng);
+      let up;
+      try {
+        up = await fetch(target, { method: "GET", headers: reqHeaders, cf: { cacheTtl: 600, cacheEverything: true } });
+      } catch (e) {
+        return json({ error: "upstream_fetch_failed", detail: String((e && e.message) || e) }, 502);
+      }
+      const out = new Headers();
+      out.set("access-control-allow-origin", "*");
+      out.set("access-control-expose-headers", "*");
+      const ct = up.headers.get("content-type"); if (ct) out.set("content-type", ct);
+      const cl = up.headers.get("content-length"); if (cl) out.set("content-length", cl);
+      const cr = up.headers.get("content-range"); if (cr) out.set("content-range", cr);
+      const ar = up.headers.get("accept-ranges"); if (ar) out.set("accept-ranges", ar);
+      const cd = up.headers.get("content-disposition"); if (cd) out.set("content-disposition", cd);
+      out.set("cache-control", "public, max-age=600");
+      out.set("x-dao-proxy", VERSION);
+      return new Response(up.body, { status: up.status, statusText: up.statusText, headers: out });
     }
 
     return json({ error: "not_found", path }, 404);

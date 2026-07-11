@@ -402,6 +402,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         sInstance = this;
+        try { kickMediaRouteProbe(); } catch (Throwable ignored) {}   // 启动即探 S3 直连可达性: 首屏图片路由先知先觉
         // Shizuku 授权结果: 授权成功后自动自我授予一切权限 (存储/无障碍/危险权限)
         try {
             rikka.shizuku.Shizuku.addRequestPermissionResultListener((requestCode, grantResult) -> {
@@ -2320,8 +2321,12 @@ public class MainActivity extends AppCompatActivity {
             //   本次仍走原生网络, 下次(重进/刷新/换网/离线)即命中磁盘缓存秒开 ——
             //   「图片时有时无」与视频重播慢的本源同解(单飞去重·限容, 见 mediaCachePrefetch)。
             mediaCachePrefetch(auth1, orgId, u.toString(), path);
-            if (ensureAttachmentCookie(auth1, orgId, u.toString())) return null;   // 原生直取(带 Cookie)
-            if (isRange) return null;   // Cookie 铸造失败的流媒体: 代取必坏 seek, 交原生(至多 401)不更差
+            kickMediaRouteProbe();
+            boolean cookieOk = ensureAttachmentCookie(auth1, orgId, u.toString());
+            if (isRange) return null;   // 流媒体 Range: 代取必坏 seek, 交原生(缓存落盘后本地供给)
+            // Cookie 就绪且 S3 直连健康 → 交还 WebView 原生并发直取(快路径);
+            // 已知 S3 被墙(国内无 VPN) → 原生代取, 被墙跳经边缘代理 → 首次即可渲染。
+            if (cookieOk && !edgePreferred()) return null;   // 原生直取(带 Cookie)
             java.net.HttpURLConnection c;
             try { c = fetchAttachment(auth1, orgId, u.toString(), rh, false); }
             catch (Exception e1) {
@@ -2368,34 +2373,55 @@ public class MainActivity extends AppCompatActivity {
             return resp;
         } catch (Exception e) { return null; }
     }
-    /** 附件代取一次 (30x 手动跟随·凭据与 Cookie 只发 app.devin.ai)。 */
+    /** 附件代取一次 (30x 手动跟随·凭据与 Cookie 只发 app.devin.ai·被墙宿主跳经边缘代理)。 */
     private static java.net.HttpURLConnection fetchAttachment(String auth1, String orgId, String url, java.util.Map<String, String> rh, boolean direct) throws Exception {
         java.net.HttpURLConnection c = null;
         for (int hop = 0; hop < 5; hop++) {
-            c = HttpBridge.openConn(url, direct);
-            c.setInstanceFollowRedirects(false);
-            c.setConnectTimeout(15000);
-            c.setReadTimeout(30000);
-            if (rh != null) for (java.util.Map.Entry<String, String> e : rh.entrySet()) {
-                String k = e.getKey();
-                if (k == null) continue;
-                String lk = k.toLowerCase(java.util.Locale.US);
-                // Accept-Encoding 不转发: 交由底层透明 gzip (自动解压并剥 Content-Encoding/Length, 免回灌压缩体)
-                // Cookie 不盲转发: 下方仅对 app.devin.ai 由 CookieManager 补 (30x 后不外泄给对象存储)
-                if (lk.equals("authorization") || lk.equals("host") || lk.equals("accept-encoding") || lk.equals("cookie")) continue;
-                try { c.setRequestProperty(k, e.getValue()); } catch (Exception ignored) {}
+            String host = new java.net.URL(url).getHost();
+            boolean hostBlocked = blockedMediaHost(host);
+            boolean viaEdge = hostBlocked && edgePreferred();
+            String openUrl = viaEdge ? edgeWrap(url) : url;
+            int code;
+            for (;;) {
+                c = HttpBridge.openConn(openUrl, direct && !viaEdge);
+                c.setInstanceFollowRedirects(false);
+                // 被墙候选宿主(S3/CloudFront)直连用短连接超时: GFW 黑洞不拒连只后沉,
+                //   快败快切边缘代理, 免占死 WebView 拦截线程。
+                c.setConnectTimeout(hostBlocked && !viaEdge ? 6000 : 15000);
+                c.setReadTimeout(30000);
+                if (rh != null) for (java.util.Map.Entry<String, String> e : rh.entrySet()) {
+                    String k = e.getKey();
+                    if (k == null) continue;
+                    String lk = k.toLowerCase(java.util.Locale.US);
+                    // Accept-Encoding 不转发: 交由底层透明 gzip (自动解压并剥 Content-Encoding/Length, 免回灌压缩体)
+                    // Cookie 不盲转发: 下方仅对 app.devin.ai 由 CookieManager 补 (30x 后不外泄给对象存储)
+                    if (lk.equals("authorization") || lk.equals("host") || lk.equals("accept-encoding") || lk.equals("cookie")) continue;
+                    try { c.setRequestProperty(k, e.getValue()); } catch (Exception ignored) {}
+                }
+                if ("app.devin.ai".equalsIgnoreCase(host)) {
+                    c.setRequestProperty("Authorization", "Bearer " + auth1);
+                    if (orgId != null && !orgId.isEmpty()) c.setRequestProperty("x-cog-org-id", orgId);
+                    try {
+                        // attachments_token 铸造时服务端钉 Path=/attachments → 必须按附件真实路径取,
+                        // 按根路径 "/" 取永远拿不到该 Cookie (铸了也 401)。
+                        String ck = android.webkit.CookieManager.getInstance().getCookie(url);
+                        if (ck != null && !ck.isEmpty()) c.setRequestProperty("Cookie", ck);   // attachments_token → /attachments 真鉴权
+                    } catch (Exception ignored) {}
+                }
+                try { code = c.getResponseCode(); }
+                catch (Exception ex) {
+                    try { c.disconnect(); } catch (Exception ignored) {}
+                    c = null;
+                    if (!viaEdge && hostBlocked) {   // S3/CloudFront 直连实败(国内被墙) → 记忆并改经边缘代理重试
+                        markDirectMediaBlocked();
+                        viaEdge = true;
+                        openUrl = edgeWrap(url);
+                        continue;
+                    }
+                    throw ex;
+                }
+                break;
             }
-            if ("app.devin.ai".equalsIgnoreCase(new java.net.URL(url).getHost())) {
-                c.setRequestProperty("Authorization", "Bearer " + auth1);
-                if (orgId != null && !orgId.isEmpty()) c.setRequestProperty("x-cog-org-id", orgId);
-                try {
-                    // attachments_token 铸造时服务端钉 Path=/attachments → 必须按附件真实路径取,
-                    // 按根路径 "/" 取永远拿不到该 Cookie (铸了也 401)。
-                    String ck = android.webkit.CookieManager.getInstance().getCookie(url);
-                    if (ck != null && !ck.isEmpty()) c.setRequestProperty("Cookie", ck);   // attachments_token → /attachments 真鉴权
-                } catch (Exception ignored) {}
-            }
-            int code = c.getResponseCode();
             if (code >= 300 && code < 400) {
                 String loc = c.getHeaderField("Location");
                 if (loc == null) return null;
@@ -2407,6 +2433,66 @@ public class MainActivity extends AppCompatActivity {
             break;
         }
         return c;
+    }
+    // ── 国内网络附件突围: app.devin.ai/attachments 本体可达(对话能聊), 但 302 落点是
+    //   AWS S3/CloudFront(国内被墙) → 图片/产出文件直连必超时。dao-relay Worker 的 GET /fetch
+    //   在 Cloudflare 全球边缘代取 S3 字节(边缘可达 S3·手机只连中继域名·国内可达)。
+    //   直连实败/探测不可达即记忆 10 分钟优先边缘; 预签名 URL 无需凭据, 不外泄任何鉴权头。
+    private static volatile long sMediaEdgeUntil;
+    private static volatile long sMediaProbeAt;
+    private static volatile String sEdgeBase;
+    static boolean blockedMediaHost(String h) {
+        if (h == null) return false;
+        h = h.toLowerCase(java.util.Locale.US);
+        return h.endsWith(".amazonaws.com") || h.equals("amazonaws.com")
+                || h.endsWith(".cloudfront.net") || h.equals("cloudfront.net")
+                || h.endsWith(".devinapps.com") || h.equals("devinapps.com");
+    }
+    /** 边缘代理基址 = 中继配置的 scheme+host (国内可达自有域名优先)。 */
+    static String edgeFetchBase() {
+        String b = sEdgeBase;
+        if (b != null) return b;
+        try {
+            android.content.Context ctx = HttpBridge.appCtx;
+            if (ctx != null) {
+                File f = new File(ctx.getFilesDir(), "relay-config.json");
+                if (f.exists()) {
+                    String u = new JSONObject(new String(readAllBytes(f), StandardCharsets.UTF_8)).optString("url", "");
+                    if (u.startsWith("https://")) {
+                        int sl = u.indexOf('/', 8);
+                        b = (sl > 0 ? u.substring(0, sl) : u);
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        if (b == null || b.isEmpty()) b = "https://dao-relay.aiotvr.cloud";
+        sEdgeBase = b;
+        return b;
+    }
+    static String edgeWrap(String url) {
+        try { return edgeFetchBase() + "/fetch?u=" + java.net.URLEncoder.encode(url, "UTF-8"); }
+        catch (Exception e) { return url; }
+    }
+    static boolean edgePreferred() { return System.currentTimeMillis() < sMediaEdgeUntil; }
+    static void markDirectMediaBlocked() { sMediaEdgeUntil = System.currentTimeMillis() + 10 * 60_000L; }
+    /** 后台探测 S3 直连可达性(4s 快判·10 分钟一次): 不可达即首张图就走边缘, 免首次破图。 */
+    static void kickMediaRouteProbe() {
+        long now = System.currentTimeMillis();
+        if (now < sMediaEdgeUntil || now - sMediaProbeAt < 10 * 60_000L) return;
+        sMediaProbeAt = now;
+        Thread t = new Thread(() -> {
+            java.net.HttpURLConnection c = null;
+            try {
+                c = HttpBridge.openConn("https://s3.us-west-2.amazonaws.com/", false);
+                c.setConnectTimeout(4000);
+                c.setReadTimeout(4000);
+                c.setRequestMethod("HEAD");
+                c.getResponseCode();   // 任何应答(含 4xx)=可达
+            } catch (Exception e) { markDirectMediaBlocked(); }
+            finally { if (c != null) try { c.disconnect(); } catch (Exception ignored) {} }
+        }, "media-route-probe");
+        t.setDaemon(true);
+        t.start();
     }
     // ── 附件媒体磁盘缓存: 视频/录屏等大附件首次播放时后台整取落盘(单飞去重),
     //   此后同一附件直接本地供给(支持 Range/206/seek) —— 弱网/国内网络/离线皆秒开。
