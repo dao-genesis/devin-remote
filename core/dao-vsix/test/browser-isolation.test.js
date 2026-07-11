@@ -72,6 +72,8 @@ const we = src.slice(src.indexOf("function daoWriteFpExtension"), src.indexOf("f
 ok(/world:\s*'MAIN'/.test(we), "注入扩展 content_script world=MAIN");
 ok(/run_at:\s*'document_start'/.test(we), "注入扩展 document_start(先于页面脚本)");
 ok(/37445|37446/.test(we), "注入覆盖 WebGL VENDOR/RENDERER 参数");
+ok(/navigator,"userAgent",C\.ua/.test(we), "注入对齐 navigator.userAgent(消 platform/UA 矛盾)");
+ok(/userAgentData/.test(we), "注入对齐 userAgentData.platform");
 
 // ④ 端点在册 + 脱敏
 ok(/case '\/api\/browser\/isolation'/.test(src), "端点 /api/browser/isolation 在册");

@@ -10354,6 +10354,7 @@ function daoWriteFpExtension(profileDir: string, fp: DaoAcctFp): string | null {
             lang: fp.lang, tz: fp.tz, tzOffset: fp.tzOffset, cores: fp.cores, mem: fp.mem,
             webglVendor: fp.webglVendor, webglRenderer: fp.webglRenderer,
             width: fp.width, height: fp.height, seed: daoFpSeed(fp.ua + fp.webglRenderer),
+            ua: fp.ua, uaPlatform: fp.uaPlatform,
         });
         // MAIN-world 注入: 覆盖 navigator/时区/WebGL/Canvas 加噪。加噪确定(种子驱动)→ 同号跨会话一致。
         const js = 'try{(function(){var C=' + cfg + ';var seed=C.seed>>>0;' +
@@ -10361,6 +10362,9 @@ function daoWriteFpExtension(profileDir: string, fp: DaoAcctFp): string | null {
             'function def(o,k,v){try{Object.defineProperty(o,k,{get:function(){return v;},configurable:true});}catch(e){}}' +
             'def(navigator,"platform",C.platform);def(navigator,"languages",Object.freeze(C.languages));' +
             'def(navigator,"language",C.lang);def(navigator,"hardwareConcurrency",C.cores);def(navigator,"deviceMemory",C.mem);' +
+            // UA 对齐 (与 --user-agent 启动旗同源·双保险): 消除 platform=Win32 而 UA=Linux 的自相矛盾
+            'try{def(navigator,"userAgent",C.ua);def(navigator,"appVersion",C.ua.replace(/^Mozilla\\//,""));def(navigator,"vendor","Google Inc.");}catch(e){}' +
+            'try{if(navigator.userAgentData){def(navigator.userAgentData,"platform",C.uaPlatform);}}catch(e){}' +
             'try{def(screen,"width",C.width);def(screen,"height",C.height);def(screen,"availWidth",C.width);def(screen,"availHeight",C.height-40);}catch(e){}' +
             // 时区
             'try{var DTF=Intl.DateTimeFormat;var RO=DTF.prototype.resolvedOptions;DTF.prototype.resolvedOptions=function(){var o=RO.apply(this,arguments);o.timeZone=C.tz;return o;};}catch(e){}' +
