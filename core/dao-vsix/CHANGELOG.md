@@ -2,6 +2,11 @@
 
 道法自然 · 无为而无不为。仅记录与「内网穿透 / dao-bridge / 知识库反向注入」相关的关键变更。
 
+## 3.51.23
+- **浏览器下载位置可配置(`wam.downloadDir`·借鉴手机 APK 下载管理)。** 网页内下载此前硬编码落 `~/.dao/downloads`(系统盘), 且「写盘」(out 层 `daoSaveDownload`)与「读清单」(rt-flow ⬇下载悬浮窗)各自硬编码路径:
+  - 新增 `wam.downloadDir` 配置项, 双端(out 层与 rt-flow 宿主)统一经 `devin_cloud.resolveDownloadsDir` 同源解析, 保证写/读恒同址;
+  - 空配置默认 `~/.dao/downloads` 不变(不孤立既有下载), `/__dlfile` 越权护栏随解析目录生效。
+
 ## 3.51.22
 - **近期对话·非本人自动化对话隔离(下沉/可隐藏·借鉴手机 APK cloud.html·帛书「知其白·守其黑」)。** 桌面「🕒 近期对话」此前把每周烧额度的自动化会话与本人对话混排、扰乱时序:
   - 移植手机 `_isAutoConv` 判定 `bkIsAuto(title)`(保守·宁漏勿误): 含中文一律判本人; 样板仓库名(`blog-drafts-42` 等)/超短名(≤3)/英文动词起头(review/fix/implement…)判非本人自动化;

@@ -2,7 +2,7 @@
 	"name": "rt-flow",
 	"displayName": "Runtime Flow",
 	"description": "Runtime flow management · adaptive scheduling · 三板块统一: Cascade + Devin Cloud + Git(GitHub PAT 归一连接)",
-	"version": "4.26.11",
+	"version": "4.26.12",
 	"publisher": "devaid",
 	"repository": {
 		"type": "git",
@@ -234,6 +234,11 @@
 					"type": "string",
 					"default": "",
 					"description": "第五板块 · Devin Cloud 备份目录 (空=~/.wam/devin_cloud_backups). v4.4.0: 文件夹结构 <账号名>/<对话名称_ID末8位>/"
+				},
+				"wam.downloadDir": {
+					"type": "string",
+					"default": "",
+					"description": "浏览器下载落盘目录 (空=~/.dao/downloads)。网页内下载的文件落此处并登记于 ⬇下载悬浮窗。"
 				},
 				"wam.devinCloudBackupMode": {
 					"type": "string",
