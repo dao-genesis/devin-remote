@@ -95,4 +95,9 @@ ok(/'offline'/.test(src) && /\ud83c\udf10断网/.test(src),
 ok(/a\.verify === 'pending' \? \{ verify: 'pending' \}/.test(src),
   "loadInjectProfile: ghFleet 归一化保留 verify=pending(重载不丢待验证态)");
 
+// 10) 跨版本多窗共档前向兼容 (旧窗保存不得抹掉新窗写入的未知顶层字段, 如 ghFleet)
+ok(/out = Object\.assign\(\{\}, raw\);/.test(src) &&
+   /if \(\(p as any\)\[k\] !== undefined\) out\[k\] = \(p as any\)\[k\];/.test(src),
+  "saveInjectProfile: 合并磁盘档未知顶层字段·只覆盖已知字段(多窗多版本共档不互抹)");
+
 console.log("[gh-fleet] " + pass + " assertion(s) passed\n");

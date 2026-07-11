@@ -14460,7 +14460,17 @@ function saveInjectProfile(p: InjectProfile): void {
     try { _syncGithubMcpHeaderToPat(p); } catch { /* 守柔 */ }
     let prevFp = '';
     try { prevFp = _secretsFingerprint(loadInjectProfile()); } catch { /* 守柔 */ }
-    try { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(INJECT_PROFILE_FILE, JSON.stringify(p, null, 2), 'utf8'); } catch { /* 守柔 */ }
+    // 前向兼容(跨版本多窗共档): 磁盘档里本版本不认识的顶层字段(未来版本新增, 如更早版本眼中的 ghFleet)
+    // 原样保留, 只覆盖本版本已知字段 — 杜绝「旧窗一次保存把新窗写入的舰队/新数据整体抹掉」。
+    let out: any = p;
+    try {
+        const raw = JSON.parse(fs.readFileSync(INJECT_PROFILE_FILE, 'utf8'));
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+            out = Object.assign({}, raw);
+            for (const k of Object.keys(p)) { if ((p as any)[k] !== undefined) out[k] = (p as any)[k]; }
+        }
+    } catch { /* 无旧档/坏档即直写 */ }
+    try { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(INJECT_PROFILE_FILE, JSON.stringify(out, null, 2), 'utf8'); } catch { /* 守柔 */ }
     try {
         if (_secretsFingerprint(p) !== prevFp) { try { fs.unlinkSync(INJECT_SIG_FILE); } catch { /* 无缓存即无需清 */ } }
     } catch { /* 守柔 */ }
