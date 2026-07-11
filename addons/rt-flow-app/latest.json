@@ -1,6 +1,6 @@
 {
-  "versionCode": 296,
-  "versionName": "0.37.191",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.191/DevinCloud-mobile-v0.37.191.apk",
-  "notes": "v0.37.191 · 归位 dao-genesis 组织: 更新源/镜像全量切换(旧源已404) + 备份网页端以备份为本源(全量历史备份·含移出账号·近期时序·自动化下沉)"
+  "versionCode": 297,
+  "versionName": "0.37.192",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.192/DevinCloud-mobile-v0.37.192.apk",
+  "notes": "v0.37.192 · 自动发版(代码已更新, 版本号自动递增)"
 }
