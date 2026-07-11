@@ -5162,6 +5162,49 @@ function bridgeCfApiRequest(method: string, apiPath: string, token: string, body
 //   用户只提供自己核心账号的一枚 PAT(admin:org+repo), 后端自动: 验 PAT → 列/择组织 →
 //   同步仓库进组织 → 批量把手套 GitHub 号邀为组织成员 → 反向注入 PAT 到全池 Security+GitHub MCP。
 //   绝不硬编任何特定组织名 —— 分发给其他用户时各用各自的组织。
+// GitHub 出网代理: api.github.com 直连在部分网络被重置, 须循 VS Code `http.proxy` / 代理环境变量
+//   经 HTTP CONNECT 隧道出网(Clash 等混合端口即此类; socks 不支持则回落直连)。
+function ghProxyUrl(): string {
+    try {
+        const p = String(vscode.workspace.getConfiguration('http').get('proxy') || '').trim();
+        if (p) return p;
+    } catch { /* 守柔 */ }
+    const e = process.env;
+    return String(e.HTTPS_PROXY || e.https_proxy || e.HTTP_PROXY || e.http_proxy || e.ALL_PROXY || e.all_proxy || '').trim();
+}
+function ghProxyAgent(proxyUrl: string): any {
+    let u: URL;
+    try { u = new URL(proxyUrl); } catch { return undefined; }
+    if (!/^https?:$/.test(u.protocol)) return undefined;
+    const net = require('net'); const tls = require('tls'); const https = require('https');
+    const agent = new https.Agent({ keepAlive: false });
+    (agent as any).createConnection = (opts: any, cb: (err: Error | null, sock?: any) => void) => {
+        const proxyPort = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
+        const socket = net.connect(proxyPort, u.hostname);
+        socket.once('error', (e: Error) => cb(e));
+        socket.once('connect', () => {
+            const host = opts.host || opts.hostname; const port = opts.port || 443;
+            let head = 'CONNECT ' + host + ':' + port + ' HTTP/1.1\r\nHost: ' + host + ':' + port + '\r\n';
+            if (u.username) head += 'Proxy-Authorization: Basic ' + Buffer.from(decodeURIComponent(u.username) + ':' + decodeURIComponent(u.password || '')).toString('base64') + '\r\n';
+            socket.write(head + '\r\n');
+            let buf = Buffer.alloc(0);
+            const onData = (d: Buffer) => {
+                buf = Buffer.concat([buf, d]);
+                const idx = buf.indexOf('\r\n\r\n');
+                if (idx < 0) return;
+                socket.removeListener('data', onData);
+                const statusLine = buf.slice(0, idx).toString().split('\r\n')[0];
+                if (!/\s2\d\d(\s|$)/.test(statusLine)) { socket.destroy(); cb(new Error('proxy CONNECT failed: ' + statusLine)); return; }
+                const rest = buf.slice(idx + 4);
+                if (rest.length) socket.unshift(rest);
+                const tlsSock = tls.connect({ socket, servername: host }, () => cb(null, tlsSock));
+                tlsSock.once('error', (e: Error) => cb(e));
+            };
+            socket.on('data', onData);
+        });
+    };
+    return agent;
+}
 // GitHub REST 统一封装: Bearer PAT + 版本头 + 超时, 返回 status/json/文本 + 限速余量。
 function ghApiRequest(method: string, apiPath: string, pat: string, body?: any): Promise<{ status: number; json?: any; text?: string; error?: string; rateRemaining?: number; rateReset?: number; scopes?: string }> {
     return new Promise((resolve) => {
@@ -5174,7 +5217,9 @@ function ghApiRequest(method: string, apiPath: string, pat: string, body?: any):
             'User-Agent': 'dao-vsix/' + EXT_VERSION,
         };
         if (data) headers['Content-Type'] = 'application/json';
-        const req = https.request({ hostname: 'api.github.com', path: apiPath, method, headers }, (res: any) => {
+        const proxy = ghProxyUrl();
+        const agent = proxy ? ghProxyAgent(proxy) : undefined;
+        const req = https.request({ hostname: 'api.github.com', path: apiPath, method, headers, ...(agent ? { agent } : {}) }, (res: any) => {
             let d = ''; res.on('data', (c: any) => d += c);
             res.on('end', () => {
                 const rr = Number(res.headers['x-ratelimit-remaining']);
