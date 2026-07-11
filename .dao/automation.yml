@@ -36,3 +36,5 @@ automerge:
     min_seconds_between_merges: 90
 
 # 高频活动全部发生在手套 fork 上，本体只做低频合并。
+
+# e2e 验证: fork PR 零人工自动合并 (dao-automerge · gloves 白名单生效) 2026-07-11
