@@ -65,15 +65,4 @@ jobs:
               });
             } catch (e) { core.warning('label failed: ' + e.message); }
 
-  auto-merge:
-    name: 自动合并 (dao-auto)
-    needs: [sanity]
-    if: contains(github.event.pull_request.labels.*.name, 'dao-auto')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Enable auto-merge
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr merge --auto --merge "${{ github.event.pull_request.number }}" \
-            -R "${{ github.repository }}" || echo "auto-merge 未启用(可能需仓库开启 Allow auto-merge)"
+  # 合并统一由 dao-automerge.yml 执行（唯一合并者·squash·CI 全绿·限速），本流程只做自检与打标。
