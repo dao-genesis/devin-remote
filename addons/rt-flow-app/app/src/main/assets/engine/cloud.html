@@ -14,18 +14,24 @@ body{margin:0;background:#0e1116;color:#cdd3de;font:13px/1.5 -apple-system,Segoe
 .search:focus{border-color:#0e639c}
 .btn{background:#21262d;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer}
 .btn.pri{background:#0e639c;border-color:#0e639c;color:#fff}
+.btn.on{background:#1c3a26;border-color:#2ea043;color:#7ee787}
 .btn:active{opacity:.7}
 #list{padding:6px 8px 60px}
 /* 一级: 账号目录 */
 .acc-dir{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer}
 .acc-dir:active{background:#1f2630}
+.acc-dir.rm{border-color:#3d2d1c;background:#15120e}
 .acc-dir .ad-r1{display:flex;align-items:center;gap:8px}
 .acc-no{flex:0 0 auto;min-width:22px;height:20px;line-height:20px;text-align:center;font-size:12px;font-weight:800;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:4px;padding:0 4px}
+.acc-no.rm{color:#d0965a;background:#2a2013;border-color:#4a3a1c}
 .ad-name{flex:1;font-size:13px;font-weight:600;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ad-folder{font-size:16px}
 .ad-meta{font-size:11px;color:#8b949e;margin-top:4px;display:flex;gap:8px;flex-wrap:wrap}
 .ad-pw{font-size:11px;color:#6e7681;font-family:monospace;margin-top:2px;word-break:break-all}
 .ad-cp{font-size:11px;color:#58a6ff;cursor:pointer;margin-left:auto}
+.tag{font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid}
+.tag.rm{color:#d0965a;border-color:#4a3a1c;background:#2a2013}
+.tag.auto{color:#8b949e;border-color:#30363d;background:#1a1f26}
 /* 二级: 对话 */
 .row{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:9px 10px;margin-bottom:7px}
 .r1{display:flex;align-items:center;gap:7px}
@@ -45,16 +51,17 @@ body{margin:0;background:#0e1116;color:#cdd3de;font:13px/1.5 -apple-system,Segoe
 <body>
 <div class="top">
   <div class="title">Devin Cloud · 备份管理</div>
-  <div class="sub" id="sub">账号目录(一级) → 对话(二级) · 排序与切号面板同步</div>
-  <div class="crumb" id="crumb"><span>📁 全部账号</span></div>
+  <div class="sub" id="sub">以备份为主 · 全机历史备份(含已移出库账号) · 按近期活跃时序</div>
+  <div class="crumb" id="crumb"><span>🗂 全部备份</span></div>
 </div>
 <div class="tb" id="tb">
-  <input class="search" id="q" placeholder="检索 账号 / 对话名称…" oninput="onSearch()" autocomplete="off"/>
+  <input class="search" id="q" placeholder="检索 账号 / 对话名称 / 文件夹…" oninput="onSearch()" autocomplete="off"/>
   <button class="btn pri" onclick="reload()">&#128260; 刷新</button>
+  <button class="btn" id="autoBtn" onclick="toggleAuto()">隐藏自动化</button>
   <button class="btn" onclick="backupAllAcc()">&#128229; 全量备份</button>
 </div>
 <div id="list"><div class="empty">加载中…</div></div>
-<div class="footer">Devin Cloud 手机版 · 备份管理 · 账号目录映射 · 道法自然</div>
+<div class="footer">Devin Cloud 手机版 · 以备份为本源 · 近期时序 · 道法自然</div>
 <div class="toast" id="toast"></div>
 
 <script src="devin-core.js"></script>
@@ -67,23 +74,189 @@ function stClass(s){ s=String(s||"").toLowerCase(); if(/run|work|active/.test(s)
 function fmtTime(t){ if(!t)return""; try{ var d=new Date(typeof t==="number"?t:Date.parse(t)); if(isNaN(d))return String(t).slice(0,16); return d.toLocaleString(); }catch(e){return String(t).slice(0,16);} }
 function safeName(s){ return String(s||"").replace(/[\\\/:*?"<>|]/g,"_").slice(0,60); }
 
-// ── 账号列表 (与切号面板同源·同序: 直接读 loadAcc, 仅已登录可备份) ──
-function panelAccounts(){ return DaoCore.loadAcc(); } // 全量·保持面板顺序
-function loggedAccounts(){ return panelAccounts().filter(function(a){return a.auth1&&a.orgId;}); }
+// ══════════════════════════════════════════════════════════════════════════
+//  以「备份」为本源 (非以账号库为本源)：枚举本机全部备份夹(含已移出库账号),
+//  按「近期活跃」时序排布(与近期对话同源逻辑), 剔除非本人自动化对话对排序的干扰。
+//  · 活跃账号 → 带账号库序号;  已移出账号 → 无序号但可检索/查看/下载/复制账密。
+//  · 数据一条不删; 自动化对话默认只「下沉」不隐藏, 可一键隐藏。
+// ══════════════════════════════════════════════════════════════════════════
 
-var VIEW = "accts";   // accts | sessions
-var CUR = null;       // 当前账号
-var CUR_NO = 0;       // 当前账号编号(面板)
-var SESSIONS = [];
-var Q = "";           // 检索词(账号名/对话名称) · 一级二级通用
+// 自动化对话判定 (与 switch.html / daopan.html 近期对话过滤同源·保守):
+//   纯英文、动词起头的机器人任务名 / 样板仓库名 → 非本人自动化; 含中文一律保留。
+var AUTO_VERB=/^(review|improve|add|fix|update|refactor|implement|create|investigate|analy[sz]e|debug|optimi[sz]e|test|write|build|set ?up|configure|migrate|remove|delete|clean|security|enhance|document|resolve|merge|deploy|integrate|verify|check|explore|research|design|develop|generate|handle|support|enable|disable|rename|move|extract|inspect|audit|scan|repair|patch|port|sync|convert|validate|ensure|prepare|establish|continue|complete|finish|start|begin)\b/i;
+function _isAutoConv(title){
+  var t=String(title||"").trim();
+  if(!t) return false;
+  if(/[\u4e00-\u9fff]/.test(t)) return false;               // 含中文 → 本人对话, 永不判自动化
+  if(/(blog-drafts|notes|dotfiles|code-snippets|utils-py|learn-cs)-\d+/i.test(t)) return true;
+  if(t.length<=3) return true;
+  if(AUTO_VERB.test(t)) return true;
+  return false;
+}
+
+var _libByKey={};   // 活跃账号库: email/id(lower) -> {acc,no}
+function _buildLib(){
+  _libByKey={}; var arr=[]; try{ arr=DaoCore.loadAcc()||[]; }catch(e){}
+  arr.forEach(function(a,i){
+    if(a.email) _libByKey[String(a.email).toLowerCase()]={acc:a,no:i+1};
+    if(a.id)    _libByKey[String(a.id).toLowerCase()]={acc:a,no:i+1};
+  });
+  return arr;
+}
+
+var _groups=[];       // 备份宇宙(全量)
+var _view=[];         // 当前渲染(过滤/排序后)
+var _bkInline={}, _bkInlineSeq=1;
+var VIEW="accts", CUR=null, CUR_NO=0, SESSIONS=[], Q="";
+if(typeof window.__showAuto==="undefined") window.__showAuto=true;   // 默认显示全量(自动化下沉), 可一键隐藏
+
+function loadGroups(){
+  _groups=[];
+  var libArr=_buildLib(), seen={};
+  var folders=[];
+  try{ if(N.vaultListBackupAccounts) folders=JSON.parse(N.vaultListBackupAccounts()||"[]")||[]; }catch(e){}
+  folders.forEach(function(folder){
+    if(folder==="_移出总账") return;
+    var man=null, rm=null;
+    try{ if(N.vaultReadBackup){ var mt=N.vaultReadBackup(folder,"manifest.json"); if(mt)man=JSON.parse(mt); } }catch(e){}
+    try{ if(N.vaultReadBackup){ var rt=N.vaultReadBackup(folder,"移出记录.json"); if(rt)rm=JSON.parse(rt); } }catch(e){}
+    var email=(man&&man.account&&man.account.email)||(rm&&rm.account&&rm.account.email)||folder;
+    var sessions=(man&&man.sessions)?Object.keys(man.sessions).map(function(k){return man.sessions[k];}).filter(Boolean)
+      .sort(function(x,y){return (y.backedUpAt||0)-(x.backedUpAt||0);}):[];
+    if(!sessions.length){
+      try{ if(N.vaultListBackups){ var fl=JSON.parse(N.vaultListBackups(folder)||"[]")||[]; var bySid={},legacy=[];
+        fl.forEach(function(fn){ var n=typeof fn==="string"?fn:(fn&&fn.name)||""; var mz=n.match(/^sess-(.+)\.zip$/),mm=n.match(/^conv-(.+)\.md$/);
+          if(mz){ bySid[mz[1]]=bySid[mz[1]]||{sid:mz[1],title:mz[1]}; bySid[mz[1]].zip=n; }
+          else if(mm){ bySid[mm[1]]=bySid[mm[1]]||{sid:mm[1],title:mm[1]}; bySid[mm[1]].md=n; }
+          else if(/^backup-.*\.json$/.test(n)) legacy.push(n); });
+        sessions=Object.keys(bySid).map(function(k){return bySid[k];});
+        if(!sessions.length && legacy.length && N.vaultReadBackup){
+          legacy.sort(); var lgName=legacy[legacy.length-1], lg=null;
+          try{ lg=JSON.parse(N.vaultReadBackup(folder,lgName)||"null"); }catch(e){}
+          if(lg){
+            if(lg.account&&lg.account.email&&email===folder) email=lg.account.email;
+            if(!rm&&lg.account) rm={account:lg.account,removedAt:0,legacy:true};
+            (lg.sessions||[]).forEach(function(s){ if(!s)return;
+              sessions.push({sid:s.sid||s.id||"",title:s.title||s.sid||"(无标题)",inlineMd:(typeof s.md==="string"?s.md:""),backedUpAt:lg.savedAt?Date.parse(lg.savedAt)||0:0,legacyFile:lgName}); });
+          }
+        }
+      } }catch(e){}
+    }
+    sessions.forEach(function(s){ if(s&&!s.folder)s.folder=folder; });
+    var key=String(email).toLowerCase();
+    var hit=_libByKey[key]||_libByKey[String(folder).toLowerCase()];
+    var removed=!!rm || !hit;
+    // 近期时序: 忽略自动化对话时间, 取本人对话最新备份时间; 无则退回全部/移出/添加时间
+    var tHuman=0, tAny=0;
+    sessions.forEach(function(s){ var bt=s.backedUpAt||0; if(bt>tAny)tAny=bt; if(!_isAutoConv(s.title||s.sid)&&bt>tHuman)tHuman=bt; });
+    var t=tHuman||tAny||(rm?rm.removedAt:0)||(hit&&hit.acc&&(hit.acc.lastActiveAt||hit.acc.addedAt))||0;
+    var allAuto=sessions.length>0 && sessions.every(function(s){return _isAutoConv(s.title||s.sid);});
+    _groups.push({folder:folder,email:email,no:hit?hit.no:0,acc:hit?hit.acc:(rm?rm.account:null),
+      logged:!!(hit&&hit.acc&&hit.acc.auth1&&hit.acc.orgId),removed:removed,removedAt:rm?rm.removedAt:0,
+      sessions:sessions,t:t,allAuto:allAuto});
+    if(key)seen[key]=1; seen[String(folder).toLowerCase()]=1;
+  });
+  // 中央移出总账: 夹被同前缀号覆盖后, 总账仍在 → 移出号永远可寻
+  try{ if(N.vaultListBackups){ var tl=JSON.parse(N.vaultListBackups("_移出总账")||"[]")||[];
+    tl.forEach(function(fn){ var n=typeof fn==="string"?fn:(fn&&fn.name)||""; if(!/\.json$/.test(n))return;
+      var rec=null; try{ rec=JSON.parse(N.vaultReadBackup("_移出总账",n)||""); }catch(e){}
+      if(!rec||!rec.account) return; var em=rec.account.email||rec.account.id||n, k=String(em).toLowerCase();
+      if(seen[k]){ for(var i=0;i<_groups.length;i++){ if(String(_groups[i].email).toLowerCase()===k){ _groups[i].removed=true; if(!_groups[i].removedAt)_groups[i].removedAt=rec.removedAt||0; if(!_groups[i].t)_groups[i].t=rec.removedAt||0; break; } } return; }
+      _groups.push({folder:rec.folder||"_移出总账",email:em,no:0,acc:rec.account,logged:false,removed:true,removedAt:rec.removedAt||0,sessions:[],t:rec.removedAt||0,allAuto:false}); seen[k]=1;
+    });
+  } }catch(e){}
+  // 账号库中「尚无备份夹」的活跃账号并入 → 活跃号绝不遗漏
+  libArr.forEach(function(a,i){ var k=String(a.email||"").toLowerCase(), k2=String(a.id||"").toLowerCase();
+    if((k&&seen[k])||(k2&&seen[k2])) return;
+    _groups.push({folder:"",email:a.email||a.id||("acc"+(i+1)),no:i+1,acc:a,logged:!!(a.auth1&&a.orgId),removed:false,removedAt:0,sessions:[],t:(a.lastActiveAt||a.addedAt||0),allAuto:false});
+    if(k)seen[k]=1; if(k2)seen[k2]=1;
+  });
+  // 近期活跃时序降序; 自动化-only 账号一律下沉(不删); 同档按序号靠前
+  _groups.sort(function(x,y){
+    if(x.allAuto!==y.allAuto) return x.allAuto?1:-1;
+    if((y.t||0)!==(x.t||0)) return (y.t||0)-(x.t||0);
+    return (x.no||99999)-(y.no||99999);
+  });
+  return _groups;
+}
 
 function onSearch(){
   Q=(document.getElementById("q").value||"").trim().toLowerCase();
   if(VIEW==="sessions"&&CUR) renderSessions(); else renderAccts();
 }
-function _accMatch(a,no){
+function toggleAuto(){
+  window.__showAuto=!window.__showAuto;
+  document.getElementById("autoBtn").className="btn"+(window.__showAuto?"":" on");
+  document.getElementById("autoBtn").textContent=window.__showAuto?"隐藏自动化":"显示自动化";
+  renderAccts();
+}
+function _grpMatch(g){
   if(!Q) return true;
-  return [a.email,a.id,a.password,a.orgName,(""+no)].some(function(v){ return String(v||"").toLowerCase().indexOf(Q)>=0; });
+  if([g.email,g.folder,(g.acc&&g.acc.id),(g.acc&&g.acc.password),(g.acc&&g.acc.orgName),(g.no?(""+g.no):"")].some(function(v){return String(v||"").toLowerCase().indexOf(Q)>=0;})) return true;
+  return g.sessions.some(function(s){ return String(s.title||s.sid||"").toLowerCase().indexOf(Q)>=0; });
+}
+
+// ── 一级: 备份账号目录 (备份为主·近期时序) ──
+function renderAccts(){
+  VIEW="accts"; CUR=null;
+  document.getElementById("crumb").innerHTML='<span>🗂 全部备份</span>';
+  var box=document.getElementById("list");
+  if(!_groups.length){ box.innerHTML='<div class="empty">无本地备份记录 — 先在工具条点「全量备份」或开启「自动备份」</div>'; return; }
+  _view=_groups.filter(function(g){ if(!window.__showAuto && g.allAuto) return false; return _grpMatch(g); });
+  var nRm=0, nAuto=0; _groups.forEach(function(g){ if(g.removed)nRm++; if(g.allAuto)nAuto++; });
+  document.getElementById("sub").textContent="共 "+_groups.length+" 个备份账号 (含 "+nRm+" 已移出库) · 近期活跃优先 · 自动化 "+nAuto+" 个"+(window.__showAuto?"(下沉)":"(已隐藏)");
+  var html=_view.map(function(g,i){
+    var name=g.email||g.folder||("acc"+(g.no||i));
+    var pw=(g.acc&&g.acc.password)||"";
+    var noHtml=g.no?('<span class="acc-no">'+g.no+'</span>'):'<span class="acc-no rm">移</span>';
+    var tags='';
+    if(g.removed) tags+=' <span class="tag rm">已移出库'+(g.removedAt?('·'+new Date(g.removedAt).toLocaleDateString()):'')+'</span>';
+    if(g.allAuto) tags+=' <span class="tag auto">自动化</span>';
+    var when=g.t?fmtTime(g.t):"";
+    var status=g.logged?"☁ 已登录·可备份":(g.removed?"🗄 本地备份·可查看/下载":"🔒 未登录·本地备份");
+    return '<div class="acc-dir'+(g.removed?' rm':'')+'" onclick="openGrp('+i+')">'+
+      '<div class="ad-r1">'+noHtml+
+        '<span class="ad-folder">'+(g.removed?'🗄':'📁')+'</span>'+
+        '<span class="ad-name" title="'+_esc(name)+'">'+_esc(name)+tags+'</span>'+
+        (pw?('<span class="ad-cp" onclick="event.stopPropagation();cpGrp('+i+')">复制账密</span>'):'')+
+      '</div>'+
+      (pw?('<div class="ad-pw">'+_esc("密码: "+pw)+'</div>'):'')+
+      '<div class="ad-meta"><span>'+status+'</span>'+
+        '<span>'+g.sessions.length+' 备份对话</span>'+
+        (when?('<span>近期 '+_esc(when)+'</span>'):'')+
+        ((g.acc&&g.acc.orgName)?('<span>'+_esc(g.acc.orgName)+'</span>'):'')+
+      '</div>'+
+    '</div>';
+  }).join("");
+  box.innerHTML = html || '<div class="empty">无匹配备份 · 清空搜索查看全部</div>';
+}
+function cpGrp(i){ var g=_view[i]; if(!g||!g.acc)return; var t=(g.acc.email||g.acc.id||"")+"\n"+(g.acc.password||""); try{N.clip&&N.clip(t);}catch(e){} toast("已复制账号+密码"); }
+
+// ── 二级: 该账号的对话 (活跃→云端; 移出/未登录→本地备份) ──
+async function openGrp(i){
+  var g=_view[i]; if(!g)return;
+  CUR=g; CUR_NO=g.no||0; VIEW="sessions"; SESSIONS=[];
+  var name=g.email||g.folder;
+  document.getElementById("crumb").innerHTML='<a onclick="renderAccts()">🗂 全部备份</a><span>›</span><span>'+(g.no?(g.no+'. '):'')+_esc(name)+'</span>';
+  document.getElementById("sub").textContent=name+(g.removed?" · 已移出库·本地备份":" · "+((g.acc&&(g.acc.orgName||g.acc.orgId))||""));
+  if(g.logged && g.acc){
+    document.getElementById("list").innerHTML='<div class="empty">拉取云端对话…</div>';
+    try{
+      var r=await DaoCloud.listSessions(g.acc,200);
+      if(r&&r.ok){ SESSIONS=r.sessions||[]; renderSessions(); if(SESSIONS.length)toast("✓ "+SESSIONS.length+" 个云端对话"); return; }
+    }catch(e){}
+    // 云端失败 → 退回本地备份
+  }
+  renderLocalSessions(g);
+}
+
+// 活跃账号云端会话渲染
+function renderSessions(){
+  if(CUR&&(!CUR.logged||!CUR.acc)){ renderLocalSessions(CUR); return; }
+  var box=document.getElementById("list");
+  if(!SESSIONS.length){ renderLocalSessions(CUR); return; }
+  var html=SESSIONS.map(function(s,i){ return _sessMatch(s)?sessHtml(s,i):""; }).join("");
+  box.innerHTML = html || '<div class="empty">无匹配对话 · 清空搜索查看全部</div>';
 }
 function _sessMatch(s){
   if(!Q) return true;
@@ -92,59 +265,41 @@ function _sessMatch(s){
   return String(title).toLowerCase().indexOf(Q)>=0 || String(sid).toLowerCase().indexOf(Q)>=0;
 }
 
-// ── 一级: 账号目录 ──
-function renderAccts(){
-  VIEW="accts"; CUR=null;
-  document.getElementById("crumb").innerHTML='<span>📁 全部账号</span>';
-  document.getElementById("sub").textContent="账号目录(一级) → 对话(二级) · 排序与切号面板同步";
-  var accs=panelAccounts();
-  if(!accs.length){ document.getElementById("list").innerHTML='<div class="empty">无账号 — 请先到「切号面板」添加</div>'; return; }
-  var html=accs.map(function(a,i){
-    var no=i+1;
-    if(!_accMatch(a,no)) return "";
-    var name=(a.email||a.id||("acc"+no));
-    var pw=a.password||"";
-    var logged=!!(a.auth1&&a.orgId);
-    // 目录命名: 编号 + 账号名 + 密码 (方便复制+定位面板编号)
-    var dirName=no+". "+name+(pw?(" ["+pw+"]"):"");
-    return '<div class="acc-dir" onclick="openAcc('+i+')">'+
-      '<div class="ad-r1">'+
-        '<span class="acc-no">'+no+'</span>'+
-        '<span class="ad-folder">📁</span>'+
-        '<span class="ad-name" title="'+_esc(dirName)+'">'+_esc(name)+'</span>'+
-        '<span class="ad-cp" onclick="event.stopPropagation();cpAcc('+i+')">复制账密</span>'+
-      '</div>'+
-      '<div class="ad-pw">'+_esc(pw?("密码: "+pw):"(无密码)")+'</div>'+
-      '<div class="ad-meta"><span>'+(logged?"☁ 已登录·可备份":"🔒 未登录")+'</span>'+(a.orgName?'<span>'+_esc(a.orgName)+'</span>':'')+'</div>'+
+// 移出/未登录账号: 从本地备份夹渲染对话 (MD/ZIP/旧版整包内联) → 历史资源恒可查可下
+function renderLocalSessions(g){
+  var box=document.getElementById("list");
+  if(!g){ box.innerHTML='<div class="empty">无数据</div>'; return; }
+  _bkInline={}; _bkInlineSeq=1;
+  var rows=g.sessions.filter(function(s){ return !Q || String(s.title||s.sid||"").toLowerCase().indexOf(Q)>=0; });
+  if(!rows.length){
+    box.innerHTML='<div class="empty">该账号本地无对话备份'+(g.removed?'<br><span style="font-size:11px;color:#6e7681">账密快照在 移出记录.json / _移出总账 · 可复制账密后重新添加回账号库</span>':'')+'</div>';
+    return;
+  }
+  var html=rows.map(function(s){
+    var when=s.backedUpAt?fmtTime(s.backedUpAt):"";
+    var openBtn='';
+    if(s.inlineMd){ var ik=String(_bkInlineSeq++); _bkInline[ik]={title:s.title||s.sid,md:s.inlineMd}; openBtn='<span class="b" onclick="bkOpenInline(\''+ik+'\')">&#128172; 打开MD</span>'; }
+    else if(s.md||s.zip){ openBtn='<span class="b" onclick="bkOpenMd(\''+_esc(s.folder||g.folder)+'\',\''+_esc(s.md||'')+'\',\''+_esc(s.zip||'')+'\')">&#128172; 打开MD</span>'; }
+    var zipBtn=s.zip?('<span class="b pri" onclick="bkSaveZip(\''+_esc(s.folder||g.folder)+'\',\''+_esc(s.zip)+'\')">&#128230; 下载ZIP</span>'):'';
+    return '<div class="row">'+
+      '<div class="r1"><span class="st"></span><span class="s-title" title="'+_esc(s.title||s.sid)+'">'+_esc(String(s.title||s.sid).slice(0,80))+'</span></div>'+
+      '<div class="s-meta">'+(when?'<span>备:'+_esc(when)+'</span>':'')+(s.legacyFile?'<span>旧版整包</span>':'')+'<span>本地备份</span></div>'+
+      '<div class="acts">'+openBtn+zipBtn+'</div>'+
     '</div>';
   }).join("");
-  document.getElementById("list").innerHTML = html || '<div class="empty">无匹配账号 · 清空搜索查看全部</div>';
+  box.innerHTML = html || '<div class="empty">无匹配对话</div>';
 }
-function cpAcc(i){ var a=panelAccounts()[i]; if(!a)return; var t=(a.email||a.id||"")+"\n"+(a.password||""); try{N.clip&&N.clip(t);}catch(e){} toast("已复制账号+密码"); }
+function bkOpenInline(key){ var e=_bkInline[key]; if(e&&e.md){ try{N.openText&&N.openText("【本地备份·旧版整包】"+e.title,e.md);}catch(x){} return;} toast("本地 MD 读取失败",true); }
+async function bkOpenMd(folder,mdName,zipName){
+  try{ if(mdName){ var md=N.vaultReadBackup?N.vaultReadBackup(folder,mdName):""; if(md){ N.openText&&N.openText("【本地备份】"+mdName,md); return; } } }catch(e){}
+  try{ if(zipName && N.vaultReadBackupB64){ var b64=N.vaultReadBackupB64(folder,zipName); if(b64){ var m=await DaoCloud.zipReadText(b64,"对话_人类可读.md"); if(m){ N.openText&&N.openText("【本地备份·整包】"+zipName,m); return; } } } }catch(e){}
+  toast("本地 MD 读取失败",true);
+}
+function bkSaveZip(folder,zipName){
+  try{ var b64=N.vaultReadBackupB64?N.vaultReadBackupB64(folder,zipName):""; if(b64 && N.saveBase64File){ N.saveBase64File(zipName,b64); toast("✓ 已导出本地全量 ZIP"); return; } }catch(e){}
+  toast("本地 ZIP 读取失败",true);
+}
 
-// ── 二级: 该账号的对话 ──
-async function openAcc(i){
-  var a=panelAccounts()[i]; if(!a)return;
-  if(!(a.auth1&&a.orgId)){ toast("该账号未登录·先到切号面板登录",true); return; }
-  CUR=a; CUR_NO=i+1; VIEW="sessions";
-  document.getElementById("crumb").innerHTML='<a onclick="renderAccts()">📁 全部账号</a><span>›</span><span>'+CUR_NO+'. '+_esc(a.email||a.id)+'</span>';
-  document.getElementById("sub").textContent=(a.email||a.id)+" · "+(a.orgName||a.orgId);
-  document.getElementById("list").innerHTML='<div class="empty">拉取对话…</div>';
-  try{
-    var r=await DaoCloud.listSessions(a,200);
-    if(!r.ok){ document.getElementById("list").innerHTML='<div class="empty">拉取失败: '+_esc(r.error||"")+'</div>'; return; }
-    SESSIONS=r.sessions||[];
-    if(!SESSIONS.length){ document.getElementById("list").innerHTML='<div class="empty">该账号暂无云端对话</div>'; return; }
-    renderSessions();
-    toast("✓ "+SESSIONS.length+" 个对话");
-  }catch(e){ document.getElementById("list").innerHTML='<div class="empty">异常: '+_esc(String(e))+'</div>'; }
-}
-function renderSessions(){
-  var box=document.getElementById("list");
-  if(!SESSIONS.length){ box.innerHTML='<div class="empty">该账号暂无云端对话</div>'; return; }
-  var html=SESSIONS.map(function(s,i){ return _sessMatch(s)?sessHtml(s,i):""; }).join("");
-  box.innerHTML = html || '<div class="empty">无匹配对话 · 清空搜索查看全部</div>';
-}
 function sessHtml(s,i){
   var sid=s.devin_id||s.session_id||s.id||"";
   var title=s.title||s.name||s.prompt||sid;
@@ -162,57 +317,54 @@ function sessHtml(s,i){
 }
 
 async function viewMd(i,kind){
-  var s=SESSIONS[i]; if(!CUR||!s)return;
+  var s=SESSIONS[i]; if(!CUR||!CUR.acc||!s)return;
   var sid=s.devin_id||s.session_id||s.id;
   toast("提取对话…");
   try{
-    var r=await DaoCloud.exportSession(CUR, sid, kind);
+    var r=await DaoCloud.exportSession(CUR.acc, sid, kind);
     if(!r.ok){ toast("提取失败: "+(r.error||""),true); return; }
     try{ N.openText && N.openText(r.title||sid, r.md); }catch(e){}
   }catch(e){ toast("异常: "+e,true); }
 }
 async function dlMd(i,kind){
-  var s=SESSIONS[i]; if(!CUR||!s)return;
+  var s=SESSIONS[i]; if(!CUR||!CUR.acc||!s)return;
   var sid=s.devin_id||s.session_id||s.id;
   toast("下载 MD…");
   try{
-    var r=await DaoCloud.exportSession(CUR, sid, kind);
+    var r=await DaoCloud.exportSession(CUR.acc, sid, kind);
     if(!r.ok){ toast("提取失败: "+(r.error||""),true); return; }
-    var fn=CUR_NO+"_"+safeName(CUR.email||CUR.id)+"/"+safeName(r.title||sid)+".md";
+    var fn=CUR_NO+"_"+safeName(CUR.acc.email||CUR.acc.id)+"/"+safeName(r.title||sid)+".md";
     try{ N.saveTextFile && N.saveTextFile(fn.replace(/\//g,"_"), r.md); }catch(e){}
   }catch(e){ toast("异常: "+e,true); }
 }
 
 // ── 下载单对话全部文件 → 打包 zip(含文件夹) → 同步到下载面板 ──
-//   与电脑版 dao-vsix 同步: 全量对话MD + 工作日志MD + 原始事件JSON + 产出文件(原路径/文件夹结构)
 async function dlAll(i){
-  var s=SESSIONS[i]; if(!CUR||!s)return;
+  var s=SESSIONS[i]; if(!CUR||!CUR.acc||!s)return;
+  var acc=CUR.acc;
   var sid=s.devin_id||s.session_id||s.id;
   toast("打包全部文件…");
   try{
     var files=[];
-    var conv=await DaoCloud.exportSession(CUR, sid, "conversation");
+    var conv=await DaoCloud.exportSession(acc, sid, "conversation");
     if(conv.ok) files.push({name:"conversation.md", data:conv.md});
-    var wl=await DaoCloud.exportSession(CUR, sid, "worklog");
+    var wl=await DaoCloud.exportSession(acc, sid, "worklog");
     if(wl.ok) files.push({name:"worklog.md", data:wl.md});
-    // 原始事件(若可取)留底 JSON
     var ev=null;
-    try{ ev=await DaoCloud.sessionEvents(CUR, sid); if(ev&&ev.ok) files.push({name:"events.json", data:JSON.stringify(ev.events||[],null,2)}); }catch(e){}
-    // 会话产出文件: 按 contents_key→presigned URL 二进制取回, 还原原始文件夹结构 (与桌面 cloud_files/ 一致)
+    try{ ev=await DaoCloud.sessionEvents(acc, sid); if(ev&&ev.ok) files.push({name:"events.json", data:JSON.stringify(ev.events||[],null,2)}); }catch(e){}
     try{
-      var cf=await DaoCloud.collectSessionFiles(CUR, sid, (ev&&ev.events)||null, function(d,t){ if(d===1||d%20===0)toast("拉取产出文件 "+d+"/"+t); });
+      var cf=await DaoCloud.collectSessionFiles(acc, sid, (ev&&ev.events)||null, function(d,t){ if(d===1||d%20===0)toast("拉取产出文件 "+d+"/"+t); });
       if(cf&&cf.files&&cf.files.length){
         cf.files.forEach(function(x){ var p=(x.path||("_unpathed/"+x.key)).replace(/^\/+/,""); files.push({name:"files/"+p, b64:x.b64}); });
       }
       if(cf&&cf.index&&cf.index.length) files.push({name:"files/_index.json", data:JSON.stringify(cf.index,null,2)});
     }catch(e){}
-    // 元信息
-    files.push({name:"meta.json", data:JSON.stringify({account:CUR.email,accountNo:CUR_NO,session:sid,title:s.title||s.name,status:s.status_enum||s.status,exportedAt:new Date().toISOString()},null,2)});
-    var zipName=CUR_NO+"_"+safeName(CUR.email||CUR.id)+"_"+safeName(s.title||sid)+".zip";
+    files.push({name:"meta.json", data:JSON.stringify({account:acc.email,accountNo:CUR_NO,session:sid,title:s.title||s.name,status:s.status_enum||s.status,exportedAt:new Date().toISOString()},null,2)});
+    var zipName=CUR_NO+"_"+safeName(acc.email||acc.id)+"_"+safeName(s.title||sid)+".zip";
     var b64=buildZipBase64(files);
     var path="";
     try{ path=N.saveBase64File ? N.saveBase64File(zipName, b64) : ""; }catch(e){}
-    if(!path){ // 兜底: 无 base64 桥则逐个落文本文件 (二进制产出文件跳过)
+    if(!path){
       files.forEach(function(f){ if(f.data==null)return; try{ N.saveTextFile && N.saveTextFile(safeName(s.title||sid)+"_"+f.name.replace(/\//g,"_"), f.data); }catch(e){} });
       toast("✓ 已下载 "+files.length+" 个文件(逐个)");
     } else {
@@ -221,11 +373,14 @@ async function dlAll(i){
   }catch(e){ toast("打包异常: "+e,true); }
 }
 
+// ── 全量备份 (仅已登录活跃账号) ──
+function loggedAccounts(){ var arr=[]; try{arr=DaoCore.loadAcc()||[];}catch(e){} return arr.filter(function(a){return a.auth1&&a.orgId;}); }
 async function backupAllAcc(){
   var accs=loggedAccounts();
   if(!accs.length){ toast("无已登录账号",true); return; }
+  var all=DaoCore.loadAcc();
   for(var i=0;i<accs.length;i++){
-    var a=accs[i]; var no=panelAccounts().indexOf(a)+1;
+    var a=accs[i]; var no=all.indexOf(a)+1;
     toast("备份 "+(i+1)+"/"+accs.length+" · "+a.email);
     try{
       var r=await DaoCloud.backupAccount(a,"conversation");
@@ -238,9 +393,13 @@ async function backupAllAcc(){
     }catch(e){}
   }
   toast("✓ 全量备份完成 · "+accs.length+" 账号");
+  reload();
 }
 
-function reload(){ if(VIEW==="sessions"&&CUR){ var idx=panelAccounts().indexOf(CUR); openAcc(idx>=0?idx:0); } else renderAccts(); }
+function reload(){
+  if(VIEW==="sessions"&&CUR){ var g=CUR; loadGroups(); for(var i=0;i<_groups.length;i++){ if(_groups[i].folder===g.folder&&_groups[i].email===g.email){ _view=_groups; openGrp(i); return; } } }
+  loadGroups(); renderAccts();
+}
 
 // ════════════════════════════════════════════════════════════════════════
 //  最小 ZIP 写入器 (store-only·无压缩) → base64 · 无需第三方库
@@ -294,8 +453,7 @@ function buildZipBase64(files){
   var centralFlat=[]; central.forEach(function(a){ centralFlat=centralFlat.concat(a); });
   var eocd=[].concat(_u32(0x06054b50),_u16(0),_u16(0),_u16(files.length),_u16(files.length),_u32(centralFlat.length),_u32(localFlat.length),_u16(0));
   var all=localFlat.concat(centralFlat).concat(eocd);
-  // → base64
-  var b="",chunk="";
+  var b="";
   var B="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   for(var i=0;i<all.length;i+=3){
     var a0=all[i],a1=all[i+1],a2=all[i+2];
@@ -306,6 +464,8 @@ function buildZipBase64(files){
 }
 
 // ── 初始化 ──
+try{ document.getElementById("autoBtn").textContent=window.__showAuto?"隐藏自动化":"显示自动化"; }catch(e){}
+loadGroups();
 renderAccts();
 </script>
 </body></html>
