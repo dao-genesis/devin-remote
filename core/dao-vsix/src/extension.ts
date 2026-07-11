@@ -5407,19 +5407,21 @@ async function daoGhPoolGitDisconnect(emails: string[]): Promise<{ ok: boolean; 
 // 舰队成员 = 纯 GitHub 账号(login + 各自 PAT + 组织角色), 存于注入档 ghFleet, 不碰 Devin 账号池。
 // 首个默认管理者, 其余默认成员; 用户可随意在管理者↔成员互转, 或移出组织。封号即删, 换一个即可。
 // 校验一个 GitHub PAT → 返回真 login/scopes(GET /user)。
-async function daoGhAccountVerify(pat: string): Promise<{ ok: boolean; login?: string; scopes?: string; error?: string }> {
+async function daoGhAccountVerify(pat: string): Promise<{ ok: boolean; login?: string; scopes?: string; error?: string; netFail?: boolean }> {
     pat = String(pat || '').trim();
     if (!/^(ghp_|github_pat_|gho_|ghu_)/.test(pat)) return { ok: false, error: 'PAT 格式无效(应以 ghp_ / github_pat_ 开头)' };
     const u = await ghApiRequest('GET', '/user', pat);
+    if (u.status === 0) return { ok: false, netFail: true, error: 'GitHub 不可达(网络/代理断 · ' + String(u.error || '') + ')' };
     if (u.status !== 200 || !u.json || !u.json.login) return { ok: false, error: 'PAT 无效或不可用 (HTTP ' + u.status + (u.json && u.json.message ? ' · ' + u.json.message : '') + ')' };
     return { ok: true, login: u.json.login, scopes: String(u.scopes || '') };
 }
 // 批量把 GitHub 账号加入独立舰队: 每行 "login pat" 或仅 "pat"(自动解析 login)。逐个校验 PAT, 按 login 去重(同名更新 PAT)。
-async function daoGhFleetAdd(lines: string[], defaultRole: string): Promise<{ ok: boolean; results: { login: string; ok: boolean; role?: string; error?: string }[] }> {
+// 断网守柔: GitHub 不可达(HTTP 0)且本行带 login 时, 仍先入队(verify='pending' 待网络恢复再核), 绝不因断网拒收。
+async function daoGhFleetAdd(lines: string[], defaultRole: string): Promise<{ ok: boolean; results: { login: string; ok: boolean; role?: string; pending?: boolean; error?: string }[] }> {
     const prof = loadInjectProfile();
     if (!Array.isArray(prof.ghFleet)) prof.ghFleet = [];
     const role = (defaultRole === 'admin') ? 'admin' : 'member';
-    const results: { login: string; ok: boolean; role?: string; error?: string }[] = [];
+    const results: { login: string; ok: boolean; role?: string; pending?: boolean; error?: string }[] = [];
     const raw = (lines || []).map(s => String(s || '').trim()).filter(Boolean);
     for (let i = 0; i < raw.length; i++) {
         const parts = raw[i].split(/[\s,]+/).filter(Boolean);
@@ -5427,10 +5429,18 @@ async function daoGhFleetAdd(lines: string[], defaultRole: string): Promise<{ ok
         let login = (parts.find(p => !/^(ghp_|github_pat_|gho_|ghu_)/.test(p)) || '').replace(/^@/, '').trim();
         if (!pat) { results.push({ login: login || raw[i].slice(0, 20), ok: false, error: '本行缺 PAT' }); continue; }
         const v = await daoGhAccountVerify(pat);
+        if (!v.ok && v.netFail && login) {
+            const exP = prof.ghFleet.find(a => a.login.toLowerCase() === login.toLowerCase());
+            if (exP) { exP.pat = pat; exP.role = exP.role || role; (exP as any).verify = 'pending'; }
+            else prof.ghFleet.push({ login, pat, role: prof.ghFleet.length === 0 ? 'admin' : role, addedAt: new Date().toISOString(), verify: 'pending' } as any);
+            results.push({ login, ok: true, pending: true, role: (exP ? exP.role : (prof.ghFleet[prof.ghFleet.length - 1] as any).role) });
+            if (i < raw.length - 1) await _ghSleep(200);
+            continue;
+        }
         if (!v.ok) { results.push({ login: login || '(未知)', ok: false, error: v.error }); if (i < raw.length - 1) await _ghSleep(1000); continue; }
         login = v.login || login;
         const ex = prof.ghFleet.find(a => a.login.toLowerCase() === login.toLowerCase());
-        if (ex) { ex.pat = pat; ex.role = ex.role || role; }
+        if (ex) { ex.pat = pat; ex.role = ex.role || role; delete (ex as any).verify; }
         else prof.ghFleet.push({ login, pat, role: prof.ghFleet.length === 0 ? 'admin' : role, addedAt: new Date().toISOString() });
         results.push({ login, ok: true, role: (ex ? ex.role : (prof.ghFleet[prof.ghFleet.length - 1].role)) });
         if (i < raw.length - 1) await _ghSleep(1000);
@@ -5439,18 +5449,18 @@ async function daoGhFleetAdd(lines: string[], defaultRole: string): Promise<{ ok
     return { ok: results.some(x => x.ok), results };
 }
 // 舰队清单 + 组织在线角色核对(用本体组织 admin PAT 查每人 membership state/role)。
-async function daoGhFleetList(orgPat: string, org: string): Promise<{ login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string }[]> {
+async function daoGhFleetList(orgPat: string, org: string): Promise<{ login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string; pending?: boolean }[]> {
     const prof = loadInjectProfile();
     const fleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
     orgPat = String(orgPat || '').trim(); org = String(org || '').trim();
-    type FleetRow = { login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string };
+    type FleetRow = { login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string; pending?: boolean };
     const out: FleetRow[] = [];
     for (const a of fleet) {
-        const row: FleetRow = { login: a.login, role: a.role || 'member', note: a.note || '', addedAt: a.addedAt || '', hasPat: !!(a.pat && a.pat.trim()), hasCred: !!(a.cred && a.cred.user), active: !!(a.pat && orgPat && a.pat.trim() === orgPat) };
+        const row: FleetRow = { login: a.login, role: a.role || 'member', note: a.note || '', addedAt: a.addedAt || '', hasPat: !!(a.pat && a.pat.trim()), hasCred: !!(a.cred && a.cred.user), active: !!(a.pat && orgPat && a.pat.trim() === orgPat), pending: (a as any).verify === 'pending' };
         if (orgPat && org) {
             const r = await ghApiRequest('GET', '/orgs/' + encodeURIComponent(org) + '/memberships/' + encodeURIComponent(a.login), orgPat);
             if (r.status === 200 && r.json) { row.orgState = r.json.state; row.orgRole = r.json.role; }
-            else row.orgState = (r.status === 404) ? 'none' : ('HTTP ' + r.status);
+            else row.orgState = (r.status === 404) ? 'none' : (r.status === 0 ? 'offline' : ('HTTP ' + r.status));
         }
         out.push(row);
     }
@@ -8197,7 +8207,8 @@ function ghRenderGhFleet(){var st=_ghState();var v=document.getElementById('ghGh
   var roleBadge=isAdmin?'<span style="color:var(--warn)">★ 管理者</span>':'<span style="color:var(--muted)">成员</span>';
   var bodyBadge=a.active?' · <span style="color:var(--success)">◆ 本体</span>':'';
   var patBadge=a.hasPat?'<span style="color:var(--success)" title="有 PAT·全功能">🔑</span>':(a.hasCred?'<span style="color:var(--warn)" title="半登录·账密已存·待续登建 PAT">🔓</span>':'<span style="color:var(--warn)" title="仅账密·待建 PAT">🔒</span>');
-  var os='';if(a.orgState){var col=(a.orgState==='active')?'var(--success)':(a.orgState==='pending'?'var(--warn)':'var(--muted)');os=' · <span style="color:'+col+'">org:'+esc(a.orgState)+(a.orgRole?('/'+esc(a.orgRole)):'')+'</span>'}
+  if(a.pending)patBadge+='<span style="color:var(--warn)" title="断网入队·PAT 待验证(网络恢复后重新添加或刷新即核)">⏳</span>';
+  var os='';if(a.orgState){var isOff=(a.orgState==='offline');var col=(a.orgState==='active')?'var(--success)':((a.orgState==='pending'||isOff)?'var(--warn)':'var(--muted)');os=' · <span style="color:'+col+'" '+(isOff?'title="GitHub 不可达(本机网络/代理断)·非账号问题"':'')+'>org:'+(isOff?'🌐断网':esc(a.orgState)+(a.orgRole?('/'+esc(a.orgRole)):''))+'</span>'}
   h+='<div class="card" style="padding:8px 9px'+(a.active?';border-left:3px solid var(--success)':'')+'">';
   h+='<div class="cr"><span class="l" style="font-size:12px">'+patBadge+' <b>'+lg+'</b> · '+roleBadge+bodyBadge+os+'</span></div>';
   // 操作行 1: 查看
@@ -8269,7 +8280,7 @@ function ghOnResult(d){
     var rs2=d.results||[];var okN2=rs2.filter(function(x){return x.ok}).length;
     ghMsg('ghReposOut','<b>迁移完成 '+okN2+'/'+rs2.length+' → '+esc(d.org||'')+'</b><br>'+rs2.map(function(x){return (x.ok?'✓ ':'✗ ')+esc(x.repo||'')+(x.error?(' — '+esc(x.error)):'')}).join('<br>'));
   }else if(d.kind==='fleet'){st.fleet=d.accounts||[];ghRenderFleet();}
-  else if(d.kind==='fleetAdd'||d.kind==='acctAdd'){var rs3=d.results||[];var okN3=rs3.filter(function(x){return x.ok}).length;ghMsg('ghAddOut','<b>加入账号池 '+okN3+'/'+rs3.length+'</b><br>'+rs3.map(function(x){return (x.ok?'✓ ':'✗ ')+esc(x.login||'')+(x.role?(' ('+esc(x.role)+')'):'')+(x.note?(' · '+esc(x.note)):'')+(x.error?(' — '+esc(x.error)):'')}).join('<br>'));cmd('daoGhFleetList',{});}
+  else if(d.kind==='fleetAdd'||d.kind==='acctAdd'){var rs3=d.results||[];var okN3=rs3.filter(function(x){return x.ok}).length;ghMsg('ghAddOut','<b>加入账号池 '+okN3+'/'+rs3.length+'</b><br>'+rs3.map(function(x){return (x.ok?'✓ ':'✗ ')+esc(x.login||'')+(x.role?(' ('+esc(x.role)+')'):'')+(x.pending?' · ⏳断网已入队·待验证':'')+(x.note?(' · '+esc(x.note)):'')+(x.error?(' — '+esc(x.error)):'')}).join('<br>'));cmd('daoGhFleetList',{});}
   else if(d.kind==='fleetGh'){st.ghFleet=d.accounts||[];ghRenderGhFleet();}
   else if(d.kind==='acctDetail'){var o1=document.getElementById('gh-ad-'+ghSafe(d.login||''));if(!o1)return;if(!d.ok){o1.innerHTML='<span style="color:var(--danger)">✗ '+esc(d.error||'拉取失败')+'</span>';return}var dh='<div class="cr"><span class="l" style="font-size:10px;color:var(--muted)">名字</span><span class="v" style="font-size:11px">'+esc(d.name||d.login||'')+'</span></div>'+'<div class="cr"><span class="l" style="font-size:10px;color:var(--muted)">scopes</span><span class="v" style="font-size:10px"><code>'+esc(d.scopes||'(细粒度 PAT/无)')+'</code></span></div>'+'<div class="cr"><span class="l" style="font-size:10px;color:var(--muted)">公开仓/私有仓</span><span class="v" style="font-size:11px">'+(d.publicRepos!=null?d.publicRepos:'?')+' / '+(d.privateRepos!=null?d.privateRepos:'?')+'</span></div>';var _os=(d.orgs||[]);dh+='<div class="cr"><span class="l" style="font-size:10px;color:var(--muted)">组织</span><span class="v" style="font-size:10px">'+(_os.length?_os.map(function(o){return esc(o.login)+(o.role==='admin'?'★':'')}).join(' · '):'(无)')+'</span></div>';o1.innerHTML=dh;}
   else if(d.kind==='acctRepos'){var o2=document.getElementById('gh-ad-'+ghSafe(d.login||''));if(!o2)return;if(!d.ok){o2.innerHTML='<span style="color:var(--danger)">✗ '+esc(d.error||'拉取失败')+'</span>';return}var rr=(d.repos||[]);o2.innerHTML='<b style="font-size:10px">'+rr.length+' 个仓库</b><br>'+rr.slice(0,30).map(function(r){return '<span style="font-size:10px">'+(r.private?'🔒':'🌐')+' '+esc(r.full_name)+(r.fork?' (fork)':'')+'</span>'}).join('<br>')+(rr.length>30?('<br><span style="color:var(--muted);font-size:10px">… 共 '+rr.length+' 个</span>'):'');}
@@ -14411,6 +14422,7 @@ function loadInjectProfile(): InjectProfile {
                 role: (a && a.role === 'admin') ? 'admin' : 'member',
                 note: String((a && a.note) || ''),
                 addedAt: String((a && a.addedAt) || ''),
+                ...(a && a.verify === 'pending' ? { verify: 'pending' } : {}),
                 cred: (a && a.cred && typeof a.cred === 'object') ? { user: String(a.cred.user || ''), pass: String(a.cred.pass || ''), otp: String(a.cred.otp || '') } : undefined,
             })).filter((a: any) => a.login) : undefined,
         };
