@@ -140,6 +140,37 @@ function resolveBackupRoot(): string {
     const dc = loadDevinCloud();
     return (dc && dc.paths && dc.paths.DC_BACKUP_DEFAULT) || path.join(os.homedir(), '.wam', 'devin_cloud_backups');
 }
+// 借鉴手机版·出库账号本地可查/加回: 从 rt-flow 备份目录名 <编号?>_<邮箱本地名>_<密码?> 尽力恢复密码段。
+//   密码段是 accountFolderName 用 safeName(pwd,32) 写入的 → 无特殊字符/≤32 时与原密码一致(best-effort·可能失真)。
+//   返回 '' 表示无法可靠恢复(交由用户手动加回)。
+function daoBackupFolderPwd(dirName: string, email: string): string {
+    if (!dirName || !email) return '';
+    const parts = String(dirName).split('_');
+    if (parts.length < 2) return '';
+    let idx = 0;
+    if (/^\d{1,3}$/.test(parts[0])) idx = 1; // 跳过前导编号
+    const local = (email.split('@')[0] || '').toLowerCase();
+    // 定位邮箱本地名所在段(safeName 后可能被截断/替换, 以前缀匹配兜底)
+    const seg = (parts[idx] || '').toLowerCase();
+    if (!(seg === local || local.startsWith(seg) || seg.startsWith(local))) return '';
+    const pwd = parts.slice(idx + 1).join('_').trim();
+    return pwd || '';
+}
+// 标注备份树: 账号是否仍在当前账号池(否=已出库·仍可本地解锁查看), 并尽力附带可加回的密码。
+function daoAnnotateBackupPool(tree: any): void {
+    try {
+        if (!tree || !Array.isArray(tree.accounts)) return;
+        const poolEmails = new Set(loadAccountPool().map(a => (a.email || '').toLowerCase()));
+        for (const a of tree.accounts) {
+            const em = String(a.email || (String(a.account || '').includes('@') ? a.account : '') || '').toLowerCase();
+            a.inPool = !!em && poolEmails.has(em);
+            if (!a.inPool && em) {
+                const pw = daoBackupFolderPwd(String(a.account || ''), em);
+                a.canReAdd = !!pw; // 有可恢复密码即可一键加回; 否则前端引导手动添加
+            }
+        }
+    } catch { /* 守柔 */ }
+}
 // 最小 ZIP 文本读取器 (无三方依赖): 解析 EOCD→中央目录, 找首个匹配 entry, 用 zlib.inflateRawSync 解出文本。
 // 仅用于内联查看 .zip 型对话备份 (对话.md/html)。method 0=stored, 8=deflate。
 function readZipTextEntry(zipPath: string, patterns: RegExp[]): { name: string; text: string } | null {
@@ -4451,7 +4482,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             const dc = loadDevinCloud();
             if (!dc || typeof dc.listBackups !== 'function') return { ok: false, error: 'rt-flow 备份引擎不可用' };
             const root = resolveBackupRoot();
-            try { return { ok: true, root, tree: dc.listBackups(root) }; } catch (e: any) { return { ok: false, error: (e && e.message) || String(e) }; }
+            try { const tree = dc.listBackups(root); daoAnnotateBackupPool(tree); return { ok: true, root, tree }; } catch (e: any) { return { ok: false, error: (e && e.message) || String(e) }; }
         }
         case '/api/devin/backups/conv': {
             // 读一条对话备份正文 (目录/zip/单文件 · 优先 对话.md) — 与面板 readBackupConv 同源逻辑
@@ -7529,6 +7560,8 @@ function rBackupConv(d){var cid='bkc-'+d.i+'-'+d.ci;var e=document.getElementByI
 function bkDownload(i,ci){var a=S.backups.accounts[i];if(!a)return;var p=(ci==null)?a.dir:((a.conversations[ci]||{}).path);if(p)cmd('exportBackup',{path:p})}
 // 解锁(解压) ZIP 型对话备份 → 同名文件夹, 解压后可内联查看正文。
 function bkUnlock(i,ci){var a=S.backups.accounts[i];if(!a)return;var c=(a.conversations||[])[ci];if(!c||c.type!=='zip'||!c.path)return;toast('解锁(解压)中…',true);cmd('unlockBackupZip',{path:c.path})}
+// 借鉴手机版 · 把已出库账号加回当前账号库(按普通新账号处理; 密码由备份目录名尽力恢复, 无则引导手动添加)
+function bkReadd(i){var a=S.backups.accounts[i];if(!a)return;var em=a.email||(String(a.account||'').indexOf('@')>=0?a.account:'');if(!em){toast('该备份无可识别邮箱, 请用「添加账号」手动加回',false);return}toast('加回账号库…',true);cmd('reAddBackupAccount',{email:em,account:a.account||''})}
 // 视图切换: 按账号(分组) ↔ 近期对话(跨账号·按时间倒序)
 function bkSetView(mode){S.bkView=mode;rBackupsData(S.backups,null)}
 // 对话检索: 按 账号邮箱 / 对话名 / 对话ID 过滤 (再渲染后回焦, 不丢输入位置)
@@ -7648,8 +7681,11 @@ function rBackupsData(tree,err){
     anyAcct=true;
     var expand=!!q; // 检索时自动展开匹配账号
     h+='<div class="card">';
-    h+='<div class="cr" style="cursor:pointer" onclick="bkToggle(&#39;'+aid+'&#39;)"><span class="l" style="font-weight:600;color:var(--fg)">▸ '+esc(label)+'</span><span class="v" style="font-size:10px;color:var(--muted)">'+(q?(matched.length+'/'+(a.count||0)):(a.count||0))+' 对话'+(a.hasAccountInfo?' · 账号快照':'')+'</span></div>';
-    h+='<div class="br" style="margin-top:4px"><button class="btn sm ghost" onclick="bkReveal('+i+',null)">📂 目录</button><button class="btn sm ghost" onclick="bkDownload('+i+',null)">⬇ 下载账号</button></div>';
+    var archBadge=(a.inPool===false)?'<span style="flex:0 0 auto;font-size:9px;font-weight:700;color:var(--warn);background:rgba(210,153,34,.16);border-radius:4px;padding:1px 5px;margin-left:6px" title="已移出当前账号池·备份仍在本地·可解锁查看/加回">已出库</span>':'';
+    h+='<div class="cr" style="cursor:pointer" onclick="bkToggle(&#39;'+aid+'&#39;)"><span class="l" style="font-weight:600;color:var(--fg)">▸ '+esc(label)+archBadge+'</span><span class="v" style="font-size:10px;color:var(--muted)">'+(q?(matched.length+'/'+(a.count||0)):(a.count||0))+' 对话'+(a.hasAccountInfo?' · 账号快照':'')+'</span></div>';
+    h+='<div class="br" style="margin-top:4px"><button class="btn sm ghost" onclick="bkReveal('+i+',null)">📂 目录</button><button class="btn sm ghost" onclick="bkDownload('+i+',null)">⬇ 下载账号</button>';
+    if(a.inPool===false)h+='<button class="btn sm primary" onclick="bkReadd('+i+')" title="把此出库账号加回当前账号库(按普通新账号处理)">↩ 加回账号库</button>';
+    h+='</div>';
     h+='<div id="'+aid+'" style="display:'+(expand?'block':'none')+';margin-top:6px;border-top:1px solid var(--border);padding-top:6px">';
     matched.slice(0,200).forEach(function(o){h+=bkConvRow(o.c,i,o.ci,false)});
     if(matched.length>200)h+='<div style="font-size:10px;color:var(--muted);margin-top:4px">仅显示前 200 条，更多请打开目录</div>';
@@ -7730,7 +7766,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -8447,7 +8483,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command)) {
         reply({ type: 'error', msg: 'Not logged in' });
         return;
@@ -8725,6 +8761,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                             }
                         }
                     } catch { /* 守柔: 状态文件缺失/损坏不影响备份树主功能 */ }
+                    daoAnnotateBackupPool(tree);
                     reply({ type: 'backupsData', tree });
                 } catch (e: any) {
                     reply({ type: 'backupsData', tree: { root: '', accounts: [] }, error: (e && e.message) || String(e) });
@@ -8821,9 +8858,28 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                         vscode.window.showWarningMessage('解锁失败: ' + ((r && r.error) || '未知'));
                     }
                     reply({ type: 'actionResult', command: 'unlockBackupZip', ok });
-                    try { const root = resolveBackupRoot(); reply({ type: 'backupsData', tree: dc.listBackups(root) }); } catch { /* 守柔 */ }
+                    try { const root = resolveBackupRoot(); const t = dc.listBackups(root); daoAnnotateBackupPool(t); reply({ type: 'backupsData', tree: t }); } catch { /* 守柔 */ }
                 } catch (e: any) {
                     reply({ type: 'actionResult', command: 'unlockBackupZip', ok: false });
+                }
+                break;
+            }
+            // 借鉴手机版 · 把已出库(移出账号池)的备份账号一键加回账号库:
+            //   从备份目录名尽力恢复密码 → 追加到切号真池 ~/.wam/accounts.md(去重·作为普通新账号) → 刷新池缓存。
+            //   目录名无法恢复密码时 needManual=true, 前端引导手动「添加账号」。凭据仅落地到本地真池, 不回显/不入日志。
+            case 'reAddBackupAccount': {
+                try {
+                    const email = String(msg.email || '').trim().toLowerCase();
+                    const dirName = String(msg.account || '');
+                    if (!email || !email.includes('@')) { reply({ type: 'actionResult', command: 'reAddBackupAccount', ok: false }); break; }
+                    const pw = daoBackupFolderPwd(dirName, email);
+                    if (!pw) { reply({ type: 'actionResult', command: 'reAddBackupAccount', ok: false, needManual: true, email }); break; }
+                    const ok = daoAppendPoolAccount(email, pw);
+                    if (ok) { loadAccountPool(true); vscode.window.showInformationMessage('已加回账号库: ' + email); }
+                    reply({ type: 'actionResult', command: 'reAddBackupAccount', ok, email });
+                    try { const dc = loadDevinCloud(); if (dc && typeof dc.listBackups === 'function') { const root = resolveBackupRoot(); const t = dc.listBackups(root); daoAnnotateBackupPool(t); reply({ type: 'backupsData', tree: t }); } } catch { /* 守柔 */ }
+                } catch (e: any) {
+                    reply({ type: 'actionResult', command: 'reAddBackupAccount', ok: false });
                 }
                 break;
             }
@@ -10969,6 +11025,23 @@ async function devinEnsureCogApiKey(orgId: string, auth1: string): Promise<strin
 // 来源(优先级): VS Code 配置 dao.devinAccounts > ~/.wam 切号真池(accounts.md/backup) > (回退)~/.dao/accounts.json/.txt
 // ═══════════════════════════════════════════════════════════
 interface PoolAccount { email: string; password: string }
+// 把一个账号追加到切号真池 ~/.wam/accounts.md(作为普通新账号): 已存在(同邮箱)则视为成功不重复写。
+//   借鉴手机版「出库账号重新加回」= 按当前账号池逻辑当作新账号处理, 不因历史移除而阻止。
+function daoAppendPoolAccount(email: string, password: string): boolean {
+    const e = (email || '').trim().toLowerCase();
+    const p = (password || '').trim();
+    if (!e || !p || !e.includes('@')) return false;
+    try {
+        let raw = '';
+        try { raw = fs.readFileSync(WAM_ACCOUNTS_MD, 'utf8'); } catch { /* 首次创建 */ }
+        const exists = parseWamAccountLines(raw).some(a => a.email.toLowerCase() === e);
+        if (exists) return true; // 已在池中 → 幂等
+        try { fs.mkdirSync(WAM_DIR, { recursive: true }); } catch { /* 守柔 */ }
+        const sep = raw && !/\r?\n$/.test(raw) ? '\n' : '';
+        fs.appendFileSync(WAM_ACCOUNTS_MD, sep + e + ' ' + p + '\n', 'utf8');
+        return true;
+    } catch { return false; }
+}
 // 解析切号板块 accounts.md 文本: 每行「邮箱<分隔>密码」。分隔可为空格/冒号/全角冒号/竖线/破折号;
 //   密码可含 @ 等特殊字符, 故以首个合法邮箱为锚, 其后整段(去前导分隔)即密码。空行/无邮箱行跳过。
 function parseWamAccountLines(raw: string): PoolAccount[] {
