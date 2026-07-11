@@ -106,14 +106,21 @@ jobs:
             const recent = await github.rest.pulls.list({ owner, repo, state: 'closed', per_page: 100, sort: 'updated', direction: 'desc' });
             const mergedRecent = recent.data.filter(p => p.merged_at && p.merged_at > since);
             let budget = A.maxPerHour - mergedRecent.length;
-            const lastMerge = mergedRecent.map(p => new Date(p.merged_at).getTime()).sort((a,b)=>b-a)[0];
-            if (lastMerge && (Date.now() - lastMerge) < A.minGap * 1000) {
-              core.info('冷却窗口内，跳过本轮（min_seconds_between_merges）'); return;
-            }
+            const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+            let lastMerge = mergedRecent.map(p => new Date(p.merged_at).getTime()).sort((a,b)=>b-a)[0] || 0;
+            // 冷却窗口内不再整轮跳过（那会把合并拖到每小时 cron），改为在窗内等剩余秒数后继续
+            const waitGap = async () => {
+              const remain = lastMerge + A.minGap * 1000 - Date.now();
+              if (remain > 0) {
+                core.info(`冷却窗口内，等待 ${Math.ceil(remain/1000)}s 后继续（min_seconds_between_merges）`);
+                await sleep(Math.min(remain, 300000));
+              }
+            };
 
             // ③ 合并：带标签 + 可信 + CI 全绿
             for (const pr of prs) {
               if (budget <= 0) { core.info('本小时合并额度已用尽，限速中'); break; }
+              await waitGap();
               if (pr.draft) continue;
               const author = (pr.user && pr.user.login || '').toLowerCase();
               const labels = (pr.labels || []).map(l => (l.name || l).toLowerCase());
@@ -131,7 +138,7 @@ jobs:
               try {
                 await github.rest.pulls.merge({ owner, repo, pull_number: pr.number, merge_method: A.method });
                 core.info(`已合并 PR #${pr.number}（作者 ${author}）`);
-                budget--;
+                budget--; lastMerge = Date.now();
                 if (A.delBranch && pr.head.repo && pr.head.repo.full_name === `${owner}/${repo}`) {
                   await github.rest.git.deleteRef({ owner, repo, ref: `heads/${pr.head.ref}` }).catch(()=>{});
                 }
@@ -148,7 +155,7 @@ jobs:
                   });
                   if (resp.ok) {
                     core.info(`已用备援令牌合并 PR #${pr.number}（含 workflow 改动）`);
-                    budget--;
+                    budget--; lastMerge = Date.now();
                     if (A.delBranch && pr.head.repo && pr.head.repo.full_name === `${owner}/${repo}`) {
                       await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${pr.head.ref}`, {
                         method: 'DELETE', headers: { authorization: `token ${fb}` }
