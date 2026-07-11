@@ -69,4 +69,12 @@ ok(/hasCred:\s*!!\(a\.cred/.test(src),
 ok(/d\.kind==='assistLogin'/.test(src) && /d\.kind==='fleetOpenPat'/.test(src),
   "前端 ghOnResult 处理 assistLogin / fleetOpenPat 回包");
 
+// 7) GitHub 出网代理 (直连被墙网络 · 循 http.proxy/环境变量走 HTTP CONNECT 隧道)
+ok(/function ghProxyUrl\(/.test(src) && /getConfiguration\('http'\)\.get\('proxy'\)/.test(src),
+  "ghProxyUrl: 循 VS Code http.proxy 设置 + 代理环境变量");
+ok(/function ghProxyAgent\(/.test(src) && /'CONNECT '\s*\+\s*host/.test(src),
+  "ghProxyAgent: 无依赖 HTTP CONNECT 隧道 (Clash 等混合端口可用)");
+ok(/const proxy = ghProxyUrl\(\);/.test(src) && /agent \? \{ agent \} : \{\}/.test(src),
+  "ghApiRequest 有代理即走隧道·无代理保持直连");
+
 console.log("[gh-fleet] " + pass + " assertion(s) passed\n");
