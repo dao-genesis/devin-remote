@@ -16,6 +16,11 @@ on:
     types: [opened, ready_for_review, labeled, synchronize, reopened]
   check_suite:
     types: [completed]
+  # check_suite 由 GITHUB_TOKEN 驱动的 Actions 套件完成时不会再触发工作流(GitHub 防递归),
+  # 故 CI 绿灯后的即时合并靠 workflow_run 链式触发(不受防递归限制), cron 仅兜底。
+  workflow_run:
+    workflows: [dao-ci, DAO PR Flow]
+    types: [completed]
   workflow_dispatch:
   schedule:
     - cron: '17 * * * *'   # 每小时兜底扫一遍，防事件丢失
@@ -133,7 +138,9 @@ jobs:
               } catch (e) {
                 // GITHUB_TOKEN 无法合并改动了 workflow 文件的 PR；用备援合并令牌兜底
                 const fb = process.env.DAO_MERGE_TOKEN;
-                if (fb && /workflow/i.test(e.message || '')) {
+                // 「Resource not accessible by integration」= GITHUB_TOKEN 权限不足
+                // （典型: PR 含 workflow 文件改动），同样走备援令牌
+                if (fb && /workflow|not accessible/i.test(e.message || '')) {
                   const resp = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pr.number}/merge`, {
                     method: 'PUT',
                     headers: { authorization: `token ${fb}`, accept: 'application/vnd.github+json' },
