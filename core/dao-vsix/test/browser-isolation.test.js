@@ -66,6 +66,7 @@ ok(/--accept-lang='\s*\+\s*fp\.acceptLang/.test(li), "启动注入 per-号 accep
 ok(/--load-extension='\s*\+\s*extDir/.test(li), "启动加载指纹注入扩展 --load-extension");
 ok(/TZ:\s*fp\.tz/.test(li), "子进程 TZ 环境变量按号设时区");
 ok(/daoAcctProxy\(safeKey\)/.test(li) && /daoWriteFpExtension\(profileDir,\s*fp\)/.test(li), "启动前取代理并生成注入扩展");
+ok(/force-webrtc-ip-handling-policy=disable_non_proxied_udp/.test(li), "配代理时强制 WebRTC 只走代理(杜绝真实 IP UDP 泄漏)");
 
 // 指纹扩展须为 MAIN world content-script(否则改不动页面 navigator/webgl)
 const we = src.slice(src.indexOf("function daoWriteFpExtension"), src.indexOf("function findBrowserExe"));
@@ -74,11 +75,17 @@ ok(/run_at:\s*'document_start'/.test(we), "注入扩展 document_start(先于页
 ok(/37445|37446/.test(we), "注入覆盖 WebGL VENDOR/RENDERER 参数");
 ok(/navigator,"userAgent",C\.ua/.test(we), "注入对齐 navigator.userAgent(消 platform/UA 矛盾)");
 ok(/userAgentData/.test(we), "注入对齐 userAgentData.platform");
+ok(/getHighEntropyValues/.test(we) && /fullVersionList/.test(we), "注入对齐 UA-CH 高熵值(getHighEntropyValues/品牌一致)");
+ok(/screen,"colorDepth",24/.test(we) && /screen,"pixelDepth",24/.test(we), "注入统一 screen 颜色深度");
+ok(/navigator,"webdriver",false/.test(we), "注入 webdriver=false(无自动化痕迹)");
+ok(/getFloatFrequencyData/.test(we) && /getChannelData/.test(we), "注入 AudioContext 指纹加噪");
+ok(/toDataURL/.test(we), "注入 Canvas 指纹加噪(既有)");
 
 // ④ 端点在册 + 脱敏
 ok(/case '\/api\/browser\/isolation'/.test(src), "端点 /api/browser/isolation 在册");
 ok(/case '\/api\/browser\/proxy'/.test(src), "端点 /api/browser/proxy 在册");
 const sum = src.slice(src.indexOf("function daoIsolationSummary"), src.indexOf("const DEVIN_URL_GET_USER_STATUS"));
 ok(/u\.password\s*=\s*'\*\*\*'/.test(sum), "隔离概览对代理密码脱敏(不回显凭证)");
+ok(/nativeSurfaces/.test(sum) && /audioNoise/.test(sum) && /webrtcPolicy/.test(sum), "概览列出原生指纹伪装面(含 audio/webrtc)");
 
 console.log("全部通过 (" + pass + " 项)");
