@@ -9553,7 +9553,9 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                         } else if (!authVal) { spec.env_variables = []; }
                     } else {
                         spec.headers = spec.headers || {};
-                        if (authVal) spec.headers.Authorization = authVal; else { delete spec.headers.Authorization; delete spec.headers.authorization; }
+                        // Bearer 前缀归一: 重复 "Bearer Bearer …" 折叠为单个(裸 token 保持原样交由调用方定语义)
+                        const authNorm = /^bearer\s+/i.test(authVal) ? ('Bearer ' + authVal.replace(/^(bearer\s+)+/i, '')) : authVal;
+                        if (authNorm) spec.headers.Authorization = authNorm; else { delete spec.headers.Authorization; delete spec.headers.authorization; }
                     }
                     // ① 持久化到反向注入档案(按名匹配) — 后续批量注入全账号亦用新密钥
                     try {
@@ -13801,7 +13803,8 @@ function loadInjectProfile(): InjectProfile {
             secrets: Array.isArray(j.secrets) ? j.secrets : [],
             knowledge: Array.isArray(j.knowledge) ? j.knowledge : [],
             playbooks: Array.isArray(j.playbooks) ? j.playbooks : [],
-            mcps: Array.isArray(j.mcps) ? j.mcps : [],
+            // GitHub MCP 单例守护: 历史重复条目只保留首条(GitHub 板块与 MCP 板块双端同源之基)
+            mcps: (() => { const arr = Array.isArray(j.mcps) ? j.mcps : []; let seen = false; return arr.filter((m: any) => { if (!/github/i.test(String((m && m.name) || ''))) return true; if (seen) return false; seen = true; return true; }); })(),
             automations: Array.isArray(j.automations) ? j.automations : [],
             messageLimit: (typeof j.messageLimit === 'number') ? j.messageLimit : null,
             // 额度跟随环默认开 — 帛书·「反者道之动」: 字段缺省且未设固定值 → 自动跟随剩余额度(不覆盖用户的显式选择/固定上限)

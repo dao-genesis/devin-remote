@@ -144,23 +144,50 @@ function _streamAttachment(rawUrl, res, cacheKey, hops) {
       return;
     }
     const ct = rs.headers["content-type"] || "application/octet-stream";
+    const expected = parseInt(rs.headers["content-length"] || "0", 10) || 0;
     const hdrs = { "Content-Type": ct, "Cache-Control": "public, max-age=31536000, immutable" };
     if (rs.headers["content-length"]) hdrs["Content-Length"] = rs.headers["content-length"];
     try { res.writeHead(sc || 200, hdrs); } catch {}
     const chunks = [];
     let total = 0;
     let idle = null;
-    const arm = () => { try { if (idle) clearTimeout(idle); } catch {} idle = setTimeout(() => { try { destroy(); } catch {} try { res.end(); } catch {} }, 60000); };
-    arm();
-    rs.on("data", (c) => { arm(); total += c.length; if (total <= _ATT_BODY_CACHE_MAX) chunks.push(c); try { res.write(c); } catch {} });
-    rs.on("end", () => {
+    let resumes = 0;
+    const finish = () => {
       try { if (idle) clearTimeout(idle); } catch {}
       try { res.end(); } catch {}
-      if (cacheKey && sc >= 200 && sc < 300 && total > 0 && total <= _ATT_BODY_CACHE_MAX) {
+      if (cacheKey && sc >= 200 && sc < 300 && total > 0 && total <= _ATT_BODY_CACHE_MAX && (!expected || total >= expected)) {
         _diskPut(cacheKey, { status: 200, headers: { "Content-Type": ct, "Cache-Control": "public, max-age=31536000, immutable" }, body: Buffer.concat(chunks) }, "");
       }
-    });
-    rs.on("error", () => { try { if (idle) clearTimeout(idle); } catch {} try { res.end(); } catch {} });
+    };
+    // 弱网断点续传(对照手机 APK .part 修法): 中途掐断不作废已吐字节, 以 Range 从断点续取同一响应续写。
+    const resume = (src) => {
+      try { if (idle) clearTimeout(idle); } catch {}
+      if (won !== true || res.writableEnded) return;
+      if (!expected || total >= expected || resumes >= 3) { finish(); return; }
+      resumes++;
+      const delay = Math.pow(2, resumes) * 500;
+      setTimeout(() => {
+        if (res.writableEnded) return;
+        try {
+          const opt = { headers: { Range: "bytes=" + total + "-", "User-Agent": DEVIN_UA }, timeout: 20000, rejectUnauthorized: false, agent: _httpsAgent };
+          const rq = https.request(Object.assign({ hostname: su.hostname, port: su.port || 443, path: su.pathname + su.search, method: "GET" }, opt), (rs2) => {
+            if ((rs2.statusCode || 0) !== 206) { rs2.resume(); finish(); return; }
+            wire(rs2, () => { try { rq.destroy(); } catch {} });
+          });
+          rq.on("error", () => resume());
+          rq.on("timeout", () => { try { rq.destroy(); } catch {} resume(); });
+          rq.end();
+        } catch { finish(); }
+      }, delay);
+    };
+    const wire = (src, kill) => {
+      const arm = () => { try { if (idle) clearTimeout(idle); } catch {} idle = setTimeout(() => { try { kill(); } catch {} resume(src); }, 60000); };
+      arm();
+      src.on("data", (c) => { arm(); total += c.length; if (total <= _ATT_BODY_CACHE_MAX) chunks.push(c); try { res.write(c); } catch {} });
+      src.on("end", () => { if (expected && total < expected) resume(src); else finish(); });
+      src.on("error", () => resume(src));
+    };
+    wire(rs, destroy);
   };
   cancels.push(_attRequest(su, 0, onRes, onFail));
   for (const p of _ATT_PROXY_PORTS) cancels.push(_attRequest(su, p, onRes, onFail));
