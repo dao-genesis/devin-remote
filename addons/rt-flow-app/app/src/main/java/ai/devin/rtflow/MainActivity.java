@@ -149,6 +149,9 @@ public class MainActivity extends AppCompatActivity {
     private volatile String sEngineCache = null;
     private volatile String curProxy = null;   // 已应用到内置浏览器(全部 WebView)的本地代理 host:port; null=直连
     private final java.util.Map<Long, String[]> dlPending = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 原生代取下载在途进度: 文件名 → {已下字节, 总字节(-1=未知)}。 */
+    private final java.util.Map<String, long[]> nativeDlProgress = new java.util.concurrent.ConcurrentHashMap<>();
+    private boolean dlTickQueued = false;
     private android.content.BroadcastReceiver dlReceiver;
     private volatile String dragDlPath = null;   // 正在从下载列表拖拽的文件 (拖到页面 → 注入上传/拖放区)
     private volatile String dragDlMime = null;
@@ -2325,7 +2328,9 @@ public class MainActivity extends AppCompatActivity {
             //   弱网/国内网络/离线皆可播 —— 视频「只有境外好网络反复重启才能看」之解。
             WebResourceResponse cached = mediaCacheServe(u, rh);
             if (cached != null) return cached;
-            if (rh != null) for (String k : rh.keySet())
+            // SPA 生成的附件链接偶见二次编码(%25xx) → 服务端 400; 交原生代取(内含单层解码重试)自愈。
+            boolean doubleEnc = u.toString().contains("%25");
+            if (!doubleEnc && rh != null) for (String k : rh.keySet())
                 if (k != null && k.equalsIgnoreCase("Authorization")) return null;   // fetch/XHR 已带鉴权 → 不重复代取
             // 本源: /attachments/ 的真鉴权是 httpOnly Cookie attachments_token。Cookie 就绪时应
             //   一律交还 WebView 原生网络栈(返回 null): 原生并发加载/HTTP 缓存/Range·206·seek 全部
@@ -2333,19 +2338,16 @@ public class MainActivity extends AppCompatActivity {
             //   "data source error" 无限重试; ② 每个图片/文档都占用 WebView 有限的拦截线程做 15-30s
             //   超时的同步网络 IO, 并发图片一多即互相饿死 → 图片时载时不载、整页请求(含点链接)僵死。
             //   Cookie 按 JWT exp 判新鲜(过期自动重铸), 铸不出时才回退代取(下方旧路径)。
-            boolean isRange = false;
-            if (rh != null) for (String k : rh.keySet())
-                if (k != null && k.equalsIgnoreCase("Range")) { isRange = true; break; }
             // 一切附件(视频/音频的 Range 分段流 + 图片/截图等整取)首见即后台整取落盘:
             //   本次仍走原生网络, 下次(重进/刷新/换网/离线)即命中磁盘缓存秒开 ——
             //   「图片时有时无」与视频重播慢的本源同解(单飞去重·限容, 见 mediaCachePrefetch)。
             mediaCachePrefetch(auth1, orgId, u.toString(), path);
             kickMediaRouteProbe();
             boolean cookieOk = ensureAttachmentCookie(auth1, orgId, u.toString());
-            if (isRange) return null;   // 流媒体 Range: 代取必坏 seek, 交原生(缓存落盘后本地供给)
-            // Cookie 就绪且 S3 直连健康 → 交还 WebView 原生并发直取(快路径);
-            // 已知 S3 被墙(国内无 VPN) → 原生代取, 被墙跳经边缘代理 → 首次即可渲染。
-            if (cookieOk && !edgePreferred()) return null;   // 原生直取(带 Cookie)
+            // Cookie 就绪且 S3 直连健康 → 交还 WebView 原生并发直取(快路径·含 Range/206/seek);
+            // 被墙(国内无 VPN)/Cookie 铸不出/二次编码链接 → 原生代取: Range 头透传、206 原样回灌
+            //   (拖动/分段可用), 被墙跳经边缘代理 → 国内视频/图片首次即可加载。
+            if (cookieOk && !edgePreferred() && !doubleEnc) return null;   // 原生直取(带 Cookie)
             java.net.HttpURLConnection c;
             try { c = fetchAttachment(auth1, orgId, u.toString(), rh, false); }
             catch (Exception e1) {
@@ -2392,8 +2394,19 @@ public class MainActivity extends AppCompatActivity {
             return resp;
         } catch (Exception e) { return null; }
     }
-    /** 附件代取一次 (30x 手动跟随·凭据与 Cookie 只发 app.devin.ai·被墙宿主跳经边缘代理)。 */
+    /** 附件代取 (含二次编码自愈): 400 且 URL 带 %25xx → 单层解码重试一次。 */
     private static java.net.HttpURLConnection fetchAttachment(String auth1, String orgId, String url, java.util.Map<String, String> rh, boolean direct) throws Exception {
+        java.net.HttpURLConnection c = fetchAttachmentOnce(auth1, orgId, url, rh, direct);
+        try {
+            if (c != null && c.getResponseCode() == 400 && url.contains("%25")) {
+                try { c.disconnect(); } catch (Exception ignored) {}
+                c = fetchAttachmentOnce(auth1, orgId, url.replace("%25", "%"), rh, direct);
+            }
+        } catch (Exception ignored) {}
+        return c;
+    }
+    /** 附件代取一次 (30x 手动跟随·凭据与 Cookie 只发 app.devin.ai·被墙宿主跳经边缘代理)。 */
+    private static java.net.HttpURLConnection fetchAttachmentOnce(String auth1, String orgId, String url, java.util.Map<String, String> rh, boolean direct) throws Exception {
         java.net.HttpURLConnection c = null;
         for (int hop = 0; hop < 5; hop++) {
             String host = new java.net.URL(url).getHost();
@@ -3994,7 +4007,7 @@ public class MainActivity extends AppCompatActivity {
                 // 落到应用专属外部目录 → 由应用内下载管理器统一展示/打开/拖拽
                 req.setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, name);
                 DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-                if (dm != null) { long id = dm.enqueue(req); dlPending.put(id, new String[]{ name, fMime == null ? "" : fMime, fUrl, String.valueOf(attempt) }); runOnUiThread(() -> toast(attempt > 0 ? ("重试下载: " + name) : ("开始下载: " + name))); }
+                if (dm != null) { long id = dm.enqueue(req); dlPending.put(id, new String[]{ name, fMime == null ? "" : fMime, fUrl, String.valueOf(attempt) }); runOnUiThread(() -> { toast(attempt > 0 ? ("重试下载: " + name) : ("开始下载: " + name)); if (dlListCol != null) renderDownloadList(dlListCol); }); }
             } catch (Exception e) { runOnUiThread(() -> toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage()))); }
         }).start();
     }
@@ -4027,10 +4040,14 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> toast("代理下载失败 (HTTP " + fc + ")"));
                     return;
                 }
+                final String pname = sanitizeFileName(nameIn);
+                long total = -1; try { total = c.getContentLength(); } catch (Exception ignored) {}
+                nativeDlProgress.put(pname, new long[]{ 0, total });
+                main.post(() -> { if (dlListCol != null) renderDownloadList(dlListCol); });
                 java.io.InputStream is = c.getInputStream();
                 ByteArrayOutputStream bos = new ByteArrayOutputStream();
                 byte[] buf = new byte[65536]; int n;
-                while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+                while ((n = is.read(buf)) > 0) { bos.write(buf, 0, n); long[] pr = nativeDlProgress.get(pname); if (pr != null) pr[0] = bos.size(); }
                 is.close();
                 byte[] data = bos.toByteArray();
                 if (data.length == 0) { runOnUiThread(() -> toast("代理下载失败: 空响应")); return; }
@@ -4052,7 +4069,11 @@ public class MainActivity extends AppCompatActivity {
                 main.post(() -> { addDownloadRecord(fname, path, puri, mime, size); toast("已经代理通道下载完成: " + fname); });
             } catch (Exception e) {
                 runOnUiThread(() -> toast("代理下载失败: " + (e.getMessage() == null ? "" : e.getMessage())));
-            } finally { if (c != null) try { c.disconnect(); } catch (Exception ignored) {} }
+            } finally {
+                nativeDlProgress.remove(sanitizeFileName(nameIn));
+                if (c != null) try { c.disconnect(); } catch (Exception ignored) {}
+                main.post(() -> { if (dlListCol != null) renderDownloadList(dlListCol); });
+            }
         }).start();
     }
     // 页面内 <a download> / blob: / data: 下载捕获脚本 (每个页面加载完安装一次)
@@ -5262,17 +5283,112 @@ public class MainActivity extends AppCompatActivity {
         dlPanel = panel;
         content.addView(panel);
     }
+    /** 下载面板分组标题。 */
+    private TextView dlGrpHeader(String t) {
+        TextView hd = new TextView(this);
+        hd.setText(t);
+        hd.setTextColor(0xFF58A6FF); hd.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        hd.setPadding(dp(6), dp(6), dp(6), dp(4));
+        return hd;
+    }
+    /** 面板开着且有在途下载 → 每秒自刷进度 (对齐浏览器下载管理器的实时进度条)。 */
+    private void scheduleDlTick() {
+        if (dlTickQueued) return;
+        dlTickQueued = true;
+        main.postDelayed(() -> {
+            dlTickQueued = false;
+            if (dlPanel != null && dlListCol != null) renderDownloadList(dlListCol);
+        }, 1000);
+    }
+    /** 渲染在途下载(系统 DownloadManager 排队/下载中/暂停 + 原生代取通道): 进度条+已下/总量+取消。 */
+    private int renderActiveDownloads(LinearLayout listCol) {
+        int count = 0;
+        try {
+            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm != null) {
+                android.database.Cursor cur = dm.query(new DownloadManager.Query().setFilterByStatus(
+                        DownloadManager.STATUS_PENDING | DownloadManager.STATUS_RUNNING | DownloadManager.STATUS_PAUSED));
+                if (cur != null) try {
+                    while (cur.moveToNext()) {
+                        long id = cur.getLong(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_ID));
+                        long got = cur.getLong(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                        long total = cur.getLong(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+                        int st = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                        String[] meta = dlPending.get(id);
+                        String title = cur.getString(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_TITLE));
+                        String name = (meta != null && meta[0] != null && !meta[0].isEmpty()) ? meta[0]
+                                : (title == null || title.isEmpty() ? ("下载 #" + id) : title);
+                        if (count == 0) listCol.addView(dlGrpHeader("⬇ 进行中"));
+                        final long fid = id;
+                        addActiveDlRow(listCol, name, got, total,
+                                st == DownloadManager.STATUS_PAUSED ? "已暂停·等待网络"
+                                        : (st == DownloadManager.STATUS_PENDING ? "排队中" : "下载中"),
+                                () -> {
+                                    try { DownloadManager d2 = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE); if (d2 != null) d2.remove(fid); } catch (Exception ignored) {}
+                                    dlPending.remove(fid);
+                                    toast("已取消下载");
+                                    if (dlListCol != null) renderDownloadList(dlListCol);
+                                });
+                        count++;
+                    }
+                } finally { cur.close(); }
+            }
+            for (java.util.Map.Entry<String, long[]> e : nativeDlProgress.entrySet()) {
+                long[] p = e.getValue();
+                if (count == 0) listCol.addView(dlGrpHeader("⬇ 进行中"));
+                addActiveDlRow(listCol, e.getKey(), p[0], p[1], "代理通道下载中", null);
+                count++;
+            }
+        } catch (Exception ignored) {}
+        return count;
+    }
+    private void addActiveDlRow(LinearLayout listCol, String name, long got, long total, String state, Runnable cancel) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(8), dp(8), dp(8), dp(8));
+        row.setBackgroundColor(0xFF16202C);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rlp.bottomMargin = dp(4); row.setLayoutParams(rlp);
+        LinearLayout top = new LinearLayout(this); top.setOrientation(LinearLayout.HORIZONTAL); top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView nm = new TextView(this); nm.setText(name);
+        nm.setTextColor(0xFFE6EDF3); nm.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        nm.setSingleLine(true); nm.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        nm.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        top.addView(nm);
+        if (cancel != null) {
+            Button cbtn = chipBtnSm("✕");
+            cbtn.setOnClickListener(v -> cancel.run());
+            top.addView(cbtn);
+        }
+        row.addView(top);
+        android.widget.ProgressBar pb = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        pb.setMax(1000);
+        if (total > 0) { pb.setIndeterminate(false); pb.setProgress((int) (got * 1000 / Math.max(1, total))); }
+        else pb.setIndeterminate(true);
+        LinearLayout.LayoutParams pblp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6));
+        pblp.topMargin = dp(4);
+        row.addView(pb, pblp);
+        TextView sub = new TextView(this);
+        sub.setText(humanSize(got) + (total > 0 ? (" / " + humanSize(total) + " · " + (got * 100 / Math.max(1, total)) + "%") : "") + " · " + state);
+        sub.setTextColor(0xFF9DB4D0); sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+        row.addView(sub);
+        listCol.addView(row);
+    }
     private void renderDownloadList(LinearLayout listCol) {
         listCol.removeAllViews();
+        int active = renderActiveDownloads(listCol);
+        if (active > 0) scheduleDlTick();
         try {
             org.json.JSONArray arr = new org.json.JSONArray(getSharedPreferences(PREFS, MODE_PRIVATE).getString("downloads", "[]"));
             if (arr.length() == 0) {
+                if (active > 0) return;
                 TextView empty = new TextView(this);
                 empty.setText("暂无下载\n网页里下载的文件会出现在这里");
                 empty.setTextColor(0xFF8B949E); empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
                 empty.setGravity(Gravity.CENTER); empty.setPadding(dp(10), dp(24), dp(10), dp(10));
                 listCol.addView(empty); return;
             }
+            if (active > 0) listCol.addView(dlGrpHeader("🗂 已完成 (" + arr.length() + ")"));
             for (int i = arr.length() - 1; i >= 0; i--) {
                 org.json.JSONObject e = arr.getJSONObject(i);
                 final String path = e.optString("file", "");
