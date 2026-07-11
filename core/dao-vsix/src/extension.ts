@@ -4339,6 +4339,23 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             daoSetAcctProxy(safeKey, String(ps.proxy || ''));
             return { ok: true, key, safeKey, set: !!String(ps.proxy || '').trim() };
         }
+        case '/api/browser/antidetect': {
+            // GET 查当前指纹浏览器接入状态(token 脱敏); POST 设/清 — body: {api, provider?, token?}(api 空=清)。
+            const cur = daoAntidetectCfg();
+            if ((req.method || 'GET').toUpperCase() === 'GET') {
+                return { ok: true, api: cur.api, provider: cur.provider || null, tokenSet: !!cur.token, engine: cur.api && cur.provider ? cur.provider + '-api' : 'chromium-isolated' };
+            }
+            const ab = await readBody(req); let asb: any = {}; try { asb = JSON.parse(ab || '{}'); } catch { /* 守柔 */ }
+            try {
+                const dir = path.join(DAO_DIR, 'browser-profiles'); fs.mkdirSync(dir, { recursive: true });
+                const f = path.join(dir, 'antidetect.json');
+                const api = String(asb.api || '').trim();
+                if (!api) { try { fs.unlinkSync(f); } catch { /* 守柔 */ } return { ok: true, cleared: true }; }
+                fs.writeFileSync(f, JSON.stringify({ api, provider: String(asb.provider || '').trim(), token: String(asb.token || '').trim() }, null, 2), 'utf8');
+            } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+            const nc = daoAntidetectCfg();
+            return { ok: true, api: nc.api, provider: nc.provider || null, tokenSet: !!nc.token };
+        }
         case '/api/devin/automations/clear': {
             // 清除官网本账号全部自动化 (用户「一切清除官网的自动化」)
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
@@ -10331,12 +10348,102 @@ function daoSetAcctProxy(safeKey: string, proxy: string): void {
     } catch { /* 守柔 */ }
 }
 // 指纹浏览器(比特浏览器等)Local API 基址: 配置文件或环境变量, 缺省不启用(仅在用户明确接入时)
-function daoAntidetectApiBase(): string {
+interface DaoAntidetectCfg { api: string; provider: string; token: string; }
+// 读取指纹浏览器接入配置: ~/.dao/browser-profiles/antidetect.json 或 DAO_ANTIDETECT_* 环境变量。
+// provider 缺省时按端口推断 (54345=比特浏览器 BitBrowser; 50325=AdsPower)。
+function daoAntidetectCfg(): DaoAntidetectCfg {
+    let api = '', provider = '', token = '';
     try {
         const f = path.join(DAO_DIR, 'browser-profiles', 'antidetect.json');
-        if (fs.existsSync(f)) { const j = JSON.parse(fs.readFileSync(f, 'utf8') || '{}'); if (j && j.api) return String(j.api).replace(/\/+$/, ''); }
+        if (fs.existsSync(f)) { const j = JSON.parse(fs.readFileSync(f, 'utf8') || '{}'); if (j) { api = String(j.api || ''); provider = String(j.provider || ''); token = String(j.token || ''); } }
     } catch { /* 守柔 */ }
-    return String(process.env['DAO_ANTIDETECT_API'] || '').replace(/\/+$/, '');
+    if (!api) api = String(process.env['DAO_ANTIDETECT_API'] || '');
+    if (!provider) provider = String(process.env['DAO_ANTIDETECT_PROVIDER'] || '');
+    if (!token) token = String(process.env['DAO_ANTIDETECT_TOKEN'] || '');
+    api = api.replace(/\/+$/, '');
+    provider = provider.toLowerCase();
+    if (!provider && api) { if (/54345/.test(api)) provider = 'bitbrowser'; else if (/50325/.test(api)) provider = 'adspower'; }
+    return { api, provider, token };
+}
+function daoAntidetectApiBase(): string { return daoAntidetectCfg().api; }
+// 解析代理串 (scheme://user:pass@host:port 或 host:port) → 结构化 (供指纹浏览器代理字段)
+interface DaoProxyParts { scheme: string; host: string; port: string; user: string; pass: string; }
+function daoParseProxy(proxy: string): DaoProxyParts | null {
+    if (!proxy) return null;
+    try {
+        const u = new URL(/:\/\//.test(proxy) ? proxy : 'http://' + proxy);
+        return { scheme: (u.protocol || 'http:').replace(':', ''), host: u.hostname, port: u.port || '', user: decodeURIComponent(u.username || ''), pass: decodeURIComponent(u.password || '') };
+    } catch { return null; }
+}
+// 通用 JSON HTTP (POST/GET·带体·带头) — 供指纹浏览器 Local API 调用
+function daoHttpJson(method: string, u: string, body: any, timeoutMs: number, headers?: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+        try {
+            const lib = u.startsWith('https') ? https : http;
+            const payload = body == null ? null : (typeof body === 'string' ? body : JSON.stringify(body));
+            const h: any = Object.assign({ 'Content-Type': 'application/json' }, headers || {});
+            if (payload != null) h['Content-Length'] = Buffer.byteLength(payload);
+            const req = lib.request(u, { method, timeout: timeoutMs, headers: h }, (r: any) => {
+                let b = ''; r.on('data', (d: any) => (b += d.toString()));
+                r.on('end', () => { try { resolve(JSON.parse(b)); } catch { resolve(b); } });
+            });
+            req.on('error', reject); req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+            if (payload != null) req.write(payload);
+            req.end();
+        } catch (e) { reject(e); }
+    });
+}
+// 每号确定性指纹/代理 → 比特浏览器 BitBrowser 建档 payload (Local API POST /browser/update)
+function daoBitbrowserProfile(safeKey: string, fp: DaoAcctFp, proxy: string): any {
+    const p = daoParseProxy(proxy);
+    return {
+        name: 'dao_' + safeKey, remark: 'DAO isolated · ' + safeKey,
+        proxyMethod: p ? 2 : 0, proxyType: p ? p.scheme : 'noproxy',
+        host: p ? p.host : '', port: p ? p.port : '', proxyUserName: p ? p.user : '', proxyPassword: p ? p.pass : '',
+        browserFingerPrint: {
+            ostype: 'PC', os: fp.uaPlatform === 'macOS' ? 'Mac OS X' : 'Win32', userAgent: fp.ua,
+            isIpCreateTimeZone: false, timeZone: fp.tz, languageType: 'custom', language: fp.acceptLang, displayLanguages: fp.lang,
+            hardwareConcurrency: String(fp.cores), deviceMemory: String(fp.mem),
+            resolutionType: 'custom', resolution: fp.width + ' x ' + fp.height,
+            webRTC: 'proxy', canvas: 'noise', webGL: 'noise', webGLManufacturer: fp.webglVendor, webGLRender: fp.webglRenderer,
+        },
+    };
+}
+// 每号确定性指纹/代理 → AdsPower 建档 payload (Local API POST /api/v1/user/create)
+function daoAdspowerProfile(safeKey: string, fp: DaoAcctFp, proxy: string): any {
+    const p = daoParseProxy(proxy);
+    return {
+        name: 'dao_' + safeKey, group_id: '0',
+        user_proxy_config: p ? { proxy_soft: 'other', proxy_type: p.scheme, proxy_host: p.host, proxy_port: p.port, proxy_user: p.user, proxy_password: p.pass } : { proxy_soft: 'no_proxy' },
+        fingerprint_config: {
+            automatic_timezone: '0', timezone: fp.tz, language: fp.acceptLang.split(',').map(s => s.split(';')[0]),
+            ua: fp.ua, screen_resolution: fp.width + '_' + fp.height,
+            hardware_concurrency: String(fp.cores), device_memory: String(fp.mem),
+            webgl_vendor: fp.webglVendor, webgl_renderer: fp.webglRenderer, canvas: '1', webgl_image: '1', webrtc: 'proxy',
+        },
+    };
+}
+// 整合已有指纹浏览器 (比特/AdsPower): 经其 Local API 用本号确定性指纹+代理建/开隔离环境 (商用级真指纹兜底)。
+// 返回 { provider, id, ws }; 失败抛错交由调用方降级自带 Chromium 隔离。
+async function daoAntidetectOpen(cfg: DaoAntidetectCfg, safeKey: string, fp: DaoAcctFp, proxy: string, targetUrl: string): Promise<any> {
+    const api = cfg.api, prov = cfg.provider;
+    if (!api) throw new Error('no antidetect api');
+    const hdr = cfg.token ? { 'x-api-key': cfg.token, Authorization: 'Bearer ' + cfg.token } : {};
+    if (prov === 'bitbrowser') {
+        const up = await daoHttpJson('POST', api + '/browser/update', daoBitbrowserProfile(safeKey, fp, proxy), 8000, hdr);
+        const id = up && up.data && (up.data.id || up.data.browserId);
+        if (!id) throw new Error('bitbrowser update failed');
+        const open = await daoHttpJson('POST', api + '/browser/open', { id, args: targetUrl ? [targetUrl] : [] }, 20000, hdr);
+        return { provider: prov, id, ws: open && open.data && (open.data.ws || open.data.http), raw: open };
+    }
+    if (prov === 'adspower') {
+        const cr = await daoHttpJson('POST', api + '/api/v1/user/create', daoAdspowerProfile(safeKey, fp, proxy), 8000, hdr);
+        const uid = cr && cr.data && cr.data.id;
+        if (!uid) throw new Error('adspower create failed');
+        const st = await daoHttpJson('GET', api + '/api/v1/browser/start?user_id=' + encodeURIComponent(uid) + '&open_tabs=1', null, 20000, hdr);
+        return { provider: prov, id: uid, ws: st && st.data && st.data.ws && (st.data.ws.puppeteer || st.data.ws.selenium), raw: st };
+    }
+    throw new Error('unknown antidetect provider: ' + prov);
 }
 // 生成/更新 per-profile 指纹注入扩展 (MV3·content_script·world=MAIN·document_start) → 返回扩展目录
 function daoWriteFpExtension(profileDir: string, fp: DaoAcctFp): string | null {
@@ -10451,13 +10558,28 @@ function findBrowserExe(): string | null {
 // 独立并行窗口同时可用, 互不串号(道并行而不相悖)。无浏览器时回退系统默认浏览器。
 function launchIsolatedBrowser(targetUrl: string, profileKey: string): boolean {
     try {
-        const exe = findBrowserExe();
         const safeKey = (profileKey || 'default').replace(/[^a-zA-Z0-9._@-]/g, '_');
         const profileDir = path.join(DAO_DIR, 'browser-profiles', safeKey);
         try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* 守柔 */ }
-        // 每号确定性指纹 + 出口代理 + 注入扩展 —— 断「设备指纹 + IP」关联 (帛书「知其白·守其黑」)
+        // 每号确定性指纹 + 出口代理 —— 断「设备指纹 + IP」关联 (帛书「知其白·守其黑」)
         const fp = daoAcctFingerprint(safeKey);
         const proxy = daoAcctProxy(safeKey);
+        // 优先整合市面已有指纹浏览器 (比特/AdsPower): 经其 Local API 建/开隔离环境;
+        //   任何失败即降级自带 Chromium 隔离 (取之尽锱铢·用之如泥沙, 不自造轮子)。
+        const adc = daoAntidetectCfg();
+        if (adc.api && adc.provider) {
+            daoAntidetectOpen(adc, safeKey, fp, proxy, targetUrl)
+                .catch(() => { try { daoLaunchChromiumIsolated(targetUrl, safeKey, fp, proxy, profileDir); } catch { /* 守柔 */ } });
+            return true;
+        }
+        return daoLaunchChromiumIsolated(targetUrl, safeKey, fp, proxy, profileDir);
+    } catch { /* 守柔 */ }
+    try { vscode.env.openExternal(vscode.Uri.parse(targetUrl)); return true; } catch { return false; }
+}
+// 自带 Chromium 隔离启动: per-号 user-data-dir + 确定性指纹注入扩展 + 出口代理 + 时区。
+function daoLaunchChromiumIsolated(targetUrl: string, safeKey: string, fp: DaoAcctFp, proxy: string, profileDir: string): boolean {
+    try {
+        const exe = findBrowserExe();
         const extDir = daoWriteFpExtension(profileDir, fp);
         if (exe) {
             const cp = require('child_process') as typeof import('child_process');
@@ -10499,7 +10621,9 @@ function daoIsolationSummary(keys: string[]): any {
             profileDir: path.join(DAO_DIR, 'browser-profiles', safeKey),
         };
     });
-    return { engine: daoAntidetectApiBase() ? 'antidetect-api' : 'chromium-isolated', antidetectApi: daoAntidetectApiBase() ? true : false, accounts: list };
+    const adc = daoAntidetectCfg();
+    const usingApi = !!(adc.api && adc.provider);
+    return { engine: usingApi ? (adc.provider + '-api') : 'chromium-isolated', antidetectApi: usingApi, provider: adc.provider || null, accounts: list };
 }
 const DEVIN_URL_GET_USER_STATUS = [
     'https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus',
