@@ -4322,6 +4322,23 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             try { await vscode.commands.executeCommand('dao.routeConvForAccount', { email: String(cs.email || ''), devinId: String(cs.devinId), mode: cs.mode === 'sys' ? 'sys' : 'ide' }); return { ok: true, action: 'routeConv', email: String(cs.email || ''), devinId: String(cs.devinId), mode: cs.mode === 'sys' ? 'sys' : 'ide' }; }
             catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
         }
+        case '/api/browser/isolation': {
+            // 多账号隔离档案概览: 每号确定性指纹 + 出口代理(脱敏) + 引擎状态 (帛书「知其白·守其黑」)
+            let keys: string[] = [];
+            try { keys = loadAccountPool().map(a => a.email).filter(Boolean); } catch { keys = []; }
+            try { if (ws.devinEmail && keys.indexOf(ws.devinEmail) < 0) keys.unshift(ws.devinEmail); } catch { /* 守柔 */ }
+            if (!keys.length) keys = ['default'];
+            return Object.assign({ ok: true }, daoIsolationSummary(keys));
+        }
+        case '/api/browser/proxy': {
+            // 设/清某号出口代理 — body: {email|key, proxy} (proxy 空=清除·"*"=全局兜底)。凭证不回显。
+            const pb = await readBody(req); let ps: any = {}; try { ps = JSON.parse(pb || '{}'); } catch { /* 守柔 */ }
+            const key = String(ps.key || ps.email || '').trim();
+            if (!key) return { ok: false, error: 'email/key required' };
+            const safeKey = key === '*' ? '*' : key.replace(/[^a-zA-Z0-9._@-]/g, '_');
+            daoSetAcctProxy(safeKey, String(ps.proxy || ''));
+            return { ok: true, key, safeKey, set: !!String(ps.proxy || '').trim() };
+        }
         case '/api/devin/automations/clear': {
             // 清除官网本账号全部自动化 (用户「一切清除官网的自动化」)
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
@@ -10222,6 +10239,142 @@ function daoLinuxRunningChromeExe(): string | null {
     } catch { /* 守柔 */ }
     return null;
 }
+// ═══════════════════════════════════════════════════════════════════════
+// 道·「知其白·守其黑·為天下式」多账号指纹隔离引擎 (Multi-Account Anti-Link Isolation)
+// ───────────────────────────────────────────────────────────────────────
+// 病灶: 多个 GitHub/Devin 账号同登一台设备 + 同一出口 IP → 被平台按「设备指纹 + IP +
+//   Cookie」三重关联, 一号被封殃及整个组织。旧 launchIsolatedBrowser 仅隔离 user-data-dir
+//   (Cookie/会话), 指纹与出口 IP 仍全同 → 关联未断。
+// 解法: 每号一套「隔离档案」——
+//   ① user-data-dir 隔离 (Cookie/localStorage·原有)
+//   ② 出口代理 (--proxy-server·每号可配不同 IP·断 IP 关联)
+//   ③ 稳定指纹 (UA/平台/语言/时区/分辨率/WebGL/核数/内存·由账号 key 确定性派生·跨次一致)
+//   ④ 指纹注入扩展 (MAIN world content-script·canvas/webgl/navigator/时区加噪·随 profile 落盘)
+// 可选: 检测到本地指纹浏览器(比特浏览器 BitBrowser 等)Local API → 经其建/开隔离环境。
+// 「恆德不貳·復歸於無極」: 同号每次启动指纹恒定(不自相矛盾), 异号之间彼此独立。
+// ═══════════════════════════════════════════════════════════════════════
+interface DaoAcctFp {
+    ua: string; platform: string; uaPlatform: string; lang: string; acceptLang: string;
+    tz: string; tzOffset: number; width: number; height: number;
+    webglVendor: string; webglRenderer: string; cores: number; mem: number;
+}
+// FNV-1a 32-bit — 确定性种子: 同 key 恒得同指纹 (帛书「恆德不貳」)
+function daoFpSeed(key: string): number {
+    let h = 0x811c9dc5;
+    const s = String(key || 'default');
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return h >>> 0;
+}
+// 确定性档案: 从真实机型池按种子挑选, 各维度用种子不同位段解耦 → 组合空间大、稳定、可信
+function daoAcctFingerprint(key: string): DaoAcctFp {
+    const seed = daoFpSeed(key);
+    const pick = <T,>(arr: T[], shift: number): T => arr[(seed >>> shift) % arr.length];
+    const chromeMajors = ['122', '123', '124', '125', '126'];
+    const cm = pick(chromeMajors, 0);
+    const winUAs = [
+        'Windows NT 10.0; Win64; x64', 'Windows NT 10.0; WOW64',
+    ];
+    const macUAs = ['Macintosh; Intel Mac OS X 10_15_7'];
+    const isMacFp = ((seed >>> 3) & 7) === 0; // ~1/8 号呈 mac 指纹, 其余 Windows
+    const osTok = isMacFp ? macUAs[0] : pick(winUAs, 5);
+    const ua = 'Mozilla/5.0 (' + osTok + ') AppleWebKit/537.36 (KHTML, like Gecko) Chrome/' + cm + '.0.0.0 Safari/537.36';
+    const langs = [
+        { l: 'en-US,en;q=0.9', p: 'en-US' }, { l: 'en-GB,en;q=0.9', p: 'en-GB' },
+        { l: 'zh-CN,zh;q=0.9,en;q=0.8', p: 'zh-CN' }, { l: 'en-US,en;q=0.9,es;q=0.8', p: 'en-US' },
+        { l: 'de-DE,de;q=0.9,en;q=0.8', p: 'de-DE' }, { l: 'fr-FR,fr;q=0.9,en;q=0.8', p: 'fr-FR' },
+    ];
+    const lg = pick(langs, 8);
+    const tzs = [
+        { z: 'America/New_York', o: 300 }, { z: 'America/Chicago', o: 360 },
+        { z: 'America/Los_Angeles', o: 480 }, { z: 'Europe/London', o: 0 },
+        { z: 'Europe/Berlin', o: -60 }, { z: 'Asia/Shanghai', o: -480 },
+        { z: 'Asia/Singapore', o: -480 }, { z: 'Asia/Tokyo', o: -540 },
+    ];
+    const tz = pick(tzs, 12);
+    const res = [
+        { w: 1920, h: 1080 }, { w: 1536, h: 864 }, { w: 1366, h: 768 },
+        { w: 1440, h: 900 }, { w: 2560, h: 1440 }, { w: 1680, h: 1050 },
+    ];
+    const rz = pick(res, 16);
+    const gpus = isMacFp ? [
+        { v: 'Apple', r: 'Apple M1' }, { v: 'Apple', r: 'Apple M2' },
+    ] : [
+        { v: 'Google Inc. (NVIDIA)', r: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+        { v: 'Google Inc. (Intel)', r: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+        { v: 'Google Inc. (AMD)', r: 'ANGLE (AMD, AMD Radeon RX 580 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+        { v: 'Google Inc. (NVIDIA)', r: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+    ];
+    const gpu = pick(gpus, 20);
+    const cores = pick([4, 6, 8, 12, 16], 24);
+    const mem = pick([4, 8, 8, 16, 16, 32], 27);
+    return {
+        ua, platform: isMacFp ? 'MacIntel' : 'Win32', uaPlatform: isMacFp ? 'macOS' : 'Windows',
+        lang: lg.l.split(',')[0], acceptLang: lg.l,
+        tz: tz.z, tzOffset: tz.o, width: rz.w, height: rz.h,
+        webglVendor: gpu.v, webglRenderer: gpu.r, cores, mem,
+    };
+}
+// per-号出口代理配置 (集中存于 DAO_DIR/browser-profiles/proxies.json): { "<safeKey>": "http://user:pass@host:port" }
+function daoProxyStorePath(): string { return path.join(DAO_DIR, 'browser-profiles', 'proxies.json'); }
+function daoReadProxyStore(): { [k: string]: string } {
+    try { return JSON.parse(fs.readFileSync(daoProxyStorePath(), 'utf8')) || {}; } catch { return {}; }
+}
+function daoAcctProxy(safeKey: string): string {
+    try { const m = daoReadProxyStore(); return String(m[safeKey] || m['*'] || (process.env['DAO_ACCT_PROXY'] || '')).trim(); } catch { return ''; }
+}
+function daoSetAcctProxy(safeKey: string, proxy: string): void {
+    try {
+        const dir = path.join(DAO_DIR, 'browser-profiles'); fs.mkdirSync(dir, { recursive: true });
+        const m = daoReadProxyStore();
+        if (proxy) m[safeKey] = String(proxy).trim(); else delete m[safeKey];
+        fs.writeFileSync(daoProxyStorePath(), JSON.stringify(m, null, 2), 'utf8');
+    } catch { /* 守柔 */ }
+}
+// 指纹浏览器(比特浏览器等)Local API 基址: 配置文件或环境变量, 缺省不启用(仅在用户明确接入时)
+function daoAntidetectApiBase(): string {
+    try {
+        const f = path.join(DAO_DIR, 'browser-profiles', 'antidetect.json');
+        if (fs.existsSync(f)) { const j = JSON.parse(fs.readFileSync(f, 'utf8') || '{}'); if (j && j.api) return String(j.api).replace(/\/+$/, ''); }
+    } catch { /* 守柔 */ }
+    return String(process.env['DAO_ANTIDETECT_API'] || '').replace(/\/+$/, '');
+}
+// 生成/更新 per-profile 指纹注入扩展 (MV3·content_script·world=MAIN·document_start) → 返回扩展目录
+function daoWriteFpExtension(profileDir: string, fp: DaoAcctFp): string | null {
+    try {
+        const extDir = path.join(profileDir, '_dao_fp_ext');
+        fs.mkdirSync(extDir, { recursive: true });
+        const manifest = {
+            manifest_version: 3, name: 'DAO Isolation', version: '1.0.0',
+            description: 'DAO per-account fingerprint isolation',
+            content_scripts: [{ matches: ['<all_urls>'], js: ['fp.js'], run_at: 'document_start', all_frames: true, world: 'MAIN' }],
+        };
+        fs.writeFileSync(path.join(extDir, 'manifest.json'), JSON.stringify(manifest), 'utf8');
+        const cfg = JSON.stringify({
+            platform: fp.platform, languages: fp.acceptLang.split(',').map(s => s.split(';')[0]),
+            lang: fp.lang, tz: fp.tz, tzOffset: fp.tzOffset, cores: fp.cores, mem: fp.mem,
+            webglVendor: fp.webglVendor, webglRenderer: fp.webglRenderer,
+            width: fp.width, height: fp.height, seed: daoFpSeed(fp.ua + fp.webglRenderer),
+        });
+        // MAIN-world 注入: 覆盖 navigator/时区/WebGL/Canvas 加噪。加噪确定(种子驱动)→ 同号跨会话一致。
+        const js = 'try{(function(){var C=' + cfg + ';var seed=C.seed>>>0;' +
+            'function rnd(){seed=(seed*1664525+1013904223)>>>0;return seed/4294967296;}' +
+            'function def(o,k,v){try{Object.defineProperty(o,k,{get:function(){return v;},configurable:true});}catch(e){}}' +
+            'def(navigator,"platform",C.platform);def(navigator,"languages",Object.freeze(C.languages));' +
+            'def(navigator,"language",C.lang);def(navigator,"hardwareConcurrency",C.cores);def(navigator,"deviceMemory",C.mem);' +
+            'try{def(screen,"width",C.width);def(screen,"height",C.height);def(screen,"availWidth",C.width);def(screen,"availHeight",C.height-40);}catch(e){}' +
+            // 时区
+            'try{var DTF=Intl.DateTimeFormat;var RO=DTF.prototype.resolvedOptions;DTF.prototype.resolvedOptions=function(){var o=RO.apply(this,arguments);o.timeZone=C.tz;return o;};}catch(e){}' +
+            'try{var _go=Date.prototype.getTimezoneOffset;Date.prototype.getTimezoneOffset=function(){return C.tzOffset;};}catch(e){}' +
+            // WebGL 厂商/渲染器
+            'try{var gp=WebGLRenderingContext.prototype.getParameter;function wrap(proto){var o=proto.getParameter;proto.getParameter=function(p){if(p===37445)return C.webglVendor;if(p===37446)return C.webglRenderer;return o.apply(this,arguments);};}wrap(WebGLRenderingContext.prototype);if(window.WebGL2RenderingContext)wrap(WebGL2RenderingContext.prototype);}catch(e){}' +
+            // Canvas 加噪 (确定·极微扰动·破解基于像素哈希的画布指纹)
+            'try{var td=HTMLCanvasElement.prototype.toDataURL;HTMLCanvasElement.prototype.toDataURL=function(){try{var ctx=this.getContext("2d");if(ctx){var w=this.width,h=this.height;if(w&&h){var d=ctx.getImageData(0,0,Math.min(w,16),Math.min(h,16));for(var i=0;i<d.data.length;i+=4){d.data[i]=d.data[i]^(rnd()<0.5?1:0);}ctx.putImageData(d,0,0);}}}catch(e){}return td.apply(this,arguments);};}catch(e){}' +
+            '})();}catch(e){}';
+        fs.writeFileSync(path.join(extDir, 'fp.js'), js, 'utf8');
+        return extDir;
+    } catch { return null; }
+}
+
 function findBrowserExe(): string | null {
     if (_daoGoodBrowser !== undefined) return _daoGoodBrowser;
     const isWin = process.platform === 'win32';
@@ -10298,6 +10451,10 @@ function launchIsolatedBrowser(targetUrl: string, profileKey: string): boolean {
         const safeKey = (profileKey || 'default').replace(/[^a-zA-Z0-9._@-]/g, '_');
         const profileDir = path.join(DAO_DIR, 'browser-profiles', safeKey);
         try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* 守柔 */ }
+        // 每号确定性指纹 + 出口代理 + 注入扩展 —— 断「设备指纹 + IP」关联 (帛书「知其白·守其黑」)
+        const fp = daoAcctFingerprint(safeKey);
+        const proxy = daoAcctProxy(safeKey);
+        const extDir = daoWriteFpExtension(profileDir, fp);
         if (exe) {
             const cp = require('child_process') as typeof import('child_process');
             const args = [
@@ -10307,15 +10464,38 @@ function launchIsolatedBrowser(targetUrl: string, profileKey: string): boolean {
                 '--disable-default-apps',
                 '--disable-sync',
                 '--disable-features=Translate,msEdgeWelcomePage,msSync',
-                '--new-window',
-                targetUrl,
+                '--user-agent=' + fp.ua,
+                '--lang=' + fp.lang,
+                '--accept-lang=' + fp.acceptLang,
+                '--window-size=' + fp.width + ',' + fp.height,
             ];
-            const child = cp.spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: true });
+            if (proxy) args.push('--proxy-server=' + proxy);
+            if (extDir) { args.push('--disable-extensions-except=' + extDir); args.push('--load-extension=' + extDir); }
+            args.push('--new-window', targetUrl);
+            // 时区经环境变量传子进程 (Chrome 在 Linux/macOS 尊重 TZ; Windows 侧由注入扩展兜底)
+            const env = Object.assign({}, process.env, { TZ: fp.tz });
+            const child = cp.spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: true, env });
             child.unref();
             return true;
         }
     } catch { /* 守柔 */ }
     try { vscode.env.openExternal(vscode.Uri.parse(targetUrl)); return true; } catch { return false; }
+}
+// 隔离档案概览 (供 /api/browser/isolation): 每号指纹摘要 + 代理 + 引擎状态 (代理凭证脱敏)
+function daoIsolationSummary(keys: string[]): any {
+    const store = daoReadProxyStore();
+    const redact = (p: string) => { try { const u = new URL(p); if (u.password) u.password = '***'; if (u.username) u.username = u.username.slice(0, 2) + '***'; return u.toString(); } catch { return p ? '***' : ''; } };
+    const list = (keys || []).map((k) => {
+        const safeKey = String(k || '').replace(/[^a-zA-Z0-9._@-]/g, '_');
+        const fp = daoAcctFingerprint(safeKey);
+        return {
+            key: k, safeKey,
+            fingerprint: { ua: fp.ua, platform: fp.uaPlatform, lang: fp.lang, tz: fp.tz, screen: fp.width + 'x' + fp.height, gpu: fp.webglRenderer, cores: fp.cores, memGB: fp.mem },
+            proxy: redact(store[safeKey] || ''),
+            profileDir: path.join(DAO_DIR, 'browser-profiles', safeKey),
+        };
+    });
+    return { engine: daoAntidetectApiBase() ? 'antidetect-api' : 'chromium-isolated', antidetectApi: daoAntidetectApiBase() ? true : false, accounts: list };
 }
 const DEVIN_URL_GET_USER_STATUS = [
     'https://server.codeium.com/exa.seat_management_pb.SeatManagementService/GetUserStatus',
