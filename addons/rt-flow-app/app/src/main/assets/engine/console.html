@@ -235,7 +235,7 @@
   <label>Token</label><input id="cfgToken" placeholder="xxxxxxxxxxxxxxxx">
   <label>Endpoint (可选)</label><input id="cfgEndpoint" placeholder="https://dao-relay-do.xxx.workers.dev">
   <p class="cfgHint">数据面<b>默认走 P2P 直连</b>(公共 ntfy 信令·0账号·不经 Worker), 打洞不通才回退中继。留空 Endpoint = 用默认中继(已零账号·可直接用)。想完全不依赖项目方？
-    <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/dao-devin/devin-remote/tree/main/addons/dao-relay" target="_blank" rel="noopener">一键自建中继 (零 Token)↗</a>
+    <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/dao-genesis/devin-remote/tree/main/addons/dao-relay" target="_blank" rel="noopener">一键自建中继 (零 Token)↗</a>
     部署完把你专属的 workers.dev 地址填到上面 Endpoint 即可。</p>
   <label>零中心·公网直连链接 (发给别人即可 P2P 直连手机·无需任何 Worker)</label>
   <div class="row" style="gap:6px"><input id="cfgShare" readonly style="flex:3" placeholder="填好 Session/Token 后自动生成"><button id="cfgCopy" style="flex:1">复制</button></div>
@@ -808,9 +808,9 @@
   var _CONSOLE_IPFS_CID = "bafybeidqzektpm63jsqk5bwbrdqnw32rmjof42xxcyljezdax3sua5kscq";
   var CDN_BASES = [];
   CDN_BASES.push(
-    "https://raw.githubusercontent.com/dao-devin/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/",
-    "https://fastly.jsdelivr.net/gh/dao-devin/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/",
-    "https://cdn.jsdelivr.net/gh/dao-devin/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/"
+    "https://raw.githubusercontent.com/dao-genesis/devin-remote/main/addons/rt-flow-app/app/src/main/assets/engine/",
+    "https://fastly.jsdelivr.net/gh/dao-genesis/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/",
+    "https://cdn.jsdelivr.net/gh/dao-genesis/devin-remote@main/addons/rt-flow-app/app/src/main/assets/engine/"
   );
   if(_CONSOLE_IPFS_CID && _CONSOLE_IPFS_CID.indexOf("__")!==0){
     CDN_BASES.push("https://"+_CONSOLE_IPFS_CID+".ipfs.dweb.link/",
