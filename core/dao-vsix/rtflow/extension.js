@@ -371,9 +371,15 @@ function _getMultiFavs() {
 function _setMultiFavs(f) {
   try { if (_ctx && _ctx.globalState) _ctx.globalState.update("dao.multiFavs", f || []); } catch (e) {}
 }
-// 浏览器下载管理: 网页内下载的真实文件由代理层落盘到 ~/.dao/downloads + _index.json,
+// 浏览器下载管理: 网页内下载的真实文件由代理层落盘到下载目录(wam.downloadDir 可配·默认 ~/.dao/downloads) + _index.json,
 //   此处只读/删该清单(与「对话备份」彻底无关), 供 /shell ⬇下载悬浮窗罗列。
-function _daoDownloadsIndexPath() { return path.join(os.homedir(), ".dao", "downloads", "_index.json"); }
+function _daoDownloadsDir() {
+  let cfg = "";
+  try { cfg = vscode.workspace.getConfiguration("wam").get("downloadDir", "") || ""; } catch (e) {}
+  try { if (devinCloud && typeof devinCloud.resolveDownloadsDir === "function") return devinCloud.resolveDownloadsDir(cfg); } catch (e) {}
+  return cfg || path.join(os.homedir(), ".dao", "downloads");
+}
+function _daoDownloadsIndexPath() { return path.join(_daoDownloadsDir(), "_index.json"); }
 function _listDaoDownloads() {
   try {
     const idx = JSON.parse(fs.readFileSync(_daoDownloadsIndexPath(), "utf8")) || [];

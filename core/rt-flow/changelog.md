@@ -2,6 +2,17 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.26.12 (2026-07-11) · 下载位置可配置: wam.downloadDir (devin_cloud.js + extension.js · 对齐手机 APK 下载管理)
+
+> 网页内下载此前硬编码落 `~/.dao/downloads`(系统盘)。写盘(out 层 daoSaveDownload)与
+> 读清单(宿主 ⬇下载悬浮窗)分居两处代码, 各自硬编码, 改位置极易失联。
+
+### 改动
+- `resolveDownloadsDir(cfgDir)`: 下载目录单一来源解析器 —— `wam.downloadDir` 配置优先,
+  空则回落 `~/.dao/downloads`(默认不变·不孤立既有下载)。devin_cloud 无 vscode 依赖, 宿主传入配置串。
+- `_daoDownloadsDir()`(extension.js): 悬浮窗清单读取改经同一解析器, 保证「写盘」「读清单」恒同址。
+- 新增 `wam.downloadDir` 配置项(rt-flow 与 dao-vsix 双端)。
+
 ## v4.26.11 (2026-07-11) · 富媒体本地化: 修「备份对话图片/视频过期打不开」(devin_cloud.js · 对齐手机 APK 附件预热)
 
 > 对话正文里的图片/视频/音频多为预签 S3/attachments URL —— 会过期或需登录,

@@ -133,6 +133,14 @@ function getOptimalBackupRoot() {
   } catch (e) {}
   return (_backupDefaultCache = root);
 }
+// 下载落盘目录解析(单一来源·out 层与 rt-flow 宿主共用, 保证写/读同址):
+//   wam.downloadDir 显式配置优先 → 否则 ~/.dao/downloads (默认不变, 不孤立既有下载)。
+//   宿主各自读 vscode 配置后把字符串传入(devin_cloud 无 vscode 依赖)。
+function resolveDownloadsDir(cfgDir) {
+  const c = String(cfgDir || "").trim();
+  if (c) return c;
+  return path.join(os.homedir(), ".dao", "downloads");
+}
 // 显式记录选择(供迁移后钉住目标盘·使后续启动走快路径不再查盘)。
 function setBackupRoot(root) {
   _backupDefaultCache = root || null;
@@ -2914,6 +2922,7 @@ module.exports = {
   paths: { WAM_DIR, DC_DIR, DC_AUTH_CACHE, DC_TAGS_FILE, DC_BACKUP_STATE, DC_CLEANUP_STATE, DC_BACKUP_DEFAULT, DC_HOME_BACKUP, DC_BACKUP_ROOT_STATE },
   // 数据盘自动择优 + 迁移 (备份不压系统盘)
   getOptimalBackupRoot,
+  resolveDownloadsDir,
   listDataDrives,
   setBackupRoot,
   migrateBackups,

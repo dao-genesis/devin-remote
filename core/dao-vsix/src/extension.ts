@@ -15490,7 +15490,13 @@ window.addEventListener('message', function(e) {
 //   与「对话备份」彻底解耦: 这里只收「用户在网页中下载的真实文件」(对齐手机 APK 下载悬浮窗)。
 // ═══════════════════════════════════════════════════════════
 function daoDownloadsDir(): string {
-    const d = path.join(DAO_DIR, 'downloads');
+    // 下载落盘目录: wam.downloadDir 可配置(默认 ~/.dao/downloads)。与 rt-flow 宿主经
+    //   devin_cloud.resolveDownloadsDir 同源解析, 保证「网页下载写盘」与「⬇悬浮窗读清单」同址。
+    let cfg = '';
+    try { cfg = (vscode.workspace.getConfiguration('wam').get('downloadDir', '') as string) || ''; } catch { /* 守柔 */ }
+    let d = '';
+    try { const dc = loadDevinCloud(); if (dc && typeof dc.resolveDownloadsDir === 'function') d = dc.resolveDownloadsDir(cfg); } catch { /* 守柔 */ }
+    if (!d) d = cfg || path.join(DAO_DIR, 'downloads');
     try { fs.mkdirSync(d, { recursive: true }); } catch { /* 守柔 */ }
     return d;
 }

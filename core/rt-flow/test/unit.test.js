@@ -1366,6 +1366,25 @@ function test(name, fn) {
     }
   });
 
+  // ── 下载位置: 写盘(out 层)与读清单(rt-flow 宿主)须经同一解析器同址 ──
+  console.log("\n[下载位置 · 同源解析]");
+  test("resolveDownloadsDir: 配置优先 · 空配置回落 ~/.dao/downloads", () => {
+    const os = require("os"), path = require("path");
+    assert.strictEqual(cloud.resolveDownloadsDir("D:\\我的下载"), "D:\\我的下载");
+    assert.strictEqual(cloud.resolveDownloadsDir("  "), path.join(os.homedir(), ".dao", "downloads"));
+    assert.strictEqual(cloud.resolveDownloadsDir(""), path.join(os.homedir(), ".dao", "downloads"));
+    assert.strictEqual(cloud.resolveDownloadsDir(null), path.join(os.homedir(), ".dao", "downloads"));
+  });
+  test("extension.js: 下载清单路径须经 resolveDownloadsDir + wam.downloadDir (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/getConfiguration\("wam"\)\.get\("downloadDir"/.test(src), rel.join("/") + " 须读 wam.downloadDir 配置");
+      assert.ok(/devinCloud\.resolveDownloadsDir/.test(src), rel.join("/") + " 须经 devin_cloud.resolveDownloadsDir 同源解析");
+      assert.ok(/_daoDownloadsDir\(\), "_index\.json"/.test(src), rel.join("/") + " 清单须落在解析后的下载目录");
+    }
+  });
+
   // ── 整页翻译跨源自愈: 宿主选同源地址 (旧: 前端自拼 /__web?u= → 点译白屏) ──
   console.log("\n[整页翻译 · 跨源白屏修复]");
   test("extension.js: 翻译跨源重载须走宿主 trReroute, 前端不再自拼 /__web?u= (双副本源级护栏)", () => {
