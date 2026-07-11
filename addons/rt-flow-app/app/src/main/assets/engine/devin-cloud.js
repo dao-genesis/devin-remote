@@ -311,20 +311,52 @@
     await Promise.all(ws);
     return out;
   }
+  // ── 自动化对话综合判定 (近期对话隐藏 / 备份过滤同源·唯一真源) ──────────────
+  //  接收会话对象或标题字符串。结构化信号(标签/playbook/自动化创建标记)最优先;
+  //  含中文(标题或用户消息)一律判本人对话, 永不误隐; 兜底走标题启发式(纯英文机器人任务名)。
+  var AUTO_VERB = /^(review|improve|add|fix|update|refactor|implement|create|investigate|analy[sz]e|debug|optimi[sz]e|test|write|build|set ?up|configure|migrate|remove|delete|clean|security|enhance|document|resolve|merge|deploy|integrate|verify|check|explore|research|design|develop|generate|handle|support|enable|disable|rename|move|extract|inspect|audit|scan|repair|patch|port|sync|convert|validate|ensure|prepare|establish|continue|complete|finish|start|begin)\b/i;
+  var AUTO_REPO = /(blog-drafts|notes|dotfiles|code-snippets|utils-py|learn-cs)-\d+/i;
+  var AUTO_TAG = /^(auto|automation|automated|batch|scheduled|schedule|cron|bot)\b|自动/i;
+  function isAutoConv(x) {
+    try {
+      var s = (x && typeof x === "object") ? x : null;
+      var title = s ? String(s.title || s.name || s.prompt || s.devin_id || s.session_id || s.id || "") : String(x == null ? "" : x);
+      if (s) {
+        var tags = s.tags || s.session_tags || (s.session && s.session.tags) || [];
+        if (Array.isArray(tags)) for (var i = 0; i < tags.length; i++)
+          if (AUTO_TAG.test(String(tags[i] && tags[i].name || tags[i]))) return true;
+        if (s.playbook_id || s.playbookId) return true;
+        if (s.is_automated === true || s.created_by_automation === true || s.origin === "automation" || s.trigger_type === "scheduled" || s.source === "automation") return true;
+        // 内容级信号: 用户消息含中文 → 本人对话, 直接豁免 (不再看标题模式)
+        var m = s.user_message || s.first_user_message || s.prompt || "";
+        if (/[\u4e00-\u9fff]/.test(String(m))) return false;
+      }
+      var t = title.trim();
+      if (!t) return false;
+      if (/[\u4e00-\u9fff]/.test(t)) return false;   // 含中文 → 本人对话, 永不判自动化
+      if (AUTO_REPO.test(t)) return true;             // 样板仓库名+序号 → 批量自动化
+      if (t.length <= 3) return true;
+      if (AUTO_VERB.test(t)) return true;             // 动词起头的机器人任务名
+      return false;
+    } catch (e) { return false; }
+  }
   // 备份单号: 列出会话 → 并发(限 3 路·低优先)导出对话 MD → 汇总。
   //  全程低优先 → 自动备份在后台慢慢跑, 登录/额度/状态轮询始终即时, 多账号并发不再卡顿。
+  //  自动化对话(isAutoConv 同源判定)不进新备份, 只跳过不删 —— 历史备份数据一律不动。
   async function backupAccount(acc, kind) {
     var ls = await listSessions(acc, 200);
     if (!ls.ok) return { ok: false, error: ls.error };
-    var sids = [];
+    var sids = [], skippedAuto = 0;
     for (var i = 0; i < ls.sessions.length; i++) {
-      var s = ls.sessions[i]; var sid = s.devin_id || s.session_id || s.id; if (sid) sids.push(sid);
+      var s = ls.sessions[i]; var sid = s.devin_id || s.session_id || s.id; if (!sid) continue;
+      if (isAutoConv(s)) { skippedAuto++; continue; }
+      sids.push(sid);
     }
     var res = await _pool(sids, 3, async function (sid) {
       var e = await exportSession(acc, sid, kind, true); return { sid: sid, title: e.title, md: e.md };
     });
     var out = res.filter(function (x) { return x && x.md != null; });
-    return { ok: true, count: out.length, sessions: out };
+    return { ok: true, count: out.length, skippedAuto: skippedAuto, sessions: out };
   }
 
   // ── P4 Secret / Knowledge / Playbook / Git ────────────────────────────────
@@ -818,6 +850,7 @@
     createSession: createSession, archiveSession: archiveSession, stopSession: stopSession,
     deleteKnowledge: deleteKnowledge, deletePlaybook: deletePlaybook, deleteSecret: deleteSecret,
     listIntegrations: listIntegrations, wipeAccount: wipeAccount,
-    getMessageLimit: getMessageLimit, setMessageLimit: setMessageLimit
+    getMessageLimit: getMessageLimit, setMessageLimit: setMessageLimit,
+    isAutoConv: isAutoConv
   };
 })(window);

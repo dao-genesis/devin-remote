@@ -140,6 +140,10 @@ public class MainActivity extends AppCompatActivity {
     private FrameLayout daoPanel;          // 全服通悬浮窗 (近期对话 / 备份网页端) — 建一次后保活, 开关只切显隐
     private WebView daoWeb;
     private boolean daoOpen = false;       // 全服通悬浮窗逻辑可见态 (面板/WebView 常驻, 故不能用 daoPanel!=null 判断)
+    private FrameLayout mediaPanel;        // 本页媒体悬浮窗 (当前页图片/视频/文档/附件一览·查看+下载)
+    private WebView mediaWeb;
+    private Button mediaBtn;
+    private boolean mediaOpen = false;
     private volatile String sEngineCache = null;
     private volatile String curProxy = null;   // 已应用到内置浏览器(全部 WebView)的本地代理 host:port; null=直连
     private final java.util.Map<Long, String[]> dlPending = new java.util.concurrent.ConcurrentHashMap<>();
@@ -619,6 +623,9 @@ public class MainActivity extends AppCompatActivity {
         // 全服通悬浮窗按钮: 近期对话(跨号·实时) + 备份网页端
         daoBtn = chipBtnPk("\uD83D\uDDC2");
         daoBtn.setOnClickListener(v -> toggleDaoPanel());
+        // 本页媒体悬浮窗按钮: 一键汇集当前页全部图片/视频/文档/附件 → 面板内查看+下载
+        mediaBtn = chipBtnPk("\uD83D\uDDBC");
+        mediaBtn.setOnClickListener(v -> toggleMediaPanel());
 
         // 第一行: 菜单 + 地址 + 下拉开关 + 前往
         bar.addView(menu);
@@ -640,6 +647,7 @@ public class MainActivity extends AppCompatActivity {
         toolRow.addView(reload);
         toolRow.addView(dlBtn);
         toolRow.addView(daoBtn);
+        toolRow.addView(mediaBtn);
 
         // 标签条
         HorizontalScrollView strip = new HorizontalScrollView(this);
@@ -2014,6 +2022,7 @@ public class MainActivity extends AppCompatActivity {
     @Override public void onBackPressed() {
         if (fsCustomView != null) { hideFsCustomView(); return; }   // 全屏视频中: 返回键先退全屏
         if (daoOpen) { hideDaoPanel(); return; }                // 返回键先关全服通悬浮窗 (保活, 再开秒显)
+        if (mediaOpen) { hideMediaPanel(); return; }            // 返回键关本页媒体悬浮窗
         if (dlPanel != null) { closeDownloadPanel(); return; }
         if (active >= 0 && tabs.get(active).web.canGoBack()) { tabs.get(active).web.goBack(); return; }
         super.onBackPressed();
@@ -3951,7 +3960,7 @@ public class MainActivity extends AppCompatActivity {
                 if (dt != null && dt.auth1 != null && !dt.auth1.isEmpty()
                         && fUrl != null && fUrl.contains("app.devin.ai/attachments/"))
                     ensureAttachmentCookie(dt.auth1, dt.orgId, fUrl);
-                String name = android.webkit.URLUtil.guessFileName(fUrl, fCd, fMime);
+                String name = sanitizeFileName(android.webkit.URLUtil.guessFileName(fUrl, fCd, fMime));
                 DownloadManager.Request req = new DownloadManager.Request(Uri.parse(fUrl));
                 if (fMime != null) req.setMimeType(fMime);
                 if (fUa != null) req.addRequestHeader("User-Agent", fUa);
@@ -3966,6 +3975,62 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
+    /** 文件名消毒: 附件名常含 '?'(中文被替换) 等非法字符 → DownloadManager 直接 enqueue 失败。 */
+    static String sanitizeFileName(String n) {
+        if (n == null || n.isEmpty()) return "download";
+        String s = n.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+        return s.isEmpty() ? "download" : s;
+    }
+    /** 末路代取下载: DownloadManager 重试耗尽后, 用 fetchAttachment(鉴权+边缘代理自动回退)拉字节
+     *  落应用目录 → 保险箱 + 系统下载 + 下载库, 与正路下载同归宿。 */
+    private void nativeFetchDownload(final String url, final String nameIn, final String mimeIn) {
+        final Tab dt = cur();
+        final String a1 = (dt != null && dt.auth1 != null) ? dt.auth1 : "";
+        final String org = (dt != null && dt.orgId != null) ? dt.orgId : "";
+        new Thread(() -> {
+            java.net.HttpURLConnection c = null;
+            try {
+                c = fetchAttachment(a1, org, url, null, false);
+                int code = (c != null) ? c.getResponseCode() : -1;
+                if ((code == 401 || code == 403) && !a1.isEmpty()) {
+                    try { c.disconnect(); } catch (Exception ignored) {}
+                    mintAttachmentCookie(a1, org);
+                    c = fetchAttachment(a1, org, url, null, false);
+                    code = (c != null) ? c.getResponseCode() : -1;
+                }
+                if (c == null || code < 200 || code >= 300) {
+                    final int fc = code;
+                    runOnUiThread(() -> toast("代理下载失败 (HTTP " + fc + ")"));
+                    return;
+                }
+                java.io.InputStream is = c.getInputStream();
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[65536]; int n;
+                while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+                is.close();
+                byte[] data = bos.toByteArray();
+                if (data.length == 0) { runOnUiThread(() -> toast("代理下载失败: 空响应")); return; }
+                String name = sanitizeFileName(nameIn);
+                String ct = c.getContentType();
+                final String mime = (mimeIn != null && !mimeIn.isEmpty()) ? mimeIn
+                        : (ct != null && !ct.isEmpty() ? (ct.indexOf(';') >= 0 ? ct.substring(0, ct.indexOf(';')).trim() : ct) : guessMime(name));
+                File dir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+                if (dir == null) dir = getCacheDir();
+                if (!dir.exists()) dir.mkdirs();
+                File f = new File(dir, name);
+                java.io.FileOutputStream fo = new java.io.FileOutputStream(f);
+                try { fo.write(data); } finally { fo.close(); }
+                File persisted = persistToVault(f, name);
+                String pu = "";
+                try { android.net.Uri pub = publishToDownloads(name, mime, data); if (pub != null) pu = pub.toString(); } catch (Exception ignored) {}
+                final String puri = pu, path = persisted.getAbsolutePath(), fname = name;
+                final long size = persisted.length();
+                main.post(() -> { addDownloadRecord(fname, path, puri, mime, size); toast("已经代理通道下载完成: " + fname); });
+            } catch (Exception e) {
+                runOnUiThread(() -> toast("代理下载失败: " + (e.getMessage() == null ? "" : e.getMessage())));
+            } finally { if (c != null) try { c.disconnect(); } catch (Exception ignored) {} }
+        }).start();
+    }
     // 页面内 <a download> / blob: / data: 下载捕获脚本 (每个页面加载完安装一次)
     static void installDownloadHook(WebView w) {
         if (w == null) return;
@@ -4010,17 +4075,25 @@ public class MainActivity extends AppCompatActivity {
             + "if(!document.body){setTimeout(setup,250);return;}"
             + "var F=[];"
             + "function inOverlay(e){for(;e&&e!==document.body;e=e.parentElement){var p=getComputedStyle(e).position;if(p==='fixed'||p==='absolute')return true;}return false;}"
+            /* 可见性判定: 隐藏子树(display:none/visibility:hidden)里的 <video> 同样命中 0 宽列启发式,
+               会把分隔条插进无视频页面的可见容器且 sweep 永不回收(隐藏视频仍在 DOM) —— 横杠误现/残留之本。
+               被挤至 0 宽的真视频列 display 非 none, 不受此判影响。 */
+            + "function vis(e){try{if(!e)return false;if(e.checkVisibility)return e.checkVisibility();"
+            + "for(var x=e;x&&x!==document.body;x=x.parentElement){var s=getComputedStyle(x);"
+            + "if(s.display==='none'||s.visibility==='hidden')return false;}return true;}catch(err){return true;}}"
             + "function revert(f){try{if(f.div&&f.div.parentNode)f.div.parentNode.removeChild(f.div);"
             + "f.row.style.cssText=f.rowCss;delete f.col.__rtFit;delete f.row.__rtFitRow;"
             + "for(var i=0;i<f.kids.length;i++)f.kids[i].el.style.cssText=f.kids[i].css;}catch(e){}}"
             + "function sweep(){for(var i=F.length-1;i>=0;i--){var f=F[i];"
+            + "var vd=f.col&&f.col.querySelector?f.col.querySelector('video'):null;"
             + "if(!f.col.isConnected||!f.div||!f.div.isConnected||f.div.parentNode!==f.row"
-            + "||!f.col.querySelector('video')||!inOverlay(f.row)||window.innerWidth>700){revert(f);F.splice(i,1);}}"
+            + "||!vd||!vis(vd)||!vis(f.col)||!inOverlay(f.row)||window.innerWidth>700){revert(f);F.splice(i,1);}}"
             + "var st=document.querySelectorAll('[data-rtdvfit]');"
             + "for(var i=0;i<st.length;i++){var d=st[i],own=false;"
             + "for(var j=0;j<F.length;j++)if(F[j].div===d){own=true;break;}"
             + "if(!own&&d.parentNode)d.parentNode.removeChild(d);}}"
             + "function fixOne(v){try{if(window.innerWidth>700)return;"
+            + "if(!vis(v))return;" /* 隐藏视频(SPA 复用/预留 DOM)不触发分栏 */
             + "var col=null,row=null;"
             + "for(var e=v;e&&e!==document.body;e=e.parentElement){"
             + "var wd=e.getBoundingClientRect().width;var p=e.parentElement;"
@@ -4033,7 +4106,7 @@ public class MainActivity extends AppCompatActivity {
             + "var f={row:row,col:col,rowCss:row.style.cssText,kids:[]};"
             + "for(var i=0;i<row.children.length;i++)f.kids.push({el:row.children[i],css:row.children[i].style.cssText});"
             + "col.__rtFit=1;row.__rtFitRow=1;F.push(f);"
-            + "var pct=parseFloat(localStorage.getItem('rtflow.vidSplit')||'55');if(!(pct>=5&&pct<=90))pct=55;"
+            + "var pct=parseFloat(localStorage.getItem('rtflow.vidSplit')||'55');if(!(pct>=12&&pct<=85))pct=55;"
             + "row.style.flexDirection='column';"
             + "col.style.width='100%';col.style.minWidth='100%';col.style.flex='0 0 '+pct+'%';col.style.minHeight='0';col.style.overflow='hidden';"
             + "for(var i=0;i<row.children.length;i++){var c=row.children[i];if(c!==col){"
@@ -4044,7 +4117,7 @@ public class MainActivity extends AppCompatActivity {
             + "var grip=document.createElement('div');grip.style.cssText='width:46px;height:5px;border-radius:3px;background:rgba(127,127,127,.75);pointer-events:none;';dv.appendChild(grip);"
             + "row.insertBefore(dv,col.nextSibling);"
             + "function mv(y){try{var r=row.getBoundingClientRect();if(r.height<40)return;"
-            + "var p=(y-r.top)/r.height*100;p=Math.max(5,Math.min(90,p));"
+            + "var p=(y-r.top)/r.height*100;p=Math.max(12,Math.min(85,p));" /* 拖动限幅: 两端留足可视区, 免拖没 */
             + "col.style.flex='0 0 '+p+'%';localStorage.setItem('rtflow.vidSplit',''+Math.round(p));}catch(e){}}"
             + "dv.addEventListener('touchstart',function(ev){ev.preventDefault();ev.stopPropagation();},{passive:false});"
             + "dv.addEventListener('touchmove',function(ev){ev.preventDefault();ev.stopPropagation();if(ev.touches&&ev.touches[0])mv(ev.touches[0].clientY);},{passive:false});"
@@ -4059,7 +4132,7 @@ public class MainActivity extends AppCompatActivity {
             + "window.addEventListener('resize',deb);"
             + "document.addEventListener('transitionend',function(){setTimeout(fit,60);},true);"
             + "setInterval(function(){try{var need=false;document.querySelectorAll('video').forEach(function(v){"
-            + "if(v.getBoundingClientRect().width<2)need=true;});"
+            + "if(vis(v)&&v.getBoundingClientRect().width<2)need=true;});"
             + "if(need||F.length||document.querySelector('[data-rtdvfit]'))fit();}catch(e){}},3000);"
             + "window.__rtVidFitRun=fit;window.__rtVidFit=1;window.__rtVidFitBoot=0;fit();"
             + "}catch(e){window.__rtVidFitBoot=0;}};setup();"
@@ -4277,6 +4350,13 @@ public class MainActivity extends AppCompatActivity {
                         String nm = meta[0]; String mm = meta[1].isEmpty() ? null : meta[1];
                         toast("下载中断, 自动重试: " + nm);
                         startDownload(srcUrl, null, "attachment; filename=\"" + nm + "\"", mm, at + 1);
+                    } else if (srcUrl != null && !srcUrl.isEmpty() && isAttachmentDownloadUrl(srcUrl)) {
+                        // DownloadManager 无法携 Authorization/走边缘代理 → 末路改原生代取
+                        // (自动跟跳+鉴权+被墙改经边缘) 落盘, 国内无 VPN / Cookie 铸不出都能成
+                        String nm = meta != null ? meta[0] : "download";
+                        String mm = (meta != null && !meta[1].isEmpty()) ? meta[1] : null;
+                        toast("改走代理通道下载: " + nm);
+                        nativeFetchDownload(srcUrl, nm, mm);
                     } else toast("下载失败");
                 }
             } finally { cur.close(); }
@@ -4827,6 +4907,140 @@ public class MainActivity extends AppCompatActivity {
         col.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         daoPanel = panel;
         web.loadUrl(DP_URL);   // 仅首建时加载一次; showDaoPanel 负责挂载到 content 并置顶
+    }
+    // ── 本页媒体悬浮窗: 汇集当前页全部图片/视频/文档/附件 → 面板内查看+下载 ──────────────
+    private static final String MP_URL = "file:///android_asset/engine/media.html";
+    private void toggleMediaPanel() {
+        if (mediaOpen) { hideMediaPanel(); return; }
+        showMediaPanel();
+    }
+    private void hideMediaPanel() {
+        mediaOpen = false;
+        if (mediaPanel != null) mediaPanel.setVisibility(View.GONE);
+        if (mediaWeb != null) { try { mediaWeb.onPause(); } catch (Exception ignored) {} }
+    }
+    private void destroyMediaPanel() {
+        mediaOpen = false;
+        if (mediaWeb != null) { try { mediaWeb.destroy(); } catch (Exception ignored) {} mediaWeb = null; }
+        if (mediaPanel != null && mediaPanel.getParent() != null) ((ViewGroup) mediaPanel.getParent()).removeView(mediaPanel);
+        mediaPanel = null;
+    }
+    private void showMediaPanel() {
+        if (mediaPanel == null) buildMediaPanel();
+        if (mediaPanel.getParent() != null) ((ViewGroup) mediaPanel.getParent()).removeView(mediaPanel);
+        content.addView(mediaPanel);
+        mediaPanel.setVisibility(View.VISIBLE);
+        mediaOpen = true;
+        if (mediaWeb != null) { resumeWeb(mediaWeb); collectPageMedia(); }
+    }
+    private void buildMediaPanel() {
+        final FrameLayout panel = new FrameLayout(this);
+        panel.setBackgroundColor(0xFF0E1116);
+        int sw = getResources().getDisplayMetrics().widthPixels;
+        int sh = getResources().getDisplayMetrics().heightPixels;
+        int w = Math.min(dp(320), sw - dp(24));
+        int h = Math.min(dp(460), (int) (sh * 0.72));
+        FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(w, h);
+        plp.gravity = Gravity.TOP | Gravity.END; plp.topMargin = dp(6); plp.rightMargin = dp(8);
+        panel.setLayoutParams(plp);
+        LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL);
+        panel.addView(col, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL); head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setBackgroundColor(0xFF1F6FEB); head.setPadding(dp(10), dp(8), dp(8), dp(8));
+        TextView ttl = new TextView(this); ttl.setText("本页媒体 · 查看 / 下载");
+        ttl.setTextColor(0xFFFFFFFF); ttl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        ttl.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView close = new TextView(this); close.setText("✕");
+        close.setTextColor(0xFFFFFFFF); close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16); close.setPadding(dp(10), 0, dp(6), 0);
+        close.setOnClickListener(v -> hideMediaPanel());
+        head.addView(ttl); head.addView(close);
+        head.setOnTouchListener(new View.OnTouchListener() {
+            float dx, dy;
+            @Override public boolean onTouch(View v, MotionEvent ev) {
+                switch (ev.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN: dx = ev.getRawX() - panel.getTranslationX(); dy = ev.getRawY() - panel.getTranslationY(); return true;
+                    case MotionEvent.ACTION_MOVE: panel.setTranslationX(ev.getRawX() - dx); panel.setTranslationY(ev.getRawY() - dy); return true;
+                }
+                return false;
+            }
+        });
+        col.addView(head);
+        WebView web = buildInternalWebView();
+        // 面板内附件缩略图/预览需要当前标签的鉴权代取 (Cookie/被墙经边缘代理与正页同一套通路)
+        web.setWebViewClient(new WebViewClient() {
+            @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
+                Tab t = cur();
+                if (t != null) {
+                    WebResourceResponse r = authMediaResponseFor(t.auth1, t.orgId, req);
+                    if (r != null) return r;
+                }
+                return super.shouldInterceptRequest(v, req);
+            }
+            @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
+                return handleExternalScheme(req.getUrl() == null ? null : req.getUrl().toString());
+            }
+            @SuppressWarnings("deprecation")
+            @Override public boolean shouldOverrideUrlLoading(WebView v, String u) { return handleExternalScheme(u); }
+            @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail detail) {
+                destroyMediaPanel();
+                return true;
+            }
+        });
+        web.addJavascriptInterface(new MediaHost(), "MediaHost");
+        mediaWeb = web;
+        col.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        mediaPanel = panel;
+        web.loadUrl(MP_URL);
+    }
+    /** 采集当前活动标签页面内全部媒体资源 (图片/视频/音频/文档链接/附件) → 推给媒体面板渲染。 */
+    private void collectPageMedia() {
+        Tab t = cur();
+        if (t == null || mediaWeb == null) {
+            if (mediaWeb != null) try { mediaWeb.evaluateJavascript("renderMedia('[]','')", null); } catch (Exception ignored) {}
+            return;
+        }
+        final String pageUrl = t.url == null ? "" : t.url;
+        String js = "(function(){try{var out=[],seen={};"
+            + "function push(u,tp,nm){try{if(!u)return;u=String(u);if(u.indexOf('data:')===0&&u.length>2048)return;"
+            + "if(u.indexOf('http')!==0&&u.indexOf('blob:')!==0)return;if(seen[u])return;seen[u]=1;"
+            + "out.push({u:u,t:tp,n:nm||decodeURIComponent((u.split('/').pop()||'').split('?')[0])||tp});}catch(e){}}"
+            + "document.querySelectorAll('img[src]').forEach(function(e){if((e.naturalWidth||0)>32||(e.width||0)>32)push(e.currentSrc||e.src,'img',e.alt);});"
+            + "document.querySelectorAll('video').forEach(function(e){push(e.currentSrc||e.src,'video');e.querySelectorAll('source[src]').forEach(function(s){push(s.src,'video');});});"
+            + "document.querySelectorAll('audio[src],audio source[src]').forEach(function(e){push(e.src,'audio');});"
+            + "document.querySelectorAll('a[href]').forEach(function(a){var h=a.href||'';"
+            + "if(/app\\.devin\\.ai\\/attachments\\//.test(h)||/\\.(md|pdf|zip|txt|json|csv|log|doc|docx|xls|xlsx|apk|mp4|webm|mov|mp3|wav|png|jpe?g|gif|webp|svg)(\\?|$)/i.test(h)){"
+            + "var ext=(h.split('?')[0].split('.').pop()||'').toLowerCase();"
+            + "var tp=/^(png|jpe?g|gif|webp|svg)$/.test(ext)?'img':(/^(mp4|webm|mov)$/.test(ext)?'video':(/^(mp3|wav)$/.test(ext)?'audio':(ext==='md'?'md':'file')));"
+            + "push(h,tp,(a.getAttribute('download')||a.textContent||'').trim().slice(0,80));}});"
+            + "return JSON.stringify(out.slice(0,300));}catch(e){return '[]';}})();";
+        try {
+            t.web.evaluateJavascript(js, value -> {
+                String v = (value == null || "null".equals(value)) ? "\"[]\"" : value;
+                try { mediaWeb.evaluateJavascript("renderMedia(" + v + "," + JSONObject.quote(pageUrl) + ")", null); } catch (Exception ignored) {}
+            });
+        } catch (Exception ignored) {}
+    }
+    /** 本页媒体面板 JS 桥: 重采 / 打开查看 / 下载。 */
+    private class MediaHost {
+        @android.webkit.JavascriptInterface public void refresh() { main.post(() -> collectPageMedia()); }
+        @android.webkit.JavascriptInterface public void openUrl(final String url) {
+            main.post(() -> {
+                if (url == null || !(url.startsWith("http") || url.startsWith("blob:"))) return;
+                Tab t = cur();
+                if (t != null && url.startsWith("http")) { hideMediaPanel(); newTab(url, t.accountJson); }
+            });
+        }
+        @android.webkit.JavascriptInterface public void download(final String url, final String name) {
+            main.post(() -> {
+                if (url == null || url.isEmpty()) return;
+                Tab t = cur();
+                String ua = null;
+                try { if (t != null) ua = t.web.getSettings().getUserAgentString(); } catch (Exception ignored) {}
+                String cd = (name != null && !name.isEmpty()) ? ("attachment; filename=\"" + sanitizeFileName(name) + "\"") : dispositionFromUrl(url);
+                startDownload(url, ua, cd, null);
+            });
+        }
     }
     /** 全服通近期对话长按拖拽: 起一个全局拖拽并临时隐藏面板, 使下方网页可接收放手注入。 */
     private void beginConvDrag(String accJson, String sid) {
@@ -6864,6 +7078,7 @@ public class MainActivity extends AppCompatActivity {
         try { if (dlReceiver != null) unregisterReceiver(dlReceiver); } catch (Exception ignored) {}
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}
         destroyDaoPanel();   // 全服通悬浮窗 WebView 常驻 → Activity 销毁时一并释放
+        destroyMediaPanel();
         try { if (mirrorBuf != null && !mirrorBuf.isRecycled()) mirrorBuf.recycle(); } catch (Exception ignored) {}
         try { if (mirrorScaledBuf != null && !mirrorScaledBuf.isRecycled()) mirrorScaledBuf.recycle(); } catch (Exception ignored) {}
         mirrorBuf = null; mirrorCanvas = null; mirrorScaledBuf = null; mirrorScaledCanvas = null;

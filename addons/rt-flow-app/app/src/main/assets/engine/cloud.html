@@ -83,15 +83,10 @@ function safeName(s){ return String(s||"").replace(/[\\\/:*?"<>|]/g,"_").slice(0
 
 // 自动化对话判定 (与 switch.html / daopan.html 近期对话过滤同源·保守):
 //   纯英文、动词起头的机器人任务名 / 样板仓库名 → 非本人自动化; 含中文一律保留。
-var AUTO_VERB=/^(review|improve|add|fix|update|refactor|implement|create|investigate|analy[sz]e|debug|optimi[sz]e|test|write|build|set ?up|configure|migrate|remove|delete|clean|security|enhance|document|resolve|merge|deploy|integrate|verify|check|explore|research|design|develop|generate|handle|support|enable|disable|rename|move|extract|inspect|audit|scan|repair|patch|port|sync|convert|validate|ensure|prepare|establish|continue|complete|finish|start|begin)\b/i;
 function _isAutoConv(title){
+  try{ if(window.DaoCloud&&DaoCloud.isAutoConv) return DaoCloud.isAutoConv(title); }catch(e){}
   var t=String(title||"").trim();
-  if(!t) return false;
-  if(/[\u4e00-\u9fff]/.test(t)) return false;               // 含中文 → 本人对话, 永不判自动化
-  if(/(blog-drafts|notes|dotfiles|code-snippets|utils-py|learn-cs)-\d+/i.test(t)) return true;
-  if(t.length<=3) return true;
-  if(AUTO_VERB.test(t)) return true;
-  return false;
+  return !!t && !/[\u4e00-\u9fff]/.test(t) && t.length<=3;   // 极简兜底 (DaoCloud 未载时)
 }
 
 var _libByKey={};   // 活跃账号库: email/id(lower) -> {acc,no}
