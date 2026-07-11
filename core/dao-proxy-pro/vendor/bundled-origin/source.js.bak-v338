@@ -307,7 +307,7 @@ function _originGetProxyAgent(isHttps) {
 const PORT = parseInt(process.env.ORIGIN_PORT || "8889", 10);
 // v9.6.1 · 反者道之动 · 远曰反 · 回归 v9.1.2 之全前端按钮 (七按钮: 道/官/实/原/编/复/卸 + dots/customBadge)
 // 以 v9.1.2 本源哲学为锚 · 守大常不动 · 五细节皆成: isAlreadyInverted · _rawTape+all_fields · 部署不 kill · 前端按钮回归
-const ORIGIN_VERSION_BASE = "v9.9.349"; // v9.9.349 · ACP spawn hook 增识 bash 包裹型(bash.exe --login -c 'devin.exe acp ...')·实证 DESKTOP-MASTER reload 后 IDE 经 Git bash login shell 间接拉起 devin.exe·旧 regex 漏网致鉴权锚定失效 · // v9.9.348 · 内网穿透反脆弱三件套(移植 dao-vsix): ① 指数退避(trycloudflare 限流→5s×2^n最多5min·URL注册成功即归零) ② 宽限期45s(新隧道注册中不误判死亡) ③ 冷却期25s(防密集重启)。前端面板增退避/宽限实时状态。handoff.md 增自愈要点详解 · v9.9.347 · 内网穿透对齐二合一本源: ① 激活自动连接(去中心化默认·开机即拉起零账号快速隧道/命名隧道·治「没有自动连接好」; 手动停止落 userstop 旗真停·24h 安全自复; 优先级 固定中继>命名隧道>快速隧道) ② 模型反代专属 Agent 交接文档 GET /origin/revproxy/handoff.md(实时含公网URL/Key/三条开通路/自愈要点·面向「反代→内网穿透→公网无感直调」链路接管·④面板底部 复制/下载/预览) ③ endpoint.json 增 revproxy.handoff_url · v9.9.346 · 捆绑 ACP 代理·实证收口(DESKTOP-MASTER): ① GetCliTeamSettings 归 PASSTHROUGH(原 LOCAL_AUTH 发 gRPC 帧·chisel 按 Connect 裸 protobuf 解 → 首字 0x00=tag0 → "invalid tag value: 0" → "Failed to fetch team settings"; 改真端成帧回真 TeamSettings·解码必过) ② dao-acp-stdio-proxy.js 永久版健康门控自注入 WINDSURF_API_SERVER_URL=本地反代(覆盖已装 v9.9.334 无需 reload·spawn 每次重读) · v9.9.345 · 捆绑 ACP 代理(devin.exe/chisel)鉴权本地锚定·根治「Connecting to server」残余(LS 侧早已反代·唯捆绑 ACP 代理仍直连官方取 GetCliTeamSettings·官方经 VPN 偶发 >3s → "Team settings refresh timed out after 3000ms" → 前端永卡; 解: spawn-hook 反代健康时注入 WINDSURF_API_SERVER_URL=本地 8937 + NO_PROXY 纳入 127.0.0.1 → 团队设置即刻本地 gRPC OK·鉴权必过·与官方可达性彻底解耦; fail-safe 仅反代健康时改写·否则原样直连; 五十二章「既得其母 以知其子」) · v9.9.344 · 座席鉴权本地兜底·根治「Connecting to server」(SeatManagement/Heartbeat 归 LOCAL_AUTH → 本地即答 gRPC OK status=0·彻底解耦官方可达性; GetUserStatus 仍走 PASSTHROUGH 真解锁·推理仍 BYOK/INFER_STRIP·不夺其真; 反者道之动·釜底抽薪) · v9.9.343 · ⑤内网穿透 第五模块归一(移植 dao-bridge workers.dev 固定中继: 一个 CF API Token 零域名自动部署中继 Worker 到用户账号·出站长连 RelayClient 派回反代 /v1/*·永不轮换持久化·开机自愈; 退出/解绑硬化-即使数据损坏也可清后重绑; 独立会话 pp- 前缀+workers-relay-proxypro.json → 与独立 dao-bridge/dao-one 三插件共存无冲突; handoff.md 反代底层API公网通道改造) · v9.9.342 · 内网穿透大修(移植 dao-bridge 核心: 代理探测7端口+注入·二进制--version验证·断点续传·CONNECT代理隧道下载·6路镜像回退·看门狗15s·resetProxy·命名空间隔离 cloudflared-proxypro.*) · v9.9.339 · 反者道之动·补全(外接api 路由流式亦撤秒数硬限·dao_router 两处 provider 请求 setTimeout(0)+keepalive·revproxy setTimeout(0)+keepalive·routed 模型长推理不再 120s 掐断·AI 自然而止) · v9.9.338 · 反者道之动(撤销一切秒数硬限·两处 H2 stream 超时归零·H1 requestTimeout=0·唯下游离场才回收·AI 自然而止·道并行而不相悖) · v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
+const ORIGIN_VERSION_BASE = "v9.9.338"; // v9.9.338 · 反者道之动(撤销一切秒数硬限·两处 H2 stream 超时归零·H1 requestTimeout=0·唯下游离场才回收·AI 自然而止·道并行而不相悖) · v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
 // 印 153 · 唯变所适 · 软编码归宗 · 二十五章「逝曰远 远曰反」· 七十六章「兵强则不胜」
 // 病: 多 ext-host 共端口 :8937 · 旧版 in-process proxy 持续 listen · self_file 锁死旧版目录
 //     → 即便装毕新版 vsix · /ping 仍返 v9.9.19/v9.9.20 之 self_file · canon_name 走旧映射
@@ -3010,42 +3010,7 @@ function routeUpstream(reqUrl) {
 //   CHAT_RAW      · RawGetChatMessage            · field[3] SP 替换 + 深度净化
 //   INFER_STRIP   · 其他 inference RPC           · 仅深度净化 (剥侧信道)
 //   MODEL_UNLOCK  · GetUserSettings/ModelConfigs · 响应注入全量模型目录
-//   LOCAL_AUTH    · SeatManagement/Heartbeat     · 官方不可达时本地兜底
 //   PASSTHROUGH   · 非 inference (mgmt/auth 等)  · 直透
-// ★ v9.9.344 · 根治 · 道法自然 · 天下有始 以为天下母
-//   病(根因): LS 启动后周期调 :8957 SeatManagement/GetUser 验鉴;
-//     SeatManagement 非 API_SERVER/INFERENCE → 默认路由至 UPSTREAM_MGMT
-//     (server.self-serve.windsurf.com) 而非 server.codeium.com;
-//     UPSTREAM_MGMT 对 SeatManagement 回 404 → LS 标记"未鉴权" → 前端永卡"Connecting to server".
-//     同理 Heartbeat 走 API_SERVER → server.codeium.com; 官方不可达时心跳亦断.
-//   解: 对鉴权/心跳 RPC 本地直返 gRPC OK · LS 即刻"已连接" · 无需官方可达.
-//     道义: 五十二章「天下有始 以为天下母 · 既得其母 以知其子」
-//     母=本地鉴权兜底 · 子=LS 连接态 · 得母则子自正.
-//
-// SeatManagement 鉴权服务 · 本地兜底集 (LS 调此验 seat/user 存在性)
-const LOCAL_AUTH_SERVICES = new Set([
-  "exa.seat_management_pb.SeatManagementService",
-]);
-// 心跳 RPC · 官方不可达时本地兜底 (LS 周期心跳; 失败→"Connecting")
-//   注: GetUserStatus 不入此集 · 其响应须经 proxyToCloud 做真解锁改写(去 Pro 锁/补 field20)
-//       故 GetUserStatus 仍走 PASSTHROUGH(reachable 时解锁; unreachable 时由 proxyToCloud 内兜底)
-const LOCAL_AUTH_METHODS = new Set([
-  "Heartbeat",
-]);
-// SeatManagement 内须保留走 PASSTHROUGH 的方法(响应需改写/解锁) · 不本地短路
-//   ★ v9.9.346 · GetCliTeamSettings 亦入此集(实证于 DESKTOP-MASTER 捆绑 ACP 代理):
-//     捆绑 devin.exe(chisel)走 Connect 协议取 GetCliTeamSettings 鉴权; LOCAL_AUTH 的
-//     _replyGrpcOk 发的是 gRPC 帧(5 字节前缀·首字节 0x00 压缩位), chisel 按 Connect
-//     unary(裸 protobuf·无帧前缀)解码 → 首字节 0x00 被读成 field tag 0 →
-//     "Connect decode error: invalid tag value: 0" → "Failed to fetch team settings"。
-//     LS 走 gRPC 只验 grpc-status 故无碍, 唯 chisel 解 payload 露此。解: 与 GetUserStatus
-//     同归 PASSTHROUGH → 由真端(self-serve)按客户端协议正确成帧回真 TeamSettings →
-//     chisel 解码必过。官方不可达时 chisel 自有 team_settings 本地缓存兜底(实测 0ms
-//     "loaded from cache")→ 仍不卡。五十二章「既得其母 以知其子」· 不夺其真。
-const SEATMGMT_PASSTHROUGH_METHODS = new Set([
-  "GetUserStatus",
-  "GetCliTeamSettings",
-]);
 function classifyRPC(reqPath) {
   if (!reqPath) return "PASSTHROUGH";
   const qIdx = reqPath.indexOf("?");
@@ -3061,18 +3026,10 @@ function classifyRPC(reqPath) {
   //   道义: 三十五章「执大象 天下往」· 全量模型即大象 · 执之则天下往
   if (rpc === "GetUserSettings" || rpc === "GetCascadeModelConfigs")
     return "MODEL_UNLOCK";
-  // ★ v9.9.344 · 鉴权/心跳兜底 · 既得其母 以知其子
-  const svcM = cleanPath.match(/^\/([^/]+)\//);
-  const svc = svcM ? svcM[1] : "";
-  if (LOCAL_AUTH_SERVICES.has(svc)) {
-    // GetUserStatus 等须解锁改写的方法保留 PASSTHROUGH · 不本地短路
-    if (SEATMGMT_PASSTHROUGH_METHODS.has(rpc)) return "PASSTHROUGH";
-    return "LOCAL_AUTH";
-  }
-  if (LOCAL_AUTH_METHODS.has(rpc) && API_SERVER_SERVICES.has(svc))
-    return "LOCAL_AUTH";
   // ★ api_server 工具服务 · 透明直透 (不剥侧信道) · 与原版 LSP 一致
   //   走 server.codeium.com · 真后端真鉴权 · 无需净化 (净化反致 proto 损坏)
+  const svcM = cleanPath.match(/^\/([^/]+)\//);
+  const svc = svcM ? svcM[1] : "";
   if (API_SERVER_SERVICES.has(svc)) return "PASSTHROUGH";
   // inference 服务 · 深度净化侧信道
   if (INFERENCE_SERVICES.has(svc)) return "INFER_STRIP";
@@ -4738,113 +4695,6 @@ let _brgProc = null;
 let _brgUrl = "";
 let _brgStartMs = 0;
 let _brgFetching = false;
-let _brgWatchdog = null;
-// ═══ v9.9.348 · 退避/宽限/冷却(移植 dao-vsix 反脆弱三件套) ═══
-//   防止 trycloudflare 429/1015 限流时无限重试(退避·道之反者); 新隧道注册需时不误杀(宽限);
-//   重启之间留最短间隔不贪多(冷却)。「损之又损·以至于无为·无为而无不为」
-let _brgSpawnFails = 0;
-let _brgBackoffUntilMs = 0;
-let _brgLastCountedStartMs = 0;
-const _BRG_ESTABLISH_GRACE_MS = 45000; // 新隧道需 ≤45s 注册 URL, 期内不判死
-const _BRG_RESTART_COOLDOWN_MS = 25000; // 重启之间最短间隔
-const _BRG_BACKOFF_MAX_MS = 300000; // 退避上限 5min
-let _brgBackoffProbeMs = 0;
-const _BRG_BACKOFF_PROBE_MIN_MS = 45000;
-// ═══ 手动停止旗(道并行而不相悖·移植 dao-vsix bridgeUserStopped) ═══
-//   激活即自动拉起零账号快速隧道(去中心化默认·AGENTS 三章「auto-打通」); 但用户手动「停止」
-//   须真停 — 落盘暂停旗, 自动连接/自愈见旗即挂起, 任一手动「启动/重启」撤旗恢复常驻。
-//   24h 安全自复: 防用户遗忘致公网端点永久断线。
-const _BRG_USERSTOP = path.join(_BRG_DIR, "cloudflared-proxypro.userstop");
-const _BRG_USERSTOP_MAX_MS = 24 * 3600 * 1000;
-function _brgUserStopped() {
-  try {
-    const st = fs.statSync(_BRG_USERSTOP);
-    if (Date.now() - st.mtimeMs > _BRG_USERSTOP_MAX_MS) {
-      try { fs.unlinkSync(_BRG_USERSTOP); } catch (_) {}
-      return false;
-    }
-    return true;
-  } catch (_) { return false; }
-}
-function _brgSetUserStopped(on) {
-  try {
-    if (on) { _brgEnsureDir(); fs.writeFileSync(_BRG_USERSTOP, new Date().toISOString(), "utf8"); }
-    else fs.unlinkSync(_BRG_USERSTOP);
-  } catch (_) {}
-}
-// ═══ 代理检测(移植 dao-bridge) · 无有入于无间 — 国内环境 cloudflared 不经代理则无法连 Cloudflare ═══
-const _BRG_PROXY_PORTS = [7890, 7897, 10809, 1080, 8889, 2080, 10808];
-let _brgProxyCache = null;
-function _brgProbeLocalProxy() {
-  const { spawnSync } = require("child_process");
-  for (const port of _BRG_PROXY_PORTS) {
-    try {
-      const r = spawnSync(process.platform === "win32" ? "powershell" : "bash",
-        process.platform === "win32"
-          ? ["-NoProfile", "-Command", `(Test-NetConnection 127.0.0.1 -Port ${port} -WarningAction SilentlyContinue).TcpTestSucceeded`]
-          : ["-c", `(exec 3<>/dev/tcp/127.0.0.1/${port}) 2>/dev/null && echo True || echo False`],
-        { timeout: 3000, encoding: "utf8", windowsHide: true });
-      if (r.stdout && /true/i.test(r.stdout)) return "http://127.0.0.1:" + port;
-    } catch (_) {}
-  }
-  return "";
-}
-function _brgDetectProxy() {
-  if (_brgProxyCache !== null) return _brgProxyCache;
-  let proxy = process.env.HTTPS_PROXY || process.env.https_proxy
-    || process.env.HTTP_PROXY || process.env.http_proxy
-    || process.env.ALL_PROXY || process.env.all_proxy || "";
-  proxy = String(proxy).trim();
-  if (!proxy) proxy = _brgProbeLocalProxy();
-  _brgProxyCache = proxy || "";
-  return _brgProxyCache;
-}
-// 给 cloudflared spawn 注入代理环境 — 清除 NO_PROXY(某些 agent 会导出 NO_PROXY=* 致 cloudflared 绕过)
-function _brgSpawnEnv(proxy) {
-  const env = Object.assign({}, process.env);
-  delete env.NO_PROXY; delete env.no_proxy;
-  if (proxy) {
-    env.HTTPS_PROXY = proxy; env.https_proxy = proxy;
-    env.HTTP_PROXY = proxy; env.http_proxy = proxy;
-    env.ALL_PROXY = proxy; env.all_proxy = proxy;
-  }
-  return env;
-}
-// ═══ 二进制完整性验证(移植 dao-bridge) · 质真如渝 ═══
-// 真二进制判定: 排除 npm/choco shim(.cmd/.ps1/无扩展名·仅几百字节), spawn(无 shell) 不能执行 shim
-function _brgIsRealBin(p) {
-  try {
-    if (!p || !fs.existsSync(p)) return false;
-    const st = fs.statSync(p);
-    if (!st.isFile() || st.size < 1000000) return false;
-    if (process.platform === "win32" && !/\.exe$/i.test(p)) return false;
-    return true;
-  } catch (_) { return false; }
-}
-let _brgProbeCache = new Map();
-// 完整性探活: --version 跑通才算数 (半成品体积也能 >1MB, 唯有 --version 通才确认未截断)
-function _brgProbeBin(p) {
-  if (!p) return false;
-  if (_brgProbeCache.has(p)) return _brgProbeCache.get(p);
-  let ok = false;
-  try {
-    const { spawnSync } = require("child_process");
-    const r = spawnSync(p, ["--version"], { timeout: 8000, windowsHide: true, encoding: "utf8" });
-    ok = !r.error && r.status === 0 && /cloudflared/i.test(String(r.stdout || "") + String(r.stderr || ""));
-  } catch (_) { ok = false; }
-  _brgProbeCache.set(p, ok);
-  return ok;
-}
-// 清理半成品(.part/.tgz) — 杜绝 "以半成品为基础永久卡死"
-function _brgCleanupPartials(dir) {
-  try {
-    for (const f of fs.readdirSync(dir)) {
-      if (/\.part(-[0-9a-f]+)?$/i.test(f) || /\.tgz$/i.test(f)) {
-        try { fs.unlinkSync(path.join(dir, f)); } catch (_) {}
-      }
-    }
-  } catch (_) {}
-}
 function _brgEnsureDir() {
   try {
     fs.mkdirSync(_BRG_DIR, { recursive: true });
@@ -4918,22 +4768,15 @@ function _brgCfState() {
     cfEmail = c.email || "";
     cfSource = c.source || "";
   }
-  // workers.dev 中继已绑(仅存 relay 配置也算已登录) → 保证「退出账号」按钮恒可见、可解绑。
-  const rc = _brgLoadRelayCfg();
-  if (rc && rc.relayUrl) { cfLoggedIn = true; if (!cfSource) cfSource = "workers-relay"; }
   if (_brgReadNamedToken()) named = true;
-  return { cfLoggedIn, cfEmail, cfSource, named, relayBound: !!(rc && rc.relayUrl) };
+  return { cfLoggedIn, cfEmail, cfSource, named };
 }
 function _brgFindCloudflared() {
   const { execSync } = require("child_process");
   const isWin = process.platform === "win32";
-  const managedDir = path.resolve(_BRG_BIN_DIR);
-  const appdata = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
   const cands = [
     path.join(_BRG_BIN_DIR, isWin ? "cloudflared.exe" : "cloudflared"),
     path.join(_BRG_DIR, isWin ? "cloudflared.exe" : "cloudflared"),
-    // npm/choco 全局安装真二进制(非 shim)
-    path.join(appdata, "npm", "node_modules", "cloudflared", "bin", isWin ? "cloudflared.exe" : "cloudflared"),
     "C:\\Program Files\\cloudflared\\cloudflared.exe",
     "C:\\cloudflared\\cloudflared.exe",
     "/usr/local/bin/cloudflared",
@@ -4941,16 +4784,30 @@ function _brgFindCloudflared() {
     "/opt/homebrew/bin/cloudflared",
   ];
   for (const c of cands) {
-    if (!_brgIsRealBin(c)) continue;
-    if (_brgProbeBin(c)) return c;
-    // 探活失败 = 半成品/损坏; 自管目录下直接删以触发重下(自愈)
-    try { if (path.resolve(c).startsWith(managedDir + path.sep)) { fs.unlinkSync(c); _brgProbeCache.delete(c); } } catch (_) {}
+    try {
+      if (fs.existsSync(c)) return c;
+    } catch (_) {}
   }
-  // PATH 兜底: 遍历 where/command -v 全部结果, 跳过 shim, 只取真二进制
   try {
-    const probe = isWin ? "where cloudflared" : "command -v cloudflared 2>/dev/null; which -a cloudflared 2>/dev/null";
-    const lines = execSync(probe, { encoding: "utf8", timeout: 5000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }).trim().split(/\r?\n/);
-    for (const ln of lines) { const p = ln.trim(); if (_brgIsRealBin(p) && _brgProbeBin(p)) return p; }
+    if (isWin) {
+      const lines = execSync("where cloudflared", {
+        encoding: "utf8",
+        timeout: 5000,
+      })
+        .trim()
+        .split("\n");
+      for (const l of lines) {
+        const q = l.trim();
+        if (q && /\.exe$/i.test(q) && fs.existsSync(q)) return q;
+      }
+    } else {
+      const q = execSync("command -v cloudflared 2>/dev/null || true", {
+        encoding: "utf8",
+        timeout: 5000,
+        shell: "/bin/sh",
+      }).trim();
+      if (q && fs.existsSync(q)) return q;
+    }
   } catch (_) {}
   return "";
 }
@@ -4992,77 +4849,80 @@ function _brgMirrors(asset) {
     "https://gh-proxy.com/" + gh,
     "https://mirror.ghproxy.com/" + gh,
     "https://ghproxy.net/" + gh,
-    "https://gh.ddlc.top/" + gh,
   ];
 }
 function _brgDownload(u, dst, proxy) {
   return new Promise((resolve) => {
     const tmp = dst + ".part";
     let settled = false;
-    let expectedTotal = 0;
     const done = (ok) => {
-      if (settled) return; settled = true;
+      if (settled) return;
+      settled = true;
       if (ok) {
         try {
-          const sz = fs.statSync(tmp).size;
-          if (sz < 1000000 || (expectedTotal && sz !== expectedTotal)) ok = false;
-        } catch (_) { ok = false; }
+          fs.renameSync(tmp, dst);
+        } catch (_) {
+          ok = false;
+        }
       }
-      if (ok) { try { fs.renameSync(tmp, dst); } catch (_) { ok = false; } }
-      if (!ok) { try { fs.unlinkSync(tmp); } catch (_) {} }
+      if (!ok) {
+        try {
+          fs.unlinkSync(tmp);
+        } catch (_) {}
+      }
       resolve(ok);
     };
-    let resumeAt = 0;
-    try { if (fs.existsSync(tmp)) resumeAt = fs.statSync(tmp).size; } catch (_) {}
-    const rangeHeaders = () => (resumeAt > 0 ? { Range: "bytes=" + resumeAt + "-" } : {});
-    const UA = "dao-proxypro-bridge fetch-cloudflared";
     const sink = (res, retry, depth) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume(); return retry(res.headers.location, depth + 1);
+      if (
+        res.statusCode >= 300 &&
+        res.statusCode < 400 &&
+        res.headers.location
+      ) {
+        res.resume();
+        return retry(res.headers.location, depth + 1);
       }
-      const append = resumeAt > 0 && res.statusCode === 206;
-      if (resumeAt > 0 && res.statusCode === 200) { resumeAt = 0; }
-      if (res.statusCode !== 200 && res.statusCode !== 206) { res.resume(); return done(false); }
-      const cl = Number(res.headers["content-length"] || 0);
-      expectedTotal = cl ? (append ? resumeAt : 0) + cl : 0;
-      const f = fs.createWriteStream(tmp, { flags: append ? "a" : "w" });
-      res.on("error", () => done(false));
+      if (res.statusCode !== 200) {
+        res.resume();
+        return done(false);
+      }
+      const f = fs.createWriteStream(tmp);
       res.pipe(f);
-      f.on("finish", () => f.close(() => done(true)));
+      f.on("finish", () =>
+        f.close(() => {
+          try {
+            if (fs.statSync(tmp).size < 1000000) return done(false);
+          } catch (_) {
+            return done(false);
+          }
+          done(true);
+        }),
+      );
       f.on("error", () => done(false));
     };
     const get = (link, depth) => {
       if (depth > 6) return done(false);
-      let o; try { o = new URL(link); } catch (_) { return done(false); }
-      // 有代理且目标为 https: 走 HTTP CONNECT 隧道
-      if (proxy && o.protocol === "https:") {
-        let px; try { px = new URL(proxy); } catch (_) { px = null; }
-        if (px) {
-          const conn = http.request({
-            host: px.hostname, port: px.port || 80, method: "CONNECT",
-            path: o.hostname + ":" + (o.port || 443),
-            headers: { Host: o.hostname + ":" + (o.port || 443), "User-Agent": UA },
-            timeout: 60000,
-          });
-          conn.on("connect", (resp, socket) => {
-            if (resp.statusCode !== 200) { socket.destroy(); return done(false); }
-            const req2 = https.get({ hostname: o.hostname, port: o.port || 443, path: o.pathname + o.search, socket, agent: false, headers: Object.assign({ "User-Agent": UA }, rangeHeaders()), timeout: 60000 },
-              (res) => sink(res, get, depth));
-            req2.on("error", () => done(false));
-            req2.setTimeout(60000, () => { req2.destroy(); done(false); });
-          });
-          conn.on("error", () => done(false));
-          conn.setTimeout(60000, () => { conn.destroy(); done(false); });
-          conn.end();
-          return;
-        }
+      let o;
+      try {
+        o = new URL(link);
+      } catch (_) {
+        return done(false);
       }
       const mod = o.protocol === "http:" ? http : https;
       const req = mod.get(
-        { hostname: o.hostname, port: o.port || (o.protocol === "http:" ? 80 : 443), path: o.pathname + o.search, headers: Object.assign({ "User-Agent": UA }, rangeHeaders()), timeout: 60000 },
-        (res) => sink(res, get, depth));
+        {
+          hostname: o.hostname,
+          port: o.port || (o.protocol === "http:" ? 80 : 443),
+          path: o.pathname + o.search,
+          headers: { "User-Agent": "dao-proxypro-bridge fetch-cloudflared" },
+          timeout: 60000,
+        },
+        (res) => sink(res, get, depth),
+      );
       req.on("error", () => done(false));
-      req.setTimeout(60000, () => { req.destroy(); done(false); });
+      req.setTimeout(60000, () => {
+        req.destroy();
+        done(false);
+      });
     };
     get(u, 0);
   });
@@ -5102,41 +4962,44 @@ function _brgExtractTgz(tgzPath, outBin) {
   return false;
 }
 // 自带二进制缺失时按平台从 GitHub(+国内镜像) 拉取 cloudflared 到 ~/.dao/bin/
-// v9.9.342 · 移植 dao-bridge: cleanup partials + proxy detection + --version 探活
 async function _brgFetchCloudflared() {
   if (_brgFetching) return "";
   _brgFetching = true;
   try {
     _brgEnsureDir();
-    try { fs.mkdirSync(_BRG_BIN_DIR, { recursive: true }); } catch (_) {}
-    _brgCleanupPartials(_BRG_BIN_DIR); // 清上一轮半成品
+    try {
+      fs.mkdirSync(_BRG_BIN_DIR, { recursive: true });
+    } catch (_) {}
     const meta = _brgPlatformAsset();
     const dst = path.join(_BRG_BIN_DIR, meta.out);
-    // 既有文件必须 --version 探活通过才复用; 否则删除重下(自愈)
-    try { if (fs.existsSync(dst) && _brgIsRealBin(dst) && _brgProbeBin(dst)) return dst; } catch (_) {}
-    try { if (fs.existsSync(dst)) { fs.unlinkSync(dst); _brgProbeCache.delete(dst); } } catch (_) {}
-    const proxy = _brgDetectProxy();
+    if (fs.existsSync(dst) && fs.statSync(dst).size > 1000000) return dst;
+    const proxy =
+      process.env.HTTPS_PROXY ||
+      process.env.https_proxy ||
+      process.env.HTTP_PROXY ||
+      process.env.http_proxy ||
+      "";
     const dlTarget = meta.tgz ? path.join(_BRG_BIN_DIR, "cloudflared.tgz") : dst;
-    const mirrors = _brgMirrors(meta.asset);
-    for (let i = 0; i < mirrors.length; i++) {
-      log("[bridge] fetch cloudflared <- mirror " + (i + 1) + "/" + mirrors.length + (proxy ? " via " + proxy : ""));
-      const ok = await _brgDownload(mirrors[i], dlTarget, proxy);
-      if (!ok) continue;
-      let bin = dlTarget;
-      if (meta.tgz) {
-        const extracted = _brgExtractTgz(dlTarget, dst);
-        try { fs.unlinkSync(dlTarget); } catch (_) {}
-        if (!extracted) continue;
-        bin = dst;
+    let ok = false;
+    for (const m of _brgMirrors(meta.asset)) {
+      log("[bridge] fetch cloudflared <- " + m);
+      ok = await _brgDownload(m, dlTarget, proxy);
+      if (ok) break;
+    }
+    if (ok && meta.tgz) {
+      ok = _brgExtractTgz(dlTarget, dst);
+      try {
+        fs.unlinkSync(dlTarget);
+      } catch (_) {}
+    }
+    if (ok) {
+      if (process.platform !== "win32") {
+        try {
+          fs.chmodSync(dst, 0o755);
+        } catch (_) {}
       }
-      if (process.platform !== "win32") { try { fs.chmodSync(bin, 0o755); } catch (_) {} }
-      _brgProbeCache.delete(bin);
-      if (_brgProbeBin(bin)) {
-        log("[bridge] cloudflared ready: " + bin);
-        return bin;
-      }
-      // 探活失败 → 删除, 换下一个镜像重下
-      try { fs.unlinkSync(bin); } catch (_) {}
+      log("[bridge] cloudflared ready: " + dst);
+      return dst;
     }
     log("[bridge] cloudflared fetch FAILED (all mirrors)");
     return "";
@@ -5158,22 +5021,9 @@ function _brgEnsureRevproxyReady() {
     }
   } catch (_) {}
 }
-async function _brgStartTunnel(named, manual) {
+async function _brgStartTunnel(named) {
   const { spawn } = require("child_process");
   _brgEnsureDir();
-  // 手动即天意: 撤停止旗+清退避, 绕过自动挂起闸; 自动调用方遇退避/冷却则提前退出。
-  if (manual) { _brgSetUserStopped(false); _brgSpawnFails = 0; _brgBackoffUntilMs = 0; _brgLastCountedStartMs = 0; }
-  else {
-    // 退避中(trycloudflare 限流后指数等待) → 不强冲
-    if (_brgBackoffUntilMs && Date.now() < _brgBackoffUntilMs) {
-      log("[bridge] backoff 退避中 · 剩余 " + Math.round((_brgBackoffUntilMs - Date.now()) / 1000) + "s");
-      return { ok: false, reason: "backoff" };
-    }
-    // 冷却期(上次启动后 25s 内不再启新) → 防密集重启
-    if (_brgStartMs && Date.now() - _brgStartMs < _BRG_RESTART_COOLDOWN_MS) {
-      return { ok: false, reason: "cooldown" };
-    }
-  }
   _brgEnsureRevproxyReady();
   const targetPort = _actualPort;
   // 复用孤儿(善建者不拔): 上个宿主留下的 cloudflared 仍活·日志有可达 URL·绑的还是当前反代口 → 直接复用
@@ -5185,18 +5035,34 @@ async function _brgStartTunnel(named, manual) {
       if (u && bound === targetPort) {
         _brgProc = null;
         _brgUrl = u;
-        try { _writeEndpointDiscovery(); } catch (_) {}
-        _brgStartWatchdog();
+        try {
+          _writeEndpointDiscovery();
+        } catch (_) {}
         return { ok: true, reused: true, url: u };
       }
-      try { process.kill(pid); } catch (_) {}
-      try { fs.unlinkSync(_BRG_PID); } catch (_) {}
-      try { fs.unlinkSync(_BRG_PORT); } catch (_) {}
+      try {
+        process.kill(pid);
+      } catch (_) {}
+      try {
+        fs.unlinkSync(_BRG_PID);
+      } catch (_) {}
+      try {
+        fs.unlinkSync(_BRG_PORT);
+      } catch (_) {}
     }
   }
-  if (_brgProc) { try { _brgProc.kill(); } catch (_) {} _brgProc = null; }
+  if (_brgProc) {
+    try {
+      _brgProc.kill();
+    } catch (_) {}
+    _brgProc = null;
+  }
   const stale = _brgPidAlive();
-  if (stale) { try { process.kill(stale); } catch (_) {} }
+  if (stale) {
+    try {
+      process.kill(stale);
+    } catch (_) {}
+  }
   let cfPath = _brgFindCloudflared();
   if (!cfPath) cfPath = await _brgFetchCloudflared();
   if (!cfPath) return { ok: false, reason: "cloudflared-not-found" };
@@ -5209,611 +5075,77 @@ async function _brgStartTunnel(named, manual) {
   } else {
     // --protocol http2: QUIC(UDP 7844) 常被防火墙/NAT 拦死(实测 VM/企业网),
     // 强制 http2 传输(走 443/TCP)让隧道在纯 TCP 环境亦能注册, 不再卡在 quic 重拨。
-    args = ["tunnel", "--url", localUrl, "--no-autoupdate", "--protocol", "http2"];
+    args = [
+      "tunnel",
+      "--url",
+      localUrl,
+      "--no-autoupdate",
+      "--protocol",
+      "http2",
+    ];
   }
-  try { fs.writeFileSync(_BRG_LOG, ""); } catch (_) {}
-  let out = "ignore";
-  try { out = fs.openSync(_BRG_LOG, "a"); } catch (_) {}
-  // ★ v9.9.342 核心修复: 注入代理环境到 cloudflared 子进程(国内环境不经代理无法连 Cloudflare)
-  const proxy = _brgDetectProxy();
-  const env = _brgSpawnEnv(proxy);
-  if (proxy) log("[bridge] cloudflared spawn with proxy: " + proxy);
   try {
-    _brgProc = spawn(cfPath, args, { stdio: ["ignore", out, out], detached: true, env });
+    fs.writeFileSync(_BRG_LOG, "");
+  } catch (_) {}
+  let out = "ignore";
+  try {
+    out = fs.openSync(_BRG_LOG, "a");
+  } catch (_) {}
+  try {
+    _brgProc = spawn(cfPath, args, {
+      stdio: ["ignore", out, out],
+      detached: true,
+    });
   } catch (_) {
     try {
-      _brgProc = spawn(cfPath, args, { stdio: "ignore", detached: true, env });
-    } catch (_2) { _brgProc = null; }
+      _brgProc = spawn(cfPath, args, { stdio: "ignore", detached: true });
+    } catch (_2) {
+      _brgProc = null;
+    }
   }
   if (!_brgProc || !_brgProc.pid) return { ok: false, reason: "spawn-failed" };
-  try { fs.writeFileSync(_BRG_PID, String(_brgProc.pid)); } catch (_) {}
+  try {
+    fs.writeFileSync(_BRG_PID, String(_brgProc.pid));
+  } catch (_) {}
   _brgWriteBoundPort(targetPort);
   _brgStartMs = Date.now();
   _brgUrl = "";
-  try { _brgProc.unref(); } catch (_) {}
-  _brgProc.on("error", () => { _brgProc = null; });
-  _brgProc.on("exit", () => { _brgProc = null; });
-  _brgStartWatchdog();
+  try {
+    _brgProc.unref();
+  } catch (_) {}
+  _brgProc.on("error", () => {
+    _brgProc = null;
+  });
+  _brgProc.on("exit", () => {
+    _brgProc = null;
+  });
   return { ok: true };
 }
-// ═══ 看门狗(watchdog): 隧道进程死后自动重启 · 善建者不拔 · v9.9.348 宽限+退避 ═══
-function _brgStartWatchdog() {
-  if (_brgWatchdog) return;
-  _brgWatchdog = setInterval(() => {
+function _brgStopTunnel() {
+  if (_brgProc) {
     try {
-      const pid = _brgPidAlive();
-      const url = _brgReadUrlFromLog();
-      if (url && !_brgUrl) {
-        _brgUrl = url;
-        // 成功注册 URL → 退避归零(道之反者·回归)
-        _brgSpawnFails = 0; _brgBackoffUntilMs = 0;
-        try { _writeEndpointDiscovery(); } catch (_) {}
-      }
-      // 进程已死且曾经启动过(startMs > 0) → 自动重启
-      if (!pid && !_brgProc && _brgStartMs > 0) {
-        // 宽限期(45s): 刚 spawn 不久还没注册 URL 就死了 → 计入失败; 已有 URL 后死 → 正常重启
-        const age = Date.now() - _brgStartMs;
-        if (age < _BRG_ESTABLISH_GRACE_MS && !_brgUrl) {
-          // 尚在宽限期内且从未出过 URL → 可能 trycloudflare 拒绝了, 计入退避
-          _brgSpawnFails++;
-          const backoff = Math.min(_BRG_BACKOFF_MAX_MS, 5000 * Math.pow(2, _brgSpawnFails));
-          _brgBackoffUntilMs = Date.now() + backoff;
-          log("[bridge] watchdog: tunnel died during grace · backoff " + Math.round(backoff / 1000) + "s (fail#" + _brgSpawnFails + ")");
-          return; // 退避期内 _brgStartTunnel 会拒绝, 下轮 watchdog 检查退避是否到期
-        }
-        log("[bridge] watchdog: tunnel dead, auto-restart");
-        _brgStartTunnel(false).catch(() => {});
-      }
-      // 退避到期且进程仍死 → 尝试恢复
-      if (!pid && !_brgProc && _brgBackoffUntilMs && Date.now() >= _brgBackoffUntilMs) {
-        log("[bridge] watchdog: backoff expired, retry");
-        _brgBackoffUntilMs = 0;
-        _brgStartMs = Date.now(); // 模拟"曾启动"使下轮 watchdog 可再判
-        _brgStartTunnel(false).catch(() => {});
-      }
+      _brgProc.kill();
     } catch (_) {}
-  }, 15000);
-}
-function _brgStopWatchdog() {
-  if (_brgWatchdog) { clearInterval(_brgWatchdog); _brgWatchdog = null; }
-}
-function _brgStopTunnel(manual) {
-  // 道并行不相悖: 手动停止落旗 → 自动连接/自愈挂起, 「停止」真停(直至手动启动/重启或 24h 安全自复)。
-  if (manual) _brgSetUserStopped(true);
-  _brgStopWatchdog();
-  _brgStartMs = 0;
-  _brgSpawnFails = 0; _brgBackoffUntilMs = 0;
-  if (_brgProc) { try { _brgProc.kill(); } catch (_) {} _brgProc = null; }
-  try { const op = _brgPidAlive(); if (op) process.kill(op); } catch (_) {}
-  try { fs.unlinkSync(_BRG_PID); } catch (_) {}
-  try { fs.unlinkSync(_BRG_PORT); } catch (_) {}
-  try { fs.writeFileSync(_BRG_LOG, ""); } catch (_) {}
-  _brgUrl = "";
-  try { _writeEndpointDiscovery(); } catch (_) {}
-}
-// ═══ 激活自动连接(去中心化默认·AGENTS 三章「插件启动即自动打通」) ═══════════════
-//   开机/激活即把反代端点自动暴露公网, 用户无需手点「启动隧道」(治用户所述「没有自动连接好」)。
-//   优先级(善用者不弃物): ① 已绑 workers.dev 固定中继 → 持久通道已由 relayAutoStart 拉起, 不另起快速隧道;
-//     ② 已存命名隧道令牌 → 以固定域名上线; ③ 皆无 → 零账号快速隧道(去中心化默认)。
-//   手动停止旗在时挂起(尊重用户意志); 缺 cloudflared 二进制自动后台拉取, 拉取期不阻塞激活。
-async function _brgAutoConnect() {
+    _brgProc = null;
+  }
   try {
-    if (_brgUserStopped()) { log("[bridge] auto-connect 挂起 · 用户手动停止旗在(点启动/重启即恢复)"); return; }
-    // 已有活着的隧道(孤儿复用) → _brgStartTunnel 内部会复用, 无害。
-    const relayCfg = _brgLoadRelayCfg();
-    if (relayCfg && relayCfg.relayUrl && relayCfg.session && relayCfg.relayToken) {
-      // 持久中继已配置: 出站长连由 _brgRelayAutoStart 维持(固定地址永不轮换), 无需快速隧道。
-      log("[bridge] auto-connect · workers.dev 固定中继已配置 · 持久通道优先");
-      return;
-    }
-    const named = !!_brgReadNamedToken();
-    const r = await _brgStartTunnel(named, false);
-    if (r && r.ok) log("[bridge] auto-connect · " + (named ? "命名隧道" : "零账号快速隧道") + (r.reused ? "(复用孤儿)" : "") + " 已拉起" + (r.url ? " · " + r.url : "(URL 建立中)"));
-    else log("[bridge] auto-connect 未成: " + (r && r.reason || "unknown") + (r && r.reason === "cloudflared-not-found" ? " (后台拉取 cloudflared 中·就绪后 watchdog 自起)" : ""));
-  } catch (e) { log("[bridge] auto-connect err: " + (e && e.message)); }
+    const op = _brgPidAlive();
+    if (op) process.kill(op);
+  } catch (_) {}
+  try {
+    fs.unlinkSync(_BRG_PID);
+  } catch (_) {}
+  try {
+    fs.unlinkSync(_BRG_PORT);
+  } catch (_) {}
+  try {
+    fs.writeFileSync(_BRG_LOG, "");
+  } catch (_) {}
+  _brgUrl = "";
+  try {
+    _writeEndpointDiscovery();
+  } catch (_) {}
 }
-
-// ═══════════════════════════════════════════════════════════
-// workers.dev 固定中继(第五模块·外接反代底层 API 持久通道) — 帛书「大道甚夷」
-//   用户只给一个 Cloudflare API Token、无需自备域名: 把最小中继 Worker(含 Durable
-//   Object, 与 addons/dao-relay 协议逐字节一致)自动部署到「用户自己的 CF 账号」, 启用
-//   免费 *.workers.dev 子域, 得到固定不变的公网地址 —— 出站长连由本机 RelayClient 维持,
-//   公网侧 POST /relay/<session> 即把请求派回本机反代端点(/v1/*), 永不轮换。
-//   与独立 dao-bridge 插件共存无冲突: 各用「独立会话」(配置落 workers-relay-proxypro.json,
-//   session 前缀 pp- 派生), 即便同账号同 Worker 脚本, DO 实例按 (session,token) 隔离 →
-//   道并行而不相悖。默认仍走零账号快速隧道; 仅当用户主动绑 API Token 时启用本持久通道。
-// ═══════════════════════════════════════════════════════════
-const _BRG_RELAY_SCRIPT = "dao-relay-do";
-const _BRG_RELAY = path.join(_BRG_DIR, "workers-relay-proxypro.json");
-let _brgRelay = null; // RelayClient 单例
-const _BRG_UA = "dao-proxypro-relay";
-
-function _brgLoadRelayCfg() {
-  try { return JSON.parse(fs.readFileSync(_BRG_RELAY, "utf8")); } catch (_) { return null; }
-}
-function _brgSaveRelayCfg(cfg) {
-  _brgEnsureDir();
-  try { fs.writeFileSync(_BRG_RELAY, JSON.stringify(cfg, null, 2), "utf8"); } catch (_) {}
-}
-
-function _brgCfApiRequest(method, apiPath, token, body) {
-  return new Promise((resolve) => {
-    const data = body ? JSON.stringify(body) : null;
-    const req = https.request({
-      hostname: "api.cloudflare.com",
-      path: "/client/v4" + apiPath,
-      method: method,
-      headers: {
-        "Authorization": "Bearer " + token,
-        "Content-Type": "application/json",
-        "User-Agent": _BRG_UA,
-      },
-    }, (res) => {
-      let d = ""; res.on("data", (c) => (d += c));
-      res.on("end", () => { try { resolve({ status: res.statusCode, json: JSON.parse(d) }); } catch (_) { resolve({ status: res.statusCode, text: d }); } });
-    });
-    req.on("error", (e) => resolve({ status: 0, error: e.message }));
-    req.setTimeout(15000, () => { req.destroy(); resolve({ status: 0, error: "timeout" }); });
-    if (data) req.write(data);
-    req.end();
-  });
-}
-
-// 内嵌最小中继 Worker 源(单模块·Durable Object Hibernation) — 与 addons/dao-relay 协议一致。
-const _BRG_RELAY_SOURCE = [
-  '"use strict";',
-  'function relayKey(s, t) { return String(s) + "\\u0000" + String(t); }',
-  'function json(b, s) { return new Response(JSON.stringify(b), { status: s || 200, headers: { "content-type": "application/json", "access-control-allow-origin": "*" } }); }',
-  'function bearer(req) { const h = req.headers.get("authorization") || ""; return h.startsWith("Bearer ") ? h.slice(7) : ""; }',
-  'export default {',
-  '  async fetch(req, env) {',
-  '    const url = new URL(req.url);',
-  '    const path = url.pathname;',
-  '    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "authorization,content-type" } });',
-  '    if (path === "/" || path === "/health") return json({ ok: true, service: "dao-relay-min", version: "1.0.0", pairing: "session+token" });',
-  '    if (path === "/connect") {',
-  '      if ((req.headers.get("upgrade") || "").toLowerCase() !== "websocket") return json({ error: "expected websocket" }, 426);',
-  '      const session = url.searchParams.get("session") || "";',
-  '      const t = url.searchParams.get("token") || "";',
-  '      if (!session || !t) return json({ error: "missing session/token" }, 400);',
-  '      if (env.DAO_TOKEN && t !== String(env.DAO_TOKEN)) return json({ error: "unauthorized" }, 401);',
-  '      const id = env.DAO_RELAY.idFromName(relayKey(session, t));',
-  '      return env.DAO_RELAY.get(id).fetch(req);',
-  '    }',
-  '    if (path.startsWith("/relay/")) {',
-  '      if (req.method !== "POST") return json({ error: "POST only", hint: "body={path,method,body} Authorization: Bearer <token>" }, 405);',
-  '      const t = bearer(req);',
-  '      const session = decodeURIComponent(path.slice("/relay/".length));',
-  '      if (!session || !t) return json({ error: "missing session/token" }, 401);',
-  '      if (env.DAO_TOKEN && t !== String(env.DAO_TOKEN)) return json({ error: "unauthorized" }, 401);',
-  '      const id = env.DAO_RELAY.idFromName(relayKey(session, t));',
-  '      return env.DAO_RELAY.get(id).fetch(new Request("https://do/relay", { method: "POST", headers: { "content-type": "application/json" }, body: await req.text() }));',
-  '    }',
-  '    return json({ error: "not found" }, 404);',
-  '  }',
-  '};',
-  'export class DaoRelayDO {',
-  '  constructor(state, env) { this.state = state; this.env = env; this.pending = new Map(); this.seq = 0; this.rl = { windowStart: 0, count: 0 }; }',
-  '  agentSocket() {',
-  '    let list = []; try { list = this.state.getWebSockets() || []; } catch (e) { list = []; }',
-  '    let saw = false;',
-  '    for (let i = list.length - 1; i >= 0; i--) { const ws = list[i]; if (!ws) continue; const rs = ws.readyState; if (rs === 1) return ws; if (rs !== undefined && rs !== null) saw = true; }',
-  '    if (!saw) for (let i = list.length - 1; i >= 0; i--) if (list[i]) return list[i];',
-  '    return null;',
-  '  }',
-  '  async waitForAgent(maxMs) { const start = Date.now(); let a = this.agentSocket(); while (!a && Date.now() - start < maxMs) { await new Promise((r) => setTimeout(r, 150)); a = this.agentSocket(); } return a; }',
-  '  rateOk() { const WIN = 10000, MAX = 120; const now = Date.now(); if (now - this.rl.windowStart > WIN) { this.rl.windowStart = now; this.rl.count = 0; } this.rl.count++; return this.rl.count <= MAX; }',
-  '  async fetch(req) {',
-  '    const url = new URL(req.url);',
-  '    if (url.pathname === "/connect") {',
-  '      const pair = new WebSocketPair();',
-  '      const client = pair[0], server = pair[1];',
-  '      try { for (const ws of (this.state.getWebSockets() || [])) { try { ws.close(1000, "replaced"); } catch (e) {} } } catch (e) {}',
-  '      this.state.acceptWebSocket(server);',
-  '      try { this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair(JSON.stringify({ type: "ping" }), JSON.stringify({ type: "pong" }))); } catch (e) {}',
-  '      return new Response(null, { status: 101, webSocket: client });',
-  '    }',
-  '    let agent = this.agentSocket();',
-  '    if (!agent) { agent = await this.waitForAgent(5000); if (!agent) return json({ error: "no_agent", hint: "no connected agent matches this session+token" }, 502); }',
-  '    if (!this.rateOk()) return json({ error: "rate_limited" }, 429);',
-  '    let frame = {}; try { frame = await req.json(); } catch (e) { frame = {}; }',
-  '    const reqPath = frame.path || "/v1/models";',
-  '    const method = frame.method || "GET";',
-  '    const body = frame.body !== undefined ? frame.body : {};',
-  '    const id = "r" + (++this.seq) + "-" + Date.now();',
-  '    const wire = JSON.stringify({ type: "request", id, path: reqPath, method, body });',
-  '    const out = await new Promise((resolve) => {',
-  '      const timer = setTimeout(() => { this.pending.delete(id); resolve({ status: 504, body: { error: "agent_timeout" } }); }, 60000);',
-  '      this.pending.set(id, { resolve, timer });',
-  '      const trySend = (sock, retriesLeft) => {',
-  '        try { sock.send(wire); } catch (e) {',
-  '          if (retriesLeft > 0) { setTimeout(() => { const fresh = this.agentSocket(); if (fresh) trySend(fresh, retriesLeft - 1); else { clearTimeout(timer); this.pending.delete(id); resolve({ status: 503, body: { error: "agent_reconnecting", retryable: true } }); } }, 200); }',
-  '          else { clearTimeout(timer); this.pending.delete(id); resolve({ status: 503, body: { error: "agent_reconnecting", retryable: true } }); }',
-  '        }',
-  '      };',
-  '      trySend(agent, 1);',
-  '    });',
-  '    return json(out.body, out.status || 200);',
-  '  }',
-  '  webSocketMessage(ws, message) {',
-  '    let m; try { const s = (typeof message === "string") ? message : new TextDecoder().decode(message); m = JSON.parse(s); } catch (e) { return; }',
-  '    if (!m || typeof m !== "object") return;',
-  '    if (m.type === "ping") { try { ws.send(JSON.stringify({ type: "pong" })); } catch (e) {} return; }',
-  '    if (m.type === "pong") return;',
-  '    if (m.type === "response" && m.id && this.pending.has(m.id)) { const p = this.pending.get(m.id); this.pending.delete(m.id); clearTimeout(p.timer); p.resolve({ status: m.status || 200, body: m.body }); }',
-  '  }',
-  '  webSocketClose(ws, code, reason) { try { ws.close(code, reason); } catch (e) {} }',
-  '  webSocketError() {}',
-  '}',
-  '',
-].join("\n");
-
-function _brgCfUploadWorker(acctId, scriptName, apiToken, source, withMigration) {
-  const crypto = require("crypto");
-  const metadata = {
-    main_module: "worker.js",
-    compatibility_date: "2024-11-01",
-    bindings: [{ type: "durable_object_namespace", name: "DAO_RELAY", class_name: "DaoRelayDO" }],
-  };
-  if (withMigration) metadata.migrations = { new_tag: "v1", new_sqlite_classes: ["DaoRelayDO"] };
-  const boundary = "----daoRelayBoundary" + crypto.randomBytes(12).toString("hex");
-  const body = Buffer.concat([
-    Buffer.from(
-      "--" + boundary + "\r\n" +
-      'Content-Disposition: form-data; name="metadata"; filename="metadata.json"\r\n' +
-      "Content-Type: application/json\r\n\r\n" +
-      JSON.stringify(metadata) + "\r\n" +
-      "--" + boundary + "\r\n" +
-      'Content-Disposition: form-data; name="worker.js"; filename="worker.js"\r\n' +
-      "Content-Type: application/javascript+module\r\n\r\n", "utf8"),
-    Buffer.from(source, "utf8"),
-    Buffer.from("\r\n--" + boundary + "--\r\n", "utf8"),
-  ]);
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: "api.cloudflare.com",
-      path: "/client/v4/accounts/" + acctId + "/workers/scripts/" + scriptName,
-      method: "PUT",
-      headers: {
-        "Authorization": "Bearer " + apiToken,
-        "Content-Type": "multipart/form-data; boundary=" + boundary,
-        "Content-Length": body.length,
-        "User-Agent": _BRG_UA,
-      },
-    }, (res) => {
-      let d = ""; res.on("data", (c) => (d += c));
-      res.on("end", () => { try { resolve({ status: res.statusCode, json: JSON.parse(d) }); } catch (_) { resolve({ status: res.statusCode, text: d }); } });
-    });
-    req.on("error", (e) => resolve({ status: 0, error: e.message }));
-    req.setTimeout(30000, () => { req.destroy(); resolve({ status: 0, error: "timeout" }); });
-    req.write(body); req.end();
-  });
-}
-
-function _brgCfErr(r) {
-  try { return JSON.stringify((r.json && r.json.errors) || r.text || r.error || "").slice(0, 220); } catch (_) { return String(r.status); }
-}
-
-// 一个 API Token → 用户自己账号下的固定 workers.dev 中继(零域名·闭环持久化)。幂等。
-async function _brgProvisionRelay(apiToken) {
-  const crypto = require("crypto");
-  const acctR = await _brgCfApiRequest("GET", "/accounts", apiToken);
-  const acct = acctR.json && acctR.json.result && acctR.json.result[0];
-  if (!acct || !acct.id) return { ok: false, message: "无法读取 Cloudflare 账号(API Token 需含 Account 读取权限)" };
-  const acctId = acct.id;
-  let sub = "";
-  const subR = await _brgCfApiRequest("GET", "/accounts/" + acctId + "/workers/subdomain", apiToken);
-  if (subR.json && subR.json.result && subR.json.result.subdomain) sub = subR.json.result.subdomain;
-  if (!sub) {
-    const cand = "dao-" + String(acctId).replace(/[^a-z0-9]/gi, "").toLowerCase().slice(0, 14);
-    const mkR = await _brgCfApiRequest("PUT", "/accounts/" + acctId + "/workers/subdomain", apiToken, { subdomain: cand });
-    if (mkR.json && mkR.json.result && mkR.json.result.subdomain) sub = mkR.json.result.subdomain;
-    if (!sub) return { ok: false, needSubdomain: true, message: "账号还没有 workers.dev 子域且自动注册未成: " + _brgCfErr(mkR) + " — 请在 Cloudflare 面板 Workers 页注册一次子域(免费), 再重试" };
-  }
-  const setR = await _brgCfApiRequest("GET", "/accounts/" + acctId + "/workers/scripts/" + _BRG_RELAY_SCRIPT + "/settings", apiToken);
-  const exists = setR.status === 200 && setR.json && setR.json.success;
-  let upR = await _brgCfUploadWorker(acctId, _BRG_RELAY_SCRIPT, apiToken, _BRG_RELAY_SOURCE, !exists);
-  if (!(upR.status === 200 && upR.json && upR.json.success) && !exists) {
-    upR = await _brgCfUploadWorker(acctId, _BRG_RELAY_SCRIPT, apiToken, _BRG_RELAY_SOURCE, false);
-  }
-  if (!(upR.status === 200 && upR.json && upR.json.success)) {
-    return { ok: false, message: "上传中继 Worker 失败(API Token 需含 Workers Scripts:Edit 权限): " + _brgCfErr(upR) };
-  }
-  const enR = await _brgCfApiRequest("POST", "/accounts/" + acctId + "/workers/scripts/" + _BRG_RELAY_SCRIPT + "/subdomain", apiToken, { enabled: true, previews_enabled: false });
-  if (!(enR.status === 200 && enR.json && enR.json.success)) {
-    return { ok: false, message: "启用 workers.dev 子域路由失败: " + _brgCfErr(enR) };
-  }
-  const relayUrl = "https://" + _BRG_RELAY_SCRIPT + "." + sub + ".workers.dev";
-  // 稳定配对: session 按机器派生(pp- 前缀以与独立 dao-bridge 会话天然区隔·不冲突), token 一次生成后复用。
-  const prev = _brgLoadRelayCfg() || {};
-  const hostSlug = (os.hostname() || "dao").toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "dao";
-  const session = prev.session || ("pp-" + hostSlug + "-" + crypto.randomBytes(3).toString("hex"));
-  const relayToken = prev.relayToken || ("dao-relay-" + crypto.randomBytes(24).toString("hex"));
-  const cfg = { relayUrl, scriptName: _BRG_RELAY_SCRIPT, subdomain: sub, acctId, session, relayToken, apiToken, savedAt: new Date().toISOString() };
-  _brgSaveRelayCfg(cfg);
-  return { ok: true, relayUrl, session, relayToken, publicUrl: relayUrl + "/relay/" + encodeURIComponent(session) };
-}
-
-// ── 零依赖 WebSocket 客户端(RFC6455·手搓) ── 与 addons/dao-bridge 同源精简 ──
-const _BRG_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-function _brgWsEncodeFrame(opcode, payload) {
-  const crypto = require("crypto");
-  const mask = crypto.randomBytes(4);
-  const len = payload.length;
-  let header;
-  if (len < 126) { header = Buffer.from([0x80 | opcode, 0x80 | len]); }
-  else if (len < 65536) { header = Buffer.alloc(4); header[0] = 0x80 | opcode; header[1] = 0x80 | 126; header.writeUInt16BE(len, 2); }
-  else { header = Buffer.alloc(10); header[0] = 0x80 | opcode; header[1] = 0x80 | 127; header.writeBigUInt64BE(BigInt(len), 2); }
-  const masked = Buffer.allocUnsafe(len);
-  for (let i = 0; i < len; i++) masked[i] = payload[i] ^ mask[i & 3];
-  return Buffer.concat([header, mask, masked]);
-}
-class _BrgWsFrameParser {
-  constructor(onText, onClose, sendPong) { this.onText = onText; this.onClose = onClose; this.sendPong = sendPong; this.buf = Buffer.alloc(0); this.fragments = []; }
-  push(chunk) { this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk; this.parse(); }
-  parse() {
-    for (;;) {
-      if (this.buf.length < 2) return;
-      const b0 = this.buf[0], b1 = this.buf[1];
-      const fin = (b0 & 0x80) !== 0;
-      const opcode = b0 & 0x0f;
-      const masked = (b1 & 0x80) !== 0;
-      let len = b1 & 0x7f, offset = 2;
-      if (len === 126) { if (this.buf.length < offset + 2) return; len = this.buf.readUInt16BE(offset); offset += 2; }
-      else if (len === 127) { if (this.buf.length < offset + 8) return; len = Number(this.buf.readBigUInt64BE(offset)); offset += 8; }
-      const maskLen = masked ? 4 : 0;
-      if (this.buf.length < offset + maskLen + len) return;
-      let payload = this.buf.subarray(offset + maskLen, offset + maskLen + len);
-      if (masked) {
-        const mask = this.buf.subarray(offset, offset + 4);
-        const un = Buffer.allocUnsafe(len);
-        for (let i = 0; i < len; i++) un[i] = payload[i] ^ mask[i & 3];
-        payload = un;
-      }
-      this.buf = this.buf.subarray(offset + maskLen + len);
-      if (opcode === 0x8) { this.onClose(); return; }
-      if (opcode === 0x9) { this.sendPong(payload); continue; }
-      if (opcode === 0xa) continue;
-      this.fragments.push(payload);
-      if (fin) { const full = Buffer.concat(this.fragments); this.fragments = []; this.onText(full.toString("utf8")); }
-    }
-  }
-}
-class _BrgWsClient {
-  constructor() { this.socket = null; this.parser = null; this.handlers = []; this.closeHandlers = []; this.closed = false; }
-  get isOpen() { return !this.closed && !!this.socket && !this.socket.destroyed; }
-  onMessage(cb) { this.handlers.push(cb); }
-  onClose(cb) { this.closeHandlers.push(cb); }
-  _emitClose() { if (this._closeEmitted) return; this._closeEmitted = true; for (const h of this.closeHandlers) { try { h(); } catch (e) {} } }
-  static _openSocket(target, opts, proxyUrl) {
-    const nett = require("net"), tls = require("tls");
-    const host = target.hostname;
-    const secure = target.protocol === "wss:";
-    const port = target.port ? Number(target.port) : (secure ? 443 : 80);
-    return new Promise((resolve, reject) => {
-      const onError = (err) => reject(err);
-      const wrapTls = (socket) => {
-        const t = tls.connect({ socket, servername: host, rejectUnauthorized: opts.verify !== false }, () => resolve(t));
-        t.on("error", onError);
-      };
-      if (proxyUrl) {
-        let p; try { p = new URL(proxyUrl); } catch (e) { p = null; }
-        if (p) {
-          const headers = {};
-          if (p.username) headers["proxy-authorization"] = "Basic " + Buffer.from(decodeURIComponent(p.username) + ":" + decodeURIComponent(p.password || "")).toString("base64");
-          const cr = http.request({ host: p.hostname, port: p.port ? Number(p.port) : 80, method: "CONNECT", path: host + ":" + port, headers });
-          cr.setTimeout(opts.timeoutMs || 15000, () => cr.destroy(new Error("代理连接超时")));
-          cr.on("error", onError);
-          cr.on("connect", (res, socket) => {
-            if (res.statusCode !== 200) { socket.destroy(); return reject(new Error("代理 CONNECT 失败: HTTP " + res.statusCode)); }
-            if (secure) wrapTls(socket); else resolve(socket);
-          });
-          cr.end();
-          return;
-        }
-      }
-      if (secure) {
-        const t = tls.connect({ host, port, servername: host, rejectUnauthorized: opts.verify !== false }, () => resolve(t));
-        t.setTimeout(opts.timeoutMs || 15000, () => t.destroy(new Error("连接超时")));
-        t.on("error", onError);
-        return;
-      }
-      const plain = nett.connect({ host, port }, () => resolve(plain));
-      plain.setTimeout(opts.timeoutMs || 15000, () => plain.destroy(new Error("连接超时")));
-      plain.on("error", onError);
-    });
-  }
-  static connect(wsUrl, options) {
-    options = options || {};
-    const crypto = require("crypto");
-    const timeoutMs = options.timeoutMs || 15000;
-    const u = new URL(wsUrl);
-    if (u.protocol !== "wss:" && u.protocol !== "ws:") return Promise.reject(new Error("不支持的 WS 协议: " + u.protocol));
-    const client = new _BrgWsClient();
-    const key = crypto.randomBytes(16).toString("base64");
-    const expectAccept = crypto.createHash("sha1").update(key + _BRG_WS_GUID).digest("base64");
-    return _BrgWsClient._openSocket(u, { verify: options.verify, timeoutMs }, options.proxy).then((socket) => new Promise((resolve, reject) => {
-      let settled = false;
-      const fail = (err) => { if (settled) return; settled = true; try { socket.destroy(); } catch (e) {} reject(err); };
-      const timer = setTimeout(() => fail(new Error("WS 握手超时")), timeoutMs);
-      socket.on("error", fail);
-      const reqStr = "GET " + u.pathname + u.search + " HTTP/1.1\r\n" +
-        "Host: " + u.host + "\r\n" +
-        "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
-        "Sec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n";
-      socket.write(reqStr);
-      let hb = Buffer.alloc(0);
-      const onHandshake = (chunk) => {
-        hb = Buffer.concat([hb, chunk]);
-        const sep = hb.indexOf("\r\n\r\n");
-        if (sep < 0) return;
-        const headerText = hb.subarray(0, sep).toString("utf8");
-        const rest = hb.subarray(sep + 4);
-        const statusLine = headerText.split("\r\n")[0] || "";
-        if (!/\s101\s/.test(" " + statusLine + " ")) return fail(new Error("WS 握手失败: " + statusLine.slice(0, 120)));
-        const am = /sec-websocket-accept:\s*(\S+)/i.exec(headerText);
-        if (!am || am[1] !== expectAccept) return fail(new Error("WS 握手失败: Sec-WebSocket-Accept 校验不通过"));
-        clearTimeout(timer);
-        settled = true;
-        socket.setTimeout(0);
-        socket.removeListener("data", onHandshake);
-        socket.removeListener("error", fail);
-        client.socket = socket;
-        client.parser = new _BrgWsFrameParser(
-          (s) => { for (const h of client.handlers) { try { h(s); } catch (e) {} } },
-          () => client.close(),
-          (payload) => client.rawSend(0xa, payload)
-        );
-        socket.on("data", (c) => { try { client.parser.push(c); } catch (e) {} });
-        socket.on("close", () => { client.closed = true; client._emitClose(); });
-        socket.on("error", () => { client.closed = true; client._emitClose(); });
-        resolve(client);
-        if (rest.length > 0) client.parser.push(rest);
-      };
-      socket.on("data", onHandshake);
-    }));
-  }
-  rawSend(opcode, payload) {
-    if (!this.socket || this.socket.destroyed) return;
-    try { this.socket.write(_brgWsEncodeFrame(opcode, payload)); } catch (e) {}
-  }
-  send(text) { this.rawSend(0x1, Buffer.from(text, "utf8")); }
-  close() {
-    if (this.closed) return;
-    this.closed = true;
-    this.rawSend(0x8, Buffer.alloc(0));
-    try { this.socket && this.socket.destroy(); } catch (e) {}
-    this._emitClose();
-  }
-}
-
-// 本机派发: 把中继帧 {path,method,body} 还原为对本机反代端点(127.0.0.1:_actualPort)的
-//   HTTP 请求, 自动注入本机 revproxy apiKey(公网侧凭 relay session+token 即可直调 /v1/*,
-//   无需另知反代 key) → 「专注对外暴露反代底层 API」。返回 {status, body}。
-function _brgRelayDispatch(frame) {
-  return new Promise((resolve) => {
-    const p = frame.path || "/v1/models";
-    const method = (frame.method || "GET").toUpperCase();
-    let apiKey = "";
-    try { const rp = _getRevproxy(); if (rp && rp.loadConfig) apiKey = rp.loadConfig().apiKey || ""; } catch (_) {}
-    const headers = { "User-Agent": _BRG_UA };
-    if (apiKey) headers["Authorization"] = "Bearer " + apiKey;
-    let data = null;
-    if (frame.body !== undefined && frame.body !== null && method !== "GET" && method !== "HEAD") {
-      data = (typeof frame.body === "string") ? frame.body : JSON.stringify(frame.body);
-      headers["Content-Type"] = "application/json";
-      headers["Content-Length"] = Buffer.byteLength(data);
-    }
-    const req = http.request({ hostname: "127.0.0.1", port: _actualPort, path: p, method, headers }, (res) => {
-      let d = ""; res.on("data", (c) => (d += c));
-      res.on("end", () => {
-        let body; try { body = JSON.parse(d); } catch (_) { body = d; }
-        resolve({ status: res.statusCode || 200, body });
-      });
-    });
-    req.on("error", (e) => resolve({ status: 502, body: { error: String(e && e.message) } }));
-    req.setTimeout(60000, () => { req.destroy(); resolve({ status: 504, body: { error: "local_timeout" } }); });
-    if (data) req.write(data);
-    req.end();
-  });
-}
-
-// ── RelayClient — 出站长连: /connect?session&token → 收 {type:request} 派本机反代 → 回 {type:response} ──
-class _BrgRelayClient {
-  constructor() { this.ws = null; this.cfg = null; this.stopped = true; this.connected = false; this.lastErr = ""; this._hb = null; this._reconnectTimer = null; this._backoff = 1500; }
-  start(cfg) { this.cfg = cfg; this.stopped = false; return this._connect(); }
-  wsUrl() {
-    const base = String(this.cfg.relayUrl || "").replace(/\/$/, "").replace(/^http/, "ws");
-    return base + "/connect?session=" + encodeURIComponent(this.cfg.session) + "&token=" + encodeURIComponent(this.cfg.relayToken);
-  }
-  async _connect() {
-    if (this.stopped) return false;
-    try {
-      const ws = await _BrgWsClient.connect(this.wsUrl(), { proxy: _brgDetectProxy(), timeoutMs: 15000 });
-      this.ws = ws;
-      this.connected = true;
-      this.lastErr = "";
-      this._backoff = 1500;
-      ws.onMessage((s) => this._onMessage(s));
-      ws.onClose(() => { this.connected = false; this._clearHb(); if (!this.stopped) this._scheduleReconnect(); });
-      this._clearHb();
-      this._hb = setInterval(() => { try { ws.send(JSON.stringify({ type: "ping" })); } catch (e) {} }, 15000);
-      try { _writeEndpointDiscovery(); } catch (_) {}
-      return true;
-    } catch (e) {
-      this.connected = false;
-      this.lastErr = String((e && e.message) || e);
-      if (!this.stopped) this._scheduleReconnect();
-      return false;
-    }
-  }
-  _scheduleReconnect() {
-    if (this._reconnectTimer || this.stopped) return;
-    const wait = this._backoff;
-    this._backoff = Math.min(Math.round(this._backoff * 1.7), 30000);
-    this._reconnectTimer = setTimeout(() => { this._reconnectTimer = null; this._connect(); }, wait);
-  }
-  async _onMessage(s) {
-    let m; try { m = JSON.parse(s); } catch (e) { return; }
-    if (!m || typeof m !== "object") return;
-    if (m.type === "pong") return;
-    if (m.type === "ping") { try { this.ws.send(JSON.stringify({ type: "pong" })); } catch (e) {} return; }
-    if (m.type === "request") {
-      let out;
-      try { _brgEnsureRevproxyReady(); out = await _brgRelayDispatch(m); }
-      catch (e) { out = { status: 500, body: { error: String(e && e.message) } }; }
-      try { this.ws.send(JSON.stringify({ type: "response", id: m.id, status: (out && out.status) || 200, body: out && out.body })); } catch (e) {}
-    }
-  }
-  _clearHb() { if (this._hb) { clearInterval(this._hb); this._hb = null; } }
-  stop() {
-    this.stopped = true; this.connected = false;
-    this._clearHb();
-    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
-    try { this.ws && this.ws.close(); } catch (e) {}
-    this.ws = null;
-  }
-}
-function _brgRelayClient() { if (!_brgRelay) _brgRelay = new _BrgRelayClient(); return _brgRelay; }
-function _brgRelayState() {
-  const cfg = _brgLoadRelayCfg();
-  if (!cfg || !cfg.relayUrl) return null;
-  const rc = _brgRelay;
-  return {
-    url: cfg.relayUrl + "/relay/" + encodeURIComponent(cfg.session),
-    relayUrl: cfg.relayUrl,
-    session: cfg.session,
-    connected: !!(rc && rc.connected),
-    lastErr: (rc && rc.lastErr) || "",
-  };
-}
-// 开机/激活时: 若已绑过 API Token(存在 relay 配置), 自动拉起出站长连(持久通道自愈)。
-async function _brgRelayAutoStart() {
-  const cfg = _brgLoadRelayCfg();
-  if (!cfg || !cfg.relayUrl || !cfg.session || !cfg.relayToken) return false;
-  const rc = _brgRelayClient();
-  try { rc.stop(); } catch (_) {}
-  return rc.start(cfg);
-}
-// 绑定 API Token → 自动部署固定 workers.dev 中继 + 拉起长连。返回带 publicUrl 的结果。
-async function _brgBindCfToken(apiToken) {
-  const tok = String(apiToken || "").trim();
-  if (!tok) return { ok: false, message: "API Token 为空" };
-  // 校验
-  const v = await _brgCfApiRequest("GET", "/user/tokens/verify", tok);
-  if (!(v.status === 200 && v.json && v.json.success)) {
-    return { ok: false, message: "API Token 校验未通过(需有效的 Cloudflare API Token): " + _brgCfErr(v) };
-  }
-  const rel = await _brgProvisionRelay(tok);
-  if (!rel.ok) return rel;
-  _brgEnsureRevproxyReady();
-  const rc = _brgRelayClient();
-  try { rc.stop(); } catch (_) {}
-  const up = await rc.start(_brgLoadRelayCfg());
-  return { ok: true, relay: true, up: !!up, relayUrl: rel.relayUrl, session: rel.session, publicUrl: rel.publicUrl,
-           message: "已在你的 Cloudflare 账号自动部署 workers.dev 固定中继(零域名): " + rel.publicUrl + (up ? " · 已上线" : "(连接中, 稍候自动就绪)") };
-}
-
 // 命名隧道(可选·固定域名): 校验 CF token / API 凭证并落盘。仅在用户主动登录时调用。
 function _brgCfLogin(email, key) {
   const k = (key || "").trim();
@@ -5842,128 +5174,27 @@ function _brgCfLogin(email, key) {
   _brgSaveCfCred(cred);
   return { ok: true, source: cred.source };
 }
-// 注销/解绑(硬化): 即便绑定数据损坏或中继正连着, 也一律能干净退出并可重绑。
-//   先停出站长连(避免残留连接), 再逐一删凭证/命名隧道/workers.dev 中继配置(逐个 try, 互不影响),
-//   最后清空内存单例。任一步失败都不阻断其余 → 「绑了退不出」根治。
 function _brgResetAccount() {
-  try { if (_brgRelay) _brgRelay.stop(); } catch (_) {}
-  _brgRelay = null;
-  for (const f of [_BRG_CF_CRED, _BRG_NAMED, _BRG_RELAY]) {
-    try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) {}
-  }
-  try { _writeEndpointDiscovery(); } catch (_) {}
+  try {
+    fs.unlinkSync(_BRG_CF_CRED);
+  } catch (_) {}
+  try {
+    fs.unlinkSync(_BRG_NAMED);
+  } catch (_) {}
   return { ok: true };
 }
-// ═══ 归一(dao-one)折入复用: 读取二合一本源 dao-vsix 已发布的共享隧道 ═══
-// 道并行而不相悖 — dao-one 中「🌐 内网穿透」板块起的单条 cloudflared 已把本反代端点
-//   (/v1/*、/origin/revproxy/*) 一并暴露公网, 故 Proxy Pro ⑤ 面板无需重复起隧道,
-//   直接读 dao-vsix 落盘的权威连接文件, 复用同一条公网 URL。
-const _BRG_SHARED_FRESH_MS = 15 * 60 * 1000;
-// 仅「真·公网 URL」才算共享隧道可复用 —— 本地回环(localhost/127.*/0.0.0.0/内网私网段)不是公网,
-//   dao-vsix 隧道未起时 dao-conn-current.json 的 url 会回落成 http://localhost:9920, 不可当公网复用。
-//   dao-vsix saveConnection(): publicUrl 存在时才写 relayUrl, 且 url=publicUrl; 未起时 url=localhost。
-//   故权威公网源优先取 relayUrl, 再取 url/primaryUrl, 并强校验非回环、非私网。
-function _brgIsPublicUrl(u) {
-  const m = /^https?:\/\/([^/:]+)/i.exec(String(u || "").trim());
-  if (!m) return false;
-  const h = m[1].toLowerCase();
-  if (h === "localhost" || h === "0.0.0.0" || h === "::1") return false;
-  if (/^127\./.test(h)) return false;
-  if (/^10\./.test(h) || /^192\.168\./.test(h)) return false;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false;
-  return true;
-}
-function _brgLocalPortOf(c) {
-  // 从连接文件推断该隧道 front 的本地端口(用以辨识「哪条隧道罩着 dao-vsix 归一服务」)
-  if (Number.isFinite(c.port)) return c.port;
-  const lu = String(c.local_url || c.localUrl || "").trim();
-  const m = /:(\d{2,5})(?:\/|$)/.exec(lu);
-  return m ? parseInt(m[1], 10) : 0;
-}
-function _brgReadSharedTunnel() {
-  const home = process.env.USERPROFILE || process.env.HOME || "";
-  if (!home) return null;
-  const now = Date.now();
-  // dao-vsix 归一服务权威端口: 读 dao-conn-current.json(dao-vsix 自身落盘)。归一折入时反代端点
-  //   随 dao-vsix 同端口(9920)对外, 故只认「front 该端口」的那条公网隧道 —— 机控 addon(另口 15715)
-  //   只代理 /api/*、不 front /v1|/origin/revproxy, 复用它会拿到打不通反代的假公网(道·辨同异)。
-  let vsixPort = 0;
-  try {
-    const cur = JSON.parse(fs.readFileSync(path.join(home, ".dao", "dao-conn-current.json"), "utf8")) || {};
-    vsixPort = _brgLocalPortOf(cur);
-    // dao-vsix 自身 board 隧道活跃时 relayUrl/publicUrl 直接就是权威公网 URL, 最优先
-    for (const cand of [cur.relayUrl, cur.publicUrl, cur.primaryUrl, cur.url]) {
-      if (_brgIsPublicUrl(cand)) {
-        let ageMs = cur.updated ? now - Date.parse(cur.updated) : NaN;
-        if (!(Number.isFinite(ageMs) && ageMs > _BRG_SHARED_FRESH_MS)) {
-          return { url: String(cand).trim(), token: String(cur.token || "").trim(),
-                   source: "dao-vsix", file: "dao-conn-current.json", port: vsixPort,
-                   ageMs: Number.isFinite(ageMs) ? ageMs : 0 };
-        }
-      }
-    }
-  } catch (_) {}
-  // 退而求其次: 扫 bridge/*.json, 只取「front dao-vsix 端口」的公网隧道; 无端口线索时兜底任一公网
-  const files = [
-    path.join(home, ".dao", "bridge", "connection.json"),
-    path.join(home, ".dao", "bridge", "conn.json"),
-  ];
-  let fallback = null;
-  for (const p of files) {
-    try {
-      const c = JSON.parse(fs.readFileSync(p, "utf8")) || {};
-      let url = "";
-      for (const cand of [c.relayUrl, c.publicUrl, c.primaryUrl, c.url]) {
-        if (_brgIsPublicUrl(cand)) { url = String(cand).trim(); break; }
-      }
-      if (!url) continue;
-      let ageMs = c.updated ? now - Date.parse(c.updated) : NaN;
-      if (Number.isFinite(ageMs) && ageMs > _BRG_SHARED_FRESH_MS) continue;
-      const rec = { url, token: String(c.token || "").trim(),
-                    source: String(c.source || "dao-vsix").trim(), file: path.basename(p),
-                    port: _brgLocalPortOf(c), ageMs: Number.isFinite(ageMs) ? ageMs : 0 };
-      if (vsixPort && rec.port === vsixPort) return rec; // front 归一端口 → 就是它
-      if (!fallback) fallback = rec;
-    } catch (_) {}
-  }
-  // 已知归一端口却无一条隧道 front 它 → 判定「无共享反代隧道可复用」, 不拿机控 addon(另口)充数。
-  //   仅在无从得知归一端口(读不到 dao-conn-current.json)时, 才退而用任一公网候选。
-  return vsixPort ? null : fallback;
-}
-function _brgStatus(preferShared) {
+function _brgStatus() {
   const pid = _brgPidAlive();
-  let url = _brgReadUrlFromLog();
+  const url = _brgReadUrlFromLog();
   if (url) _brgUrl = url;
   const cf = _brgCfState();
-  let running = !!(pid || _brgProc);
-  const proxy = _brgDetectProxy();
-  // 折入模式: 本插件未自起隧道时, 复用 dao-vsix 共享隧道的公网 URL(不重复造轮子)
-  const shared = _brgReadSharedTunnel();
-  let sharedActive = false;
-  if (preferShared && !url && shared && shared.url) {
-    url = shared.url;
-    sharedActive = true;
-    running = true;
-  }
-  // workers.dev 固定中继(持久通道·永不轮换): 用户绑 API Token 后可用, 与快速隧道并存。
-  const relay = _brgRelayState();
+  const running = !!(pid || _brgProc);
   return {
     ok: true,
     running,
     connecting: running && !url,
-    shared: sharedActive,
-    sharedUrl: shared ? shared.url : "",
-    sharedSource: shared ? shared.source : "",
     url: url || "",
     named: cf.named,
-    relay: relay ? {
-      bound: true,
-      connected: relay.connected,
-      relayUrl: relay.relayUrl,
-      session: relay.session,
-      publicUrl: relay.url,
-      lastErr: relay.lastErr,
-    } : { bound: false, connected: false },
     localPort: _actualPort,
     boundPort: _brgReadBoundPort() || (running ? _actualPort : 0),
     bin: _brgFindCloudflared() || "",
@@ -5971,8 +5202,6 @@ function _brgStatus(preferShared) {
     startedMs: _brgStartMs || 0,
     cfLoggedIn: cf.cfLoggedIn,
     cfEmail: cf.cfEmail,
-    proxy: proxy || "",
-    watchdog: !!_brgWatchdog,
     // 公网端点 (反代直调 · 任意 AI 工具凭此 + apiKey 在公网直连反带模型)
     publicBase: url ? url + "/v1" : "",
     publicChat: url ? url + "/v1/chat/completions" : "",
@@ -5980,11 +5209,6 @@ function _brgStatus(preferShared) {
     publicModels: url ? url + "/v1/models" : "",
     publicConsole: url ? url + "/origin/revproxy/console" : "",
     publicStatus: url ? url + "/origin/revproxy/status" : "",
-    // v9.9.348 · 退避/宽限状态(供前端面板展示)
-    backoff: _brgBackoffUntilMs > Date.now() ? Math.round((_brgBackoffUntilMs - Date.now()) / 1000) : 0,
-    spawnFails: _brgSpawnFails,
-    graceRemaining: (running && !url && _brgStartMs && Date.now() - _brgStartMs < _BRG_ESTABLISH_GRACE_MS)
-      ? Math.round((_BRG_ESTABLISH_GRACE_MS - (Date.now() - _brgStartMs)) / 1000) : 0,
   };
 }
 
@@ -6013,7 +5237,6 @@ function _writeEndpointDiscovery() {
         messages_url: base + "/v1/messages",
         models_url: base + "/v1/models",
         status_url: base + "/origin/revproxy/status",
-        handoff_url: base + "/origin/revproxy/handoff.md",
         key_hint:
           "GET /origin/revproxy/status (本机) 返回 apiKey; 或读 ~/.codeium/dao-byok/revproxy.json 之 apiKey",
         // 内网穿透 · DAO Bridge: 隧道活时公网端点自省 (任意 AI 工具凭此 + apiKey 公网直调)
@@ -6354,22 +5577,12 @@ function _buildHandoffMd() {
     try {
       _brg = _brgStatus();
     } catch (_) {}
-    L.push("### ⑤ 内网穿透 · 外接反代底层 API 公网通道 (Proxy Pro 第五模块)");
+    L.push("### 内网穿透 · DAO Bridge (反带端点公网直调 · 零账号去中心化)");
     L.push(
-      "> 本模块把上述**反代底层 API**(`/v1/*`、`/origin/revproxy/*`)暴露到公网 —— 与「操作整机」定位不同, 这里专注**帮用户配置内网穿透、对外提供反代底层 API**。两条通道并存(道并行而不相悖):",
+      "> 把上述反带端点经 cloudflared 快速隧道暴露公网。公网 AI 工具把 Base 换成**公网URL**、Header 仍带同一 `apiKey` 即可直调反带出来的免费/付费模型。用户若要固定域名可自登 Cloudflare(命名隧道·可选)。",
     );
-    L.push(
-      "> 1. **默认·快速隧道(零账号·去中心化)**: cloudflared quick tunnel, 即开即用, URL 随重启轮换。公网 AI 工具把 Base 换成**公网URL**、Header 仍带同一 `apiKey` 即可直调反带模型。",
-    );
-    L.push(
-      "> 2. **可选·固定通道(只需一个 Cloudflare API Token·零域名·永不轮换)**: 在 ⑤ 面板粘贴 API Token 点「绑定并固定」, 系统自动把最小中继 Worker 部署到你自己账号的免费 `*.workers.dev` 子域, 得到永久固定的公网入口(持久化·重启自愈)。**无需自备域名**。",
-    );
-    if (_brg && _brg.relay && _brg.relay.bound) {
-      L.push("- 固定通道(workers.dev 中继): " + (_brg.relay.connected ? "**已上线**" : "连接中") + " · 公网入口 `" + (_brg.relay.publicUrl || "") + "`");
-      L.push("  - 公网侧调用: `POST <公网入口> -H 'Authorization: Bearer <relayToken>' -d '{\"path\":\"/v1/chat/completions\",\"method\":\"POST\",\"body\":{...}}'` (relay session+token 即凭证, 反代 apiKey 由本机自动注入)。");
-    }
     if (_brg && _brg.running && _brg.url) {
-      L.push("- 快速隧道状态: **已连通**" + (_brg.named ? " (命名隧道·固定域名)" : " (快速隧道)"));
+      L.push("- 隧道状态: **已连通**" + (_brg.named ? " (命名隧道·固定域名)" : " (快速隧道)"));
       L.push("- 公网 Base URL: `" + _brg.publicBase + "`");
       L.push("- 公网对话补全: `" + _brg.publicChat + "`");
       L.push("- 公网 Claude 端点: `" + _brg.publicMessages + "`");
@@ -6400,132 +5613,11 @@ function _buildHandoffMd() {
           "/origin/revproxy/tunnel {\"action\":\"start\"}` 即得公网URL。",
       );
     }
-    L.push("- 隧道管理: `GET/POST " + rpBase + "/origin/revproxy/tunnel` — `{action: start|stop|restart|startNamed|cfLogin|bindCf|relayStart|relayStop|logout}`");
-    L.push("  - `bindCf {token}`: 一个 CF API Token → 自动部署 workers.dev 固定中继(零域名·持久)。`logout`: 停中继 + 清所有凭证(即使数据损坏也能干净解绑重绑)。");
+    L.push("- 隧道管理: `GET/POST " + rpBase + "/origin/revproxy/tunnel` — `{action: start|stop|restart|startNamed|cfLogin|logout}`");
     L.push("");
   }
   L.push("---");
-  L.push("_本文件由 /origin/ea/handoff.md 实时生成 · 反映插件当前真实状态 · 端点发现文件 endpoint.json 保证跨重启可连 · v9.9.348_");
-  return L.join("\n");
-}
-
-// ★ v9.9.347 · 模型反代专属 Agent 交接文档 (Markdown) · 反者道之动
-//   面向「本地/云端 Agent」: 照此把已反带的模型经内网穿透暴露到公网, 让第三方公网环境
-//   (智能家居/其他设备/云端脚本)以标准 OpenAI·Anthropic SDK 无感直调。与 /origin/ea/handoff.md
-//   (渠道配置/模型路由的总交接文档)分工: 本文专注「模型反代 → 公网直调」这一条链路的接管。
-function _buildRevproxyHandoffMd() {
-  _writeEndpointDiscovery();
-  const L = [];
-  const base = "http://127.0.0.1:" + _actualPort;
-  // 反代实时配置 + apiKey
-  let rpKey = "", rpEnabled = false, rpDisabled = 0;
-  try {
-    const m = _getRevproxy && _getRevproxy();
-    if (m && m.loadConfig) {
-      const rc = m.loadConfig() || {};
-      rpKey = rc.apiKey || "";
-      rpEnabled = !!rc.enabled;
-      rpDisabled = Array.isArray(rc.disabledModels) ? rc.disabledModels.length : 0;
-    }
-  } catch (_) {}
-  let rpModels = 0;
-  try { rpModels = Math.max(0, (_fullModelCatalog ? _fullModelCatalog.length : 0) - rpDisabled); } catch (_) {}
-  // 隧道实时状态(公网入口)
-  let brg = null;
-  try { brg = _brgStatus(); } catch (_) {}
-  const pub = (brg && brg.url) || "";
-  const relay = brg && brg.relay && brg.relay.bound ? brg.relay : null;
-  const relayPub = relay && relay.publicUrl ? relay.publicUrl : "";
-  const publicBase = pub ? pub + "/v1" : (relayPub ? relayPub + "/v1" : "");
-
-  L.push("# dao-proxy-pro · 模型反代 → 公网直调 · Agent 交接文档");
-  L.push("");
-  L.push("> 反者道之动。本插件把「渠道配置/模型路由」里已接通的模型(免费 GLM / 官方家族映射 /");
-  L.push("> 任意 OpenAI·Anthropic 兼容渠道)**反向暴露为标准端点**, 再经**内网穿透**推到公网,");
-  L.push("> 让第三方公网环境以标准 SDK **无感直调**。任意 Agent 拿到本文即可接管这条链路·热配·热管·不重启。");
-  L.push("");
-  L.push("## 一、当前实时状态");
-  L.push("");
-  L.push("| 项 | 值 |");
-  L.push("|---|---|");
-  L.push("| 模型反代 | " + (rpEnabled ? "✅ 已启用" : "❌ 未启用(POST /origin/revproxy/config {\"enabled\":true})") + " |");
-  L.push("| 可反带模型数 | " + rpModels + " |");
-  L.push("| 本地端点 Base | `" + base + "/v1` |");
-  L.push("| 本地鉴权 Key | " + (rpKey ? "`" + rpKey + "`" : "(空 · 仅 127.0.0.1 放行 · POST config {\"regenerateKey\":true} 生成)") + " |");
-  L.push("| 内网穿透 | " + (brg && brg.running ? "🟢 已连通" : (brg && brg.connecting ? "🟡 建立中" : "⚪ 未连通")) + (brg && brg.watchdog ? " · 自愈守护在" : "") + " |");
-  L.push("| 公网 Base | " + (publicBase ? "`" + publicBase + "`" : "(隧道未连通 · 见下「三、开通/自愈」)") + " |");
-  if (relay) L.push("| 持久中继 | " + (relay.connected ? "🟢 出站长连已上线" : "🟡 已绑·重连中") + " · `" + (relayPub || relay.relayUrl || "") + "`(永不轮换) |");
-  L.push("");
-  L.push("## 二、公网直调(第三方环境 · 换 Base 不换 Key)");
-  L.push("");
-  L.push("公网 Agent / 智能家居 / 云端脚本, 只需把 SDK 的 `base_url` 指向**公网 Base**、`api_key` 用上表 Key:");
-  L.push("");
-  L.push("```bash");
-  L.push("# OpenAI 兼容 · Chat Completions");
-  L.push("curl -X POST " + (publicBase || "https://<公网URL>/v1") + "/chat/completions \\");
-  L.push("  -H 'Content-Type: application/json' -H 'Authorization: Bearer " + (rpKey || "$REVPROXY_KEY") + "' \\");
-  L.push("  -d '" + JSON.stringify({ model: "swe-1-6", messages: [{ role: "user", content: "你好" }], stream: false }) + "'");
-  L.push("");
-  L.push("# 列出可反带模型");
-  L.push("curl -s " + (publicBase || "https://<公网URL>/v1") + "/models -H 'Authorization: Bearer " + (rpKey || "$REVPROXY_KEY") + "'");
-  L.push("");
-  L.push("# Anthropic(Claude) 兼容 · Messages");
-  L.push("curl -X POST " + (publicBase || "https://<公网URL>/v1") + "/messages -H 'x-api-key: " + (rpKey || "$REVPROXY_KEY") + "' \\");
-  L.push("  -H 'anthropic-version: 2023-06-01' -H 'Content-Type: application/json' \\");
-  L.push("  -d '" + JSON.stringify({ model: "swe-1-6", max_tokens: 1024, messages: [{ role: "user", content: "你好" }] }) + "'");
-  L.push("```");
-  L.push("");
-  L.push("Python(openai SDK):");
-  L.push("```python");
-  L.push("from openai import OpenAI");
-  L.push("client = OpenAI(base_url=\"" + (publicBase || "https://<公网URL>/v1") + "\", api_key=\"" + (rpKey || "<KEY>") + "\")");
-  L.push("print(client.chat.completions.create(model=\"swe-1-6\", messages=[{\"role\":\"user\",\"content\":\"你好\"}]).choices[0].message.content)");
-  L.push("```");
-  L.push("");
-  L.push("## 三、开通 / 自愈内网穿透(三条路·去中心化默认)");
-  L.push("");
-  L.push("插件**激活即自动**拉起零账号快速隧道(无需任何账号), 死后 watchdog 15s 内自动重启。");
-  L.push("手动管理经隧道端点(本机):");
-  L.push("");
-  L.push("```bash");
-  L.push("# 状态");
-  L.push("curl -s " + base + "/origin/revproxy/tunnel");
-  L.push("# ① 零账号快速隧道(去中心化默认·即得 *.trycloudflare.com 公网URL)");
-  L.push("curl -X POST " + base + "/origin/revproxy/tunnel -d '" + JSON.stringify({ action: "start" }) + "'");
-  L.push("# ② 固定公网域名(持久·永不轮换): 只给一个 Cloudflare API Token, 零自备域名, 自动部署 workers.dev 中继");
-  L.push("curl -X POST " + base + "/origin/revproxy/tunnel -d '" + JSON.stringify({ action: "bindCf", token: "<CF_API_TOKEN>" }) + "'");
-  L.push("# ③ 命名隧道(自有域名·固定子域): cfLogin 后 startNamed");
-  L.push("curl -X POST " + base + "/origin/revproxy/tunnel -d '" + JSON.stringify({ action: "cfLogin", email: "<email>", key: "<API_TOKEN_OR_KEY>" }) + "'");
-  L.push("curl -X POST " + base + "/origin/revproxy/tunnel -d '" + JSON.stringify({ action: "startNamed" }) + "'");
-  L.push("# 重启 / 停止(停止落暂停旗·自动连接挂起至下次手动启动或 24h 安全自复)");
-  L.push("curl -X POST " + base + "/origin/revproxy/tunnel -d '" + JSON.stringify({ action: "restart" }) + "'");
-  L.push("curl -X POST " + base + "/origin/revproxy/tunnel -d '" + JSON.stringify({ action: "stop" }) + "'");
-  L.push("```");
-  L.push("");
-  L.push("`{action}` 全集: `start|stop|restart|startNamed|cfLogin|bindCf|relayStart|relayStop|logout|resetProxy`。");
-  L.push("");
-  L.push("## 四、热管理模型反代(即时生效·不重启)");
-  L.push("");
-  L.push("- `GET  " + base + "/origin/revproxy/status` — 状态 + 全模型(含 `exposed` 外接标记) + 家族 + 配额 + apiKey");
-  L.push("- `POST " + base + "/origin/revproxy/config` — `{enabled,applyInvert,isolatePrompt,exposeLan,defaultMaxTokens,disabledModels,regenerateKey}`");
-  L.push("- `POST " + base + "/origin/revproxy/models` — 选择性反带 `{modelUids:[...],exposed:true|false}` 或 `{setAll:\"on\"|\"off\"}`");
-  L.push("- `POST " + base + "/origin/revproxy/tier` — 热切某家族当前反代档位 `{familyUid, modelUid}`");
-  L.push("- 网页对话台: `" + base + "/origin/revproxy/console`" + (pub ? " · 公网 `" + pub + "/origin/revproxy/console`" : ""));
-  L.push("");
-  L.push("## 五、自愈要点(为何这次不再反复掉线)");
-  L.push("");
-  L.push("- **激活自动连接**: 无需用户手点「启动隧道」, 开机即打通(去中心化零账号默认)。");
-  L.push("- **watchdog 守护**: 隧道进程死亡 15s 内自动重启; 复用孤儿进程(窗口重载不断线)。");
-  L.push("- **指数退避**: trycloudflare 限流(429/1015)时不盲重试, 指数等待(5s→10s→…最多5min), URL 注册成功即归零。");
-  L.push("- **宽限期 45s**: 新 spawn 不到 45s 即死(还没注册 URL)才计失败+退避, 已有 URL 后死则正常重启。");
-  L.push("- **冷却期 25s**: 两次 spawn 间至少 25s, 防密集重启浪费资源。");
-  L.push("- **强制 http2 传输**: 走 443/TCP, 绕过 QUIC(UDP 7844)被防火墙/NAT 拦死的环境。");
-  L.push("- **代理自探**: 国内环境自动探测本机代理(7890 等 7 口)注入 cloudflared, 无代理亦回退直连。");
-  L.push("- **端点发现文件**: `~/.codeium/dao-byok/endpoint.json` 恒记最新公网/本地端点, 跨重启换端口可连。");
-  L.push("- **手动停止即真停**: 落暂停旗, 自动连接/自愈挂起, 直至手动启动/重启或 24h 安全自复。");
-  L.push("");
-  L.push("---");
-  L.push("_本文件由 " + base + "/origin/revproxy/handoff.md 实时生成 · 反映插件当前真实状态 · v9.9.348_");
+  L.push("_本文件由 /origin/ea/handoff.md 实时生成 · 反映插件当前真实状态 · 端点发现文件 endpoint.json 保证跨重启可连 · v9.9.310_");
   return L.join("\n");
 }
 
@@ -8417,31 +7509,6 @@ function _harvestFromLsp(body) {
   } catch (_) {}
   return false;
 }
-// ★ v9.9.344 · 本地 gRPC OK 应答 · 天下有始 以为天下母
-//   SeatManagement/Heartbeat/GetUserStatus 官方不可达时 → 本地直返空 gRPC OK
-//   LS 仅检 grpc-status=0 即视为"已鉴权/已连接" · 无需真实 proto 载荷
-//   gRPC 帧: [0x00(无压缩), 0x00,0x00,0x00,0x00(长度=0)] = 空 protobuf message
-const _GRPC_EMPTY_OK = Buffer.from([0, 0, 0, 0, 0]);
-function _replyGrpcOk(res, rid, rpcName) {
-  try {
-    if (res.headersSent) return;
-    // H2 与 H1 均用 writeHead + write + addTrailers + end
-    res.writeHead(200, {
-      "content-type": "application/grpc",
-    });
-    res.write(_GRPC_EMPTY_OK);
-    try {
-      res.addTrailers({ "grpc-status": "0", "grpc-message": "" });
-    } catch (_) {
-      // H1 无 TE:trailers 时 addTrailers 可能报错 · 忽略(grpc-status 已在 header 隐含)
-    }
-    res.end();
-    log(`#${rid} [local-auth] ${rpcName} → gRPC OK (本地兜底)`);
-  } catch (e) {
-    log(`#${rid} [local-auth] _replyGrpcOk err: ${e.message}`);
-  }
-}
-
 function _rpcName(u) {
   try {
     const q = (u || "").indexOf("?");
@@ -9054,23 +8121,6 @@ async function _maybeRevproxy(req, res) {
     res.end();
     return true;
   }
-  // ★ v9.9.347 · GET /origin/revproxy/handoff.md · 模型反代专属 Agent 交接文档 (Markdown)
-  //   与 /origin/ea/handoff.md 分工: 本文专注「模型反代 → 内网穿透 → 公网第三方无感直调」链路。
-  if (u.pathname === "/origin/revproxy/handoff.md" && req.method === "GET") {
-    let md = "";
-    try {
-      md = _buildRevproxyHandoffMd();
-    } catch (e) {
-      md = "# dao-proxy-pro · 模型反代交接文档生成失败\n\n" + (e && e.message);
-    }
-    res.setHeader("Content-Type", "text/markdown; charset=utf-8");
-    res.setHeader(
-      "Content-Disposition",
-      'attachment; filename="dao-proxy-pro-revproxy-handoff.md"',
-    );
-    res.end(md);
-    return true;
-  }
   // 诊断: 当前预热帧所携模型(官方直通实际将路由之档) · 只读 · 供面板/自检显预热档
   if (u.pathname === "/origin/revproxy/warm" && req.method === "GET") {
     if (!_lastChatFrame || !_lastChatFrame.body) _restoreChatFrame(false);
@@ -9099,9 +8149,8 @@ async function _maybeRevproxy(req, res) {
   // 内网穿透 · DAO Bridge: 状态自省 + 启停控制 (把反代端点直暴公网)
   if (u.pathname === "/origin/revproxy/tunnel") {
     res.setHeader("Content-Type", "application/json");
-    const preferShared = u.searchParams && u.searchParams.get("shared") === "1";
     if (req.method === "GET") {
-      res.end(JSON.stringify(_brgStatus(preferShared)));
+      res.end(JSON.stringify(_brgStatus()));
       return true;
     }
     if (req.method === "POST") {
@@ -9115,37 +8164,24 @@ async function _maybeRevproxy(req, res) {
       const action = body.action || "";
       try {
         if (action === "start") {
-          const r = await _brgStartTunnel(false, true);
+          const r = await _brgStartTunnel(false);
           res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
         } else if (action === "startNamed") {
-          const r = await _brgStartTunnel(true, true);
+          const r = await _brgStartTunnel(true);
           res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
         } else if (action === "restart") {
           _brgStopTunnel();
-          const r = await _brgStartTunnel(false, true);
+          const r = await _brgStartTunnel(false);
           res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
         } else if (action === "stop") {
-          _brgStopTunnel(true);
-          res.end(JSON.stringify(Object.assign({ ok: true }, _brgStatus(preferShared))));
+          _brgStopTunnel();
+          res.end(JSON.stringify(Object.assign({ ok: true }, _brgStatus())));
         } else if (action === "cfLogin") {
           const r = _brgCfLogin(body.email || "", body.key || "");
           res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
-        } else if (action === "bindCf") {
-          // 用户只给一个 Cloudflare API Token → 自动部署 workers.dev 固定中继(零域名·持久通道)
-          const r = await _brgBindCfToken(body.token || body.key || "");
-          res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
-        } else if (action === "relayStart") {
-          const up = await _brgRelayAutoStart();
-          res.end(JSON.stringify(Object.assign({ ok: !!up || !!_brgLoadRelayCfg() }, _brgStatus())));
-        } else if (action === "relayStop") {
-          try { if (_brgRelay) _brgRelay.stop(); } catch (_) {}
-          res.end(JSON.stringify(Object.assign({ ok: true }, _brgStatus())));
         } else if (action === "logout") {
           const r = _brgResetAccount();
           res.end(JSON.stringify(Object.assign({}, r, _brgStatus())));
-        } else if (action === "resetProxy") {
-          _brgProxyCache = null;
-          res.end(JSON.stringify(Object.assign({ ok: true, proxy: _brgDetectProxy() }, _brgStatus(preferShared))));
         } else {
           res.statusCode = 400;
           res.end(JSON.stringify({ ok: false, error: "unknown action" }));
@@ -9204,26 +8240,6 @@ const _mainHandler = async (req, res) => {
     const route = routeUpstream(req.url);
     const isInferenceRPC = route.host === UPSTREAM_INFER;
     _recordPath(req.method, req.url, kind, route.host);
-
-    // ★ v9.9.344 · 鉴权/心跳本地兜底(根治) · 天下有始 以为天下母
-    //   病灶: SeatManagement/GetUser(座席鉴权)默认归 PASSTHROUGH → 路由 UPSTREAM_MGMT
-    //        (server.self-serve.windsurf.com) → 该端不实现此 RPC → 404/连接断
-    //        → LS 判定「未鉴权」→ GetUserSettings 空 → 前端永卡「Connecting to server」。
-    //   又: 官方 H2/gRPC 长连在本网络环境被切断(与本机 cloudflared/relay 同症)
-    //        → 即便路由正确, 座席鉴权仍不可达。
-    //   治法(反者道之动·釜底抽薪): 座席鉴权与心跳本地即答 gRPC OK(status=0)。
-    //        LS 只验 grpc-status, 不解 payload → 即认「已连接」, 彻底解耦官方可达性。
-    //   注: 真模型目录仍由 GetUserSettings(MODEL_UNLOCK)注入; GetUserStatus 仍走
-    //        PASSTHROUGH 做真解锁; 推理仍走 BYOK/INFER_STRIP → 本兜底不夺其真。
-    if (kind === "LOCAL_AUTH") {
-      const _authRpc = _rpcName(req.url);
-      // 先采集鉴权信封(LS 请求常携 Bearer) → 供上游模型路由复用 · 利而不害
-      try { _scanAuthHeaders(req); } catch (_) {}
-      // 消费 body 防 socket 泄漏, 再本地即答(零延迟·不依赖官方可达)
-      try { req.resume(); } catch (_) {}
-      _replyGrpcOk(res, rid, _authRpc);
-      return;
-    }
 
     // 3. 非 inference (mgmt/auth 等): 纯透 · 不读 body · 无 SP 可观
     //   v9.9.336 · 根源突破: 信封陈旧时对 PASSTHROUGH 的 POST 缓冲 body 探采鉴权信封
@@ -9824,11 +8840,6 @@ server.on("listening", () => {
     _actualPort = (server.address() && server.address().port) || PORT;
   } catch {}
   _writeEndpointDiscovery();
-  // 持久通道自愈: 若用户此前已绑 CF API Token, 开机即自动拉起 workers.dev 出站长连(固定地址永不轮换)。
-  try { _brgRelayAutoStart().then((up) => { if (up) log(" workers.dev 固定中继 · 出站长连已上线(持久通道)"); }).catch(() => {}); } catch (_) {}
-  // 内网穿透去中心化默认: 激活即自动把反代端点暴露公网(治「没有自动连接好」)。延迟 6s 待反代就绪,
-  //   避免与端口收敛/多实例 leader 抢建同一瞬。手动停止旗在时自挂起(尊重用户意志)。
-  try { setTimeout(() => { _brgAutoConnect().catch(() => {}); }, 6000); } catch (_) {}
   log("═══════════════════════════════════════════════════════");
   log(` 本源 Origin ${ORIGIN_VERSION} h1+h2c mux @ :${_actualPort}`);
   log(` mgmt   → https://${UPSTREAM_MGMT}`);
@@ -10104,16 +9115,5 @@ module.exports = {
     parseFrames,
     parseProto,
     serializeProto,
-    // ⑤ 内网穿透 · workers.dev 固定中继 (离线可测·无副作用)
-    _BRG_RELAY_SOURCE,
-    _BRG_RELAY_SCRIPT,
-    _brgWsEncodeFrame,
-    _BrgWsFrameParser,
-    _BrgWsClient,
-    _BrgRelayClient,
-    _brgRelayClient: () => _brgRelayClient(),
-    _brgLoadRelayCfg,
-    _brgSaveRelayCfg,
-    _brgRelayState,
   },
 };
