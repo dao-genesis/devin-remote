@@ -46,4 +46,27 @@ ok(/function ghRenderGhFleet\(/.test(src), "前端渲染器 ghRenderGhFleet");
 ok(/function ghFleetAdd\(|function ghFleetRole\(|function ghFleetForget\(/.test(src),
   "前端交互函数 ghFleetAdd/ghFleetRole/ghFleetForget 存在");
 
+// 6) 半登录账号「续登助手」(账密存号→隔离档续登+隔离档建 PAT·守柔不无头·不张冠李戴)
+ok(/function ghTotp\(/.test(src) && /function ghBase32Decode\(/.test(src),
+  "本地 TOTP(RFC6238): ghTotp + ghBase32Decode(2FA 当前码本地出示·seed 不外传)");
+ok(/function daoGhWriteLoginAssistExt\(/.test(src),
+  "续登助手扩展(仅本号隔离 profile·自动填充不自动提交)");
+ok(/不自动提交|autofill|自动填充/.test(src) && !/\.submit\(\)/.test(src.split("daoGhWriteLoginAssistExt")[1].slice(0, 1200)),
+  "续登助手守柔: 自动填充但绝不自动提交(不做无头登录)");
+ok(/async function daoGhFleetAssistLogin\(/.test(src),
+  "daoGhFleetAssistLogin: 该号专属隔离档打开 GitHub 登录页 + 填充");
+ok(/function daoGhFleetOpenPat\(/.test(src) && /launchIsolatedBrowser\(url,\s*'gh:'/.test(src),
+  "daoGhFleetOpenPat: 同一隔离档打开建 PAT 页(必为本号建·不张冠李戴)");
+ok(/无有效 auth1|该账号无账密存号|账号不在池中/.test(src),
+  "无账密存号/不在池中 → 明确报错(不回退活动号)");
+for (const c of ["daoGhFleetAssistLogin", "daoGhFleetOpenPat"]) {
+  ok(new RegExp("case '" + c + "':").test(src), "消息处理: case '" + c + "'");
+}
+ok(/function ghAssistLogin\(/.test(src) && /function ghFleetOpenPat\(/.test(src),
+  "前端交互函数 ghAssistLogin / ghFleetOpenPat 存在");
+ok(/hasCred:\s*!!\(a\.cred/.test(src),
+  "daoGhFleetList 暴露 hasCred(前端据此显示半登录🔓+续登按钮)");
+ok(/d\.kind==='assistLogin'/.test(src) && /d\.kind==='fleetOpenPat'/.test(src),
+  "前端 ghOnResult 处理 assistLogin / fleetOpenPat 回包");
+
 console.log("[gh-fleet] " + pass + " assertion(s) passed\n");
