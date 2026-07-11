@@ -22,6 +22,19 @@ button:active{background:#30363d}
 .big{position:fixed;inset:0;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;z-index:9;flex-direction:column;gap:8px}
 .big img,.big video{max-width:96vw;max-height:82vh}
 .big .x{position:fixed;top:8px;right:12px;font-size:22px;color:#fff;background:none;border:none}
+.doc{position:fixed;inset:0;background:#0e1116;z-index:9;display:flex;flex-direction:column}
+.doc .dh{display:flex;align-items:center;gap:8px;background:#1f6feb;color:#fff;padding:8px 10px}
+.doc .dh .t{flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.doc .dh button{background:rgba(255,255,255,.15);color:#fff;border:none}
+.doc .db{flex:1;overflow:auto;padding:10px;-webkit-overflow-scrolling:touch}
+.doc .db.mdv{font-size:13px;line-height:1.65;word-break:break-word}
+.doc .db.mdv h1,.doc .db.mdv h2,.doc .db.mdv h3{color:#e6edf3;margin:12px 0 6px;border-bottom:1px solid #21262d;padding-bottom:4px}
+.doc .db.mdv pre{background:#161b22;border:1px solid #21262d;border-radius:6px;padding:8px;overflow:auto;font-size:12px;margin:8px 0}
+.doc .db.mdv code{background:#161b22;border-radius:4px;padding:1px 4px;font-size:12px}
+.doc .db.mdv blockquote{border-left:3px solid #30363d;padding-left:8px;color:#8b949e;margin:6px 0}
+.doc .db.mdv a{color:#58a6ff}
+.doc .db pre.raw{white-space:pre-wrap;word-break:break-word;font-size:12px}
+.doc .db .ld{color:#8b949e;text-align:center;padding:30px 0}
 </style>
 </head>
 <body>
@@ -57,19 +70,74 @@ function renderMedia(json,pageUrl){
   box.innerHTML=html;
 }
 function doRefresh(){ try{ MediaHost.refresh(); }catch(e){} }
+var DOCS={}, DOCSEQ=0;
+function extOf(u,n){ var s=String(n||u||"").split("?")[0]; var i=s.lastIndexOf("."); return i<0?"":s.slice(i+1).toLowerCase(); }
+function isTextExt(x){ return /^(md|markdown|txt|json|csv|log|xml|yml|yaml|js|ts|py|java|sh|html?|css)$/.test(x); }
+// 轻量 Markdown 渲染 (无依赖·先转义后替换): 标题/粗斜/行内码/围栏码/引用/列表/链接
+function mdRender(src){
+  var code=[]; src=String(src).replace(/```([\s\S]*?)```/g,function(_,c){ code.push(c); return "\u0000"+(code.length-1)+"\u0000"; });
+  var h=esc(src);
+  h=h.replace(/^######\s+(.+)$/gm,"<h3>$1</h3>").replace(/^#####\s+(.+)$/gm,"<h3>$1</h3>").replace(/^####\s+(.+)$/gm,"<h3>$1</h3>")
+     .replace(/^###\s+(.+)$/gm,"<h3>$1</h3>").replace(/^##\s+(.+)$/gm,"<h2>$1</h2>").replace(/^#\s+(.+)$/gm,"<h1>$1</h1>")
+     .replace(/^&gt;\s?(.+)$/gm,"<blockquote>$1</blockquote>")
+     .replace(/^\s*[-*+]\s+(.+)$/gm,"• $1<br>")
+     .replace(/\*\*([^*\n]+)\*\*/g,"<b>$1</b>").replace(/\*([^*\n]+)\*/g,"<i>$1</i>")
+     .replace(/`([^`\n]+)`/g,"<code>$1</code>")
+     .replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g,'<a href="$2" target="_blank">$1</a>')
+     .replace(/\n\n+/g,"<br><br>").replace(/\n/g,"<br>");
+  h=h.replace(/\u0000(\d+)\u0000/g,function(_,i){ return "<pre>"+esc(code[+i])+"</pre>"; });
+  return h;
+}
+function openDoc(it){
+  var id=++DOCSEQ;
+  var d=document.createElement("div"); d.className="doc";
+  d.innerHTML='<div class="dh"><div class="t">'+esc(it.n||it.u)+'</div>'
+    +'<button class="dd">⬇ 下载</button><button class="x2">✕</button></div>'
+    +'<div class="db" id="db'+id+'"><div class="ld">⏳ 正在加载文档…</div></div>';
+  d.querySelector(".dd").onclick=function(){ try{ MediaHost.download(it.u, it.n||""); }catch(e){} };
+  d.querySelector(".x2").onclick=function(){ delete DOCS[id]; d.remove(); };
+  document.body.appendChild(d);
+  DOCS[id]={ ext:extOf(it.u,it.n) };
+  try{ MediaHost.fetchDoc(it.u, id); }
+  catch(e){ docFailed(id, "桌面桥不可用"); }
+}
+// 正页点开 MD/文本附件 → 原生直送悬浮窗直看 (查看为主, 不再跳下载)
+function openDocExt(url,name){ openDoc({u:url,n:name||""}); }
+function docLoaded(id,text){
+  var box=document.getElementById("db"+id), m=DOCS[id]; if(!box) return;
+  if(m&&/^(md|markdown)$/.test(m.ext)){ box.className="db mdv"; box.innerHTML=mdRender(text); }
+  else{ box.innerHTML='<pre class="raw"></pre>'; box.querySelector("pre").textContent=text; }
+}
+function docFailed(id,err){
+  var box=document.getElementById("db"+id); if(!box) return;
+  box.innerHTML='<div class="ld">❌ 加载失败: '+esc(err)+'<br><br>可改用「下载」获取文件</div>';
+}
 function doView(i){
   var it=ITEMS[i]; if(!it) return;
-  if(it.t==="img"||it.t==="video"){   // 图片/视频面板内直看 (经原生鉴权代取通路)
+  if(it.t==="img"||it.t==="video"||it.t==="audio"){   // 图片/视频/音频面板内直看 (经原生鉴权代取通路)
+    var tag=it.t==="img"?('<img src="'+esc(it.u)+'">'):(it.t==="video"?('<video src="'+esc(it.u)+'" controls autoplay playsinline></video>'):('<audio src="'+esc(it.u)+'" controls autoplay></audio>'));
     var d=document.createElement("div"); d.className="big";
-    d.innerHTML=(it.t==="img"?('<img src="'+esc(it.u)+'">'):('<video src="'+esc(it.u)+'" controls autoplay playsinline></video>'))
-      +'<button class="x">✕</button>';
-    d.onclick=function(ev){ if(ev.target===d||ev.target.className==="x"){ try{var v=d.querySelector("video");if(v)v.pause();}catch(e){} d.remove(); } };
+    d.innerHTML=tag+'<button class="x">✕</button>';
+    d.onclick=function(ev){ if(ev.target===d||ev.target.className==="x"){ try{var v=d.querySelector("video,audio");if(v)v.pause();}catch(e){} d.remove(); } };
     document.body.appendChild(d);
     return;
   }
-  try{ MediaHost.openUrl(it.u); }catch(e){}   // 文档/文件 → 开新标签查看
+  var ext=extOf(it.u,it.n);
+  if(it.t==="md"||isTextExt(ext)){ openDoc(it); return; }   // MD/文本类 → 悬浮窗内直看正文
+  if(ext==="pdf"){   // PDF → 面板内嵌页尝试 (拦截层鉴权代取)
+    var p=document.createElement("div"); p.className="doc";
+    p.innerHTML='<div class="dh"><div class="t">'+esc(it.n||it.u)+'</div>'
+      +'<button class="dd">⬇ 下载</button><button class="x2">✕</button></div>'
+      +'<iframe src="'+esc(it.u)+'" style="flex:1;border:none;background:#fff"></iframe>';
+    p.querySelector(".dd").onclick=function(){ try{ MediaHost.download(it.u, it.n||""); }catch(e){} };
+    p.querySelector(".x2").onclick=function(){ p.remove(); };
+    document.body.appendChild(p);
+    return;
+  }
+  doDl(i);   // 其余二进制类型(zip/apk/office): 无法面板内渲染 → 转下载
 }
 function doDl(i){ var it=ITEMS[i]; if(!it) return; try{ MediaHost.download(it.u, it.n||""); }catch(e){} }
+try{ MediaHost.ready(); }catch(e){}
 </script>
 </body>
 </html>
