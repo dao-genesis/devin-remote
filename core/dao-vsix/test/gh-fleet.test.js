@@ -77,4 +77,8 @@ ok(/function ghProxyAgent\(/.test(src) && /'CONNECT '\s*\+\s*host/.test(src),
 ok(/const proxy = ghProxyUrl\(\);/.test(src) && /agent \? \{ agent \} : \{\}/.test(src),
   "ghApiRequest 有代理即走隧道·无代理保持直连");
 
+// 8) GitHub 纵向板块独立鉴权 (自带 PAT · 不依赖 Devin 登录态)
+ok(/!\/\^daoGh\/\.test\(String\(msg\.command \|\| ''\)\)/.test(src),
+  "auth gate: daoGh* 命令免 Devin 登录(GitHub 板块独立于 Devin 账号池)");
+
 console.log("[gh-fleet] " + pass + " assertion(s) passed\n");
