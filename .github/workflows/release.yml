@@ -137,7 +137,13 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add README.md
             git commit -m "docs(readme): auto-sync 模块下载索引 [skip ci]"
-            git push
+            # main 可能被并行工作流(android-release 回写 latest.json 等)推进 → rebase 重试, 免与之竞态失败
+            ok=""
+            for i in 1 2 3; do
+              if git push; then ok=1; break; fi
+              git pull --rebase origin main || exit 1
+            done
+            [ -n "$ok" ]
           else
             echo "README module index unchanged"
           fi
