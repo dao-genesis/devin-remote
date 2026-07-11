@@ -964,6 +964,10 @@ public class RelayService extends Service {
             case "requestBatteryOpt": case "openAutoStart": case "openBatterySettings":
             case "phoneEnsureControl": case "applyProxy": case "clearProxy": return false;
             case "shizukuStatus": return 0;
+            // 版本号权威源 = 本进程 PackageManager (本体被杀时旧答案会让引擎页脚僵化在旧版号)
+            case "appVer":
+                try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
+                catch (Exception e) { return ""; }
             case "vpnStatus": case "detectProxy": case "currentProxy":
             case "shizukuGrantAll": case "shizukuShell": case "appCheckUpdate":
             case "appInstallUpdate": case "rotateRelayToken": return "";

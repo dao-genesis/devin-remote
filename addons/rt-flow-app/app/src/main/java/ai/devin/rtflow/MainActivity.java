@@ -144,6 +144,8 @@ public class MainActivity extends AppCompatActivity {
     private WebView mediaWeb;
     private Button mediaBtn;
     private boolean mediaOpen = false;
+    // 各标签媒体资源预采缓存 (vid → 采集 JSON): 页面加载完即后台预采, 开面板/切标签秒出
+    private final java.util.Map<Long, String[]> mediaCache = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile String sEngineCache = null;
     private volatile String curProxy = null;   // 已应用到内置浏览器(全部 WebView)的本地代理 host:port; null=直连
     private final java.util.Map<Long, String[]> dlPending = new java.util.concurrent.ConcurrentHashMap<>();
@@ -1236,6 +1238,7 @@ public class MainActivity extends AppCompatActivity {
                     installAttachmentPrefetch(v); // 附件预热: DOM 一出现附件即后台整取落盘 → 首次点开即秒开
                     harvestPageAuth(v, tab, u); // 非账号标签从页面登录态采收 auth → 媒体代取可用
                     warmAttachmentCookie(tab.auth1, tab.orgId, u);   // 预铸附件 Cookie → 首次图片/视频即已授权
+                    scheduleMediaPrecollect(tab);   // 本页媒体预采 → 开面板/切标签秒出
                     if (tab.translated) applyTranslate(v); // 翻译态跨页保持
                     injectUserScripts(v, u, "end");       // 油猴 @run-at document-end/idle
                 }
@@ -1248,7 +1251,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); }
+                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); scheduleMediaPrecollect(tab); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -1468,6 +1471,12 @@ public class MainActivity extends AppCompatActivity {
             if (daoPanel.getParent() != null) ((ViewGroup) daoPanel.getParent()).removeView(daoPanel);
             content.addView(daoPanel);
         }
+        // 本页媒体悬浮窗跨标签常驻: 切标签即按新页缓存秒渲 (预采于页面加载时已完成)
+        if (mediaOpen && mediaPanel != null) {
+            if (mediaPanel.getParent() != null) ((ViewGroup) mediaPanel.getParent()).removeView(mediaPanel);
+            content.addView(mediaPanel);
+            collectPageMedia();
+        }
         setAddr(displayUrl(t));
         renderTabStrip();
         if (pageZoom != 100) applyZoom(t.web);
@@ -1531,6 +1540,7 @@ public class MainActivity extends AppCompatActivity {
         if (idx < 0 || idx >= tabs.size()) return;
         Tab t = tabs.remove(idx);
         try { tabViewers.remove(t.vid); } catch (Exception ignored) {}   // 关标签即清其联控在场登记 → tabViewers 不随开/关标签单调累积(久用泄漏根除·橙色在场计数不被死标签污染)
+        try { mediaCache.remove(t.vid); } catch (Exception ignored) {}   // 关标签清其媒体预采缓存
         try {
             android.view.View host = t.swipe != null ? t.swipe : t.web;
             if (host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
@@ -3929,12 +3939,26 @@ public class MainActivity extends AppCompatActivity {
             return (d == null || d.isEmpty()) ? null : d;
         } catch (Exception e) { return null; }
     }
-    /** 顶层导航落在附件/S3 预签名直链 → 拦下转真下载(留在原页); onCreateWindow 刚开出的空标签顺手关闭。 */
+    /** 文本类扩展名 (MD/日志/代码等): 悬浮窗内可直接渲染正文。 */
+    static boolean isTextDocName(String n) {
+        if (n == null) return false;
+        int i = n.lastIndexOf('.');
+        if (i < 0) return false;
+        String ext = n.substring(i + 1).toLowerCase(java.util.Locale.US);
+        return ext.matches("md|markdown|txt|json|csv|log|xml|yml|yaml|js|ts|py|java|sh|html?|css");
+    }
+    /** 顶层导航落在附件/S3 预签名直链 → 文本类开悬浮窗直看(查看为主), 其余转真下载(留在原页);
+     *  onCreateWindow 刚开出的空标签顺手关闭。 */
     private boolean interceptAttachmentNav(WebView v, String u) {
         if (!isAttachmentDownloadUrl(u)) return false;
-        String ua = null;
-        try { ua = v.getSettings().getUserAgentString(); } catch (Exception ignored) {}
-        startDownload(u, ua, dispositionFromUrl(u), null);
+        String gname = sanitizeFileName(android.webkit.URLUtil.guessFileName(u, dispositionFromUrl(u), null));
+        if (isTextDocName(gname)) {
+            viewDocInPanel(u, gname);
+        } else {
+            String ua = null;
+            try { ua = v.getSettings().getUserAgentString(); } catch (Exception ignored) {}
+            startDownload(u, ua, dispositionFromUrl(u), null);
+        }
         int idx = tabOf(v);
         if (idx >= 0) {
             try {
@@ -4921,6 +4945,7 @@ public class MainActivity extends AppCompatActivity {
     }
     private void destroyMediaPanel() {
         mediaOpen = false;
+        mediaPageReady = false;
         if (mediaWeb != null) { try { mediaWeb.destroy(); } catch (Exception ignored) {} mediaWeb = null; }
         if (mediaPanel != null && mediaPanel.getParent() != null) ((ViewGroup) mediaPanel.getParent()).removeView(mediaPanel);
         mediaPanel = null;
@@ -4993,14 +5018,28 @@ public class MainActivity extends AppCompatActivity {
         mediaPanel = panel;
         web.loadUrl(MP_URL);
     }
-    /** 采集当前活动标签页面内全部媒体资源 (图片/视频/音频/文档链接/附件) → 推给媒体面板渲染。 */
+    /** 面板渲染入口: 先用该标签的预采缓存秒出, 再后台重采刷新 (多页并行预采 → 切页不再等待)。 */
     private void collectPageMedia() {
         Tab t = cur();
         if (t == null || mediaWeb == null) {
             if (mediaWeb != null) try { mediaWeb.evaluateJavascript("renderMedia('[]','')", null); } catch (Exception ignored) {}
             return;
         }
+        String[] c = mediaCache.get(t.vid);
+        if (c != null && c[1] != null && c[1].equals(t.url)) pushMediaRender(c[0], c[1]);   // 预采缓存秒出 (仅同页, 防导航后渲旧页资源)
+        collectTabMedia(t);
+        // 顺手把其余账号/网页标签也并行预采一轮 (多页并行开发场景: 用户切到哪页都秒出)
+        for (Tab o : tabs) if (o != t && !o.internal) collectTabMedia(o);
+    }
+    private void pushMediaRender(String itemsJson, String pageUrl) {
+        if (mediaWeb == null || !mediaPageReady) return;   // 面板页脚本尚未就绪 → ready() 回调会再拉缓存渲染
+        try { mediaWeb.evaluateJavascript("renderMedia(" + JSONObject.quote(itemsJson) + "," + JSONObject.quote(pageUrl == null ? "" : pageUrl) + ")", null); } catch (Exception ignored) {}
+    }
+    /** 单标签媒体采集 → 存缓存; 若该标签是当前页且面板开着, 顺手推渲染。 */
+    private void collectTabMedia(final Tab t) {
+        if (t == null || t.web == null || t.internal) return;
         final String pageUrl = t.url == null ? "" : t.url;
+        if (!pageUrl.startsWith("http")) return;
         String js = "(function(){try{var out=[],seen={};"
             + "function push(u,tp,nm){try{if(!u)return;u=String(u);if(u.indexOf('data:')===0&&u.length>2048)return;"
             + "if(u.indexOf('http')!==0&&u.indexOf('blob:')!==0)return;if(seen[u])return;seen[u]=1;"
@@ -5016,13 +5055,40 @@ public class MainActivity extends AppCompatActivity {
             + "return JSON.stringify(out.slice(0,300));}catch(e){return '[]';}})();";
         try {
             t.web.evaluateJavascript(js, value -> {
-                String v = (value == null || "null".equals(value)) ? "\"[]\"" : value;
-                try { mediaWeb.evaluateJavascript("renderMedia(" + v + "," + JSONObject.quote(pageUrl) + ")", null); } catch (Exception ignored) {}
+                String itemsJson = "[]";
+                try {
+                    if (value != null && !"null".equals(value)) {
+                        Object parsed = new org.json.JSONTokener(value).nextValue();
+                        if (parsed instanceof String) itemsJson = (String) parsed;
+                    }
+                } catch (Exception ignored) {}
+                mediaCache.put(t.vid, new String[]{ itemsJson, pageUrl });
+                Tab c = cur();
+                if (mediaOpen && c == t) pushMediaRender(itemsJson, pageUrl);
             });
         } catch (Exception ignored) {}
     }
+    /** 页面加载/SPA 路由后延时预采本标签媒体 (等 SPA 渲染完), 面板未开也采 → 开面板即秒出。 */
+    private void scheduleMediaPrecollect(final Tab t) {
+        main.postDelayed(() -> { try { collectTabMedia(t); } catch (Exception ignored) {} }, 1200);
+    }
     /** 本页媒体面板 JS 桥: 重采 / 打开查看 / 下载。 */
+    // 正页点开 MD/文本附件 → 悬浮窗直看: 面板页可能尚在加载, 先挂起待 ready 送达
+    private volatile String[] pendingDocView = null;
+    private volatile boolean mediaPageReady = false;
+    private void viewDocInPanel(String url, String name) {
+        pendingDocView = new String[]{ url, name == null ? "" : name };
+        showMediaPanel();
+        if (mediaPageReady) deliverPendingDoc();
+    }
+    private void deliverPendingDoc() {
+        String[] p = pendingDocView;
+        if (p == null || mediaWeb == null) return;
+        pendingDocView = null;
+        try { mediaWeb.evaluateJavascript("openDocExt(" + JSONObject.quote(p[0]) + "," + JSONObject.quote(p[1]) + ")", null); } catch (Exception ignored) {}
+    }
     private class MediaHost {
+        @android.webkit.JavascriptInterface public void ready() { main.post(() -> { mediaPageReady = true; deliverPendingDoc(); if (mediaOpen) collectPageMedia(); }); }
         @android.webkit.JavascriptInterface public void refresh() { main.post(() -> collectPageMedia()); }
         @android.webkit.JavascriptInterface public void openUrl(final String url) {
             main.post(() -> {
@@ -5040,6 +5106,45 @@ public class MainActivity extends AppCompatActivity {
                 String cd = (name != null && !name.isEmpty()) ? ("attachment; filename=\"" + sanitizeFileName(name) + "\"") : dispositionFromUrl(url);
                 startDownload(url, ua, cd, null);
             });
+        }
+        /** 文档正文代取 (MD/文本 悬浮窗内直看): 鉴权+边缘代理与正页同通路, 取回 UTF-8 文本回推面板。 */
+        @android.webkit.JavascriptInterface public void fetchDoc(final String url, final int reqId) {
+            final Tab t = cur();
+            final String a1 = (t != null && t.auth1 != null) ? t.auth1 : "";
+            final String org = (t != null && t.orgId != null) ? t.orgId : "";
+            new Thread(() -> {
+                String err = null, text = null;
+                java.net.HttpURLConnection c = null;
+                try {
+                    c = fetchAttachment(a1, org, url, null, false);
+                    int code = (c != null) ? c.getResponseCode() : -1;
+                    if ((code == 401 || code == 403) && !a1.isEmpty()) {
+                        try { c.disconnect(); } catch (Exception ignored) {}
+                        mintAttachmentCookie(a1, org);
+                        c = fetchAttachment(a1, org, url, null, false);
+                        code = (c != null) ? c.getResponseCode() : -1;
+                    }
+                    if (c == null || code < 200 || code >= 300) err = "HTTP " + code;
+                    else {
+                        java.io.InputStream is = c.getInputStream();
+                        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                        byte[] buf = new byte[65536]; int n; long cap = 4L * 1024 * 1024;
+                        while ((n = is.read(buf)) > 0) { bos.write(buf, 0, n); if (bos.size() > cap) break; }
+                        is.close();
+                        text = new String(bos.toByteArray(), StandardCharsets.UTF_8);
+                    }
+                } catch (Exception e) { err = String.valueOf(e.getMessage()); }
+                finally { if (c != null) try { c.disconnect(); } catch (Exception ignored) {} }
+                final String fT = text, fE = err;
+                main.post(() -> {
+                    if (mediaWeb == null) return;
+                    try {
+                        mediaWeb.evaluateJavascript(fE != null
+                            ? ("docFailed(" + reqId + "," + JSONObject.quote(fE) + ")")
+                            : ("docLoaded(" + reqId + "," + JSONObject.quote(fT) + ")"), null);
+                    } catch (Exception ignored) {}
+                });
+            }).start();
         }
     }
     /** 全服通近期对话长按拖拽: 起一个全局拖拽并临时隐藏面板, 使下方网页可接收放手注入。 */
