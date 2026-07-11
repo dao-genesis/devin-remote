@@ -3810,6 +3810,23 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         return await genericWebProxy(target, 0, _ctx, _isSub);
     }
 
+    // ── 归一 · 整页翻译 (对齐手机 APK TranslateBridge): 服务端代调 Edge 翻译 API → 页面 CSP/CORS 全绕开 ──
+    //   /__translate 翻译文本数组 · /__translate.js 引擎内容脚本(与手机 translate.js 同源同构)。
+    if (route === '/__translate') {
+        const _tm = String((req && req.method) || 'GET').toUpperCase();
+        const _tCORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' };
+        if (_tm === 'OPTIONS') return { _proxy: true, status: 204, contentType: 'text/plain', body: '', headers: _tCORS };
+        let _tp: any = null;
+        try { _tp = JSON.parse((await readBodyBuffer(req)).toString('utf8')); } catch (e) { _tp = null; }
+        const _texts = (_tp && Array.isArray(_tp.texts)) ? _tp.texts.map((t: any) => String(t == null ? '' : t)).slice(0, 128) : null;
+        if (!_texts || !_texts.length) return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: '缺少 texts 数组' }), headers: _tCORS };
+        const _out = await daoTranslateTexts(_texts, String((_tp && _tp.to) || 'zh-Hans'));
+        return { _proxy: true, status: 200, contentType: 'application/json; charset=utf-8', body: JSON.stringify(_out ? { ok: true, translations: _out } : { ok: false, translations: [], error: '翻译服务不可达' }), headers: _tCORS };
+    }
+    if (route === '/__translate.js') {
+        return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoTransEngineJs(), headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } };
+    }
+
     // ── 归一 · 拖拽上传桥数据源 (对齐手机 APK: 拖文件=上传该文件 / 拖会话=上传该会话 MD) ──
     //   网页内注入的 drop 桥与外壳同源, 落点后经此同源端点取字节 → 合成 File 喂入页面上传框。
     //   同一服务函数 daoServeBridgeRoute 亦注入 IDE 内多实例反代(devin_proxy)就地同源服务。
@@ -15689,7 +15706,7 @@ function _isDownloadable(cd: string, ct: string): boolean {
     if (/attachment/i.test(cd || '')) return true;
     const c = String(ct || '').toLowerCase().split(';')[0].trim();
     if (!c) return false;
-    if (/^(text\/html|application\/xhtml|text\/css|application\/javascript|text\/javascript|application\/json|image\/|video\/|audio\/|font\/|text\/plain|text\/xml|application\/xml)/.test(c)) return false;
+    if (/^(text\/html|application\/xhtml|text\/css|application\/(x-)?(javascript|ecmascript)|text\/(javascript|ecmascript)|application\/json|image\/|video\/|audio\/|font\/|text\/plain|text\/xml|application\/xml|application\/wasm|application\/manifest)/.test(c)) return false;
     return /^(application\/(octet-stream|zip|x-zip|pdf|x-pdf|gzip|x-gzip|x-tar|x-7z|x-rar|vnd\.|msword|x-msdownload)|application\/x-)/.test(c);
 }
 function daoSaveDownload(name: string, buf: Buffer, ct: string, src: string): any {
@@ -15910,6 +15927,259 @@ function daoDropBridgeJs() {
     ].join("");
 }
 
+// ═══════════════════════════════════════════════════════════
+// 归一 · 整页翻译 (对齐手机 APK TranslateBridge · MainActivity doTranslate) — Edge 浏览器内置翻译引擎
+//   令牌: GET edge.microsoft.com/translate/auth (JWT 约 10 分钟, 缓存 8 分钟复用)
+//   翻译: POST api-edge.cognitive.microsofttranslator.com/translate?api-version=3.0&to=<lang> (免费·无 key)
+//   宿主服务端代调(等效手机原生桥/浏览器扩展后台页): 页面 CSP/CORS 全绕开;
+//   直连与经本机代理(Clash/V2Ray) CONNECT 双赛道齐发, 谁先成谁用(与 genericWebProxy 同策)。
+// ═══════════════════════════════════════════════════════════
+let _transToken = '';
+let _transTokenTs = 0;
+function _transHttpsReq(urlStr: string, method: string, hdrs: any, body: Buffer | null, timeoutMs: number): Promise<{ status: number; buf: Buffer } | null> {
+    let u: URL;
+    try { u = new URL(urlStr); } catch (e) { return Promise.resolve(null); }
+    return new Promise((resolve) => {
+        let done = false, fails = 0;
+        const proxyPort = detectedProxyPort || detectProxyPort();
+        const tracks = proxyPort ? 2 : 1;
+        const settle = (v: { status: number; buf: Buffer } | null) => {
+            if (done) return;
+            if (v === null) { if (++fails >= tracks) { done = true; resolve(null); } return; }
+            done = true; resolve(v);
+        };
+        // 直连赛道
+        try {
+            const rq = https.request({ hostname: u.hostname, path: (u.pathname || '/') + (u.search || ''), method, headers: hdrs, timeout: timeoutMs }, (res) => {
+                const chunks: Buffer[] = [];
+                res.on('data', (c) => chunks.push(c));
+                res.on('end', () => settle({ status: res.statusCode || 0, buf: Buffer.concat(chunks) }));
+                res.on('error', () => settle(null));
+            });
+            rq.on('error', () => settle(null));
+            rq.on('timeout', () => { try { rq.destroy(); } catch (e) { /* 守柔 */ } settle(null); });
+            if (body) rq.write(body);
+            rq.end();
+        } catch (e) { settle(null); }
+        // 代理赛道 (CONNECT+TLS 隧道内手写 HTTP 帧, 承载 POST 体 — fetchViaTunnel 仅 GET 故不复用)
+        if (proxyPort) {
+            createProxyTunnel(u.hostname).then((sock) => {
+                if (!sock) { settle(null); return; }
+                if (done) { try { sock.destroy(); } catch (e) { /* 守柔 */ } return; }
+                const bufs: Buffer[] = [];
+                const to2 = setTimeout(() => { try { sock.destroy(); } catch (e) { /* 守柔 */ } settle(null); }, timeoutMs);
+                const parseAll = () => {
+                    clearTimeout(to2);
+                    if (done) return;
+                    const all = Buffer.concat(bufs);
+                    const idx = all.indexOf('\r\n\r\n');
+                    if (idx < 0) { settle(null); return; }
+                    const head = all.slice(0, idx).toString('latin1').split('\r\n');
+                    let bodyBuf = all.slice(idx + 4);
+                    const m = (head[0] || '').match(/^HTTP\/\d\.\d\s+(\d+)/);
+                    const hd: any = {};
+                    for (let i = 1; i < head.length; i++) { const c = head[i].indexOf(':'); if (c > 0) hd[head[i].slice(0, c).trim().toLowerCase()] = head[i].slice(c + 1).trim(); }
+                    if (String(hd['transfer-encoding'] || '').toLowerCase().indexOf('chunked') >= 0) bodyBuf = _dechunk(bodyBuf);
+                    settle({ status: m ? parseInt(m[1]) : 0, buf: bodyBuf });
+                };
+                sock.on('data', (c) => bufs.push(c));
+                sock.on('end', parseAll);
+                sock.on('close', parseAll);
+                sock.on('error', () => { clearTimeout(to2); settle(null); });
+                let rs = method + ' ' + ((u.pathname || '/') + (u.search || '')) + ' HTTP/1.1\r\n';
+                const h2: any = Object.assign({}, hdrs, { Host: u.host, Connection: 'close' }, body ? { 'Content-Length': body.length } : {});
+                for (const k of Object.keys(h2)) rs += k + ': ' + h2[k] + '\r\n';
+                rs += '\r\n';
+                try { sock.write(rs); if (body) sock.write(body); } catch (e) { clearTimeout(to2); settle(null); }
+            }).catch(() => settle(null));
+        }
+    });
+}
+async function _ensureTransToken(): Promise<string> {
+    if (_transToken && Date.now() - _transTokenTs < 8 * 60 * 1000) return _transToken;
+    const r = await _transHttpsReq('https://edge.microsoft.com/translate/auth', 'GET', { 'User-Agent': 'Mozilla/5.0' }, null, 10000);
+    if (!r || r.status < 200 || r.status >= 300) return '';
+    const tok = r.buf.toString('utf8').trim();
+    if (tok) { _transToken = tok; _transTokenTs = Date.now(); }
+    return tok;
+}
+// 文本数组 → 译文数组 (顺序一致, 失败项为空串); 服务不可达返 null。
+async function daoTranslateTexts(texts: string[], to: string): Promise<string[] | null> {
+    const token = await _ensureTransToken();
+    if (!token) return null;
+    const body = Buffer.from(JSON.stringify(texts.map(t => ({ Text: String(t == null ? '' : t) }))), 'utf8');
+    const r = await _transHttpsReq('https://api-edge.cognitive.microsofttranslator.com/translate?api-version=3.0&to=' + encodeURIComponent(to || 'zh-Hans'), 'POST',
+        { 'Content-Type': 'application/json; charset=UTF-8', 'Authorization': 'Bearer ' + token, 'User-Agent': 'Mozilla/5.0', 'Content-Length': body.length }, body, 15000);
+    if (!r) return null;
+    if (r.status === 401) _transToken = '';   // 令牌过期 → 下次重取
+    if (r.status < 200 || r.status >= 300) return null;
+    let res: any = null;
+    try { res = JSON.parse(r.buf.toString('utf8')); } catch (e) { return null; }
+    if (!Array.isArray(res)) return null;
+    return res.map((it: any) => {
+        const tr = it && it.translations;
+        return (Array.isArray(tr) && tr.length) ? String(tr[0].text || '') : '';
+    });
+}
+// 整页翻译引擎 (内容脚本 · 与手机 APK assets/engine/translate.js 同源同构):
+//   遍历可见文本节点(含开放 Shadow DOM) → 经 __dcTr 桥翻译 → 回填并保留原文(node.__dcOrig) →
+//   MutationObserver 增量翻译动态内容; window.__dcTransRestore() 一键恢复原文。
+function daoTransEngineJs(): string {
+    return `(function () {
+  var S = (window.__dcTrans = window.__dcTrans || {});
+  if (S.active) { return; }
+  S.active = true;
+  S.seq = S.seq || 0;
+  S.cbs = S.cbs || {};
+  var TO = window.__dcTransTo || "zh-Hans";
+  window.__dcTrCb = function (reqId, b64) {
+    var cb = S.cbs[reqId]; if (!cb) return; delete S.cbs[reqId];
+    var arr = null;
+    try {
+      var json = decodeURIComponent(Array.prototype.map.call(atob(b64), function (c) {
+        return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2);
+      }).join(""));
+      arr = JSON.parse(json);
+    } catch (e) { arr = null; }
+    cb(arr);
+  };
+  function nativeTranslate(texts) {
+    return new Promise(function (resolve) {
+      var id = "t" + (++S.seq) + "_" + Date.now();
+      var done = false;
+      S.cbs[id] = function (arr) { if (done) return; done = true; resolve(arr); };
+      setTimeout(function () { if (done) return; done = true; delete S.cbs[id]; resolve(null); }, 20000);
+      try {
+        if (!window.__dcTr || !window.__dcTr.translate) { done = true; resolve(null); return; }
+        window.__dcTr.translate(id, JSON.stringify(texts), TO);
+      } catch (e) { done = true; resolve(null); }
+    });
+  }
+  var SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEXTAREA: 1, CODE: 1, PRE: 1, KBD: 1, SAMP: 1, SVG: 1, CANVAS: 1, MATH: 1 };
+  var HAS_LETTER = /[A-Za-z\\u00C0-\\u024F\\u0400-\\u04FF\\u0370-\\u03FF\\u3040-\\u30FF\\uAC00-\\uD7AF]/;
+  function rejectByParent(n) {
+    var p = n.parentNode;
+    while (p && p.nodeType === 1) {
+      if (SKIP[p.tagName]) return true;
+      if (p.isContentEditable) return true;
+      var tr = p.getAttribute && p.getAttribute("translate");
+      if (tr === "no") return true;
+      var cls = (p.className && p.className.baseVal !== undefined) ? p.className.baseVal : p.className;
+      if (typeof cls === "string" && /(^|\\s)notranslate(\\s|$)/.test(cls)) return true;
+      p = p.parentNode;
+    }
+    return false;
+  }
+  function allRoots(root) {
+    var roots = [root];
+    try {
+      var els = root.querySelectorAll ? root.querySelectorAll("*") : [];
+      for (var i = 0; i < els.length; i++) {
+        var sr = els[i].shadowRoot;
+        if (sr) { var sub = allRoots(sr); for (var j = 0; j < sub.length; j++) roots.push(sub[j]); }
+      }
+    } catch (e) {}
+    return roots;
+  }
+  function collect(root) {
+    var out = [];
+    var filter = {
+      acceptNode: function (n) {
+        if (n.__dcOrig !== undefined) return NodeFilter.FILTER_REJECT;
+        var t = n.nodeValue;
+        if (!t) return NodeFilter.FILTER_REJECT;
+        var s = t.trim();
+        if (s.length < 2 || !HAS_LETTER.test(s)) return NodeFilter.FILTER_REJECT;
+        if (rejectByParent(n)) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    };
+    var roots = allRoots(root);
+    for (var r = 0; r < roots.length; r++) {
+      try {
+        var w = document.createTreeWalker(roots[r], NodeFilter.SHOW_TEXT, filter);
+        var n; while ((n = w.nextNode())) out.push(n);
+        observeRoot(roots[r]);
+      } catch (e) {}
+    }
+    return out;
+  }
+  function batch(nodes) {
+    var batches = [], cur = [], chars = 0;
+    for (var i = 0; i < nodes.length; i++) {
+      var len = nodes[i].nodeValue.length;
+      if (cur.length && (cur.length >= 64 || chars + len > 7000)) { batches.push(cur); cur = []; chars = 0; }
+      cur.push(nodes[i]); chars += len;
+    }
+    if (cur.length) batches.push(cur);
+    return batches;
+  }
+  function runOnce(root) {
+    var nodes = collect(root || document.body || document.documentElement);
+    if (!nodes.length) return Promise.resolve(0);
+    var batches = batch(nodes), bi = 0, done = 0;
+    return new Promise(function (resolve) {
+      function next() {
+        if (bi >= batches.length) { resolve(done); return; }
+        var grp = batches[bi++];
+        var texts = grp.map(function (n) { return n.nodeValue; });
+        nativeTranslate(texts).then(function (tr) {
+          if (tr && tr.length) {
+            for (var i = 0; i < grp.length; i++) {
+              var v = tr[i];
+              if (v != null && v !== "" && v !== grp[i].nodeValue) {
+                grp[i].__dcOrig = grp[i].nodeValue;
+                grp[i].nodeValue = v;
+                done++;
+              } else if (v != null) {
+                grp[i].__dcOrig = grp[i].nodeValue;
+              }
+            }
+          }
+          next();
+        });
+      }
+      next();
+    });
+  }
+  S.observed = S.observed || [];
+  function scheduleIncremental() {
+    clearTimeout(S.debounce);
+    S.debounce = setTimeout(function () { if (S.active) runOnce(document.body || document.documentElement); }, 700);
+  }
+  function observeRoot(root) {
+    try {
+      if (!root || S.observed.indexOf(root) >= 0) return;
+      var mo = new MutationObserver(scheduleIncremental);
+      mo.observe(root, { childList: true, subtree: true, characterData: true });
+      S.observed.push(root);
+      S.mos = S.mos || []; S.mos.push(mo);
+    } catch (e) {}
+  }
+  function observe() { observeRoot(document.documentElement); }
+  window.__dcTransRestore = function () {
+    try {
+      S.active = false;
+      if (S.mos) { for (var i = 0; i < S.mos.length; i++) try { S.mos[i].disconnect(); } catch (e) {} }
+      S.mos = []; S.observed = [];
+      var roots = allRoots(document.documentElement);
+      for (var r = 0; r < roots.length; r++) {
+        try {
+          var w = document.createTreeWalker(roots[r], NodeFilter.SHOW_TEXT, null);
+          var n; while ((n = w.nextNode())) {
+            if (n.__dcOrig !== undefined) { n.nodeValue = n.__dcOrig; delete n.__dcOrig; }
+          }
+        } catch (e) {}
+      }
+    } catch (e) {}
+  };
+  runOnce(document.body || document.documentElement).then(function (c) {
+    try { if (window.__dcTr && window.__dcTr.report) window.__dcTr.report(c); } catch (e) {}
+    observe();
+  });
+})();`;
+}
+
 // 归一 · 搜索引擎结果链接「跳转包装」解包 — 各大引擎结果均非直链, 而是经自家跟踪跳转中转:
 //   Bing  /ck/a?...&u=a1<base64url(dest)>  · Google /url?q=<dest> · DuckDuckGo /l/?uddg=<dest>。
 //   不解包则点击结果经代理取到的是跳转中转页(JS/meta refresh) → webview 内白屏(用户「搜索没做好」根因)。
@@ -16075,7 +16345,7 @@ async function genericWebProxy(targetUrl, depth = 0, reqCtx: any = null, isSub =
                 // 表单提交: GET 表单改写 query 经代理整页跳; POST 表单(登录/评论/提交)重建同源 POST 表单直投 /__web → 站内操作真正生效(旧病灶: 只放行 GET, POST 一律漏网)。multipart 上传交原生(边缘情形)。
                 + 'document.addEventListener("submit",function(e){var f=e.target;if(!f||e.defaultPrevented)return;var mth=(f.getAttribute("method")||f.method||"get").toLowerCase();var act;try{act=new URL(f.getAttribute("action")||B,B).href}catch(x){return}if(!/^https?:/i.test(act))return;if(mth!=="post"){try{var u2=new URL(act);u2.search=new URLSearchParams(new FormData(f)).toString();e.preventDefault();_nav(P+encodeURIComponent(u2.href));}catch(x){}return}if((f.getAttribute("enctype")||"").toLowerCase().indexOf("multipart")>=0)return;e.preventDefault();try{var nf=document.createElement("form");nf.method="POST";nf.action=P+encodeURIComponent(act);nf.style.display="none";new FormData(f).forEach(function(v,k){if(typeof v==="string"){var ip=document.createElement("input");ip.type="hidden";ip.name=k;ip.value=v;nf.appendChild(ip)}});document.body.appendChild(nf);nf.submit();}catch(x){}},true);'
                 // fetch/XHR 拦截: 站内一切 AJAX(GitHub 等 SPA 数据面全走此)改经同源 /__web 代理并带凭据 → 跨源 CORS/掉 Cookie 之困全消(旧病灶: fetch 直打真源被 CORS 拦死, 搜完就不能操作)。
-                + 'try{var _F=window.fetch;if(_F){window.fetch=function(inp,ini){try{var url=(typeof inp==="string")?inp:(inp&&inp.url);if(url&&!isProxied(url)){var nu=subUrl(url);if(nu!==url){if(typeof inp==="string")return _F(nu,Object.assign({credentials:"include"},ini||{}));try{return _F(new Request(nu,inp),ini)}catch(e2){return _F(nu,Object.assign({credentials:"include"},ini||{}))}}}}catch(e){}return _F.call(this,inp,ini)};}}catch(e){}'
+                + 'try{var _F=window.fetch;if(_F){window.__daoNF=_F.bind(window);window.fetch=function(inp,ini){try{var url=(typeof inp==="string")?inp:(inp&&inp.url);if(url&&!isProxied(url)){var nu=subUrl(url);if(nu!==url){if(typeof inp==="string")return _F(nu,Object.assign({credentials:"include"},ini||{}));try{return _F(new Request(nu,inp),ini)}catch(e2){return _F(nu,Object.assign({credentials:"include"},ini||{}))}}}}catch(e){}return _F.call(this,inp,ini)};}}catch(e){}'
                 + 'try{var _xo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,url){var a2=arguments;try{if(url&&!isProxied(url)){var nu=subUrl(url);if(nu!==url){a2=[m,nu].concat([].slice.call(arguments,2))}}}catch(e){}return _xo.apply(this,a2)};}catch(e){}'
                 + 'try{window.open=function(u){if(u){go(u)}return null};}catch(e){}'
                 // JS 驱动的整页跳转(搜索结果/SPA 多层点进) → 同样改经 /__web 代理, 否则套娃页直跳真站致掉登录/空白。
@@ -16088,7 +16358,26 @@ async function genericWebProxy(targetUrl, depth = 0, reqCtx: any = null, isSub =
                 + 'try{if(document.readyState!=="loading")fixFrames();document.addEventListener("DOMContentLoaded",function(){fixFrames()});}catch(e){}'
                 + 'try{new MutationObserver(function(ms){for(var i=0;i<ms.length;i++){var an=ms[i].addedNodes||[];for(var j=0;j<an.length;j++){var n=an[j];if(n&&n.nodeType===1){if(n.tagName==="IFRAME"||n.tagName==="FRAME"){var s=n.getAttribute("src");if(s&&!isProxied(s)&&/^https?:/i.test(ab(s)))n.setAttribute("src",P+encodeURIComponent(ab(s)))}else fixFrames(n)}}}}).observe(document.documentElement,{childList:true,subtree:true});}catch(e){}'
                 + '})();<\/script>'
-                + '<script src="/__daobridge.js"><\/script>'; // 拖拽上传桥(下载文件/会话MD → 投递页面上传框)
+                + '<script src="/__daobridge.js"><\/script>' // 拖拽上传桥(下载文件/会话MD → 投递页面上传框)
+                // 整页翻译桥(对齐手机 APK 悬浮球「译」): __dcTr 桥走原生 fetch(__daoNF, 免被代理拦截器改写)
+                //   → 同源 /__translate 宏主代调 Edge 翻译; 引擎 /__translate.js 懒加载, 按钮切换 翻译/还原。
+                + '<script>(function(){try{'
+                + 'var O=location.origin;function NF(){return window.__daoNF||window.fetch}'
+                + 'function toast(t){try{var d=document.createElement("div");d.textContent=t;d.style.cssText="position:fixed;z-index:2147483647;left:50%;top:18px;transform:translateX(-50%);background:#11161d;color:#cdd3de;border:1px solid #2a313b;border-radius:8px;padding:8px 14px;font:13px sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.45)";(document.body||document.documentElement).appendChild(d);setTimeout(function(){try{d.parentNode.removeChild(d)}catch(e){}},2600)}catch(e){}}'
+                + 'window.__dcTr={translate:function(id,tj,to){var ts=[];try{ts=JSON.parse(tj)}catch(e){}'
+                + 'NF()(O+"/__translate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({texts:ts,to:to||"zh-Hans"})})'
+                + '.then(function(r){return r.json()}).then(function(j){var b64=btoa(unescape(encodeURIComponent(JSON.stringify((j&&j.translations)||[]))));try{window.__dcTrCb&&window.__dcTrCb(id,b64)}catch(e){}})'
+                + '.catch(function(){try{window.__dcTrCb&&window.__dcTrCb(id,btoa("[]"))}catch(e){}})},'
+                + 'report:function(n){toast(n>0?("\u5df2\u7ffb\u8bd1 "+n+" \u6bb5"):"\u672c\u9875\u65e0\u53ef\u7ffb\u8bd1\u5185\u5bb9")}};'
+                + 'var eng=null;function ensureEng(){if(eng)return Promise.resolve(eng);return NF()(O+"/__translate.js").then(function(r){return r.text()}).then(function(s){eng=s;return s})}'
+                + 'function setBtn(on){try{var b=document.getElementById("__daoTransBtn");if(b){b.textContent=on?"\u539f":"\u8bd1";b.title=on?"\u6062\u590d\u539f\u6587":"\u7ffb\u8bd1\u6b64\u9875"}}catch(e){}}'
+                + 'window.__daoTransToggle=function(){'
+                + 'if(window.__dcTransOn){window.__dcTransOn=false;try{window.__dcTransRestore&&window.__dcTransRestore()}catch(e){}toast("\u6062\u590d\u539f\u6587");setBtn(false);return}'
+                + 'window.__dcTransTo=window.__dcTransTo||"zh-Hans";window.__dcTransOn=true;toast("\u7ffb\u8bd1\u4e2d\u2026");setBtn(true);'
+                + 'ensureEng().then(function(s){try{(new Function(s))()}catch(e){window.__dcTransOn=false;setBtn(false);toast("\u7ffb\u8bd1\u5f15\u64ce\u52a0\u8f7d\u5931\u8d25")}}).catch(function(){window.__dcTransOn=false;setBtn(false);toast("\u7ffb\u8bd1\u5f15\u64ce\u52a0\u8f7d\u5931\u8d25")})};'
+                + 'function addBtn(){try{if(document.getElementById("__daoTransBtn"))return;var d=document.createElement("div");d.id="__daoTransBtn";d.textContent=window.__dcTransOn?"\u539f":"\u8bd1";d.title="\u7ffb\u8bd1\u6b64\u9875";d.setAttribute("translate","no");d.style.cssText="position:fixed;z-index:2147483646;right:14px;bottom:64px;width:38px;height:38px;border-radius:50%;background:#1f6feb;color:#fff;display:flex;align-items:center;justify-content:center;font:15px/1 sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35);user-select:none";d.addEventListener("click",function(e){e.stopPropagation();window.__daoTransToggle()});(document.body||document.documentElement).appendChild(d)}catch(e){}}'
+                + 'if(document.readyState!=="loading")addBtn();document.addEventListener("DOMContentLoaded",function(){addBtn()});setInterval(addBtn,3000);'
+                + '}catch(e){}})();<\/script>';
             html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, '<head$1>' + inj) : (inj + html);
             finish({ _proxy: true, status: sc, contentType: 'text/html; charset=utf-8', body: html });
         };
