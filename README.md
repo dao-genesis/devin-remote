@@ -254,6 +254,13 @@ python cloud/export-accounts/dao_export_all.py --email xxx@gmail.com --password 
 
 ---
 
-## PR 自动合并（道法自然）
+## PR 自动合并（道法自然 · 唯一合并者）
 
-本仓库配置了 [`.github/workflows/auto-merge.yml`](.github/workflows/auto-merge.yml)：向 `main` 提交的 PR，只要**无冲突（mergeable）即自动合并**，无需人工同意；**有冲突则自动跳过**，留待人工解决。草稿（draft）PR 不会被自动合并。
+合并统一由 [`.github/workflows/dao-automerge.yml`](.github/workflows/dao-automerge.yml) 执行，策略读自 [`.dao/automation.yml`](.dao/automation.yml)：
+
+1. **自动打标**：可信作者（组织成员/协作者，或 gloves 白名单）开的非草稿 PR（标题不含 `[wip]`/`[hold]`）自动打上 `dao-auto`；
+2. **自动合并**：带 `dao-auto` 且 CI 全绿的 PR 以 squash 限速合并（每小时上限 + 冷却窗内等待续跑）并删分支；含 workflow 改动的 PR 走 `DAO_MERGE_TOKEN` 备援令牌；
+3. **合并后发布**：自动 dispatch `release.yml` / `android-release.yml` / `dao-relay-deploy.yml`（GITHUB_TOKEN 的 push 不触发 on:push，防递归）。
+
+触发链：`pull_request_target` 打标 → CI 完成 `workflow_run` 链式触发即时合并 → 每小时 cron 兜底。开发者/Agent 只需用手套账号推分支、开 PR，其余全自动、零人工。
+[`dao-pr-flow.yml`](.github/workflows/dao-pr-flow.yml) 仅做自检与打标，不再合并；原 `auto-merge.yml`（无 CI 门槛即并）已移除。
