@@ -20,6 +20,7 @@ gloves:
   - samuelpoel
   - fahin00
   - isayanzho
+  - jakolor
   # - <下一个 Devin 实例的 GitHub 账号>
 
 # 自动合并策略（本体侧 dao-automerge.yml 执行）
@@ -37,5 +38,3 @@ automerge:
 
 # 高频活动全部发生在手套 fork 上，本体只做低频合并。
 
-# e2e 验证: fork PR 零人工自动合并 (dao-automerge · gloves 白名单生效) 2026-07-11
-# 零人工闭环终验: workflow_run 即时合并 2026-07-11
