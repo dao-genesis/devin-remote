@@ -68,6 +68,24 @@ From a Devin VM you operate the fleet by tunneling into the desktop and calling 
   writes. Prefer `bridge-state.url` over `connection.publicUrl` (the latter can be stale → CF 530) and validate the
   candidate returns 200 from outside before trusting it.
 
+## Deploying a rebuilt dao-vsix bundle to the desktop (hot-patch path)
+- **Find the truly-running extension dir before copying.** There may be many `dao.dao-vsix-*` dirs across profiles
+  (`AppData\Roaming\Devin\extensions`, `~\.devin\extensions`, `~\.devin-i*\...`). The one that matters is usually
+  `~\.devin\extensions\dao.dao-vsix-<version>` where `<version>` matches `/api/health`'s reported plugin version.
+  If you patch the wrong dir, reload "succeeds" but the UI stays old — verify by grepping the served board HTML for a
+  new-version marker string, not just by file mtime.
+- Copy `out/extension.js` **byte-level** (`[IO.File]::WriteAllBytes`), keep a `.bak` alongside, then reload the window
+  via `POST /api/command {command:"workbench.action.reloadWindow"}` (a `500 Canceled` response usually means the reload fired).
+- **Reload rotates the quick tunnel** and rebuild can take 5–10+ min. Recover the new URL via route-C ntfy mesh
+  `/api/bridge-state` (poll every ~30s until `connected:true` with a URL); the fixed Worker relay may report `no_agent`
+  meanwhile. `/api/exec` also works over the mesh, so desktop diagnostics never need the tunnel.
+
+## UI testing the GitHub board without real credentials
+- Never paste real PATs/passwords/2FA. To exercise per-account card rendering, add a synthetic account via the
+  账密+2FA mode (local-only storage), verify the card + graceful "no PAT" detail path, then delete it via the card's 删 button.
+- Real-API assertions (account detail, repo list, org mutations) must be marked untested unless the user supplies a
+  disposable sub-account PAT.
+
 ## Devin Secrets Needed
 - None stored in Devin. The DAO Bridge **URL + bearer token** are provided by the user per session (quick-tunnel URLs
   rotate on restart). The account-API token is read live from `~/.dao/dao-conn.json` on the desktop.

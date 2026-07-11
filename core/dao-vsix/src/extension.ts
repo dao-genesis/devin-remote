@@ -5333,6 +5333,62 @@ function daoGhFleetForget(login: string): { ok: boolean } {
     saveInjectProfile(prof);
     return { ok: true };
 }
+// GitHub 管理中心 MD(一键复制/打开 · 对照 Bridge MD 模式): 只含脱敏元数据 + 热接入指引, 绝不含明文 PAT/密码/2FA。
+function ghGenerateMgmtMd(): string {
+    const prof = loadInjectProfile();
+    const fleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
+    const ob: any = prof.orgBody || {};
+    const hasBodyPat = !!String((prof.secrets.find(s => s.name === 'GITHUB_PAT') || { value: '' }).value || '').trim();
+    const gm: any = (prof.mcps || []).find((m: any) => /github/i.test(String(m.name || '')));
+    const authRaw = gm && gm.headers && (gm.headers.Authorization || gm.headers.authorization) || '';
+    const authMasked = authRaw ? ('Bearer ' + String(authRaw).replace(/^(Bearer\s+)+/i, '').slice(0, 7) + '…(脱敏)') : '(随本体 PAT 注入)';
+    const brUrl = (typeof bridgeEffectiveUrl === 'function' ? (bridgeEffectiveUrl() || '') : '') || '(未连接·见公网穿透板块 MD)';
+    const port = bridgeMachinePort() || ws.port || DEFAULT_PORT;
+    const active = fleet.find(a => !!(a.pat && a.pat.trim()) && hasBodyPat && String(a.pat).trim() === String((prof.secrets.find(s => s.name === 'GITHUB_PAT') || { value: '' }).value || '').trim());
+    const rows = fleet.map(a => '| ' + a.login + ' | ' + (a.role || 'member') + ' | ' + (a.pat && a.pat.trim() ? '✓ ' + String(a.pat).trim().slice(0, 7) + '…(脱敏)' : '✗ 待建') + ' | ' + (active && active.login === a.login ? '◆ 本体' : '') + ' | ' + (a.addedAt || '') + ' |');
+    return [
+        '# 🐙 GitHub 管理中心 · 运行文档 (脱敏·可热接入)',
+        '',
+        '> 本文档由二合一插件 GitHub 板块生成, 供云端 Agent 读取后**揭露并热操作**本板块。',
+        '> 全文只含脱敏元数据; 明文 PAT/密码/2FA 永不出现在本文档。',
+        '',
+        '## 当前状态',
+        '',
+        '```',
+        '本体账号: ' + (active ? active.login : (hasBodyPat ? '(有 GITHUB_PAT·未匹配池内账号)' : '(未设)')),
+        '本体组织: ' + (ob.org || '(未设)') + (ob.org ? (' · role=' + (ob.role || 'member')) : ''),
+        'GitHub MCP: ' + (gm ? ('已钉 · ' + (gm.url || 'https://api.githubcopilot.com/mcp/') + ' · Authorization=' + authMasked) : '未钉'),
+        '账号池: ' + fleet.length + ' 号 · 有 PAT ' + fleet.filter(a => !!(a.pat && a.pat.trim())).length,
+        '更新于: ' + new Date().toISOString(),
+        '```',
+        '',
+        '## 账号池 (脱敏)',
+        '',
+        '| login | 角色 | PAT | 本体 | 加入时间 |',
+        '|---|---|---|---|---|',
+        ...(rows.length ? rows : ['| (空) | | | | |']),
+        '',
+        '## 热接入 · 揭露底层 (经 DAO Bridge 隧道)',
+        '',
+        '```',
+        '公网URL:  ' + brUrl,
+        'Local:    http://127.0.0.1:' + port,
+        '鉴权:     Authorization: Bearer <Token>(见公网穿透板块 MD, 本文不含)',
+        '```',
+        '',
+        '- 板块状态源 = `~/.dao/dao-inject-profile.json` 的 `ghFleet` / `orgBody` / `mcps`(⚠ 含明文 PAT — 读取后禁止外传/打印)。',
+        '- 热查看: `POST /api/exec` 读上述文件; 热修复: `POST /api/write` + `POST /api/command` (`workbench.action.reloadWindow`) 重载生效。',
+        '- 面板命令(webview cmd → 后端): `daoGhAccountAdd` `daoGhAccountDetail` `daoGhAccountRepos` `daoGhSetActive` `daoGhFleetList` `daoGhFleetRole` `daoGhFleetRemoveOrg` `daoGhFleetForget` `daoGhForkRepos` `daoGhSyncRepos` `daoGhCreateOrg` `daoGhInvite` `daoGhCopyMd`。',
+        '- GitHub REST 直调: 后端 `ghApiRequest(method, path, pat)` → api.github.com(限速自守)。',
+        '',
+        '## AI 守则',
+        '',
+        '1. 诊断前先重新生成/读取本文档, 以最新状态为准。',
+        '2. 凭证只走 secret 引用; 任何输出中明文 PAT/密码/2FA 一律脱敏。',
+        '3. 真实 GitHub API 变更(组织/迁仓/成员)须显式授权; 未执行的路径标 untested。',
+        '4. GitHub 板块与 Devin 账号池完全分离; 勿混用两者状态。',
+    ].join('\n');
+}
 // ── GitHub 账号中心 v4.20 · 逐账号管理 ─────────────────────────────────────
 // 账密+2FA 任意格式解析(对齐切号添号): 每行「账号----密码----2FA」/空格/逗号/Tab 分隔均可。
 //   识别规则: 含 @ 或首段 = 账号; base32(≥16位) = 2FA seed; 其余最长段 = 密码。仅本地存号。
@@ -7040,6 +7096,13 @@ body.solo .sb{display:none}
 .btn.warn:hover{background:#8b4b2a}
 .btn.ghost{background:transparent;color:var(--accent);border:1px solid var(--border)}
 .btn.ghost:hover{background:var(--hover)}
+input,textarea,select{background:var(--input);color:var(--input-fg);border:1px solid var(--input-border);border-radius:4px;padding:5px 8px;font-size:12px;font-family:inherit;box-sizing:border-box;outline:none;transition:border-color .15s,box-shadow .15s}
+input::placeholder,textarea::placeholder{color:var(--muted);opacity:.75}
+input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(99,102,241,.25)}
+input:hover:not(:focus),textarea:hover:not(:focus),select:hover:not(:focus){border-color:var(--accent2)}
+select{cursor:pointer;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='%23888' d='M0 0l5 6 5-6z'/></svg>");background-repeat:no-repeat;background-position:right 8px center;padding-right:22px}
+textarea{resize:vertical;line-height:1.5}
+input[type=checkbox],input[type=radio],input[type=range]{background:transparent;border:none;padding:0;box-shadow:none;accent-color:var(--accent)}
 .br{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
 .tag{display:inline-block;font-size:9px;padding:1px 6px;border-radius:3px;margin-left:4px}
 .tag.secret{background:#5a2d82;color:#d4a0ff}
@@ -7919,16 +7982,27 @@ function ghRenderGhFleet(){var st=_ghState();var v=document.getElementById('ghGh
   h+='<div id="gh-ad-'+sid+'" style="font-size:11px;line-height:1.6;margin-top:4px"></div>';
   h+='</div>';
 });v.innerHTML=h;}
-// ④ 仅 GitHub MCP 一条(非整个 MCP 板块镜像)
-function ghRenderMcpOne(){var v=document.getElementById('ghMcpOne');if(!v)return;var gm=null;try{var ms=(S.injectProfile&&S.injectProfile.mcps)||[];gm=ms.filter(function(m){return /github/i.test(m.name||'')})[0]||null}catch(e){}
+// ④ 仅 GitHub MCP 一条(非整个 MCP 板块镜像) · 与 MCP 板块双端同源(同一条 injectProfile.mcps 条目)
+function ghBearerNorm(v){return String(v||'').replace(/^(Bearer\s+)+/i,'')}
+function ghMcpEntry(){try{var ms=(S.injectProfile&&S.injectProfile.mcps)||[];return ms.filter(function(m){return /github/i.test(m.name||'')})[0]||null}catch(e){return null}}
+function ghMcpSpec(){var gm=ghMcpEntry();if(!gm)return null;var sp={name:gm.name||'GitHub MCP',transport:gm.transport||'HTTP',url:gm.url||'https://api.githubcopilot.com/mcp/'};var a=ghBearerNorm((gm.headers&&(gm.headers.Authorization||gm.headers.authorization))||'');if(a)sp.headers={Authorization:'Bearer '+a};return sp}
+function ghMcpProbe(){var sp=ghMcpSpec();if(!sp){toast('先钉住 GitHub MCP',false);return}var s=document.getElementById('mcp-probe-gh');if(s){s.style.color='var(--muted)';s.textContent='· ⏳ 接测中…'}cmd('mcpProbe',{spec:sp,idx:'gh'})}
+function ghMcpTools(){var sp=ghMcpSpec();if(!sp){toast('先钉住 GitHub MCP',false);return}var b=document.getElementById('mcp-tools-gh');if(b)b.innerHTML='<div style="font-size:11px;color:var(--muted)">⏳ 拉取工具清单(tools/list 真调)…</div>';cmd('mcpTools',{spec:sp,idx:'gh'})}
+function ghMcpSetPat(){var gm=ghMcpEntry();if(!gm){toast('先钉住 GitHub MCP',false);return}sm('🔑 更换 GitHub MCP PAT','<input id="m1" type="password" placeholder="粘新 PAT (ghp_… / github_pat_…) · 留空=清除" style="width:100%;margin:4px 0"><p style="font-size:10px;color:var(--muted);margin:4px 0">写入后双端同步: 本卡 + MCP 板块 + 反向注入档案。明文不回显。</p>',function(){var p=ghBearerNorm((document.getElementById('m1')||{}).value||'').trim();cmd('mcpSetAuth',{spec:ghMcpSpec()||{},auth:p?('Bearer '+p):''});if(gm.headers||p){gm.headers=gm.headers||{};if(p)gm.headers.Authorization='Bearer '+p;else{delete gm.headers.Authorization;delete gm.headers.authorization}}ghRenderMcpOne();return true})}
+function ghRenderMcpOne(){var v=document.getElementById('ghMcpOne');if(!v)return;var gm=ghMcpEntry();
   if(!gm){v.innerHTML='<div class="cr"><span class="l">GitHub MCP</span><span class="v"><span style="color:var(--warn)">○ 未钉</span></span></div><div class="br" style="margin-top:4px"><button class="btn sm primary" onclick="ipMcpPreset0()">➕ 钉住 GitHub MCP</button></div>';return}
-  var auth=(gm.headers&&gm.headers.Authorization)||'';var authShown=auth?('Bearer '+esc(String(auth).replace(/^Bearer\s+/i,'').slice(0,7))+'…'):'(随本体 PAT 注入)';
-  var h='<div class="cr"><span class="l">'+esc(gm.name||'GitHub MCP')+'</span><span class="v"><span style="color:var(--success)">● 已钉</span></span></div>';
+  var auth=ghBearerNorm((gm.headers&&(gm.headers.Authorization||gm.headers.authorization))||'');var authShown=auth?('Bearer '+esc(auth.slice(0,7))+'…'):'(随本体 PAT 注入)';
+  var h='<div class="cr"><span class="l">'+esc(gm.name||'GitHub MCP')+'</span><span class="v"><span style="color:var(--success)">● 已钉</span> <span id="mcp-probe-gh" style="font-size:10px"></span></span></div>';
   h+='<div class="cr"><span class="l" style="font-size:11px;color:var(--muted)">URL</span><span class="v" style="font-size:10px">'+esc(gm.url||'https://api.githubcopilot.com/mcp/')+'</span></div>';
   h+='<div class="cr"><span class="l" style="font-size:11px;color:var(--muted)">Authorization</span><span class="v" style="font-size:10px">'+authShown+'</span></div>';
-  h+='<div class="br" style="margin-top:4px"><button class="btn sm" onclick="sw(&#39;mcp&#39;)" title="到 MCP 板块看/管全部 MCP">🧩 MCP 板块</button></div>';
+  h+='<div class="br" style="margin-top:4px">'
+    +'<button class="btn sm primary" onclick="ghMcpSetPat()" title="更换本 MCP 的 PAT(双端同步写入)">🔑 换 PAT</button>'
+    +'<button class="btn sm" onclick="ghMcpProbe()" title="实时接测运行状态/可用性">⚡ 接测</button>'
+    +'<button class="btn sm" onclick="ghMcpTools()" title="拉取当前可用工具清单(tools/list 真调)">🛠 工具</button>'
+    +'<button class="btn sm ghost" onclick="sw(&#39;mcp&#39;)" title="到 MCP 板块看/管全部 MCP(同一条目·双端同步)">🧩 MCP 板块</button></div>';
+  h+='<div id="mcp-tools-gh" style="margin-top:4px"></div>';
   v.innerHTML=h;}
-function ipMcpPreset0(){var pat='';try{var s=(S.injectProfile&&S.injectProfile.secrets)||[];for(var i=0;i<s.length;i++){if(s[i].name==='GITHUB_PAT'){pat=s[i].value||'';break}}}catch(e){}if(!S.injectProfile)return;if(!Array.isArray(S.injectProfile.mcps))S.injectProfile.mcps=[];var m={name:'GitHub MCP',transport:'HTTP',url:'https://api.githubcopilot.com/mcp/',short_description:'GitHub official remote MCP'};if(pat)m.headers={Authorization:'Bearer '+pat};S.injectProfile.mcps.push(m);ipSave();ghRenderMcpOne();toast('✓ 已钉 GitHub MCP',true)}
+function ipMcpPreset0(){var pat='';try{var s=(S.injectProfile&&S.injectProfile.secrets)||[];for(var i=0;i<s.length;i++){if(s[i].name==='GITHUB_PAT'){pat=s[i].value||'';break}}}catch(e){}if(!S.injectProfile)return;if(!Array.isArray(S.injectProfile.mcps))S.injectProfile.mcps=[];pat=ghBearerNorm(pat);var ex=ghMcpEntry();var m=ex||{name:'GitHub MCP',transport:'HTTP',url:'https://api.githubcopilot.com/mcp/',short_description:'GitHub official remote MCP'};m.transport='HTTP';m.url=m.url||'https://api.githubcopilot.com/mcp/';if(pat)m.headers={Authorization:'Bearer '+pat};if(!ex)S.injectProfile.mcps.push(m);ipSave();ghRenderMcpOne();toast(ex?'✓ 已归一 GitHub MCP(单例)':'✓ 已钉 GitHub MCP',true)}
 function ghOnProgress(d){ghMsg('ghFleetOut','⏳ 入组进度 '+d.done+'/'+d.total+(d.last?(' · '+esc(d.last.login||'')+' '+(d.last.ok?'✓':'✗')):''))}
 function ghOnResult(d){
   var st=_ghState();
@@ -7996,7 +8070,7 @@ function rGitHub(){
     +'<div class="cr"><span class="l">本体组织</span><span class="v">'+_stOrg+(ob.org?(' · '+esc(ob.role||'member')):'')+'</span></div>'
     +'<div class="cr"><span class="l">GitHub MCP 钉住</span><span class="v">'+(_stMcp?'<span style="color:var(--success)">● 已钉</span>':'<span style="color:var(--warn)">○ 未钉</span>')+'</span></div>'
     +'<div class="cr"><span class="l">GitHub 账号池</span><span class="v">'+_fleet.length+' 号 · 有 PAT '+_flOk+'</span></div>'
-    +'<div class="br" style="margin-top:4px"><button class="btn sm" onclick="cmd(&#39;getInjectProfile&#39;);cmd(&#39;daoGhFleetList&#39;,{});cmd(&#39;loadTabData&#39;,{tab:&#39;mcp&#39;})">⟳ 刷新状态</button></div></div>';
+    +'<div class="br" style="margin-top:4px"><button class="btn sm" onclick="cmd(&#39;getInjectProfile&#39;);cmd(&#39;daoGhFleetList&#39;,{});cmd(&#39;loadTabData&#39;,{tab:&#39;mcp&#39;})">⟳ 刷新状态</button><button class="btn sm primary" onclick="cmd(&#39;daoGhCopyMd&#39;,{})" title="生成+复制 GitHub 管理中心 MD(脱敏·可热接入) — 对照穿透板块 MD 模式">📋 复制管理 MD</button><button class="btn sm ghost" onclick="cmd(&#39;daoGhCopyMd&#39;,{open:true})" title="生成并在编辑器打开 MD">📄 打开 MD</button></div></div>';
   // ── 左右分栏网格(IDE 标签宽·充分利用横向; 窄屏自动堆叠) ──
   h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px;align-items:start">';
   // ═══ 左栏: 添号 + 账号池 ═══
@@ -9007,8 +9081,9 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // 随 PAT 同步钉住官方 GitHub MCP(HTTP · Bearer PAT) — security 与 MCP 一体注入
                 if (!Array.isArray(prof.mcps)) prof.mcps = [];
                 const gm = prof.mcps.find((m: any) => /github/i.test(m.name || ''));
-                if (gm) { gm.transport = 'HTTP'; gm.url = gm.url || 'https://api.githubcopilot.com/mcp/'; gm.headers = { ...(gm.headers || {}), Authorization: 'Bearer ' + pat }; }
-                else prof.mcps.push({ name: 'GitHub MCP', transport: 'HTTP', url: 'https://api.githubcopilot.com/mcp/', headers: { Authorization: 'Bearer ' + pat }, short_description: 'GitHub official remote MCP' });
+                const patNorm = pat.replace(/^(Bearer\s+)+/i, '');
+                if (gm) { gm.transport = 'HTTP'; gm.url = gm.url || 'https://api.githubcopilot.com/mcp/'; gm.headers = { ...(gm.headers || {}), Authorization: 'Bearer ' + patNorm }; }
+                else prof.mcps.push({ name: 'GitHub MCP', transport: 'HTTP', url: 'https://api.githubcopilot.com/mcp/', headers: { Authorization: 'Bearer ' + patNorm }, short_description: 'GitHub official remote MCP' });
                 saveInjectProfile(prof);
                 await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'PAT 注密钥到所有账号…' }, async () => {
                     const r = await daoBatchInjectAllAccounts();
@@ -9059,6 +9134,17 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'daoGhFleetForget': {
                 const r = daoGhFleetForget(String(msg.login || ''));
                 reply({ type: 'daoGhResult', kind: 'fleetForget', login: String(msg.login || ''), ...r });
+                break;
+            }
+            case 'daoGhCopyMd': {
+                // 「MD 文档」: 生成+落盘+复制 GitHub 管理中心 MD(脱敏·热接入) — 镜像 copyMcpMd/bridgeCopyCloudMd。
+                const ghMd = ghGenerateMgmtMd();
+                const ghMdPath = path.join(os.homedir(), '.dao', 'bridge', 'github-board.md');
+                try { fs.mkdirSync(path.dirname(ghMdPath), { recursive: true }); fs.writeFileSync(ghMdPath, ghMd, 'utf8'); } catch { /* 守柔 */ }
+                await vscode.env.clipboard.writeText(ghMd);
+                if (msg.open) { try { const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(ghMdPath)); await vscode.window.showTextDocument(doc, { preview: false }); } catch { /* 守柔 */ } }
+                vscode.window.showInformationMessage('已复制 GitHub 管理中心 MD(脱敏·热接入) 到剪贴板');
+                reply({ type: 'actionResult', command: 'daoGhCopyMd', ok: true });
                 break;
             }
             // ── GitHub 账号中心 v4.20 · 逐账号管理 ─────────────────────────────
