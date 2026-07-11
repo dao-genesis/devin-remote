@@ -2077,12 +2077,17 @@ async function handleRelayRequest(msg: any, relaySocket: any, port: number, toke
         const relayAuthTok = bridgeAuthoritativeToken() || token || '';
         const relayHeaders: any = Object.assign({ 'content-type': 'application/json' }, msg.headers || {});
         if (relayAuthTok) { relayHeaders['authorization'] = 'Bearer ' + relayAuthTok; delete relayHeaders['Authorization']; }
+        // 帛书·「守全字节」(与路线C sig 通道同法): Worker 转发帧的 body 是已解析的对象, 而下游
+        //   readBody→JSON.parse 期望字符串 → 旧法 `msg.body || ''` 直传对象 → JSON.parse("[object
+        //   Object]") 抛错 (鉴权修复后 POST 端点才暴露此病灶)。故此处对齐 mesh 的 bodyStr: 非串即 stringify。
+        const relayBodyStr = (msg.body === undefined || msg.body === null) ? ''
+            : (typeof msg.body === 'string' ? msg.body : JSON.stringify(msg.body));
         const fakeReq: any = {
             headers: relayHeaders,
             method: msg.method || 'GET',
             socket: { remoteAddress: 'relay' },
             url: msg.path || '/api/health',
-            _relayBody: msg.body || ''
+            _relayBody: relayBodyStr
         };
         const parsedUrl = new URL(msg.path || '/api/health', 'http://localhost:' + port);
         const route = parsedUrl.pathname;

@@ -33,4 +33,13 @@ ok(/delete\s+relayHeaders\['Authorization'\]/.test(fn), "去重大小写 Authori
 // 路线C sig 通道的同源修法仍在(两通道对齐, 不允许只修一边)
 ok(/sigAuthTok\s*=\s*bridgeAuthoritativeToken\(\)/.test(src), "路线C sig 通道权威 Bearer 注入仍在(双通道对齐)");
 
+// 病灶2(鉴权修复后实测暴露): Worker 帧 body 已是对象, readBody→JSON.parse 需字符串 →
+//   旧法 `_relayBody: msg.body || ''` 直传对象 → JSON.parse("[object Object]") 抛错。
+//   须与 mesh 的 bodyStr 同法: 非串即 JSON.stringify。
+ok(/relayBodyStr\s*=/.test(fn), "handleRelayRequest 先算 relayBodyStr(body 归一)");
+ok(/typeof\s+msg\.body\s*===\s*'string'\s*\?\s*msg\.body\s*:\s*JSON\.stringify\(msg\.body\)/.test(fn),
+   "relay body 非串即 JSON.stringify(对齐 mesh bodyStr)");
+ok(/_relayBody:\s*relayBodyStr/.test(fn), "fakeReq._relayBody 用归一后的 relayBodyStr(不再直传对象)");
+ok(!/_relayBody:\s*msg\.body\s*\|\|\s*''/.test(fn), "不再裸传 _relayBody: msg.body || ''(对象致 JSON.parse 崩)");
+
 console.log("全部通过 (" + pass + " 项)");
