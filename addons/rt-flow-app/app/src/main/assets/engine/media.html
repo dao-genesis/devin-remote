@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>本页媒体</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0e1116;color:#cdd3de;font:13px/1.5 -apple-system,"Noto Sans SC",sans-serif;padding:8px}
+.bar{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.bar .src{flex:1;font-size:11px;color:#8b949e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button{background:#21262d;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font-size:12px}
+button:active{background:#30363d}
+.grp{margin:10px 0 4px;font-size:12px;color:#58a6ff;font-weight:600}
+.item{display:flex;align-items:center;gap:8px;background:#161b22;border:1px solid #21262d;border-radius:8px;padding:6px;margin-bottom:6px}
+.th{width:56px;height:42px;flex:0 0 56px;border-radius:5px;background:#0b0e13;display:flex;align-items:center;justify-content:center;font-size:20px;overflow:hidden}
+.th img{width:100%;height:100%;object-fit:cover}
+.nm{flex:1;min-width:0;font-size:12px;word-break:break-all;max-height:3em;overflow:hidden}
+.ops{display:flex;flex-direction:column;gap:4px}
+.empty{color:#8b949e;text-align:center;padding:24px 0}
+.big{position:fixed;inset:0;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;z-index:9;flex-direction:column;gap:8px}
+.big img,.big video{max-width:96vw;max-height:82vh}
+.big .x{position:fixed;top:8px;right:12px;font-size:22px;color:#fff;background:none;border:none}
+</style>
+</head>
+<body>
+<div class="bar">
+  <div class="src" id="src">采集中…</div>
+  <button onclick="doRefresh()">↻ 重采</button>
+</div>
+<div id="list"><div class="empty">采集中…</div></div>
+<script>
+var ITEMS=[];
+var TYPE_META={img:["🖼","图片"],video:["🎬","视频"],audio:["🎵","音频"],md:["📄","Markdown 文档"],file:["📦","文件 / 附件"]};
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
+function renderMedia(json,pageUrl){
+  try{ ITEMS=JSON.parse(json||"[]")||[]; }catch(e){ ITEMS=[]; }
+  var src=document.getElementById("src");
+  src.textContent=pageUrl?("来源: "+pageUrl):"";
+  var box=document.getElementById("list");
+  if(!ITEMS.length){ box.innerHTML='<div class="empty">本页未发现媒体资源<br>(图片 / 视频 / 文档 / 附件)</div>'; return; }
+  var order=["img","video","audio","md","file"], html="";
+  order.forEach(function(tp){
+    var arr=ITEMS.map(function(it,i){ it._i=i; return it; }).filter(function(it){ return (it.t||"file")===tp; });
+    if(!arr.length) return;
+    var m=TYPE_META[tp]||["📦",tp];
+    html+='<div class="grp">'+m[0]+" "+m[1]+" ("+arr.length+")</div>";
+    arr.forEach(function(it){
+      var th=(tp==="img")?('<img loading="lazy" src="'+esc(it.u)+'" onerror="this.parentNode.textContent=\'🖼\'">'):(m[0]);
+      html+='<div class="item"><div class="th">'+th+'</div>'
+        +'<div class="nm">'+esc(it.n||it.u)+'</div>'
+        +'<div class="ops"><button onclick="doView('+it._i+')">查看</button>'
+        +'<button onclick="doDl('+it._i+')">下载</button></div></div>';
+    });
+  });
+  box.innerHTML=html;
+}
+function doRefresh(){ try{ MediaHost.refresh(); }catch(e){} }
+function doView(i){
+  var it=ITEMS[i]; if(!it) return;
+  if(it.t==="img"||it.t==="video"){   // 图片/视频面板内直看 (经原生鉴权代取通路)
+    var d=document.createElement("div"); d.className="big";
+    d.innerHTML=(it.t==="img"?('<img src="'+esc(it.u)+'">'):('<video src="'+esc(it.u)+'" controls autoplay playsinline></video>'))
+      +'<button class="x">✕</button>';
+    d.onclick=function(ev){ if(ev.target===d||ev.target.className==="x"){ try{var v=d.querySelector("video");if(v)v.pause();}catch(e){} d.remove(); } };
+    document.body.appendChild(d);
+    return;
+  }
+  try{ MediaHost.openUrl(it.u); }catch(e){}   // 文档/文件 → 开新标签查看
+}
+function doDl(i){ var it=ITEMS[i]; if(!it) return; try{ MediaHost.download(it.u, it.n||""); }catch(e){} }
+</script>
+</body>
+</html>

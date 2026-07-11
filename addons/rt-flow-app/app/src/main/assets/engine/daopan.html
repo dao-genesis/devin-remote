@@ -95,7 +95,11 @@ var _rot = 0, _seeded = false;
 var CONC = 6, PERACC = 6, BATCH = 16, MAXREC = 40, MAXREC_STEP = 40, CACHE_KEY = "rtflow.recentConv", CACHE_TTL = 45000;
 function _accId(a){ return (a&&(a.id||a.email))||""; }
 function _statusOf(s){ try{ if(window.DaoCloud&&DaoCloud.sessStatus) return DaoCloud.sessStatus(s); }catch(e){} return ["",""]; }
-function _itemOf(a,no,s){ var st=_statusOf(s); return { acc:a, no:no, sid:sidOf(s), title:titleOf(s), status:(s.status_enum||s.status||s.state||""), cls:st[0]||"", label:st[1]||"", t:recencyMs(s), s:s }; }
+function _itemOf(a,no,s){ var st=_statusOf(s); return { acc:a, no:no, sid:sidOf(s), title:titleOf(s), status:(s.status_enum||s.status||s.state||""), cls:st[0]||"", label:st[1]||"", t:recencyMs(s), auto:_isAuto(s), s:s }; }
+// 自动化对话判定 (devin-cloud.js isAutoConv 同源·唯一真源): 接会话对象或标题
+function _isAuto(x){ try{ if(window.DaoCloud&&DaoCloud.isAutoConv) return DaoCloud.isAutoConv(x); }catch(e){} return false; }
+var _showAuto=false; try{ _showAuto=localStorage.getItem("rtflow.showAutoConv")==="1"; }catch(e){}
+function toggleAutoRecent(){ _showAuto=!_showAuto; try{ localStorage.setItem("rtflow.showAutoConv",_showAuto?"1":"0"); }catch(e){} renderRecent(); }
 // 有限并发池(与原生 HttpBridge 线程池对齐): 把 68 号串行等待压成 6 路并发
 async function _pool(items, conc, fn){
   var idx=0, n=items.length; conc=Math.max(1,Math.min(conc, n||1));
@@ -116,7 +120,7 @@ function loadMore(){
   MAXREC+=MAXREC_STEP; _rebuild(); renderRecent(); _saveCache();
 }
 function _saveCache(){
-  try{ localStorage.setItem(CACHE_KEY, JSON.stringify({ ts:Date.now(), list:REC.slice(0,MAXREC).map(function(it){ return {accId:_accId(it.acc),accEmail:(it.acc&&it.acc.email)||"",no:it.no,sid:it.sid,title:it.title,status:it.status,cls:it.cls,label:it.label,t:it.t}; }) })); }catch(e){}
+  try{ localStorage.setItem(CACHE_KEY, JSON.stringify({ ts:Date.now(), list:REC.slice(0,MAXREC).map(function(it){ return {accId:_accId(it.acc),accEmail:(it.acc&&it.acc.email)||"",no:it.no,sid:it.sid,title:it.title,status:it.status,cls:it.cls,label:it.label,t:it.t,auto:it.auto?1:0}; }) })); }catch(e){}
 }
 // ── 公网单网页: 一次 RPC 从设备原生聚合近期对话 (与 APK 同一份数据·最终状态齐平) ──
 //   病灶(用户截图「加载中 0/248」): web 端逐号 listSessions 各经 mesh 一个 /api/http 往返,
@@ -135,7 +139,7 @@ function _ingestDeviceList(list){
   _accSess=Object.create(null);
   list.forEach(function(r){
     var a=byId[r.accId]||byEmail[String(r.accEmail||"").toLowerCase()]||{id:r.accId,email:r.accEmail};
-    var k=_accId(a); (_accSess[k]=_accSess[k]||[]).push({acc:a,no:r.no,sid:r.sid,title:r.title,status:r.status,cls:r.cls||"",label:r.label||"",t:r.t,s:{}});
+    var k=_accId(a); (_accSess[k]=_accSess[k]||[]).push({acc:a,no:r.no,sid:r.sid,title:r.title,status:r.status,cls:r.cls||"",label:r.label||"",t:r.t,auto:(r.auto!=null?!!r.auto:_isAuto(r.title)),s:{}});
   });
   _rebuild();
 }
@@ -154,14 +158,14 @@ function _seedFromCache(){
     var list = raw && (raw.list || (Array.isArray(raw)?raw:null));
     if(raw && raw.ts) cacheTs=raw.ts;
     if(list && list.length){
-      list.forEach(function(r){ var a=byId[r.accId]||byEmail[String(r.accEmail||"").toLowerCase()]; if(!a)return; var k=_accId(a); (_accSess[k]=_accSess[k]||[]).push({acc:a,no:r.no,sid:r.sid,title:r.title,status:r.status,cls:r.cls||"",label:r.label||"",t:r.t,s:{}}); });
+      list.forEach(function(r){ var a=byId[r.accId]||byEmail[String(r.accEmail||"").toLowerCase()]; if(!a)return; var k=_accId(a); (_accSess[k]=_accSess[k]||[]).push({acc:a,no:r.no,sid:r.sid,title:r.title,status:r.status,cls:r.cls||"",label:r.label||"",t:r.t,auto:(r.auto!=null?!!r.auto:_isAuto(r.title)),s:{}}); });
     }
   }catch(e){}
   try{
     var trk=JSON.parse(localStorage.getItem("rtflow.trk")||"{}");
     for(var em in trk){ var rec=trk[em], a=byEmail[em]; if(!a||!rec||!rec.items)continue; var k=_accId(a); var arr=_accSess[k]=_accSess[k]||[];
       rec.items.forEach(function(it){ if(!it.uuid)return; var dup=false; for(var z=0;z<arr.length;z++){ if(arr[z].sid===it.uuid){dup=true;break;} } if(dup)return;
-        arr.push({acc:a,no:rec.no||(accList().indexOf(a)+1),sid:it.uuid,title:it.title||it.uuid,status:it.cls||"running",t:rec.ts||Date.now(),s:{}}); });
+        arr.push({acc:a,no:rec.no||(accList().indexOf(a)+1),sid:it.uuid,title:it.title||it.uuid,status:it.cls||"running",t:rec.ts||Date.now(),auto:_isAuto(it.title||""),s:{}}); });
     }
   }catch(e){}
   _rebuild();
@@ -249,8 +253,9 @@ function renderRecent(){
   var q=(document.getElementById("q").value||"").trim().toLowerCase();
   var box=document.getElementById("recentList");
   if(!REC.length){ box.innerHTML='<div class="empty">暂无近期对话</div>'; return; }
-  var html="", n=0;
+  var html="", n=0, hid=0;
   REC.forEach(function(it,idx){
+    if(it.auto && !_showAuto && !q){ hid++; return; }   // 默认隐藏自动化对话(搜索时不隐, 免漏检)
     if(q){
       var hay=((it.acc.email||"")+" "+(it.acc.id||"")+" "+it.title+" "+it.sid+" "+it.no).toLowerCase();
       if(hay.indexOf(q)<0) return;
@@ -272,6 +277,10 @@ function renderRecent(){
         '<span class="b pri" onclick="dlZip('+idx+')">&#128230; 全部文件</span>'+
       '</div></div>';
   });
+  // 自动化对话隐藏条: 显示隐藏数量 + 展开/收起开关 (数据一条不删, 只隐不移)
+  if(!q && (hid>0 || _showAuto)){
+    html='<div class="empty" style="padding:8px 0;font-size:12px">'+(_showAuto?'自动化对话已展开':'已隐藏 '+hid+' 个自动化对话')+' · <a href="javascript:void 0" onclick="toggleAutoRecent()" style="color:#58a6ff">'+(_showAuto?'收起':'显示')+'</a></div>'+html;
+  }
   // 翻页: 当去重后总数 > 当前 MAXREC 且未过滤时, 显示「加载更多」按钮
   if(!q && _totalAvail > MAXREC){
     html+='<div style="text-align:center;padding:12px 0"><button class="mini" onclick="loadMore()" style="padding:8px 18px;font-size:13px">加载更多 (当前 '+REC.length+' / 共 '+_totalAvail+')</button></div>';
