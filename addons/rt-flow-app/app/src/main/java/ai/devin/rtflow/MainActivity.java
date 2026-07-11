@@ -150,15 +150,15 @@ public class MainActivity extends AppCompatActivity {
     private volatile String dragConvAccJson = null; // 全服通近期对话拖拽: 该对话所属账号 (含 email/密码/org → 引擎取数+指引md)
     private volatile String dragConvSid = null;     // 全服通近期对话拖拽: 该对话 sid
     // ── 在线自动更新 ──
-    static final String UPDATE_MANIFEST = "https://raw.githubusercontent.com/dao-devin/devin-remote/main/addons/rt-flow-app/latest.json";
+    static final String UPDATE_MANIFEST = "https://raw.githubusercontent.com/dao-genesis/devin-remote/main/addons/rt-flow-app/latest.json";
     // 去中心化更新: 多镜像源轮询 (任一可达即可检查/下载, 不依赖单一服务器或穿透通道)。
     // GitHub raw + jsDelivr/Fastly/Statically CDN + ghproxy 反代 — 覆盖国内外网络。
     static final String[] UPDATE_MIRRORS = {
-        "https://raw.githubusercontent.com/dao-devin/devin-remote/main/addons/rt-flow-app/latest.json",
-        "https://cdn.jsdelivr.net/gh/dao-devin/devin-remote@main/addons/rt-flow-app/latest.json",
-        "https://fastly.jsdelivr.net/gh/dao-devin/devin-remote@main/addons/rt-flow-app/latest.json",
-        "https://cdn.statically.io/gh/dao-devin/devin-remote/main/addons/rt-flow-app/latest.json",
-        "https://ghproxy.net/https://raw.githubusercontent.com/dao-devin/devin-remote/main/addons/rt-flow-app/latest.json"
+        "https://raw.githubusercontent.com/dao-genesis/devin-remote/main/addons/rt-flow-app/latest.json",
+        "https://cdn.jsdelivr.net/gh/dao-genesis/devin-remote@main/addons/rt-flow-app/latest.json",
+        "https://fastly.jsdelivr.net/gh/dao-genesis/devin-remote@main/addons/rt-flow-app/latest.json",
+        "https://cdn.statically.io/gh/dao-genesis/devin-remote/main/addons/rt-flow-app/latest.json",
+        "https://ghproxy.net/https://raw.githubusercontent.com/dao-genesis/devin-remote/main/addons/rt-flow-app/latest.json"
     };
     static final String UPDATE_APK_NAME = "DevinCloud-update.apk";   // 更新包固定文件名 (落 app 私有 Download, 据此识别更新下载, 不受进程重建/字段丢失影响)
     private volatile long updateDlId = -1;          // 当前更新下载任务 id (区别于普通网页下载)
@@ -1400,6 +1400,16 @@ public class MainActivity extends AppCompatActivity {
         if (host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
         autoHost.addView(host, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         pauseWeb(t.web);
+        keepRenderer(t.web, false);   // 停泊即还原可降权 → 后台标签仍可被系统按需回收, 不拖整机
+    }
+
+    /** 活动标签渲染进程保优(API26+): 默认策略下 App 一转后台, 各标签的沙盒渲染进程即降为可牺牲优先级
+     *  (与前台服务无关) → 稍切走一下就被系统收割, 回来渲染进程全没 → 整页全部重来(用户所述「稍微切了
+     *  一下软件再进来整个被刷新」之根)。仅对当前活动标签豁免(keep=true: 不随可见性降权), 停泊回后台即还原
+     *  → 短暂切走再回来不丢页面态, 后台标签仍按需可收(不加剧整机内存压力)。 */
+    private void keepRenderer(final WebView w, boolean keep) {
+        if (w == null || Build.VERSION.SDK_INT < 26) return;
+        try { w.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, !keep); } catch (Exception ignored) {}
     }
 
     /** 暂停一个后台 WebView 的「额外处理」(渲染合成/动画/插件), 让出系统资源。仅 onPause(), 不动全局 pauseTimers()
@@ -1453,6 +1463,7 @@ public class MainActivity extends AppCompatActivity {
         renderTabStrip();
         if (pageZoom != 100) applyZoom(t.web);
         resumeWeb(t.web);   // 选中即把页面拉回「可见+计时器运行」, 防止 visibilityState 卡 hidden 致交互冻死
+        keepRenderer(t.web, true);   // 活动标签渲染进程免降权: 短暂切走再回来不再被系统收割致整页重载
         // 切到账号标签 → 顺手命令切号引擎刷一次该号(状态+额度), 顶部标签金额即时显示·不等周期心跳。
         if (t.accountJson != null) pushOpenAcctsToSwitch();
         // 附件 Cookie 是组织级共享状态 → 前台标签优先: 切标签即按其组织预铸 (他组织铸过则重铸)
