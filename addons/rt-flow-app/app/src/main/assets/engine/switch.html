@@ -1127,6 +1127,8 @@ async function _pollOneAcc(a, realNo){
   // 状态变化即时通知(道法自然·及时): 卡住/报错/停滞的对话立即弹通知, 不再默默等用户手动刷新才看到
   items.forEach(function(it){ if(it.cls==="blocked"||it.cls==="exhausted") try{ _stateChangeAlert(a,it); }catch(e){} });
   var total=running+awaiting+blocked+exhausted;
+  // 最新对话名恒存: 本轮取空(瞬时接口抖动/局部回包)时沿用缓存旧名, 绝不用空值覆盖 → 页签对话名不再「突然消失」。
+  var _prevTrk=_trk[(a.email||"").toLowerCase()]; if(!latestName && _prevTrk && _prevTrk.latest) latestName=_prevTrk.latest;
   if(total>0){ _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:running,awaiting:awaiting,blocked:blocked,exhausted:exhausted,total:total,items:items,latest:latestName,ts:Date.now()}; if(exhausted>0){ var exq=items.filter(function(x){return x.cls==="exhausted";})[0]; _quotaAlert(a,exhausted,(exq&&exq.title)||latestName); } }
   else _trk[(a.email||"").toLowerCase()]={no:realNo,who:devinTag(a)||(a.email||"").split("@")[0],running:0,awaiting:0,blocked:0,exhausted:0,total:0,items:[],latest:latestName,ts:Date.now()};   // 墓碑(非删除): 转空闲也带新 ts → 经金库跨设备同步熄灯, 显示侧 total<=0 一律按无活跃处理
   // 推送该账号"最需关注对话名+状态"到顶部标签 (卡住/待你>待输入>运行优先, 让需你处理的浮上来)
@@ -1137,7 +1139,7 @@ async function _pollOneAcc(a, realNo){
           || items.filter(function(x){return x.cls==="running";})[0] || null;
     var nm = top ? (top.title||"") : latestName;   // 无需关注对话 → 显示该账号最新对话名(finished·无点); 仍空(零对话)才由原生回退账号名
     var stt = top ? ((top.cls==="blocked"||top.cls==="exhausted"||top.cls==="awaiting")?"blocked":"running") : "finished";
-    if(N.setTabStatus){ N.setTabStatus(a.id||"", nm, stt); if(a.email) N.setTabStatus(a.email, nm, stt); }
+    if(nm && N.setTabStatus){ N.setTabStatus(a.id||"", nm, stt); if(a.email) N.setTabStatus(a.email, nm, stt); }   // 空名绝不推送: 宁可保留原生缓存的上次对话名, 也不把页签抹成空白
     _pushTabDol(DaoCore.findAcc(a.id)||a);   // 金额与状态同推: 凡有状态更新的页签必同时带上其(缓存)金额, 杜绝「有🟢对话名却无 $」
   }catch(e){}
 }
