@@ -15,7 +15,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -145,7 +145,7 @@ async function healthOk(url, tries = 10) {
 
 function stateFile() {
   const dir = join(homedir(), ".dao");
-  try { mkdirSync(dir, { recursive: true }); } catch { /* 已存在 */ }
+  try { mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { /* 已存在 */ }
   return join(dir, "relay.json");
 }
 
@@ -153,9 +153,12 @@ export function loadState() {
   try { return JSON.parse(readFileSync(stateFile(), "utf8")); } catch { return null; }
 }
 
+// 含 CF 令牌/refresh_token, 一律 0600(仅属主可读写); Windows 无 POSIX 位则忽略。
 function saveState(s) {
-  writeFileSync(stateFile(), JSON.stringify(s, null, 2));
-  return stateFile();
+  const f = stateFile();
+  writeFileSync(f, JSON.stringify(s, null, 2), { mode: 0o600 });
+  try { chmodSync(f, 0o600); } catch { /* 非 POSIX 平台守柔 */ }
+  return f;
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────

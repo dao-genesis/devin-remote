@@ -27,6 +27,27 @@ const EXT_VERSION: string = (() => {
     return '1.3.2';
 })();
 const DAO_DIR = path.join(os.homedir(), '.dao');
+// 凭据落盘守护 — 含令牌/凭证/Cookie 的文件一律 0600(仅属主可读写), 目录 0700,
+//   防同机其他用户窃读。Windows 无 POSIX 位则由 fs 忽略, 行为不变。
+function writeSecretFile(file: string, data: string): void {
+    try { fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); } catch { /* 已存在 */ }
+    fs.writeFileSync(file, data, { encoding: 'utf8', mode: 0o600 });
+    try { fs.chmodSync(file, 0o600); } catch { /* 非 POSIX 平台守柔 */ }
+}
+// 启动时对历史遗留的凭据文件做一次性收紧(旧版以 0644 落盘的存量文件)。
+function hardenSecretFilePerms(): void {
+    if (process.platform === 'win32') return;
+    const files = [
+        'api-token', 'dao-conn.json', 'dao-conn-current.json', 'dao-config.json',
+        'relay.json', 'dao-accounts-auth.json', 'web-cookies.json',
+        path.join('bridge', 'auth-token'), path.join('bridge', 'tunnel-token'),
+        path.join('bridge', 'named-tunnel.json'), path.join('bridge', 'cf-credentials.json'),
+        path.join('bridge', 'plugin-api.json'), path.join('bridge', 'conn.json'),
+        path.join('bridge', 'connection.json'), path.join('bridge', 'last-inject.json'),
+    ];
+    for (const f of files) { try { fs.chmodSync(path.join(DAO_DIR, f), 0o600); } catch { /* 不存在即过 */ } }
+    for (const d of [DAO_DIR, path.join(DAO_DIR, 'bridge')]) { try { fs.chmodSync(d, 0o700); } catch { /* 守柔 */ } }
+}
 // 软编码·归一 — 帛书「道生一」: 本机 API 单一权威默认端口。package.json `dao.port` 默认与此恒同;
 //   全部 `ws.port || <数字>` 回落统一引此常量, 杜绝 9910/9921 等散落魔数与清单(9920)漂移失配。
 const DEFAULT_PORT = 9920;
@@ -53,7 +74,7 @@ function daoPruneConnRegistry(): any[] {
         if (!prev || String(c.updated || '') >= String(prev.updated || '')) byPid.set(c.pid, c);
     }
     const live = Array.from(byPid.values());
-    try { if (live.length !== all.length) fs.writeFileSync(DAO_CONN_REGISTRY, JSON.stringify(live, null, 2), 'utf8'); } catch { /* 守柔 */ }
+    try { if (live.length !== all.length) writeSecretFile(DAO_CONN_REGISTRY, JSON.stringify(live, null, 2)); } catch { /* 守柔 */ }
     return live;
 }
 // 健康探活: 直连端口 /api/health 确认真有 dao-vsix 在听。帛书·「自知者明」: pid 可能被 OS 回收
@@ -97,7 +118,7 @@ async function daoRefreshCurrent(): Promise<any> {
         epoch, updated: new Date().toISOString(),
         alive: alive.map(a => ({ port: a.port, pid: a.pid, version: a.version, url: a.url, devinEmail: a.devinEmail }))
     };
-    try { fs.writeFileSync(DAO_CONN_CURRENT, JSON.stringify(cur, null, 2), 'utf8'); } catch { /* 守柔 */ }
+    try { writeSecretFile(DAO_CONN_CURRENT, JSON.stringify(cur, null, 2)); } catch { /* 守柔 */ }
     return cur;
 }
 const GLOBAL_CONFIG_FILE = path.join(DAO_DIR, 'dao-config.json');  // CF全局凭证
@@ -288,7 +309,7 @@ function webProxyPersistCookies(): void {
                 obj[origin] = kv;
             }
             fs.mkdirSync(DAO_DIR, { recursive: true });
-            fs.writeFileSync(WEB_COOKIE_FILE, JSON.stringify(obj), 'utf8');
+            writeSecretFile(WEB_COOKIE_FILE, JSON.stringify(obj));
         } catch { /* 守柔 */ }
     }, 1500);
 }
@@ -556,7 +577,7 @@ class WorkspaceState {
                 updatedAt: new Date().toISOString()
             };
             if (this.devinQuota) cfg.devinQuota = this.devinQuota;
-            fs.writeFileSync(this.configFile, JSON.stringify(cfg, null, 2), 'utf8');
+            writeSecretFile(this.configFile, JSON.stringify(cfg, null, 2));
         } catch {}
     }
 
@@ -584,14 +605,14 @@ class WorkspaceState {
         if (this.devinOrgName) info.devinOrgName = this.devinOrgName;
         try {
             // Per-workspace连接文件 — 窗口专属，永不互踩
-            fs.writeFileSync(this.connFile, JSON.stringify(info, null, 2), 'utf8');
+            writeSecretFile(this.connFile, JSON.stringify(info, null, 2));
             // 全局连接注册表 — 数组合集，按pid去重合并
             const globalConnFile = path.join(DAO_DIR, 'dao-conn.json');
             let allConns: any[] = [];
             try { allConns = JSON.parse(fs.readFileSync(globalConnFile, 'utf8')); if (!Array.isArray(allConns)) allConns = []; } catch {}
             allConns = allConns.filter((c: any) => c.pid !== process.pid);
             allConns.push(info);
-            fs.writeFileSync(globalConnFile, JSON.stringify(allConns, null, 2), 'utf8');
+            writeSecretFile(globalConnFile, JSON.stringify(allConns, null, 2));
             // 无缝接力: 裁剪死实例 + 刷新权威「当前接口」(epoch 单调) → 重启/切号后外部可解析活接口
             daoRefreshCurrent().catch(() => { /* 守柔 */ });
         } catch {}
@@ -612,14 +633,14 @@ class WorkspaceState {
             const g = fs.readFileSync(globalTokenFile, 'utf8').trim();
             if (g && g.length >= 16) {
                 this.token = g;
-                try { fs.writeFileSync(this.tokenFile, g, 'utf8'); } catch {}
+                try { writeSecretFile(this.tokenFile, g); } catch {}
                 this.saveState();
                 return g;
             }
         } catch {}
         this.token = 'dao-vsix-' + crypto.randomBytes(16).toString('hex');
-        try { fs.writeFileSync(this.tokenFile, this.token, 'utf8'); } catch {}
-        try { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(globalTokenFile, this.token, 'utf8'); } catch {}
+        try { writeSecretFile(this.tokenFile, this.token); } catch {}
+        try { writeSecretFile(globalTokenFile, this.token); } catch {}
         this.saveState();
         return this.token;
     }
@@ -638,7 +659,7 @@ class WorkspaceState {
         } catch {}
         // 每窗口专属session：workspaceKey + 32字符随机后缀（3.4×10^38种，不可暴力猜）
         this.relaySessionId = this.workspaceKey + '-' + crypto.randomBytes(16).toString('hex');
-        try { fs.writeFileSync(sf, this.relaySessionId, 'utf8'); } catch {}
+        try { writeSecretFile(sf, this.relaySessionId); } catch {}
         this.saveState();
         return this.relaySessionId;
     }
@@ -725,6 +746,7 @@ function ensureStartupWorkspace(): void {
 
 export async function activate(context: vscode.ExtensionContext) {
     // 初始化每窗口专属状态
+    hardenSecretFilePerms();
     ws = new WorkspaceState();
     ws.init();
 
@@ -1691,7 +1713,7 @@ function unregisterConnection() {
         let allConns: any[] = JSON.parse(fs.readFileSync(globalConnFile, 'utf8'));
         if (!Array.isArray(allConns)) allConns = [];
         allConns = allConns.filter((c: any) => c.pid !== process.pid);
-        fs.writeFileSync(globalConnFile, JSON.stringify(allConns, null, 2), 'utf8');
+        writeSecretFile(globalConnFile, JSON.stringify(allConns, null, 2));
     } catch {}
 }
 
@@ -1800,7 +1822,7 @@ async function daoRelaySetPersistent(rawUrl: string): Promise<{ ok: boolean; url
         let prev: any = {};
         try { prev = JSON.parse(fs.readFileSync(RELAY_STATE_FILE, 'utf8')); } catch { /* 首次 */ }
         fs.mkdirSync(DAO_DIR, { recursive: true });
-        fs.writeFileSync(RELAY_STATE_FILE, JSON.stringify({ ...prev, url, healthy, registeredAt: new Date().toISOString() }, null, 2), 'utf8');
+        writeSecretFile(RELAY_STATE_FILE, JSON.stringify({ ...prev, url, healthy, registeredAt: new Date().toISOString() }, null, 2));
     } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
     // 断开现连 → 下一轮 connectRelay 即把持久通道置顶接管。
     try { if (ws.relayWs) { ws.relayWs.close(); ws.relayWs = null; } } catch { /* 守柔 */ }
@@ -4400,7 +4422,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
                 const f = path.join(dir, 'antidetect.json');
                 const api = String(asb.api || '').trim();
                 if (!api) { try { fs.unlinkSync(f); } catch { /* 守柔 */ } return { ok: true, cleared: true }; }
-                fs.writeFileSync(f, JSON.stringify({ api, provider: String(asb.provider || '').trim(), token: String(asb.token || '').trim() }, null, 2), 'utf8');
+                writeSecretFile(f, JSON.stringify({ api, provider: String(asb.provider || '').trim(), token: String(asb.token || '').trim() }, null, 2));
             } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
             const nc = daoAntidetectCfg();
             return { ok: true, api: nc.api, provider: nc.provider || null, tokenSet: !!nc.token };
@@ -5117,7 +5139,7 @@ function bridgeStartUrlPoll(): void {
 
 function bridgeSaveNamedToken(token: string) {
     bridgeEnsureDir();
-    fs.writeFileSync(path.join(BRIDGE_DIR, 'tunnel-token'), token, 'utf8');
+    writeSecretFile(path.join(BRIDGE_DIR, 'tunnel-token'), token);
 }
 
 function bridgeReadNamedToken(): string {
@@ -5130,7 +5152,7 @@ function bridgeReadNamedToken(): string {
 // ═══════════════════════════════════════════════════════════
 function bridgeCfCredFile(): string { return path.join(BRIDGE_DIR, 'cf-credentials.json'); }
 function bridgeLoadCfCredentials(): any { try { return JSON.parse(fs.readFileSync(bridgeCfCredFile(), 'utf8')); } catch { return null; } }
-function bridgeSaveCfCredentials(creds: any) { bridgeEnsureDir(); fs.writeFileSync(bridgeCfCredFile(), JSON.stringify(creds, null, 2), 'utf8'); }
+function bridgeSaveCfCredentials(creds: any) { bridgeEnsureDir(); writeSecretFile(bridgeCfCredFile(), JSON.stringify(creds, null, 2)); }
 function bridgeCfState(): { cfLoggedIn: boolean; cfEmail: string; cfSource: string; named: boolean } {
     let cfEmail = '', cfSource = '', cfLoggedIn = false, named = false;
     const c = bridgeLoadCfCredentials();
@@ -6016,8 +6038,8 @@ async function bridgeProvisionNamedTunnel(apiToken: string, wantHostname?: strin
     else await bridgeCfApiRequest('POST', '/zones/' + zone.id + '/dns_records', apiToken, dnsBody);
     try {
         bridgeEnsureDir();
-        fs.writeFileSync(path.join(BRIDGE_DIR, 'named-tunnel.json'),
-            JSON.stringify({ cfTunnelToken: connToken, cfHostname: hostname, tunnelId, acctId, zoneId: zone.id, apiToken, savedAt: new Date().toISOString() }, null, 2), 'utf8');
+        writeSecretFile(path.join(BRIDGE_DIR, 'named-tunnel.json'),
+            JSON.stringify({ cfTunnelToken: connToken, cfHostname: hostname, tunnelId, acctId, zoneId: zone.id, apiToken, savedAt: new Date().toISOString() }, null, 2));
     } catch { /* 守柔 */ }
     bridgeSaveNamedToken(connToken);
     return { ok: true, hostname, tunnelId, token: connToken };
@@ -6052,7 +6074,7 @@ async function bridgeCfLogin(email: string, apiKeyOrToken: string): Promise<{ ok
     }
     if (token.length >= 100 && /^[A-Za-z0-9_\-=.]+$/.test(token)) {
         try {
-            fs.writeFileSync(path.join(BRIDGE_DIR, 'named-tunnel.json'), JSON.stringify({ cfTunnelToken: token, email, savedAt: new Date().toISOString() }, null, 2), 'utf8');
+            writeSecretFile(path.join(BRIDGE_DIR, 'named-tunnel.json'), JSON.stringify({ cfTunnelToken: token, email, savedAt: new Date().toISOString() }, null, 2));
             bridgeSaveNamedToken(token);
             return { ok: true, message: '已保存命名隧道令牌 — 点「重启隧道」即以固定域名启动' };
         } catch { /* 守柔 */ }
@@ -6465,7 +6487,7 @@ function bridgePublishPluginApi() {
             version: EXT_VERSION,
             updated: new Date().toISOString(),
         };
-        fs.writeFileSync(path.join(BRIDGE_DIR, 'plugin-api.json'), JSON.stringify(data, null, 2), 'utf8');
+        writeSecretFile(path.join(BRIDGE_DIR, 'plugin-api.json'), JSON.stringify(data, null, 2));
     } catch { /* 守柔 */ }
 }
 
@@ -6478,9 +6500,9 @@ function bridgeSaveConnJson() {
         port: ws.port || DEFAULT_PORT, workspace: wsInfo.name, root: wsInfo.root,
         host: os.hostname(), updated: new Date().toISOString(), version: EXT_VERSION,
     };
-    fs.writeFileSync(path.join(BRIDGE_DIR, 'conn.json'), JSON.stringify(data, null, 2), 'utf8');
+    writeSecretFile(path.join(BRIDGE_DIR, 'conn.json'), JSON.stringify(data, null, 2));
     // Also write to global location for other extensions
-    try { fs.writeFileSync(path.join(BRIDGE_DIR, 'connection.json'), JSON.stringify(data, null, 2), 'utf8'); } catch {}
+    try { writeSecretFile(path.join(BRIDGE_DIR, 'connection.json'), JSON.stringify(data, null, 2)); } catch {}
 }
 
 function bridgeWriteArtifacts() {
@@ -7176,11 +7198,11 @@ function bridgeLoadAuthToken(): string {
     return '';
 }
 function bridgeSaveAuthToken(t: string): void {
-    try { if (t) { bridgeEnsureDir(); fs.writeFileSync(bridgeAuthTokenFile(), t, 'utf8'); } } catch { /* 守柔 */ }
+    try { if (t) { bridgeEnsureDir(); writeSecretFile(bridgeAuthTokenFile(), t); } } catch { /* 守柔 */ }
 }
 function bridgeLastInjectFile(): string { return path.join(BRIDGE_DIR, 'last-inject.json'); }
 function bridgeSaveLastInject(url: string, token: string): void {
-    try { bridgeEnsureDir(); fs.writeFileSync(bridgeLastInjectFile(), JSON.stringify({ url, token, ts: new Date().toISOString() }), 'utf8'); } catch { /* 守柔 */ }
+    try { bridgeEnsureDir(); writeSecretFile(bridgeLastInjectFile(), JSON.stringify({ url, token, ts: new Date().toISOString() })); } catch { /* 守柔 */ }
 }
 function bridgeLoadLastInject(): void {
     try {
@@ -11824,7 +11846,7 @@ function saveAccountAuth(email?: string): void {
             apiServerUrl: ws.devinApiServerUrl, savedAt: new Date().toISOString(),
         };
         fs.mkdirSync(DAO_DIR, { recursive: true });
-        fs.writeFileSync(ACCOUNTS_AUTH_FILE, JSON.stringify(store, null, 2), 'utf8');
+        writeSecretFile(ACCOUNTS_AUTH_FILE, JSON.stringify(store, null, 2));
     } catch { /* 守柔 */ }
 }
 function loadAccountAuth(email: string): SavedAccountAuth | null {
@@ -11845,7 +11867,7 @@ function saveAccountAuthRecord(email: string, rec: { auth1: string; orgId?: stri
             apiKey: prev.apiKey || '', apiServerUrl: prev.apiServerUrl || '', savedAt: new Date().toISOString(),
         };
         fs.mkdirSync(DAO_DIR, { recursive: true });
-        fs.writeFileSync(ACCOUNTS_AUTH_FILE, JSON.stringify(store, null, 2), 'utf8');
+        writeSecretFile(ACCOUNTS_AUTH_FILE, JSON.stringify(store, null, 2));
     } catch { /* 守柔 */ }
 }
 // 道·多实例按需取号 — 帛书「既以为人己愈有」: 路由某账号(dao_acct)时若其真 auth1 未缓存,
