@@ -2767,7 +2767,21 @@ async function _refreshHealthForTick(email, minGapSec) {
     const iv = (minGapSec > 0 ? Math.max(30, minGapSec | 0) : Math.max(30, +_cfg('statusHealthRefreshSec', 120) || 120)) * 1000;
     const last = _healthTickAt.get(k) || 0; if (Date.now() - last < iv) return;
     if (_healthInflight.has(k)) return;
-    const a = (_store.accounts || []).find((x) => String(x.email || '').toLowerCase() === k); if (!a) return;
+    const a = (_store.accounts || []).find((x) => String(x.email || '').toLowerCase() === k);
+    // 无密码账号(仅 auth 记录导入)或不在账号池的标签号 → verifyOneAccount 恒 "no creds" → 额度永远陈旧。
+    //   走 auth1 billing 直探: app.devin.ai/api/<org>/billing/status 无需 Windsurf 登录链。
+    if (!a || !a.password) {
+      _healthTickAt.set(k, Date.now());
+      _healthInflight.add(k);
+      try {
+        const au = await _shellEnsureAuth(k);
+        if (au && au.auth1) {
+          const q = await _tryDevinBillingFallback(au.auth1);
+          if (q) _store.setHealth(k, q);
+        }
+      } finally { _healthInflight.delete(k); }
+      return;
+    }
     let slowLane = false, slow = 0;
     if (!_getCachedSession(a.email)) {
       // 无缓存会话 → 慢道: 打开中的标签值得一次真登录取额度(否则 $ 永远陈旧),
