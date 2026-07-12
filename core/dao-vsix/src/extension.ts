@@ -5561,12 +5561,91 @@ async function daoGhFleetAssistLogin(login: string): Promise<{ ok: boolean; logi
     const launched = daoLaunchChromiumIsolated('https://github.com/login', safeKey, fp, proxy, profileDir, assistExt ? [assistExt] : []);
     return { ok: !!launched, login, launched: !!launched, hasOtp: !!otpNow };
 }
+// GitHub 经典 PAT 全量 scope 清单(对齐官网建 PAT 页勾选项) — 账号池通用配置默认全给, 用户可在配置窗调整。
+const GH_PAT_SCOPES: { key: string; label: string }[] = [
+    { key: 'repo', label: '仓库(全部读写)' },
+    { key: 'workflow', label: 'Actions 工作流' },
+    { key: 'write:packages', label: '包·写' },
+    { key: 'delete:packages', label: '包·删' },
+    { key: 'admin:org', label: '组织与团队(全权)' },
+    { key: 'admin:public_key', label: '公钥' },
+    { key: 'admin:repo_hook', label: '仓库 Webhook' },
+    { key: 'admin:org_hook', label: '组织 Webhook' },
+    { key: 'gist', label: 'Gist' },
+    { key: 'notifications', label: '通知' },
+    { key: 'user', label: '用户资料' },
+    { key: 'delete_repo', label: '删除仓库' },
+    { key: 'write:discussion', label: '讨论' },
+    { key: 'admin:enterprise', label: '企业(全权)' },
+    { key: 'audit_log', label: '审计日志' },
+    { key: 'codespace', label: 'Codespaces' },
+    { key: 'copilot', label: 'Copilot' },
+    { key: 'project', label: '项目 Projects' },
+    { key: 'admin:gpg_key', label: 'GPG 密钥' },
+    { key: 'admin:ssh_signing_key', label: 'SSH 签名密钥' },
+];
+// 有效期天数(对齐官网下拉): 0 = 永不过期(No expiration)。默认 30 天。
+const GH_PAT_EXP_DAYS: number[] = [0, 7, 30, 60, 90];
+function _ghDefaultPatCfg(): { scopes: string[]; expDays: number } {
+    return { scopes: GH_PAT_SCOPES.map(s => s.key), expDays: 30 };
+}
+// 读账号池 PAT 通用配置(缺省 → 全 scope + 30 天), 顺带回带全量 scope 清单供前端渲染勾选项。
+function daoGhGetPatCfg(): { ok: boolean; scopes: string[]; expDays: number; all: { key: string; label: string }[] } {
+    const prof = loadInjectProfile();
+    const c = prof.ghPatCfg;
+    const def = _ghDefaultPatCfg();
+    const valid = new Set(GH_PAT_SCOPES.map(s => s.key));
+    const scopes = (c && Array.isArray(c.scopes)) ? c.scopes.filter(s => valid.has(String(s))) : def.scopes;
+    const expDays = (c && GH_PAT_EXP_DAYS.indexOf(Number(c.expDays)) >= 0) ? Number(c.expDays) : def.expDays;
+    return { ok: true, scopes, expDays, all: GH_PAT_SCOPES };
+}
+// 存账号池 PAT 通用配置(仅非密元数据·scope 白名单过滤 + 有效期归一)。
+function daoGhSavePatCfg(scopes: string[], expDays: number): { ok: boolean; scopes: string[]; expDays: number } {
+    const prof = loadInjectProfile();
+    const valid = new Set(GH_PAT_SCOPES.map(s => s.key));
+    const sc = Array.isArray(scopes) ? scopes.map(s => String(s)).filter(s => valid.has(s)) : [];
+    const ed = GH_PAT_EXP_DAYS.indexOf(Number(expDays)) >= 0 ? Number(expDays) : 30;
+    prof.ghPatCfg = { scopes: sc, expDays: ed };
+    saveInjectProfile(prof);
+    return { ok: true, scopes: prof.ghPatCfg.scopes, expDays: prof.ghPatCfg.expDays };
+}
+// 建 PAT 助手扩展: 仅本号隔离档, 按账号池通用配置在官网建 PAT 页预勾 scope + 预选有效期, 守柔不自动提交。
+function daoGhWritePatAssistExt(profileDir: string, scopes: string[], expDays: number): string | null {
+    try {
+        const extDir = path.join(profileDir, '_gh_pat_assist');
+        fs.mkdirSync(extDir, { recursive: true });
+        const manifest = {
+            manifest_version: 3, name: 'DAO GH PAT Assist', version: '1.0.0',
+            description: 'DAO 建 PAT 助手(仅本号隔离档·按账号池通用配置预勾 scope/有效期·不自动提交)',
+            content_scripts: [{ matches: ['https://github.com/settings/tokens/new*'], js: ['assist.js'], run_at: 'document_idle', all_frames: false }],
+        };
+        fs.writeFileSync(path.join(extDir, 'manifest.json'), JSON.stringify(manifest), 'utf8');
+        const C = JSON.stringify({ scopes: scopes || [], expDays: Number(expDays) || 0 });
+        const js = 'try{(function(){var C=' + C + ';' +
+            'function setScopes(){try{(C.scopes||[]).forEach(function(sc){var el=document.querySelector("input[type=checkbox][value=\\""+sc+"\\"]");if(el&&!el.checked){el.click();}});}catch(e){}}' +
+            'function setExp(){try{var d=C.expDays;var sels=document.querySelectorAll("select");for(var i=0;i<sels.length;i++){var s=sels[i];var opts=s.options||[];for(var j=0;j<opts.length;j++){var o=opts[j];var t=((o.textContent||"")+" "+(o.value||"")).toLowerCase();var hit=false;if(d===0){hit=/no expiration|never|^none$|永不|无期/.test(t);}else{hit=new RegExp("(^|\\\\D)"+d+"\\\\s*day").test(t)||o.value===String(d);}if(hit){s.value=o.value;s.dispatchEvent(new Event("change",{bubbles:true}));return true;}}}}catch(e){}return false;}' +
+            'function bar(){try{if(document.getElementById("__dao_pat_bar"))return;var b=document.createElement("div");b.id="__dao_pat_bar";b.textContent="DAO 建 PAT 助手·已按账号池配置预勾 scope + 有效期("+(C.expDays===0?"永不过期":C.expDays+"天")+")·请核对后手动点 Generate token";b.style.cssText="position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#1f6feb;color:#fff;font:13px sans-serif;padding:6px 10px;text-align:center";document.documentElement.appendChild(b);}catch(e){}}' +
+            'function run(){setScopes();setExp();bar();}run();setTimeout(run,800);setTimeout(run,2000);' +
+            '})();}catch(e){}';
+        fs.writeFileSync(path.join(extDir, 'assist.js'), js, 'utf8');
+        return extDir;
+    } catch { return null; }
+}
 // 隔离建 PAT: 在该号专属隔离档打开建 PAT 页(与续登同 profile → 必为本号建 PAT, 不张冠李戴)。
-function daoGhFleetOpenPat(login: string): { ok: boolean; login: string; launched?: boolean } {
+// 按账号池通用配置(scope + 有效期)构建官网 URL 并注入建 PAT 助手扩展预勾/预选, 守柔不自动提交。
+function daoGhFleetOpenPat(login: string): { ok: boolean; login: string; launched?: boolean; scopes?: string[]; expDays?: number } {
     login = String(login || '').trim().replace(/^@/, '');
-    const url = 'https://github.com/settings/tokens/new?scopes=admin:org,repo,workflow&description=dao-' + encodeURIComponent(login);
-    const launched = launchIsolatedBrowser(url, 'gh:' + login);
-    return { ok: !!launched, login, launched: !!launched };
+    const cfg = daoGhGetPatCfg();
+    const scopeStr = cfg.scopes.join(',');
+    const url = 'https://github.com/settings/tokens/new?scopes=' + encodeURIComponent(scopeStr) + '&description=' + encodeURIComponent('dao-' + login);
+    const safeKey = ('gh:' + login).replace(/[^a-zA-Z0-9._@-]/g, '_');
+    const profileDir = path.join(DAO_DIR, 'browser-profiles', safeKey);
+    try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* 守柔 */ }
+    const patExt = daoGhWritePatAssistExt(profileDir, cfg.scopes, cfg.expDays);
+    const fp = daoAcctFingerprint(safeKey);
+    const proxy = daoAcctProxy(safeKey);
+    const launched = daoLaunchChromiumIsolated(url, safeKey, fp, proxy, profileDir, patExt ? [patExt] : []);
+    return { ok: !!launched, login, launched: !!launched, scopes: cfg.scopes, expDays: cfg.expDays };
 }
 // GitHub 管理中心 MD(一键复制/打开 · 对照 Bridge MD 模式): 只含脱敏元数据 + 热接入指引, 绝不含明文 PAT/密码/2FA。
 function ghGenerateMgmtMd(): string {
@@ -5613,7 +5692,7 @@ function ghGenerateMgmtMd(): string {
         '',
         '- 板块状态源 = `~/.dao/dao-inject-profile.json` 的 `ghFleet` / `orgBody` / `mcps`(⚠ 含明文 PAT — 读取后禁止外传/打印)。',
         '- 热查看: `POST /api/exec` 读上述文件; 热修复: `POST /api/write` + `POST /api/command` (`workbench.action.reloadWindow`) 重载生效。',
-        '- 面板命令(webview cmd → 后端): `daoGhAccountAdd` `daoGhAccountDetail` `daoGhAccountRepos` `daoGhSetActive` `daoGhFleetList` `daoGhFleetRole` `daoGhFleetRemoveOrg` `daoGhFleetForget` `daoGhFleetAssistLogin`(半登录续登·隔离档自动填充不提交) `daoGhFleetOpenPat`(该号隔离档建 PAT·不张冠李戴) `daoGhForkRepos` `daoGhSyncRepos` `daoGhCreateOrg` `daoGhInvite` `daoGhCopyMd`。',
+        '- 面板命令(webview cmd → 后端): `daoGhAccountAdd` `daoGhAccountDetail` `daoGhAccountRepos` `daoGhSetActive` `daoGhFleetList` `daoGhFleetRole` `daoGhFleetRemoveOrg` `daoGhFleetForget` `daoGhFleetAssistLogin`(半登录续登·隔离档自动填充不提交) `daoGhFleetOpenPat`(该号隔离档建 PAT·按通用配置预勾·不张冠李戴) `daoGhGetPatCfg`/`daoGhSavePatCfg`(账号池通用 PAT 权限/有效期配置) `daoGhForkRepos` `daoGhSyncRepos` `daoGhCreateOrg` `daoGhInvite` `daoGhCopyMd`。',
         '- GitHub REST 直调: 后端 `ghApiRequest(method, path, pat)` → api.github.com(限速自守)。',
         '',
         '## AI 守则',
@@ -8216,7 +8295,23 @@ function ghFleetRole(login,role){if(!login)return;toast('⏳ '+login+' → '+(ro
 function ghFleetRemoveOrg(login){if(!login)return;if(typeof confirm==='function'&&!confirm('把 '+login+' 移出本体组织?'))return;cmd('daoGhFleetRemoveOrg',{login:login})}
 function ghFleetForget(login){if(!login)return;if(typeof confirm==='function'&&!confirm('从本地舰队删除 '+login+'?(不影响其 GitHub 账号)'))return;cmd('daoGhFleetForget',{login:login})}
 function ghAssistLogin(login){if(!login)return;toast('🚀 隔离档续登(自动填充·守柔不提交): '+login,true);cmd('daoGhFleetAssistLogin',{login:login})}
-function ghFleetOpenPat(login){if(!login)return;toast('🔑 该号隔离档打开建 PAT: '+login,true);cmd('daoGhFleetOpenPat',{login:login})}
+function ghFleetOpenPat(login){if(!login)return;toast('🔑 该号隔离档打开建 PAT('+((_ghState().patCfg||{}).expDays===0?'永不过期':(((_ghState().patCfg||{}).expDays||30)+'天'))+'): '+login,true);cmd('daoGhFleetOpenPat',{login:login})}
+// PAT 通用配置窗: 先拉当前配置(含全量 scope 清单)再弹窗渲染。
+function ghPatCfgOpen(){_ghState().patCfgWantShow=true;toast('⏳ 载入 PAT 通用配置…',true);cmd('daoGhGetPatCfg',{})}
+function ghPatCfgShow(d){
+  var all=d.all||[];var sel={};(d.scopes||[]).forEach(function(k){sel[k]=1});var exp=(d.expDays==null?30:d.expDays);
+  var eopts=[[0,'永不过期'],[7,'7 天'],[30,'30 天'],[60,'60 天'],[90,'90 天']].map(function(o){return '<option value="'+o[0]+'"'+(exp===o[0]?' selected':'')+'>'+o[1]+'</option>'}).join('');
+  var boxes=all.map(function(s){return '<label style="display:inline-flex;align-items:center;gap:4px;width:48%;margin:2px 0;font-size:11px"><input type="checkbox" class="ghpc" value="'+esc(s.key)+'"'+(sel[s.key]?' checked':'')+'><code style="font-size:10px">'+esc(s.key)+'</code> <span style="color:var(--muted)">'+esc(s.label)+'</span></label>'}).join('');
+  var body='<p style="font-size:11px;color:var(--muted);line-height:1.6;margin:2px 0 6px">账号池<b>通用</b>建 PAT 配置(与官网一致): 勾权限 scope + 选有效期。各账号点「🔑 建 PAT」即在该号<b>隔离指纹档</b>按此预勾/预选跳官网, 守柔核对后手动 Generate。默认全权限 · 30 天。</p>'
+    +'<div style="margin:4px 0"><b style="font-size:11px">有效期</b> <select id="ghpcExp" style="width:120px">'+eopts+'</select> <button class="btn sm ghost" onclick="ghPatCfgAll(true)">全选权限</button> <button class="btn sm ghost" onclick="ghPatCfgAll(false)">全不选</button></div>'
+    +'<div style="display:flex;flex-wrap:wrap;max-height:240px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:6px;margin:4px 0">'+boxes+'</div>';
+  sm('⚙ GitHub PAT 通用配置 (账号池共用)',body,function(){
+    var scopes=[];try{document.querySelectorAll('.ghpc').forEach(function(c){if(c.checked)scopes.push(c.value)})}catch(e){}
+    var ed=parseInt((document.getElementById('ghpcExp')||{}).value,10);if(isNaN(ed))ed=30;
+    cmd('daoGhSavePatCfg',{scopes:scopes,expDays:ed});
+  })
+}
+function ghPatCfgAll(on){try{document.querySelectorAll('.ghpc').forEach(function(c){c.checked=!!on})}catch(e){}return false}
 // 账号池逐账号卡片(对齐 Devin 切号下拉管理): 详情/仓库/建 PAT/设本体/角色互转/移出/删。
 function ghRenderGhFleet(){var st=_ghState();var v=document.getElementById('ghGhFleetList');if(!v)return;var fs=st.ghFleet||[];if(!fs.length){v.innerHTML='<p style="font-size:11px;color:var(--muted);margin:4px 0">（账号池为空 · 上方「① 添加 GitHub 账号」加入）</p>';return}var h='';fs.forEach(function(a){
   var lg=esc(a.login);var sid=ghSafe(a.login);
@@ -8307,7 +8402,9 @@ function ghOnResult(d){
   else if(d.kind==='fleetRemoveOrg'){if(d.ok){toast('✓ '+d.login+' 已移出组织',true);cmd('daoGhFleetList',{})}else toast('✗ '+esc(d.error||'移出失败'),false);}
   else if(d.kind==='fleetForget'){if(d.ok){toast('✓ 已从舰队删除 '+d.login,true);cmd('daoGhFleetList',{})}}
   else if(d.kind==='assistLogin'){if(d.ok)toast('✓ 已在 '+d.login+' 隔离档打开 GitHub 登录'+(d.hasOtp?'·2FA已填充':'')+' · 核对后手动登入',true);else toast('✗ '+esc(d.error||'续登失败'),false);}
-  else if(d.kind==='fleetOpenPat'){if(d.ok)toast('✓ 已在 '+d.login+' 隔离档打开建 PAT 页',true);else toast('✗ 打开建 PAT 页失败',false);}
+  else if(d.kind==='fleetOpenPat'){if(d.ok)toast('✓ 已在 '+d.login+' 隔离档打开建 PAT 页(scope '+((d.scopes||[]).length)+' 项·'+(d.expDays===0?'永不过期':((d.expDays==null?30:d.expDays)+'天'))+'·助手已预勾)',true);else toast('✗ 打开建 PAT 页失败',false);}
+  else if(d.kind==='patCfg'){st.patCfg={scopes:d.scopes||[],expDays:(d.expDays==null?30:d.expDays)};if(st.patCfgWantShow){st.patCfgWantShow=false;ghPatCfgShow(d);}}
+  else if(d.kind==='patCfgSaved'){st.patCfg={scopes:d.scopes||[],expDays:(d.expDays==null?30:d.expDays)};toast('✓ PAT 通用配置已保存(scope '+((d.scopes||[]).length)+' 项·'+(d.expDays===0?'永不过期':d.expDays+'天')+')',true);}
   else if(d.kind==='injectPat'){
     if(d.ok){ghMsg('ghInjectOut','<span style="color:var(--success)">✓ GITHUB_PAT 已存入注入清单(security)+钉住 GitHub MCP · 已同步 '+(d.okCount||0)+'/'+(d.total||0)+' 账号</span>');cmd('getInjectProfile')}
     else ghMsg('ghInjectOut','<span style="color:var(--danger)">✗ '+esc(d.error||'注入失败')+'</span>');
@@ -8361,7 +8458,8 @@ function rGitHub(){
   h+='<div id="ghAddOut" style="font-size:11px;line-height:1.6;margin-top:4px"></div></div>';
   // ② GitHub 账号池 (逐账号管理)
   h+='<div class="st">② GitHub 账号池 (逐账号管理)</div><div class="card">';
-  h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 6px">每个账号可「详情」下拉看数据(login/名字/scopes/组织)、「仓库」列当前仓库、「建 PAT」跳官网、「设为本体」以其 PAT 统管组织。首个默认管理者, 封号即删换新。</p>';
+  h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 6px">每个账号可「详情」下拉看数据(login/名字/scopes/组织)、「仓库」列当前仓库、「建 PAT」按<b>账号池通用配置</b>(下方⚙)在该号隔离档跳官网预勾 scope/有效期、「设为本体」以其 PAT 统管组织。首个默认管理者, 封号即删换新。</p>';
+  h+='<div class="br" style="margin:2px 0 6px"><button class="btn sm" onclick="ghPatCfgOpen()" title="配置账号池通用建 PAT 参数(scope 权限 + 有效期)·各账号点「建 PAT」即按此在隔离档预勾/预选">⚙ PAT 通用配置</button></div>';
   h+='<div id="ghGhFleetList"></div></div>';
   h+='</div>'; // /左栏
   // ═══ 右栏: 组织管理 + GitHub MCP ═══
@@ -8389,7 +8487,7 @@ function rGitHub(){
   h+='</div>'; // /右栏
   h+='</div>'; // /grid
   v.innerHTML=h;
-  ghRenderGhFleet();ghRenderMcpOne();cmd('daoGhFleetList',{});
+  ghRenderGhFleet();ghRenderMcpOne();cmd('daoGhFleetList',{});cmd('daoGhGetPatCfg',{});
 }
 // 添号模式切换
 function ghAddMode(m){var st=_ghState();st.addMode=m;rGitHub()}
@@ -9433,6 +9531,17 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // 隔离建 PAT: 在该号专属隔离档打开建 PAT 页(与续登同 profile · 不张冠李戴)。
                 const r = daoGhFleetOpenPat(String(msg.login || ''));
                 reply({ type: 'daoGhResult', kind: 'fleetOpenPat', ...r });
+                break;
+            }
+            case 'daoGhGetPatCfg': {
+                // 读账号池 PAT 通用配置(scope + 有效期) + 全量 scope 清单供前端渲染配置窗。
+                reply({ type: 'daoGhResult', kind: 'patCfg', ...daoGhGetPatCfg() });
+                break;
+            }
+            case 'daoGhSavePatCfg': {
+                // 存账号池 PAT 通用配置(仅非密元数据·白名单过滤)。
+                const r = daoGhSavePatCfg(Array.isArray(msg.scopes) ? msg.scopes : [], Number(msg.expDays));
+                reply({ type: 'daoGhResult', kind: 'patCfgSaved', ...r });
                 break;
             }
             case 'daoGhCopyMd': {
@@ -14405,6 +14514,8 @@ interface InjectProfile {
     // GitHub 独立舰队(与 Devin 池完全分离): 纯 GitHub 账号 login+PAT+组织角色, 供管理者↔成员互转/移出组织。
     // cred = 账密+2FA 本地存号(不外发不入 UI 明文); 无头登录不做, 仅供官网引导换 PAT。
     ghFleet?: { login: string; pat?: string; role?: string; note?: string; addedAt?: string; cred?: { user?: string; pass?: string; otp?: string } }[];
+    // GitHub 建 PAT 账号池通用配置(仅非密元数据): 官网建 PAT 页预勾的 scope 清单 + 有效期天数(0=永不过期)。默认全 scope + 30 天。
+    ghPatCfg?: { scopes: string[]; expDays: number };
 }
 function mcpSlug(m: InjectProfileItemM): string {
     return String(m.slug || m.name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');

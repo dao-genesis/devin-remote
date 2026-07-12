@@ -55,8 +55,10 @@ ok(/不自动提交|autofill|自动填充/.test(src) && !/\.submit\(\)/.test(src
   "续登助手守柔: 自动填充但绝不自动提交(不做无头登录)");
 ok(/async function daoGhFleetAssistLogin\(/.test(src),
   "daoGhFleetAssistLogin: 该号专属隔离档打开 GitHub 登录页 + 填充");
-ok(/function daoGhFleetOpenPat\(/.test(src) && /launchIsolatedBrowser\(url,\s*'gh:'/.test(src),
-  "daoGhFleetOpenPat: 同一隔离档打开建 PAT 页(必为本号建·不张冠李戴)");
+ok(/function daoGhFleetOpenPat\(/.test(src) &&
+   /const safeKey = \('gh:' \+ login\)/.test(src) &&
+   /daoLaunchChromiumIsolated\(url, safeKey, fp, proxy, profileDir, patExt/.test(src),
+  "daoGhFleetOpenPat: 同一隔离档(gh:<login>)打开建 PAT 页+注入助手(必为本号建·不张冠李戴)");
 ok(/无有效 auth1|该账号无账密存号|账号不在池中/.test(src),
   "无账密存号/不在池中 → 明确报错(不回退活动号)");
 for (const c of ["daoGhFleetAssistLogin", "daoGhFleetOpenPat"]) {
@@ -99,5 +101,37 @@ ok(/a\.verify === 'pending' \? \{ verify: 'pending' \}/.test(src),
 ok(/out = Object\.assign\(\{\}, raw\);/.test(src) &&
    /if \(\(p as any\)\[k\] !== undefined\) out\[k\] = \(p as any\)\[k\];/.test(src),
   "saveInjectProfile: 合并磁盘档未知顶层字段·只覆盖已知字段(多窗多版本共档不互抹)");
+
+// 11) PAT 通用配置(账号池共用·官网建 PAT 权限/有效期): 默认全 scope + 30 天·用户可调·隔离档助手预勾不自动提交
+ok(/const GH_PAT_SCOPES:/.test(src) && /key: 'repo'/.test(src) && /key: 'admin:org'/.test(src) && /key: 'workflow'/.test(src),
+  "GH_PAT_SCOPES: 全量 scope 清单(对齐官网)含 repo/admin:org/workflow");
+ok(/const GH_PAT_EXP_DAYS:\s*number\[\]\s*=\s*\[0, 7, 30, 60, 90\]/.test(src),
+  "GH_PAT_EXP_DAYS: 有效期天数(0=永不过期) 对齐官网下拉");
+ok(/function _ghDefaultPatCfg\(\)[\s\S]*?expDays:\s*30/.test(src),
+  "_ghDefaultPatCfg: 默认全 scope + 30 天");
+ok(/function daoGhGetPatCfg\(/.test(src) && /function daoGhSavePatCfg\(/.test(src),
+  "daoGhGetPatCfg/daoGhSavePatCfg: 读写账号池通用 PAT 配置");
+ok(/prof\.ghPatCfg = \{ scopes: sc, expDays: ed \}/.test(src) && /const sc = Array\.isArray\(scopes\)[\s\S]*?valid\.has\(s\)/.test(src),
+  "daoGhSavePatCfg: scope 白名单过滤 + 有效期归一后落档");
+ok(/ghPatCfg\?:\s*\{\s*scopes:\s*string\[\];\s*expDays:\s*number\s*\}/.test(src),
+  "InjectProfile 声明 ghPatCfg(仅非密元数据)");
+ok(/function daoGhWritePatAssistExt\(/.test(src) && /settings\/tokens\/new\*/.test(src),
+  "daoGhWritePatAssistExt: 建 PAT 页助手扩展(仅本号隔离档·匹配 tokens/new)");
+{
+  const patExtBlock = src.split("daoGhWritePatAssistExt")[1].slice(0, 1800);
+  ok(!/\.submit\(\)/.test(patExtBlock) && /Generate token|不自动提交/.test(patExtBlock),
+    "建 PAT 助手守柔: 预勾 scope/有效期但绝不自动提交");
+}
+ok(/scopes=' \+ encodeURIComponent\(scopeStr\)/.test(src),
+  "daoGhFleetOpenPat: URL scope 由通用配置生成(非硬编码 admin:org,repo,workflow)");
+for (const c of ["daoGhGetPatCfg", "daoGhSavePatCfg"]) {
+  ok(new RegExp("case '" + c + "':").test(src), "消息处理: case '" + c + "'");
+}
+ok(/function ghPatCfgOpen\(/.test(src) && /function ghPatCfgShow\(/.test(src),
+  "前端 ghPatCfgOpen/ghPatCfgShow: PAT 通用配置悬浮窗");
+ok(/d\.kind==='patCfg'/.test(src) && /d\.kind==='patCfgSaved'/.test(src),
+  "前端 ghOnResult 处理 patCfg / patCfgSaved 回包");
+ok(/onclick="ghPatCfgOpen\(\)"/.test(src),
+  "账号池区提供「⚙ PAT 通用配置」按钮");
 
 console.log("[gh-fleet] " + pass + " assertion(s) passed\n");
