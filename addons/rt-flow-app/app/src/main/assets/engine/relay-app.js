@@ -72,10 +72,193 @@ const DaoRelayApp = (function () {
   }
   function shortHost(u) { try { return new URL(u).host; } catch (e) { return u; } }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  //__HUB_START__ 手机中枢 (三明治 operator→hub→agent): 让任意 PC 一行 PowerShell
+  //   经手机中转接入 —— PC 不装插件, connect 领 per-agent token, poll 取命令, result 回传。
+  //   与 addons/dao-bridge WorkspaceServer 同协议同语义 (见其 test/hub.test.js), 纯内存队列,
+  //   跑在 RelayService 常驻 WebView 引擎单例中, 帧间状态天然持久。经 test/phone-hub.test.js 实测, 勿删标记。
+  // ═══════════════════════════════════════════════════════════════════════
+  var HUB_POLL_MAX = 25, HUB_HB_TIMEOUT = 90000;   // 90s 无 poll/心跳判离线
+  var agentRegistry = new Map();
+  function hubRandHex(n) {
+    var b = null;
+    try { if (typeof crypto !== "undefined" && crypto.getRandomValues) { b = new Uint8Array(n); crypto.getRandomValues(b); } } catch (e) {}
+    if (!b) { b = new Uint8Array(n); for (var i = 0; i < n; i++) b[i] = Math.floor(Math.random() * 256); }
+    var s = ""; for (var j = 0; j < n; j++) s += ("0" + b[j].toString(16)).slice(-2);
+    return s;
+  }
+  function hubPsq(s) { return "'" + String(s == null ? "" : s).replace(/'/g, "''") + "'"; }
+  function hubShq(s) { return "'" + String(s == null ? "" : s).replace(/'/g, "'\\''") + "'"; }
+  // 按被控端登记平台把 {type,file,args,cmd,cwd} 规范化为一条可执行命令串 (dao-bridge buildExecCommand 移植)。
+  function hubBuildExec(body, posix) {
+    body = body || {};
+    var type = String(body.type || "shell").toLowerCase();
+    var file = body.file || body.exe || body.program || "";
+    var args = Array.isArray(body.args) ? body.args : [];
+    var cmd = body.cmd || body.command || (body.payload && body.payload.command) || "";
+    if (posix) {
+      var cwdP = body.cwd ? "cd " + hubShq(body.cwd) + " && " : "";
+      if (type === "detached" || type === "spawn" || body.detached) {
+        var t1 = file ? hubShq(file) : cmd; var a1 = args.length ? " " + args.map(hubShq).join(" ") : "";
+        return cwdP + "nohup " + t1 + a1 + " >/dev/null 2>&1 & echo \"started pid=$! file=" + (file || cmd) + "\"";
+      }
+      if (type === "run" || type === "file" || (file && !cmd)) {
+        var a2 = args.length ? " " + args.map(hubShq).join(" ") : ""; var runner = /\.sh$/i.test(file) ? "sh " : "";
+        return cwdP + runner + hubShq(file || cmd) + a2 + " 2>&1";
+      }
+      return cwdP + cmd;
+    }
+    var cwd = body.cwd ? "Set-Location -LiteralPath " + hubPsq(body.cwd) + "; " : "";
+    if (type === "detached" || type === "spawn" || body.detached) {
+      var tgt = file || cmd; var al = args.length ? " -ArgumentList " + args.map(hubPsq).join(",") : "";
+      var win = body.show ? "" : " -WindowStyle Hidden"; var verb = body.elevate ? " -Verb RunAs" : "";
+      return cwd + "$p=Start-Process -FilePath " + hubPsq(tgt) + al + win + verb + " -PassThru; 'started pid=' + $p.Id + ' file=' + " + hubPsq(tgt);
+    }
+    if (type === "run" || type === "file" || (file && !cmd)) {
+      var al2 = args.length ? " " + args.map(hubPsq).join(" ") : "";
+      return cwd + "& " + hubPsq(file || cmd) + al2 + " 2>&1 | Out-String";
+    }
+    if (type === "cmd" || type === "bat" || type === "batch") {
+      return cwd + "& cmd.exe /d /c " + hubPsq("chcp 65001>nul & " + cmd) + " 2>&1 | Out-String";
+    }
+    return cwd + cmd;
+  }
+  function hubPlatformPosix(a) {
+    var p = (a && a.sysinfo && a.sysinfo.platform) || (a && a.platform) || "win32";
+    return String(p).toLowerCase() !== "win32";
+  }
+  function hubRegister(sysinfo) {
+    sysinfo = sysinfo || {};
+    var id = sysinfo.hostname || ("agent-" + hubRandHex(3));
+    var token = hubRandHex(24);
+    var ex = agentRegistry.get(id);
+    if (ex) {
+      ex.id = id; ex.token = token; ex.sysinfo = sysinfo; ex.lastSeen = Date.now(); ex.status = "online";
+      ex.hostname = sysinfo.hostname || id; ex.capabilities = sysinfo.capabilities || ex.capabilities || ["shell"];
+      if (!ex.queue) ex.queue = []; if (!ex.waiters) ex.waiters = [];
+      if (!ex.results) ex.results = new Map(); if (!ex.resultWaiters) ex.resultWaiters = new Map();
+      return ex;
+    }
+    var a = { id: id, token: token, sysinfo: sysinfo, hostname: sysinfo.hostname || id,
+      capabilities: sysinfo.capabilities || ["shell"], connectedAt: Date.now(), lastSeen: Date.now(),
+      status: "online", queue: [], waiters: [], results: new Map(), resultWaiters: new Map() };
+    agentRegistry.set(id, a);
+    return a;
+  }
+  function hubGetAgent(id) {
+    if (!id) return null;
+    var a = agentRegistry.get(id); if (a) { a.id = a.id || id; return a; }
+    var t = String(id).toLowerCase();
+    var it = agentRegistry.entries(), n;
+    while (!(n = it.next()).done) { if (String(n.value[0]).toLowerCase() === t) { n.value[1].id = n.value[1].id || n.value[0]; return n.value[1]; } }
+    return null;
+  }
+  function hubAlive(a) { var ls = typeof a.lastSeen === "number" ? a.lastSeen : 0; return Date.now() - ls < HUB_HB_TIMEOUT; }
+  function hubIsSelf(id) { var k = String(id || "").toLowerCase().trim(); return k === "" || k === "self" || k === "local" || k === "phone"; }
+  function hubQueue(agentId, type, payload) {
+    var a = hubGetAgent(agentId); if (!a) return { err: "agent not found" };
+    if (!a.queue) a.queue = []; if (!a.waiters) a.waiters = [];
+    var cmdId = "cmd_" + Date.now() + "_" + hubRandHex(3);
+    a.queue.push({ cmd_id: cmdId, type: type || "shell", payload: payload || {} });
+    var w = a.waiters.shift(); if (w) w();
+    return { cmdId: cmdId, agent: a };
+  }
+  function hubPoll(a, timeoutSec) {
+    a.lastSeen = Date.now(); a.status = "online";
+    if (!a.queue) a.queue = []; if (!a.waiters) a.waiters = [];
+    var ms = Math.min(timeoutSec || HUB_POLL_MAX, HUB_POLL_MAX) * 1000;
+    return new Promise(function (resolve) {
+      if (a.queue.length) return resolve(a.queue.splice(0));
+      var done = false, timer = null;
+      var finish = function (cmds) { if (done) return; done = true; clearTimeout(timer); var i = a.waiters.indexOf(wake); if (i >= 0) a.waiters.splice(i, 1); resolve(cmds); };
+      var wake = function () { finish(a.queue.splice(0)); };
+      a.waiters.push(wake);
+      timer = setTimeout(function () { finish([]); }, ms);
+    });
+  }
+  function hubSubmit(a, cmdId, result) {
+    a.lastSeen = Date.now();
+    if (!a.results) a.results = new Map();
+    a.results.set(cmdId, Object.assign({ completed_at: Date.now() }, result));
+    if (a.results.size > 100) {
+      var arr = Array.from(a.results.entries()).sort(function (x, y) { return (x[1].completed_at || 0) - (y[1].completed_at || 0); });
+      for (var i = 0; i < a.results.size - 100; i++) a.results.delete(arr[i][0]);
+    }
+    var w = a.resultWaiters && a.resultWaiters.get(cmdId); if (w) w(a.results.get(cmdId));
+  }
+  function hubWaitResult(a, cmdId, timeoutMs) {
+    return new Promise(function (resolve) {
+      var ex = a.results && a.results.get(cmdId); if (ex) return resolve(ex);
+      if (!a.resultWaiters) a.resultWaiters = new Map();
+      var done = false, timer = null;
+      var finish = function (r) { if (done) return; done = true; clearTimeout(timer); a.resultWaiters.delete(cmdId); resolve(r); };
+      a.resultWaiters.set(cmdId, finish);
+      timer = setTimeout(function () { finish(null); }, timeoutMs);
+    });
+  }
+  function hubList() {
+    var out = [], it = agentRegistry.entries(), n;
+    while (!(n = it.next()).done) {
+      var id = n.value[0], a = n.value[1], si = a.sysinfo || {};
+      out.push({ id: id, hostname: a.hostname || id, status: hubAlive(a) ? "online" : "offline",
+        os: si.os_version || a.os || "?", user: si.username || a.user || "?",
+        capabilities: a.capabilities || ["shell"],
+        last_seen: typeof a.lastSeen === "number" ? new Date(a.lastSeen).toISOString() : "",
+        pending: (a.queue && a.queue.length) || 0 });
+    }
+    return out;
+  }
+  // 当前对外可达的接入端点 (relay 主域 + /relay/<session>); 被控端一行脚本据此回连。
+  function hubEndpoint() {
+    var base = (activeUrl || (candidates && candidates[0]) || (typeof cfg.url === "string" ? cfg.url.replace(/\/$/, "") : "")) || "";
+    return base && cfg.session ? base + "/relay/" + cfg.session : "";
+  }
+  // 被控端一行接入 PowerShell (帧封装版: 每次调用 POST <endpoint> body={path,method,body}, Bearer=中继 token)。
+  function hubBootstrapPs1(endpoint, token) {
+    endpoint = endpoint || "<hub-endpoint>"; token = token || "<relay-token>";
+    return "# dao 手机中枢 · 被控端一行接入 · 道生一,一命接万机\n" +
+"$ErrorActionPreference='SilentlyContinue'; $ProgressPreference='SilentlyContinue'\n" +
+"try{ $OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8 }catch{}\n" +
+"$EP='" + endpoint + "'; $TK='" + token + "'\n" +
+"function Dao-Rpc($p,$o){ $f=@{path=$p;method='POST';body=$o}; $b=[Text.Encoding]::UTF8.GetBytes(($f|ConvertTo-Json -Depth 8 -Compress)); return irm $EP -Method POST -Body $b -ContentType 'application/json; charset=utf-8' -Headers @{Authorization=\"Bearer $TK\"} -TimeoutSec 35 }\n" +
+"$sys=@{ hostname=$env:COMPUTERNAME; username=$env:USERNAME; platform='win32'; os_version=[Environment]::OSVersion.VersionString; ps_version=$PSVersionTable.PSVersion.ToString(); capabilities=@('shell','cmd','run','detached') }\n" +
+"try { $reg = Dao-Rpc '/api/connect' @{sysinfo=$sys} } catch { Write-Host \"[dao] connect failed: $($_.Exception.Message)\" -ForegroundColor Red; return }\n" +
+"$aid=$reg.agent_id; $tok=$reg.token\n" +
+"Write-Host \"[dao] 已接入手机中枢 as $aid  (Ctrl+C 退出)\" -ForegroundColor Green\n" +
+"while($true){\n" +
+"  try{\n" +
+"    $poll = Dao-Rpc '/api/poll' @{id=$aid;token=$tok;timeout=25}\n" +
+"    foreach($__daoCmd in @($poll.commands)){\n" +
+"      if(-not $__daoCmd){ continue }\n" +
+"      $__daoCid=$__daoCmd.cmd_id; $__daoType=$__daoCmd.type; $__daoPayloadCmd=$__daoCmd.payload.command\n" +
+"      $out='';$err='';$code=0; $sw=[Diagnostics.Stopwatch]::StartNew(); $global:LASTEXITCODE=0\n" +
+"      try{\n" +
+"        switch($__daoType){\n" +
+"          'sysinfo' { $out=(Get-ComputerInfo | Out-String) }\n" +
+"          default {\n" +
+"            $Error.Clear(); $ErrorActionPreference='Continue'\n" +
+"            $raw = & { Invoke-Expression $args[0] } $__daoPayloadCmd 2>&1\n" +
+"            $ErrorActionPreference='SilentlyContinue'; $out=($raw | Out-String)\n" +
+"            if($Error.Count -gt 0){ $code=1; $msgs=(@($Error|Select-Object -First 20)|ForEach-Object{$_.ToString()}) -join [Environment]::NewLine; if([string]::IsNullOrWhiteSpace($out)){$out=$msgs}else{$out=$out+[Environment]::NewLine+$msgs} }\n" +
+"            if($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0){ $code=$LASTEXITCODE }\n" +
+"          }\n" +
+"        }\n" +
+"      }catch{ $err=$_.Exception.Message; $code=1 }\n" +
+"      $sw.Stop()\n" +
+"      $res=@{ stdout=$out; stderr=$err; exit_code=$code; execution_time_ms=$sw.ElapsedMilliseconds }\n" +
+"      try{ Dao-Rpc '/api/result' @{agent_id=$aid;token=$tok;cmd_id=$__daoCid;result=$res} | Out-Null }catch{}\n" +
+"    }\n" +
+"  }catch{\n" +
+"    try{ $reg=Dao-Rpc '/api/connect' @{sysinfo=$sys}; $aid=$reg.agent_id; $tok=$reg.token }catch{ Start-Sleep 3 }\n" +
+"  }\n" +
+"}\n";
+  }
+  //__HUB_END__
+
   async function handleFrame(m) {
     const path = (m && m.path) || "/api/health";
     if (path === "/api/health") {
-      return { status: 200, body: { status: "ok", service: "devin-cloud-mobile", role: "browser-tunnel", session: cfg.session, ts: Date.now(), cmds: Object.keys(COMMANDS) } };
+      return { status: 200, body: { status: "ok", service: "devin-cloud-mobile", role: "browser-tunnel", session: cfg.session, ts: Date.now(), cmds: Object.keys(COMMANDS), hub: { agents: agentRegistry.size, online: hubList().filter(function (a) { return a.status === "online"; }).length } } };
     }
     // v0.6.0 · 最大化暴露 · 不害怕方能成其大
     if (path === "/api/info" || path === "/api/device") {
@@ -109,7 +292,70 @@ const DaoRelayApp = (function () {
       const N = typeof Native !== "undefined" ? Native : {};
       return { status: 200, body: N.listTabs ? (function(){ try{ return JSON.parse(N.listTabs()||"[]"); }catch(e){ return []; } })() : [] };
     }
+    // ── 手机中枢·被控端端点 (三明治 operator→hub→agent, per-agent token 自证) ──
+    if (path === "/api/bootstrap.ps1" || path === "/bootstrap.ps1") {
+      const ep = (m.body && m.body.endpoint) || hubEndpoint();
+      const tk = (m.body && m.body.token) || cfg.token || "";
+      return { status: 200, body: { script: hubBootstrapPs1(ep, tk), endpoint: ep } };
+    }
+    if (path === "/api/connect") {
+      const a = hubRegister((m.body && (m.body.sysinfo || m.body)) || {});
+      return { status: 200, body: { agent_id: a.id, token: a.token, server_time: new Date().toISOString() } };
+    }
+    if (path === "/api/poll") {
+      const a = hubGetAgent(m.body && m.body.id);
+      if (!a || a.token !== (m.body && m.body.token)) return { status: 401, body: { error: "unauthorized" } };
+      const cmds = await hubPoll(a, parseInt((m.body && m.body.timeout), 10) || HUB_POLL_MAX);
+      return { status: 200, body: { commands: cmds } };
+    }
+    if (path === "/api/result") {
+      const a = hubGetAgent(m.body && m.body.agent_id);
+      if (!a || a.token !== (m.body && m.body.token)) return { status: 401, body: { error: "unauthorized" } };
+      hubSubmit(a, m.body.cmd_id, (m.body && m.body.result) || {});
+      return { status: 200, body: { ok: true } };
+    }
+    if (path === "/api/heartbeat") {
+      const a = hubGetAgent(m.body && m.body.agent_id);
+      if (a && a.token === (m.body && m.body.token)) { a.lastSeen = Date.now(); a.status = "online"; }
+      return { status: 200, body: { ok: true } };
+    }
+    if (path === "/api/agents") { return { status: 200, body: { agents: hubList() } }; }
+    if (path === "/api/result-fetch") {
+      const a = hubGetAgent(m.body && m.body.agent_id);
+      if (!a) return { status: 404, body: { error: "agent not found" } };
+      const r = a.results && a.results.get(m.body && m.body.cmd_id);
+      if (!r) return { status: 200, body: { status: "pending", agent_id: a.id, cmd_id: m.body && m.body.cmd_id } };
+      return { status: 200, body: { status: "completed", agent_id: a.id, cmd_id: m.body.cmd_id, result: r } };
+    }
+    if (path === "/api/broadcast") {
+      const b = (m && m.body) || {};
+      const ids = [], it = agentRegistry.keys(); let n;
+      while (!(n = it.next()).done) {
+        const tgt = hubGetAgent(n.value); if (!tgt) continue;
+        const payload = { command: hubBuildExec(b, hubPlatformPosix(tgt)) };
+        const qd = hubQueue(n.value, "shell", payload);
+        if (!qd.err) ids.push({ agent_id: tgt.id, cmd_id: qd.cmdId });
+      }
+      return { status: 200, body: { dispatched: ids.length, commands: ids } };
+    }
     if (path === "/api/exec" || path === "/api/exec-sync" || path === "/api/command") {
+      // agent_id 指向已接入的被控端 → 转发该 PC (connect/poll/result 三明治); 空/self → 本机手机 shell。
+      const aid = m.body && m.body.agent_id;
+      if (aid && !hubIsSelf(aid)) {
+        const sync = path === "/api/exec-sync";
+        const type = String((m.body && m.body.type) || "shell").toLowerCase();
+        const timeoutMs = Math.min(Number(m.body && m.body.timeout) || 60, 300) * 1000;
+        const tgt = hubGetAgent(aid);
+        if (!tgt) return { status: 404, body: { error: "agent not found" } };
+        const ctype = type === "sysinfo" ? "sysinfo" : "shell";
+        const payload = type === "sysinfo" ? {} : { command: hubBuildExec(m.body, hubPlatformPosix(tgt)) };
+        const qd = hubQueue(aid, ctype, payload);
+        if (qd.err) return { status: 404, body: { error: qd.err } };
+        if (!sync) return { status: 200, body: { cmd_id: qd.cmdId, agent_id: qd.agent.id, type } };
+        const result = await hubWaitResult(qd.agent, qd.cmdId, timeoutMs);
+        if (!result) return { status: 504, body: { status: "timeout", agent_id: qd.agent.id, cmd_id: qd.cmdId } };
+        return { status: 200, body: { status: "completed", agent_id: qd.agent.id, cmd_id: qd.cmdId, result } };
+      }
       // ADB/AVD 级 shell (Shizuku, uid2000): Token 已在中继层鉴权 + 设备端 remoteOps 门禁; 此处直通执行真实命令。
       const N = typeof Native !== "undefined" ? Native : {};
       const c = (m.body && (m.body.command || m.body.cmd || m.body.sh || m.body.line)) || "";

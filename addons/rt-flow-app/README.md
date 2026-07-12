@@ -82,6 +82,16 @@ app/src/main/assets/engine/
 首次启动：面板「穿透配置」区自动展开 → 填入 URL/Token/Session → 保存 → 自动连接。
 每个用户/设备独立配置，不同用户不同数据。
 
+## 手机中枢 (三明治 · 任意 PC 一行接入)
+
+`relay-app.js` 内置**手机中枢**：让任意电脑跑**一行 PowerShell**（**不装插件**）经手机中转接入，
+operator → 手机 → 被控 PC。协议/语义 = `addons/dao-bridge` 的 `WorkspaceServer`（源级护栏
+`test/phone-hub.test.js`）。端点：`/api/connect`·`/api/agents`·`/api/poll`·`/api/result`·
+`/api/heartbeat`·`/api/result-fetch`·`/api/exec[-sync]`·`/api/broadcast`·`/api/bootstrap.ps1`；
+空/`self` agent_id = 手机本机 shell，其它 = 转发已接入 PC。per-agent token 自证、90s 心跳判活、
+跨平台命令规范化、E2E 不削弱。完整接入/API/自愈文档见
+[`docs/手机中枢-被控端接入.md`](docs/手机中枢-被控端接入.md)。
+
 ## 切号原理 (= 桌面扩展 DNR 的等价物)
 
 Devin 鉴权是 HTTP 头 `Authorization: Bearer <auth1>` + `x-cog-org-id`（非 cookie）。
