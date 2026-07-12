@@ -1241,6 +1241,22 @@ function test(name, fn) {
     assert.ok(/'\/shell' \+ \(alt \? \('\?dao_alt=' \+ encodeURIComponent\(alt\)\) : ''\)/.test(ts), "src/extension.ts: copyBridgeShell 须携带 ?dao_alt= 快速通道兜底");
   });
 
+  // ── /shell 内联脚本「渲染后」语法护栏 (双副本) ──
+  // 病灶: 反引号模板里正则的单反斜杠(\/ \. \? \s)在模板求值时被吞 → 渲染出的整段
+  //   客户端脚本 SyntaxError, 全部按钮处理器未绑定(☰/译/⬇/🖼/📁 集体失灵)。
+  // 正法: 用 tools/render_check.js 对 _multiShellHtml 全部 <script> 做「模拟插值 + vm 解析」。
+  console.log("\n[/shell 渲染后语法护栏]");
+  test("/shell: _multiShellHtml 渲染后脚本可解析 (双副本源级护栏)", () => {
+    const cp = require("child_process"), path = require("path");
+    const tool = path.join(__dirname, "..", "..", "..", "tools", "render_check.js");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const target = path.join(__dirname, ...rel);
+      const r = cp.spawnSync(process.execPath, [tool, target], { encoding: "utf8" });
+      assert.ok(r.status === 0, rel.join("/") + ": render_check 须通过\n" + (r.stdout || "") + (r.stderr || ""));
+      assert.ok(/_multiShellHtml script#\d+ RENDERED \+ PARSED OK/.test(r.stdout || ""), rel.join("/") + ": 须实际校验到 _multiShellHtml 脚本块");
+    }
+  });
+
   // ── Worker 持久通道控制台「为学者日益·闻道者日损」按钮归一 (与快速通道同构) ──
   // 复制地址/复制Token/接入信息 三合一 → 复制接入信息; 重启/重建 二合一 → 重启 Worker(连不上自动升级重建)。
   console.log("\n[Worker 控制台按钮归一]");
