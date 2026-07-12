@@ -1220,6 +1220,13 @@ public class MainActivity extends AppCompatActivity {
                 return handleExternalScheme(u);
             }
             @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) {
+                // 兜底: window.open/target=_blank 经 onCreateWindow 传输的首个导航常绕过
+                //   shouldOverrideUrlLoading → 附件下载直链会把新标签整帧导去 S3 落成空白/超时。
+                //   在此拦停并转下载/悬浮直看(文本类), interceptAttachmentNav 顺手关掉空标签。
+                if (u != null && u.startsWith("http") && isAttachmentDownloadUrl(u)) {
+                    try { v.stopLoading(); } catch (Exception ignored) {}
+                    if (interceptAttachmentNav(v, u)) return;
+                }
                 tab.url = u; if (tabOf(v) == active) setAddr(u);
                 if (u != null && u.startsWith("http")) tab.loadedAt = System.currentTimeMillis();   // 整页加载 → V8 堆归零, 重计堆龄
                 // 老 WebView 兜底: 无 DOCUMENT_START_SCRIPT 时, 此处尽早种入多实例鉴权(与 TabActivity 一致) → 旧机型账号可登。
@@ -4013,7 +4020,13 @@ public class MainActivity extends AppCompatActivity {
             String host = x.getHost() == null ? "" : x.getHost().toLowerCase(java.util.Locale.US);
             String path = x.getPath() == null ? "" : x.getPath();
             if (host.equals("app.devin.ai") && path.startsWith("/attachments/")) return true;
-            if (low.contains("x-amz-signature=") && low.contains("response-content-disposition=attachment")) return true;
+            // 预签名直链(处置明示 attachment): SigV4(x-amz-signature) / SigV2(awsaccesskeyid) /
+            //   STS 临时凭证(amz-security-token) 三种签名形态皆算 —— 只认 SigV4 会漏掉 Devin 现网
+            //   实际下发的 SigV2/STS 直链 → 顶层导航到它必空白/超时, 须转下载/悬浮直看而非导航。
+            if (low.contains("response-content-disposition=attachment")
+                    && (low.contains("x-amz-signature=")
+                        || low.contains("awsaccesskeyid=")
+                        || low.contains("amz-security-token="))) return true;
         } catch (Exception ignored) {}
         return false;
     }
@@ -4036,7 +4049,7 @@ public class MainActivity extends AppCompatActivity {
      *  onCreateWindow 刚开出的空标签顺手关闭。 */
     private boolean interceptAttachmentNav(WebView v, String u) {
         if (!isAttachmentDownloadUrl(u)) return false;
-        String gname = sanitizeFileName(android.webkit.URLUtil.guessFileName(u, dispositionFromUrl(u), null));
+        String gname = attachmentFileName(u, dispositionFromUrl(u), null);
         if (isTextDocName(gname)) {
             viewDocInPanel(u, gname);
         } else {
@@ -4069,7 +4082,7 @@ public class MainActivity extends AppCompatActivity {
                 if (!doomed && edgePreferred() && (blockedMediaHost(h) || isAttachmentDownloadUrl(url))) doomed = true;
             } catch (Exception ignored) {}
             if (doomed) {
-                String nm = sanitizeFileName(android.webkit.URLUtil.guessFileName(url, contentDisposition, mime));
+                String nm = attachmentFileName(url, contentDisposition, mime);
                 runOnUiThread(() -> toast("经代理通道下载: " + nm));
                 nativeFetchDownload(url, nm, mime);
                 return;
@@ -4084,7 +4097,7 @@ public class MainActivity extends AppCompatActivity {
                 if (dt != null && dt.auth1 != null && !dt.auth1.isEmpty()
                         && fUrl != null && fUrl.contains("app.devin.ai/attachments/"))
                     ensureAttachmentCookie(dt.auth1, dt.orgId, fUrl);
-                String name = sanitizeFileName(android.webkit.URLUtil.guessFileName(fUrl, fCd, fMime));
+                String name = attachmentFileName(fUrl, fCd, fMime);
                 DownloadManager.Request req = new DownloadManager.Request(Uri.parse(fUrl));
                 if (fMime != null) req.setMimeType(fMime);
                 if (fUa != null) req.addRequestHeader("User-Agent", fUa);
@@ -4099,6 +4112,25 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
+    /** 附件真名推导: URLUtil.guessFileName 遇路径内二次编码的 %3F('?') 会当作查询串截断 →
+     *  丢真名与扩展名(得 "xx.bin")→ MD 等文本附件误走下载而非悬浮直看。此时改用解码后的
+     *  URL 末段路径补救(保留扩展名), 正常 URL 仍走 guessFileName 原逻辑。 */
+    static String attachmentFileName(String u, String cd, String mime) {
+        String g = sanitizeFileName(android.webkit.URLUtil.guessFileName(u, cd, mime));
+        if (g.endsWith(".bin") || !g.contains(".")) {
+            try {
+                String seg = Uri.parse(u).getLastPathSegment();
+                if (seg != null && seg.contains("%")) {
+                    try { seg = java.net.URLDecoder.decode(seg, "UTF-8"); } catch (Exception ignored) {}
+                }
+                if (seg != null) {
+                    seg = sanitizeFileName(seg);
+                    if (seg.lastIndexOf('.') > 0) return seg;
+                }
+            } catch (Exception ignored) {}
+        }
+        return g;
+    }
     /** 文件名消毒: 附件名常含 '?'(中文被替换) 等非法字符 → DownloadManager 直接 enqueue 失败。 */
     static String sanitizeFileName(String n) {
         if (n == null || n.isEmpty()) return "download";

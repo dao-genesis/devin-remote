@@ -285,7 +285,7 @@ public class TabActivity extends AppCompatActivity {
                 if (accAuth1 != null && !accAuth1.isEmpty()
                         && fUrl != null && fUrl.contains("app.devin.ai/attachments/"))
                     MainActivity.ensureAttachmentCookie(accAuth1, accOrgId, fUrl);
-                String name = android.webkit.URLUtil.guessFileName(fUrl, fCd, fMime);
+                String name = MainActivity.attachmentFileName(fUrl, fCd, fMime);
                 DownloadManager.Request req = new DownloadManager.Request(Uri.parse(fUrl));
                 if (fMime != null) req.setMimeType(fMime);
                 if (fUa != null) req.addRequestHeader("User-Agent", fUa);
