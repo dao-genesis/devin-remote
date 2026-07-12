@@ -259,6 +259,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const https = require("node:https");
+const net = require("node:net");
+const tls = require("node:tls");
 const crypto = require("node:crypto");
 const { URL } = require("node:url");
 // 第五板块 · Devin Cloud 接入底层 (对话提取/备份/追踪/水过无痕清理)
@@ -2665,7 +2667,14 @@ async function _handleShellStatus(m, send) {
       // auth 未缓存(如 IDE 重启后还原的标签) → 节流自动登录取号(每号 10min 一试·不阻塞其他号),
       //   否则该号标签永无状态灯/对话名(旧病灶: 直接 continue 即静默死区)。
       if (!auth || !auth.auth1) auth = await _shellEnsureAuth(email);
-      if (!auth || !auth.auth1) continue;
+      if (!auth || !auth.auth1) {
+        // 取不到 auth(登录失败/负缓存) → 仍回填已知额度, 标签不留死区
+        try {
+          const h0 = _store && _store.getHealth ? _store.getHealth(email) : null;
+          if (h0 && h0.checked) { const d0 = Math.max(0, Math.round(h0.overageDollars || 0)); for (const t of tl) send({ type: 'tabUpdate', id: t.id, dollars: d0 }); }
+        } catch (e) {}
+        continue;
+      }
       let act = [];
       try { act = await devinCloud.listRunningSessions(auth); } catch (e) {}
       const amap = new Map();
@@ -7139,6 +7148,55 @@ function _isValidAutoTarget(i) {
   return false;
 }
 
+// 道·网络软编码(直连优先·代理兜底) — 与 devin_proxy.upstreamRequest 同策, 覆盖所有
+//   rt-flow 宿主侧 API 调用(planStatus/devinLogin/listSessions 等):
+//   ① 直连(keep-alive 池) → ② 瞬断(TLS 半握手被掐/ECONNRESET)换新 socket 直连重试
+//   → ③ 仍不通才探测本机常见代理端口(Clash/v2ray 等·60s 缓存)经 CONNECT 兜底。
+//   任一路成功即记忆偏好(直连恢复自动回归), 国内直连/挂代理/无代理三态皆自愈。
+const _NETP_PORTS = [7890, 10809, 7891, 1080, 10808, 8080, 8118];
+let _netpProbe = { port: 0, ts: 0 }; // port>0=探到可用; -1=探明无; 0=未探测 (60s 缓存)
+let _netpGood = 0; // 上次经该本机代理成功 → 后续先走代理; 直连一成功即清零
+function _netTransient(e) {
+  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|disconnected|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND|handshake|TLS/i.test(String((e && e.message) || e || ""));
+}
+function _netpProbePort(host, cb) {
+  if (_netpProbe.ts && Date.now() - _netpProbe.ts < 60000) return cb(_netpProbe.port > 0 ? _netpProbe.port : 0);
+  let i = 0;
+  const tryNext = () => {
+    if (i >= _NETP_PORTS.length) { _netpProbe = { port: -1, ts: Date.now() }; return cb(0); }
+    const port = _NETP_PORTS[i++];
+    let done = false;
+    const s = net.connect({ host: "127.0.0.1", port, timeout: 800 });
+    const fin = (ok) => { if (done) return; done = true; try { s.destroy(); } catch (e) {} if (ok) { _netpProbe = { port, ts: Date.now() }; cb(port); } else tryNext(); };
+    s.once("connect", () => {
+      s.write("CONNECT " + host + ":443 HTTP/1.1\r\nHost: " + host + ":443\r\n\r\n");
+      s.once("data", (d) => fin(/^HTTP\/1\.[01] 200/.test(String(d))));
+      setTimeout(() => fin(false), 4000);
+    });
+    s.once("error", () => fin(false));
+    s.once("timeout", () => fin(false));
+  };
+  tryNext();
+}
+function _netpTunnel(proxyPort, host, cb) {
+  let done = false;
+  const s = net.connect({ host: "127.0.0.1", port: proxyPort, timeout: 5000 });
+  const fail = (m) => { if (done) return; done = true; try { s.destroy(); } catch (e) {} cb(new Error(m || "tunnel failed")); };
+  s.once("connect", () => {
+    s.write("CONNECT " + host + ":443 HTTP/1.1\r\nHost: " + host + ":443\r\n\r\n");
+    let buf = "";
+    const onData = (d) => {
+      buf += String(d);
+      if (buf.indexOf("\r\n\r\n") < 0) return;
+      s.removeListener("data", onData);
+      if (!/^HTTP\/1\.[01] 200/.test(buf)) return fail("proxy CONNECT " + buf.split("\r\n")[0]);
+      done = true; s.setTimeout(0); cb(null, s);
+    };
+    s.on("data", onData);
+  });
+  s.once("error", (e) => fail(e && e.message));
+  s.once("timeout", () => fail("proxy connect timeout"));
+}
 function httpsReq(method, urlStr, headers, body, timeoutMs) {
   return new Promise((resolve, reject) => {
     let u;
@@ -7147,28 +7205,57 @@ function httpsReq(method, urlStr, headers, body, timeoutMs) {
     } catch (e) {
       return reject(e);
     }
-    const req = https.request(
-      {
-        method,
-        hostname: u.hostname,
-        port: u.port || 443,
-        path: u.pathname + u.search,
-        headers: Object.assign({ "User-Agent": UA }, headers || {}),
-        timeout: timeoutMs || HTTP_TIMEOUT_MS,
-        agent: _httpsAgent, // 有界复用池 · 防 globalAgent 无限新建 socket 打满 conntrack
-      },
-      (res) => {
-        const chunks = [];
-        res.on("data", (c) => chunks.push(c));
-        res.on("end", () =>
-          resolve({ status: res.statusCode, body: Buffer.concat(chunks) }),
-        );
-      },
-    );
-    req.on("error", reject);
-    req.on("timeout", () => req.destroy(new Error("timeout")));
-    if (body) req.write(body);
-    req.end();
+    const baseOpts = {
+      method,
+      hostname: u.hostname,
+      port: u.port || 443,
+      path: u.pathname + u.search,
+      headers: Object.assign({ "User-Agent": UA }, headers || {}),
+      timeout: timeoutMs || HTTP_TIMEOUT_MS,
+    };
+    let settled = false;
+    const done = (r) => { if (!settled) { settled = true; resolve(r); } };
+    const fail = (e) => { if (!settled) { settled = true; reject(e); } };
+    const collect = (res, onOkProxyPort) => {
+      if (onOkProxyPort) _netpGood = onOkProxyPort; else _netpGood = 0;
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => done({ status: res.statusCode, body: Buffer.concat(chunks) }));
+    };
+    const viaProxy = (port, origErr) => {
+      _netpTunnel(port, u.hostname, (te, sock) => {
+        if (te) return fail(origErr || te);
+        const pr = https.request(Object.assign({}, baseOpts, { agent: false, createConnection: () => tls.connect({ socket: sock, servername: u.hostname, rejectUnauthorized: false }) }), (r) => collect(r, port));
+        pr.on("timeout", () => pr.destroy(new Error("timeout(proxy)")));
+        pr.on("error", (e) => fail(origErr || e));
+        if (body) pr.write(body);
+        pr.end();
+      });
+    };
+    const direct = (n, extra) => {
+      const req = https.request(Object.assign({}, baseOpts, extra), (r) => collect(r, 0));
+      req.on("timeout", () => req.destroy(new Error("timeout")));
+      req.on("error", (e) => {
+        if (!_netTransient(e)) return fail(e);
+        if (n === 0) return direct(1, { agent: false }); // 瞬断 → 换新 socket 直连重试
+        _netpProbePort(u.hostname, (pp) => { if (!pp) return fail(e); viaProxy(pp, e); });
+      });
+      if (body) req.write(body);
+      req.end();
+    };
+    if (_netpGood) {
+      // 偏好代理时仍带直连回归: 隧道失败/代理下线 → 清偏好走直连
+      _netpTunnel(_netpGood, u.hostname, (te, sock) => {
+        if (te) { _netpGood = 0; _netpProbe = { port: 0, ts: 0 }; return direct(0, { agent: _httpsAgent }); }
+        const pr = https.request(Object.assign({}, baseOpts, { agent: false, createConnection: () => tls.connect({ socket: sock, servername: u.hostname, rejectUnauthorized: false }) }), (r) => collect(r, _netpGood));
+        pr.on("timeout", () => pr.destroy(new Error("timeout(proxy)")));
+        pr.on("error", () => { _netpGood = 0; direct(0, { agent: _httpsAgent }); });
+        if (body) pr.write(body);
+        pr.end();
+      });
+      return;
+    }
+    direct(0, { agent: _httpsAgent }); // 有界复用池 · 防 globalAgent 无限新建 socket 打满 conntrack
   });
 }
 async function jsonPost(url, headers, body, timeoutMs) {
