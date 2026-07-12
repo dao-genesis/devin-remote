@@ -8727,6 +8727,20 @@ function rGitHub(){
   h+='<div class="st">④ GitHub MCP (随本体 PAT 钉住)</div><div class="card">';
   h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 6px">仅同步 <b>GitHub MCP</b> 一条(非整个 MCP 板块): 设本体/注 PAT 后自动以官方 remote MCP(Bearer PAT)钉住, 与 MCP 板块的该条同源双向。</p>';
   h+='<div id="ghMcpOne"></div></div>';
+  // ⑤ 持久化 Worker 通道 (与内网穿透板块同一后端·同步显示) — 用户在此简单交互:
+  //   一键 OAuth 打通 / 用池内 GitHub 账号代登 Cloudflare 建 Token / 贴 Token 全自动。
+  //   普通中继零账号即可用(快速隧道/mesh 兜底), Cloudflare 仅为「永不漂固定地址」可选项。
+  h+='<div class="st" style="margin-top:10px">⑤ 持久化 Worker 通道 (Cloudflare · 与内网穿透板块同步)</div><div class="card" style="border-left:3px solid var(--accent2,#c586c0)">';
+  var _rl=(S.bridge&&S.bridge.relay)||{};
+  var _rlSt=(_rl.active&&_rl.url)?('<span style="color:'+(_rl.healthy?'var(--success)':'var(--warn)')+'">'+(_rl.healthy?'● 就绪·置顶接管':'⚠ 已部署·传播中')+'</span> <span style="font-size:10px;word-break:break-all;color:var(--muted)">'+esc(_rl.url)+'</span>'):'<span style="color:var(--warn)">○ 未打通(快速隧道/mesh 照常可用·零账号)</span>';
+  h+='<div class="cr"><span class="l">通道状态</span><span class="v">'+_rlSt+'</span></div>';
+  h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:4px 0 6px">想要<b style="color:var(--fg)">永不漂的固定公网地址</b>？三条路任选(状态同显于内网穿透板块): ① 一键 OAuth 全自动(推荐·免手搓 Token); ② 用本板块账号池的 GitHub 号<b>代登 Cloudflare</b> → 建 Token 页链式代填(守柔不代提交); ③ 已有 Cloudflare API Token 直接贴入(含 Workers 脚本编辑+账号读权限)。打通后自动部署你自己的 Worker、落盘置顶、与内网穿透板块同步。</p>';
+  h+='<div class="br" style="margin:2px 0"><button class="btn sm primary" onclick="toast(&#39;打开 Cloudflare 授权页…点一次授权即全自动打通&#39;,true);cmd(&#39;relayOAuthLogin&#39;)" title="浏览器打开 Cloudflare 登录授权 → 后端全自动注册 Token·部署 Worker·落盘置顶·自动续期">🔐 一键 OAuth 全自动打通</button>'+(_rl.active?'<button class="btn sm" onclick="cmd(&#39;relayRestart&#39;)" title="重启 Worker 通道; 连不上自动升级重建">🔄 重启 Worker</button><button class="btn sm" onclick="cmd(&#39;copyRelayInfo&#39;)" title="复制完整接入信息(地址+Token+兜底)">📋 复制接入信息</button>':'')+'</div>';
+  var _credAccts=_fleet.filter(function(a){return a.hasCred});
+  h+='<div style="display:flex;gap:4px;margin:6px 0 2px"><select id="ghCfGhLogin" style="flex:1">'+(_credAccts.length?_credAccts.map(function(a){return '<option value="'+esc(a.login)+'">'+esc(a.login)+' (有账密·可代登)</option>'}).join(''):'<option value="">— 账号池暂无「账密+2FA」账号(添号③模式) —</option>')+'</select><button class="btn sm" onclick="ghCfGhGo()" title="隔离档浏览器: GitHub 代登 Cloudflare → 建 Token 页按 dao-relay 所需权限预勾预填·守柔不代提交"'+(_credAccts.length?'':' disabled style="opacity:.5"')+'>🤖 用该号代登建 Token</button></div>';
+  h+='<div style="display:flex;gap:4px;margin:4px 0 2px"><input id="ghCfToken" type="password" placeholder="Cloudflare API Token(Workers 脚本编辑+账号读) · 贴入一键全自动" style="flex:1"><button class="btn sm primary" onclick="ghCfTokenGo()" title="token→取账号→部署 Worker→落盘置顶, 全后台自动(约1-2分钟)">🚀 Token 打通</button></div>';
+  h+='<div class="br" style="margin:4px 0 0"><a href="#" onclick="cmd(&#39;openCf&#39;);return false" style="font-size:10px;color:var(--accent2)">去 Cloudflare 手动创建 Token →</a><span style="font-size:10px;color:var(--muted)"> · 也可在内网穿透板块手动贴 Token 打通(同一后端)</span></div>';
+  h+='</div>';
   h+='</div>'; // /右栏
   h+='</div>'; // /grid
   v.innerHTML=h;
@@ -8734,6 +8748,9 @@ function rGitHub(){
 }
 // 添号模式切换
 function ghAddMode(m){var st=_ghState();st.addMode=m;rGitHub()}
+// ⑤ 持久化 Worker · GitHub 板块入口(复用穿透板块同一后端命令, 状态两板同步)
+function ghCfGhGo(){var el=document.getElementById('ghCfGhLogin');var login=el?el.value.trim():'';if(!login){toast('账号池暂无「账密+2FA」账号 — 先在「① 添加账号 → ③ 账密+2FA」添号',false);return}toast('🤖 代登 Cloudflare 中…隔离档浏览器将打开(GitHub 代登链→建 Token 页代填·守柔不代提交)',true);cmd('relayGhAutoLogin',{login:login})}
+function ghCfTokenGo(){var k=document.getElementById('ghCfToken');var token=k?k.value.trim():'';if(!token){toast('请先贴入 Cloudflare API Token',false);return}toast('全自动打通中…(取账号→部署 Worker→落盘置顶, 约 1-2 分钟)',true);cmd('relayProvisionToken',{token:token})}
 // 添加账号(三模式统一入口): PAT 模式与账密模式都走 daoGhAccountAdd(后端按格式识别)。
 function ghAcctAdd(){var t=(document.getElementById('ghAddInput')||{}).value||'';if(!t.trim()){toast('先填至少一行',false);return}var role=(document.getElementById('ghAddRole')||{}).value||'member';var mode=(_ghState().addMode||'pat');ghMsg('ghAddOut','⏳ 校验并加入账号池(限速)…');cmd('daoGhAccountAdd',{text:t,role:role,mode:mode})}
 // 逐账号操作
