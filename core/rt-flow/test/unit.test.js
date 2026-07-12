@@ -1473,6 +1473,45 @@ function test(name, fn) {
     }
   });
 
+  // ── 账号标签额度/状态保鲜: 耗尽后 $ 须能降到 0 · 疑似耗尽强刷真额度 ──
+  console.log("\n[标签额度保鲜 · 耗尽不再滞留旧 $]");
+  test("extension.js: 标签 $ 回填须允许降为 0 (h.checked 而非 overageDollars>0 门) (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      const n = (src.match(/if \(h && h\.checked\) dollars = Math\.max\(0, Math\.round\(h\.overageDollars \|\| 0\)\);/g) || []).length;
+      assert.ok(n >= 4, rel.join("/") + " 须有 ≥4 处 checked 门额度回填 (实得 " + n + ") — 旧病灶 overageDollars>0 只升不降·耗尽仍显旧 $");
+    }
+  });
+  test("extension.js: 疑似额度耗尽须 45s 限频强刷真额度后再判 exhausted (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/_refreshHealthForTick\(email, 45\)/.test(src), rel.join("/") + " 疑似耗尽须强刷 _refreshHealthForTick(email, 45)");
+      assert.ok(/function _refreshHealthForTick\(email, minGapSec\)/.test(src), rel.join("/") + " _refreshHealthForTick 须支持 minGapSec 覆写");
+      assert.ok(/_cfg\('statusHealthRefreshSec', 120\)/.test(src), rel.join("/") + " 默认保鲜间隔须降至 120s");
+    }
+  });
+
+  test("extension.js: 无缓存会话账号须走慢道真登录保鲜 (900s/号限频+限速窗+in-flight 去重) (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/_cfg\('statusHealthLoginRefreshSec', 900\)/.test(src), rel.join("/") + " 慢道须 900s/号限频 — 旧病灶: 无缓存会话直接 return → $ 永远陈旧");
+      assert.ok(/_devinLoginRateLimitedUntil\) return;/.test(src), rel.join("/") + " 慢道须尊重全局 devinLogin 限速窗");
+      assert.ok(/_healthInflight/.test(src), rel.join("/") + " 须有 in-flight 去重");
+    }
+  });
+
+  test("extension.js: 宿主 API httpsReq 须直连优先+瞬断换socket重试+本机代理兜底 (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/_netpProbePort/.test(src) && /_netpTunnel/.test(src), rel.join("/") + " 须有本机代理探测/CONNECT 兜底 — 旧病灶: TLS 瞬断即 planStatus 拉空·额度长期陈旧");
+      assert.ok(/direct\(1, \{ agent: false, family: 4 \}\)/.test(src), rel.join("/") + " 瞬断须换新 socket + 钉 IPv4 直连重试(国内 IPv6 到 AWS 黑洞)");
+    }
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);

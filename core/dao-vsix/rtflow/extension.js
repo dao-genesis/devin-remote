@@ -259,6 +259,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const https = require("node:https");
+const net = require("node:net");
+const tls = require("node:tls");
 const crypto = require("node:crypto");
 const { URL } = require("node:url");
 // 第五板块 · Devin Cloud 接入底层 (对话提取/备份/追踪/水过无痕清理)
@@ -1968,7 +1970,7 @@ async function _shellResolveOpen(opts) {
     );
     if (idx >= 0) accNo = idx + 1;
     const h = _store && _store.getHealth ? _store.getHealth(email) : null;
-    if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars);
+    if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0));
   } catch (e) {}
   const title = String(opts.title || '').trim();
   const pageLabel = String(opts.label || '').trim();
@@ -2059,7 +2061,7 @@ async function shellHandleMessage(sid, m) {
       case 'getAccounts': {
         const list = (((_store && _store.accounts) || [])).map((a, i) => {
           let dollars = 0;
-          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
           return { accNo: i + 1, email: a.email, name: a.name || String(a.email || '').split('@')[0], dollars };
         });
         send({ type: 'accounts', list });
@@ -2096,9 +2098,24 @@ async function shellHandleMessage(sid, m) {
         return;
       }
       case 'openCloudPage': {
-        const email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || '');
+        // path 显式带 dao_acct=<email> → 钉该号(多实例指定号直开), 不回退活动号(串号病灶);
+        //   并从 path 剥除该参(下游 _shellResolveOpen 会按 email 重拼, 防双 dao_acct)。
+        let path = String(m.path || '');
+        let email = '';
+        try {
+          const mm = /[?&]dao_acct=([^&]+)/.exec(path);
+          if (mm) {
+            email = decodeURIComponent(mm[1]).trim().toLowerCase();
+            path = path.replace(/[?&]dao_acct=[^&]*/g, '');
+            if (path.indexOf('?') < 0) path = path.replace('&', '?');
+          }
+        } catch (e) {}
+        if (!email) email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || '');
         if (!email) { _toast('无可用账号'); return; }
-        const open = await _shellResolveOpen({ email, path: m.path, label: m.label });
+        // 账号首页与手机同构: 每次点开都新开一张独立页(fresh), 不折叠到已开页(一号多页多实例);
+        //   指定对话/子路径仍按 id 折叠复用。
+        const fresh = !path || path === '/' || path === '/?';
+        const open = await _shellResolveOpen({ email, path, label: m.label, fresh });
         if (open) send(open);
         return;
       }
@@ -2579,7 +2596,7 @@ function _wireMultiPanel(panel) {
       if (m.type === "getAccounts") {
         const list = (((_store && _store.accounts) || [])).map((a, i) => {
           let dollars = 0;
-          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
           return { accNo: i + 1, email: a.email, name: a.name || String(a.email || "").split("@")[0], dollars: dollars };
         });
         try { panel.webview.postMessage({ type: "accounts", list: list }); } catch (e) {}
@@ -2665,14 +2682,22 @@ async function _handleShellStatus(m, send) {
       // auth 未缓存(如 IDE 重启后还原的标签) → 节流自动登录取号(每号 10min 一试·不阻塞其他号),
       //   否则该号标签永无状态灯/对话名(旧病灶: 直接 continue 即静默死区)。
       if (!auth || !auth.auth1) auth = await _shellEnsureAuth(email);
-      if (!auth || !auth.auth1) continue;
+      if (!auth || !auth.auth1) {
+        // 取不到 auth(登录失败/负缓存) → 仍回填已知额度, 标签不留死区
+        try {
+          const h0 = _store && _store.getHealth ? _store.getHealth(email) : null;
+          if (h0 && h0.checked) { const d0 = Math.max(0, Math.round(h0.overageDollars || 0)); for (const t of tl) send({ type: 'tabUpdate', id: t.id, dollars: d0 }); }
+        } catch (e) {}
+        continue;
+      }
       let act = [];
       try { act = await devinCloud.listRunningSessions(auth); } catch (e) {}
       const amap = new Map();
       for (const s of (act || [])) { const id2 = String(s.devinId || '').replace(/^devin-/, ''); if (id2) amap.set(id2, s); }
       let h = null, dollars = null;
       try { await _refreshHealthForTick(email); } catch (e) {}
-      try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+      try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
+      let _qForcedFresh = false; // 疑似额度耗尽 → 每号本 tick 至多强刷一次真额度(45s 限频), 防陈旧缓存误标
       for (const t of tl) {
         const sid = String(t.devinId || '').replace(/^devin-/, '');
         // 账号首页标签(无具体对话·对齐手机 APK): 以该号最新活跃会话回填对话名+状态灯; 无活跃 → idle 灰。
@@ -2680,6 +2705,11 @@ async function _handleShellStatus(m, send) {
         let cls = hit ? (hit.statusClass || 'running') : (sid ? 'finished' : 'idle');
         try {
           if (hit && cls === 'blocked' && QRE.test(JSON.stringify(hit.latest_status_contents || '') + ' ' + String(hit.status || ''))) {
+            if (!_qForcedFresh && (!h || !h.checked || h.staleMin >= 1)) {
+              _qForcedFresh = true;
+              try { await _refreshHealthForTick(email, 45); } catch (e) {}
+              try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
+            }
             const live = !!(h && (((typeof h.dPct === 'number') && h.dPct > 0) || ((typeof h.wPct === 'number') && h.wPct > 0) || ((typeof h.overageDollars === 'number') && h.overageDollars > 0)));
             cls = live ? 'finished' : 'exhausted';
           }
@@ -2730,6 +2760,15 @@ async function _resolveAuthForEmail(email, password) {
       } catch (e) {}
     }
     if (pw) { const r = await devinCloud.getAuth(email, pw); if (r && r.ok) auth = r; }
+    // 无密码亦无 DC 缓存 → 回落 dao-vsix 多实例钉号已落盘的真 auth1 (~/.dao/dao-accounts-auth.json)。
+    //   标签页能登录渲染却拿不到 auth 刷额度的死区即此: 两套 auth 存储互不相见。
+    if (!auth || !auth.auth1) {
+      try {
+        const f = path.join(os.homedir(), '.dao', 'dao-accounts-auth.json');
+        const rec = JSON.parse(fs.readFileSync(f, 'utf8'))[String(email).toLowerCase()];
+        if (rec && rec.auth1) auth = { auth1: rec.auth1, userId: rec.userId || '', orgId: rec.orgId || '', orgBare: String(rec.orgId || '').replace(/^org-/, ''), orgName: rec.orgName || '', email };
+      } catch (e) {}
+    }
   }
   return auth;
 }
@@ -2740,20 +2779,51 @@ function _classStr(s){s=String(s==null?'':s).toLowerCase().trim();if(!s)return '
   if(/finished|completed|done|stopped|suspend|expired|exited|archived|deleted/.test(s))return 'finished';
   if(/running|working|in_progress|streaming|active|started|resumed|busy|thinking|executing|coding|planning|testing/.test(s))return 'running';
   return 'running';}
-// 归一 · 状态轮询中的额度保鲜(限频·仅 session-cache 快路·零 devinLogin·零限速风险):
-//   getHealth 只读缓存 → 标签 $ 额度可能长期陈旧; 此处每账号限频(默 300s)经 verifyOneAccount
-//   缓存快路真拉一次 planStatus 回写 setHealth, 让状态轮询回填的额度真正保鲜。
+// 归一 · 状态轮询中的额度保鲜(限频): getHealth 只读缓存 → 标签 $ 额度可能长期陈旧; 此处每账号限频
+//   (默 120s·疑似耗尽时 45s 强刷)经 verifyOneAccount 真拉一次 planStatus 回写 setHealth。
+//   有缓存会话走快路(零 devinLogin); 无缓存会话走慢道真登录(900s/号 + 全局限速窗 + in-flight 去重)。
 const _healthTickAt = new Map();
-async function _refreshHealthForTick(email) {
+const _healthLoginAt = new Map(); // 无缓存会话账号 → 慢道真登录限频(默 900s/号)
+const _healthInflight = new Set(); // in-flight 去重: 同号并发 tick 只跑一次
+async function _refreshHealthForTick(email, minGapSec) {
   try {
     const k = String(email || '').toLowerCase(); if (!k) return;
-    const iv = Math.max(60, +_cfg('statusHealthRefreshSec', 300) || 300) * 1000;
+    const iv = (minGapSec > 0 ? Math.max(30, minGapSec | 0) : Math.max(30, +_cfg('statusHealthRefreshSec', 120) || 120)) * 1000;
     const last = _healthTickAt.get(k) || 0; if (Date.now() - last < iv) return;
+    if (_healthInflight.has(k)) return;
+    const a = (_store.accounts || []).find((x) => String(x.email || '').toLowerCase() === k);
+    // 无密码账号(仅 auth 记录导入)或不在账号池的标签号 → verifyOneAccount 恒 "no creds" → 额度永远陈旧。
+    //   走 auth1 billing 直探: app.devin.ai/api/<org>/billing/status 无需 Windsurf 登录链。
+    if (!a || !a.password) {
+      _healthTickAt.set(k, Date.now());
+      _healthInflight.add(k);
+      try {
+        const au = await _shellEnsureAuth(k);
+        if (au && au.auth1) {
+          const q = await _tryDevinBillingFallback(au.auth1);
+          if (q) _store.setHealth(k, q);
+          try { log('health直探 ' + k + ' → ' + (q ? ('$' + q.overageDollars) : '拉空')); } catch (e) {}
+        } else { try { log('health直探 ' + k + ' → 无auth1'); } catch (e) {} }
+      } finally { _healthInflight.delete(k); }
+      return;
+    }
+    let slowLane = false, slow = 0;
+    if (!_getCachedSession(a.email)) {
+      // 无缓存会话 → 慢道: 打开中的标签值得一次真登录取额度(否则 $ 永远陈旧),
+      //   但须 900s/号限频 + 尊重全局 devinLogin 限速窗(防批量登录触限速)
+      if (Date.now() < _devinLoginRateLimitedUntil) return;
+      slow = Math.max(300, +_cfg('statusHealthLoginRefreshSec', 900) || 900) * 1000;
+      const lg = _healthLoginAt.get(k) || 0; if (Date.now() - lg < slow) return;
+      _healthLoginAt.set(k, Date.now());
+      slowLane = true;
+    }
     _healthTickAt.set(k, Date.now());
-    const a = (_store.accounts || []).find((x) => String(x.email || '').toLowerCase() === k); if (!a) return;
-    if (!_getCachedSession(a.email)) return; // 无缓存会话 → 不走全路(防批量 devinLogin 触限速)
-    const vr = await verifyOneAccount(a);
-    if (vr && vr.ok && vr.q) _store.setHealth(a.email, vr.q);
+    _healthInflight.add(k);
+    try {
+      const vr = await verifyOneAccount(a);
+      if (vr && vr.ok && vr.q) _store.setHealth(a.email, vr.q);
+      else if (slowLane) _healthLoginAt.set(k, Date.now() - slow + 180000); // 失败不烧满 900s 槽: 180s 后可再试(网络瞬断自愈)
+    } finally { _healthInflight.delete(k); }
   } catch (e) {}
 }
 // 归一 · 多实例标签状态实时轮询(对齐手机端·仅打开中的少量标签·每账号一次 listSessions):
@@ -2775,7 +2845,7 @@ async function _multiTabStatusTick() {
       for (const s of (active || [])) { const id = String(s.devinId || '').replace(/^devin-/, ''); if (id) amap.set(id, s); }
       let dollars = null;
       try { await _refreshHealthForTick(email); } catch (e) {}
-      try { const h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+      try { const h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
       for (const t of tabsForEmail) {
         const sid = String(t.devinId || '').replace(/^devin-/, '');
         const hit = amap.get(sid);
@@ -2822,7 +2892,7 @@ async function openMultiInstance(opts) {
     );
     if (idx >= 0) accNo = idx + 1;
     const h = _store && _store.getHealth ? _store.getHealth(email) : null;
-    if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars);
+    if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0));
   } catch (e) {}
   const title = String(opts.title || '').trim();
   const pageLabel = String(opts.label || '').trim();
@@ -7120,6 +7190,55 @@ function _isValidAutoTarget(i) {
   return false;
 }
 
+// 道·网络软编码(直连优先·代理兜底) — 与 devin_proxy.upstreamRequest 同策, 覆盖所有
+//   rt-flow 宿主侧 API 调用(planStatus/devinLogin/listSessions 等):
+//   ① 直连(keep-alive 池) → ② 瞬断(TLS 半握手被掐/ECONNRESET)换新 socket 直连重试
+//   → ③ 仍不通才探测本机常见代理端口(Clash/v2ray 等·60s 缓存)经 CONNECT 兜底。
+//   任一路成功即记忆偏好(直连恢复自动回归), 国内直连/挂代理/无代理三态皆自愈。
+const _NETP_PORTS = [7890, 10809, 7891, 1080, 10808, 8080, 8118];
+let _netpProbe = { port: 0, ts: 0 }; // port>0=探到可用; -1=探明无; 0=未探测 (60s 缓存)
+let _netpGood = 0; // 上次经该本机代理成功 → 后续先走代理; 直连一成功即清零
+function _netTransient(e) {
+  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|disconnected|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND|handshake|TLS/i.test(String((e && e.message) || e || ""));
+}
+function _netpProbePort(host, cb) {
+  if (_netpProbe.ts && Date.now() - _netpProbe.ts < 60000) return cb(_netpProbe.port > 0 ? _netpProbe.port : 0);
+  let i = 0;
+  const tryNext = () => {
+    if (i >= _NETP_PORTS.length) { _netpProbe = { port: -1, ts: Date.now() }; return cb(0); }
+    const port = _NETP_PORTS[i++];
+    let done = false;
+    const s = net.connect({ host: "127.0.0.1", port, timeout: 800 });
+    const fin = (ok) => { if (done) return; done = true; try { s.destroy(); } catch (e) {} if (ok) { _netpProbe = { port, ts: Date.now() }; cb(port); } else tryNext(); };
+    s.once("connect", () => {
+      s.write("CONNECT " + host + ":443 HTTP/1.1\r\nHost: " + host + ":443\r\n\r\n");
+      s.once("data", (d) => fin(/^HTTP\/1\.[01] 200/.test(String(d))));
+      setTimeout(() => fin(false), 4000);
+    });
+    s.once("error", () => fin(false));
+    s.once("timeout", () => fin(false));
+  };
+  tryNext();
+}
+function _netpTunnel(proxyPort, host, cb) {
+  let done = false;
+  const s = net.connect({ host: "127.0.0.1", port: proxyPort, timeout: 5000 });
+  const fail = (m) => { if (done) return; done = true; try { s.destroy(); } catch (e) {} cb(new Error(m || "tunnel failed")); };
+  s.once("connect", () => {
+    s.write("CONNECT " + host + ":443 HTTP/1.1\r\nHost: " + host + ":443\r\n\r\n");
+    let buf = "";
+    const onData = (d) => {
+      buf += String(d);
+      if (buf.indexOf("\r\n\r\n") < 0) return;
+      s.removeListener("data", onData);
+      if (!/^HTTP\/1\.[01] 200/.test(buf)) return fail("proxy CONNECT " + buf.split("\r\n")[0]);
+      done = true; s.setTimeout(0); cb(null, s);
+    };
+    s.on("data", onData);
+  });
+  s.once("error", (e) => fail(e && e.message));
+  s.once("timeout", () => fail("proxy connect timeout"));
+}
 function httpsReq(method, urlStr, headers, body, timeoutMs) {
   return new Promise((resolve, reject) => {
     let u;
@@ -7128,28 +7247,57 @@ function httpsReq(method, urlStr, headers, body, timeoutMs) {
     } catch (e) {
       return reject(e);
     }
-    const req = https.request(
-      {
-        method,
-        hostname: u.hostname,
-        port: u.port || 443,
-        path: u.pathname + u.search,
-        headers: Object.assign({ "User-Agent": UA }, headers || {}),
-        timeout: timeoutMs || HTTP_TIMEOUT_MS,
-        agent: _httpsAgent, // 有界复用池 · 防 globalAgent 无限新建 socket 打满 conntrack
-      },
-      (res) => {
-        const chunks = [];
-        res.on("data", (c) => chunks.push(c));
-        res.on("end", () =>
-          resolve({ status: res.statusCode, body: Buffer.concat(chunks) }),
-        );
-      },
-    );
-    req.on("error", reject);
-    req.on("timeout", () => req.destroy(new Error("timeout")));
-    if (body) req.write(body);
-    req.end();
+    const baseOpts = {
+      method,
+      hostname: u.hostname,
+      port: u.port || 443,
+      path: u.pathname + u.search,
+      headers: Object.assign({ "User-Agent": UA }, headers || {}),
+      timeout: timeoutMs || HTTP_TIMEOUT_MS,
+    };
+    let settled = false;
+    const done = (r) => { if (!settled) { settled = true; resolve(r); } };
+    const fail = (e) => { if (!settled) { settled = true; reject(e); } };
+    const collect = (res, onOkProxyPort) => {
+      if (onOkProxyPort) _netpGood = onOkProxyPort; else _netpGood = 0;
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => done({ status: res.statusCode, body: Buffer.concat(chunks) }));
+    };
+    const viaProxy = (port, origErr) => {
+      _netpTunnel(port, u.hostname, (te, sock) => {
+        if (te) return fail(origErr || te);
+        const pr = https.request(Object.assign({}, baseOpts, { agent: false, createConnection: () => tls.connect({ socket: sock, servername: u.hostname, rejectUnauthorized: false }) }), (r) => collect(r, port));
+        pr.on("timeout", () => pr.destroy(new Error("timeout(proxy)")));
+        pr.on("error", (e) => fail(origErr || e));
+        if (body) pr.write(body);
+        pr.end();
+      });
+    };
+    const direct = (n, extra) => {
+      const req = https.request(Object.assign({}, baseOpts, extra), (r) => collect(r, 0));
+      req.on("timeout", () => req.destroy(new Error("timeout")));
+      req.on("error", (e) => {
+        if (!_netTransient(e)) return fail(e);
+        if (n === 0) return direct(1, { agent: false, family: 4 }); // 瞬断 → 换新 socket + 钉 IPv4 直连重试(国内 IPv6 到 AWS 黑洞)
+        _netpProbePort(u.hostname, (pp) => { if (!pp) return fail(e); viaProxy(pp, e); });
+      });
+      if (body) req.write(body);
+      req.end();
+    };
+    if (_netpGood) {
+      // 偏好代理时仍带直连回归: 隧道失败/代理下线 → 清偏好走直连
+      _netpTunnel(_netpGood, u.hostname, (te, sock) => {
+        if (te) { _netpGood = 0; _netpProbe = { port: 0, ts: 0 }; return direct(0, { agent: _httpsAgent }); }
+        const pr = https.request(Object.assign({}, baseOpts, { agent: false, createConnection: () => tls.connect({ socket: sock, servername: u.hostname, rejectUnauthorized: false }) }), (r) => collect(r, _netpGood));
+        pr.on("timeout", () => pr.destroy(new Error("timeout(proxy)")));
+        pr.on("error", () => { _netpGood = 0; direct(0, { agent: _httpsAgent }); });
+        if (body) pr.write(body);
+        pr.end();
+      });
+      return;
+    }
+    direct(0, { agent: _httpsAgent }); // 有界复用池 · 防 globalAgent 无限新建 socket 打满 conntrack
   });
 }
 async function jsonPost(url, headers, body, timeoutMs) {
