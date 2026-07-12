@@ -809,7 +809,7 @@
   "scripts": {
     "vscode:prepublish": "node ./build.js",
     "compile": "node ./build.js",
-    "test": "node ./build.js && node test/board-solo.test.js && node test/gh-fleet.test.js && node test/inject-knowledge-leader.test.js && node test/web-cookie-persist.test.js && node test/web-translate.test.js && node test/mcp-env-hygiene.test.js && node test/relay-auth.test.js && node test/browser-isolation.test.js && node test/antidetect-adapter.test.js && node test/backup-pool.test.js && node test/reverse-inject.test.js && node test/multi-instance.sim.js"
+    "test": "node ./build.js && node test/board-solo.test.js && node test/gh-fleet.test.js && node test/inject-knowledge-leader.test.js && node test/web-cookie-persist.test.js && node test/web-translate.test.js && node test/mcp-env-hygiene.test.js && node test/relay-auth.test.js && node test/relay-gh-autologin.test.js && node test/browser-isolation.test.js && node test/antidetect-adapter.test.js && node test/backup-pool.test.js && node test/reverse-inject.test.js && node test/multi-instance.sim.js"
   },
   "devDependencies": {
     "@types/node": "^25.9.2",
