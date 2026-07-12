@@ -312,11 +312,12 @@
     return out;
   }
   // ── 自动化对话综合判定 (近期对话隐藏 / 备份过滤同源·唯一真源) ──────────────
-  //  接收会话对象或标题字符串。结构化信号(标签/playbook/自动化创建标记)最优先;
-  //  含中文(标题或用户消息)一律判本人对话, 永不误隐; 兜底走标题启发式(纯英文机器人任务名)。
-  var AUTO_VERB = /^(review|improve|add|fix|update|refactor|implement|create|investigate|analy[sz]e|debug|optimi[sz]e|test|write|build|set ?up|configure|migrate|remove|delete|clean|security|enhance|document|resolve|merge|deploy|integrate|verify|check|explore|research|design|develop|generate|handle|support|enable|disable|rename|move|extract|inspect|audit|scan|repair|patch|port|sync|convert|validate|ensure|prepare|establish|continue|complete|finish|start|begin)\b/i;
-  var AUTO_REPO = /(blog-drafts|notes|dotfiles|code-snippets|utils-py|learn-cs)-\d+/i;
-  var AUTO_TAG = /^(auto|automation|automated|batch|scheduled|schedule|cron|bot)\b|自动/i;
+  //  接收会话对象或标题字符串。判定只认「可靠结构化信号」——绝不用「动词起头」等标题启发式,
+  //  否则会把本人正常英文对话(如 "Fix …" / "Integrate …")误判为自动化 → 无法备份/追踪/查看。
+  //  实测真源: Devin 自动生成的样板任务一律带 `onboarding` 标签, 且都跑在样板仓(blog-drafts-\d+ 等);
+  //  本人对话(无论中英文)标签为 agent:*/agent-preview:* 且不含 onboarding。
+  var AUTO_REPO = /\b(blog-drafts|notes|dotfiles|code-snippets|utils-py|learn-cs)-\d+/i;
+  var AUTO_TAG = /^(auto|automation|automated|batch|scheduled|schedule|cron|bot|onboarding)\b|自动/i;
   function isAutoConv(x) {
     try {
       var s = (x && typeof x === "object") ? x : null;
@@ -327,16 +328,12 @@
           if (AUTO_TAG.test(String(tags[i] && tags[i].name || tags[i]))) return true;
         if (s.playbook_id || s.playbookId) return true;
         if (s.is_automated === true || s.created_by_automation === true || s.origin === "automation" || s.trigger_type === "scheduled" || s.source === "automation") return true;
-        // 内容级信号: 用户消息含中文 → 本人对话, 直接豁免 (不再看标题模式)
-        var m = s.user_message || s.first_user_message || s.prompt || "";
-        if (/[\u4e00-\u9fff]/.test(String(m))) return false;
       }
+      // 无对象/标签兜底: 仅凭「样板仓名+序号」这一强信号识别自动化 (标题字符串场景)。
+      //   不再用动词/长度等弱启发式 —— 宁可漏判个别自动化, 也绝不误隐本人对话。
       var t = title.trim();
       if (!t) return false;
-      if (/[\u4e00-\u9fff]/.test(t)) return false;   // 含中文 → 本人对话, 永不判自动化
-      if (AUTO_REPO.test(t)) return true;             // 样板仓库名+序号 → 批量自动化
-      if (t.length <= 3) return true;
-      if (AUTO_VERB.test(t)) return true;             // 动词起头的机器人任务名
+      if (AUTO_REPO.test(t)) return true;
       return false;
     } catch (e) { return false; }
   }
