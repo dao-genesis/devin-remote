@@ -177,7 +177,28 @@ function buildBridge() {
   log("vendor-bridge: copied extension.js + media (内网穿透本体)");
 }
 
-// ── ⑤ 折叠自验 (通用适配体系·防上游漂移): 上游任一插件更新后, 仅需重跑
+// ── ⑤ dao-desktop (addons/dao-desktop 快照): Cascade 三模式面板 · Devin Desktop 插件版 ──
+//   把官方 Devin Desktop 体感(Cascade 对话/轨迹卡片/官方 LS 桥/windsurf-shim)折入归一版,
+//   任意 VS Code 系 IDE 装 dao-one 即同时得「Devin Desktop 对话框 + 道一全能管理面」。
+//   本源在 windsurf-assistant/plugins/dao-desktop, 经 tools/sync-dao-desktop.js 快照。
+function buildDesktop() {
+  const srcRoot = path.join(path.dirname(plugins), "addons", "dao-desktop");
+  const dst = path.join(root, "vendor-desktop");
+  rmrf(dst);
+  if (!fs.existsSync(path.join(srcRoot, "extension.js"))) {
+    log("vendor-desktop: SKIP (源缺失 " + srcRoot + " · 跑 node tools/sync-dao-desktop.js)");
+    return;
+  }
+  for (const f of ["extension.js", "windsurf-shim.js", "package.json"])
+    if (fs.existsSync(path.join(srcRoot, f)))
+      copyFile(path.join(srcRoot, f), path.join(dst, f));
+  for (const d of ["dao-cascade", "media"])
+    if (fs.existsSync(path.join(srcRoot, d)))
+      copyDir(path.join(srcRoot, d), path.join(dst, d));
+  log("vendor-desktop: copied extension.js + windsurf-shim + dao-cascade/ + media (Cascade 三模式面板)");
+}
+
+// ── ⑥ 折叠自验 (通用适配体系·防上游漂移): 上游任一插件更新后, 仅需重跑
 //   node build.js — 所有折叠锚点逐一断言, 缺一即构建失败并指名道姓,
 //   使 dao-vsix / rt-flow / dao-proxy-pro 的更新可以「拿来即折·折错即报」。
 function verifyFolds() {
@@ -204,12 +225,15 @@ function verifyFolds() {
     "proxy:['🔀','Proxy Pro']",     // BOARD_META 标签
   ]);
   must("vendor-proxy/extension.js", ["getEaConfigHtml"]);
-  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×8 · vendor-flow ×2 · vendor-proxy ×1)");
+  if (fs.existsSync(path.join(root, "vendor-desktop", "extension.js")))
+    must("vendor-desktop/dao-cascade/panel.js", ["dao.cascade"]);
+  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×8 · vendor-flow ×2 · vendor-proxy ×1 · vendor-desktop ×1)");
 }
 
 buildVsix();
 buildProxy();
 buildFlow();
 buildBridge();
+buildDesktop();
 verifyFolds();
-log("done · vendor-vsix / vendor-proxy / vendor-flow / vendor-bridge assembled");
+log("done · vendor-vsix / vendor-proxy / vendor-flow / vendor-bridge / vendor-desktop assembled");

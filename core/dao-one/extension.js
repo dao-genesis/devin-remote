@@ -11,6 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 const vscode = require("vscode");
 const path = require("path");
+const fs = require("fs");
 
 // ── 子引擎: 名 · 子目录 · 入口 ────────────────────────────────────────────────
 const MODULES = [
@@ -18,6 +19,7 @@ const MODULES = [
   { key: "路由", dir: "vendor-proxy", entry: "extension.js" }, // dao-proxy-pro → dao.essence
   { key: "Cloud", dir: "vendor-flow", entry: "extension.js" }, // rt-flow → wam.panel
   { key: "穿透", dir: "vendor-bridge", entry: "extension.js", optional: true }, // dao-bridge → daoBridgeView
+  { key: "Cascade", dir: "vendor-desktop", entry: "extension.js", optional: true }, // dao-desktop → dao.cascade (Devin Desktop 插件版)
 ];
 
 const _out = vscode.window.createOutputChannel("道 · 归一");
@@ -43,16 +45,35 @@ const _loaded = [];
 // ═══════════════════════════════════════════════════════════════════════════
 async function activate(context) {
   log("dao-one activate · 归一: " + MODULES.map((m) => m.key).join(" / "));
+  // 先立 Cascade 全局标记(vendor-desktop 在场即立) — vendor-vsix 激活期即可探测到
+  // 插件版 Cascade 能力, 不依赖引擎启动次序。
+  try {
+    if (fs.existsSync(path.join(context.extensionPath, "vendor-desktop", "extension.js")))
+      globalThis.__daoCascadeEngine = true;
+  } catch (_) {}
   // 依次启动四引擎 —— 各自 activate 注册其原生 webview/后端服务。
   // 仅 wam.panel 与 dao.cloudPanel 在 package.json dao-one 容器下声明 → 占据容器视图;
   // dao-proxy-pro 的 /origin 反代与 dao-bridge 隧道照常起,其面板内嵌于全能板内部 tab。
   for (const m of MODULES) {
     const full = path.join(context.extensionPath, m.dir, m.entry);
+    // Cascade 引擎去重: 若宿主已单独安装 dao-agi.dao-desktop, 其 dao.cascade 视图/命令
+    // 已在位 — 重复 activate 必重注册而崩(见 AGENTS 踩坑 1), 故共生让行。
+    if (m.dir === "vendor-desktop") {
+      const standalone = vscode.extensions.getExtension("dao-agi.dao-desktop");
+      if (standalone) {
+        globalThis.__daoCascadeEngine = true;
+        log("· [" + m.key + "] 宿主已装独立 dao-desktop · 共生让行(不重复激活)");
+        continue;
+      }
+    }
     try {
       const mod = require(full);
       if (mod && typeof mod.activate === "function") {
         await mod.activate(subContext(context, m.dir));
         _loaded.push({ mod, m });
+        // 归一版内折 Cascade 引擎就位 → 全局标记, 供 vendor-vsix 宿主能力探测
+        // (detectCascadePlugin · MCP 源归 Devin Desktop 同源配置 / 主页展示插件版 Cascade)。
+        if (m.dir === "vendor-desktop") globalThis.__daoCascadeEngine = true;
         log("✓ [" + m.key + "] 引擎启动 (" + m.dir + ")");
       } else log("✗ [" + m.key + "] 无 activate: " + full);
     } catch (e) { log("✗ [" + m.key + "] 启动失败: " + (e && e.stack ? e.stack : e)); }
