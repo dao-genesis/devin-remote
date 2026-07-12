@@ -415,6 +415,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         sInstance = this;
+        try { initMemTier(); } catch (Exception ignored) {}   // 资源档位: 依整机 RAM 定回收/常驻尺度
         try { kickMediaRouteProbe(); } catch (Throwable ignored) {}   // 启动即探 S3 直连可达性: 首屏图片路由先知先觉
         // Shizuku 授权结果: 授权成功后自动自我授予一切权限 (存储/无障碍/危险权限)
         try {
@@ -7074,8 +7075,8 @@ public class MainActivity extends AppCompatActivity {
     //       原样重建 → 把堆占用真正还给系统, 长会话占用有界 → 用久了也不再越用越卡。
     private static final long MEM_HYGIENE_MS = 180000;   // 前台每 3 分钟保洁一轮
     private static final long MEM_TRIM_IDLE_MS = 90000;  // 后台标签闲置超 90s 才做轻量释放 (避免快速来回切换的标签被反复清缓存)
-    private static final long IDLE_UNLOAD_MS = 900000;   // 后台普通网页标签闲置超 15 分钟 → 整页卸载 (选中即原样重建)
-    private static final long ACCT_IDLE_UNLOAD_MS = 1800000; // 后台 Devin 账号标签闲置超 30 分钟(更金贵·阈值更宽) → 整页卸载, 选中即按原账号重注鉴权重建
+    private long IDLE_UNLOAD_MS = 900000;   // 后台普通网页标签闲置超 15 分钟 → 整页卸载 (选中即原样重建); 按整机 RAM 档位放宽(见 initMemTier)
+    private long ACCT_IDLE_UNLOAD_MS = 1800000; // 后台 Devin 账号标签闲置超 30 分钟(更金贵·阈值更宽) → 整页卸载, 选中即按原账号重注鉴权重建; 按 RAM 档位放宽
     // ── 后台常驻重型 WebView「数量上限闸」(LRU 丢弃) · 根治积极使用时的「越用越卡」────────────────
     //   病根(前四轮收的是各类单调累积的「慢泄漏」, 这是另一维度的「快积压」): 闲置卸载只在标签闲到 15/30 分钟
     //   才触发; 而用户积极使用时不停在多个账号/网页标签间来回切, 谁都到不了闲置阈值 → 全部 account/网页标签
@@ -7085,7 +7086,7 @@ public class MainActivity extends AppCompatActivity {
     //   最久未访问优先整页卸载换空壳(选中即原样/按原账号重注鉴权重建) → 不论开多少标签, 并发重页恒有界 →
     //   从结构上消除这一维度的累积(对「到底哪个计数在涨」鲁棒)。护栏与闲置卸载一致(跳过 活动/内部/空壳·账号
     //   标签跳过被联控观看者), 且只动闲置超下方阈值的标签 → 正在来回切的工作集绝不被打断。
-    private static final int  MAX_LIVE_BG_HEAVY = 5;       // 后台常驻重型 http(s) WebView 上限(不含活动标签)
+    private int MAX_LIVE_BG_HEAVY = 5;       // 后台常驻重型 http(s) WebView 上限(不含活动标签); 按整机 RAM 档位放宽(见 initMemTier)
     private static final long WEB_LRU_MIN_IDLE_MS = 90000;   // 普通网页标签: 闲置超 90s 才可因超限被丢弃(防来回切抖动)
     private static final long ACCT_LRU_MIN_IDLE_MS = 300000; // 账号标签更金贵: 闲置超 5 分钟才可因超限被丢弃(短于 30 分钟硬阈值, 多号积压时更早收敛)
     // ── 转后台后的「重度」内存保洁: 根治用户实测「即使超后台也没用·还是卡, 唯有放置几小时(等系统终于回收进程)才好」──
@@ -7094,13 +7095,50 @@ public class MainActivity extends AppCompatActivity {
     //   回前台自然还是卡, 只有进程被系统(几小时后)杀掉才清零。修法: 转后台 BG_HYGIENE_DELAY_MS 后起一轮重度释放并
     //   每 BG_HYGIENE_MS 续做 —— 全部标签(含原活动标签, 后台无任何标签可见)清 RAM 缓存+freeMemory, 闲置普通网页
     //   标签整页卸载 → 「把它扔后台」真的能把占用降下来, 回前台即顺。JS 不全局冻结 → 远程自动化(execJs)仍可驱动。
-    private static final long BG_HYGIENE_DELAY_MS = 45000;   // 转后台 45s 后做首轮重度释放 (快速切回的不被无谓清理)
-    private static final long BG_HYGIENE_MS = 120000;        // 此后后台每 2 分钟续做一轮 → 久置后台占用持续下降而非常驻
+    private long BG_HYGIENE_DELAY_MS = 45000;   // 转后台后首轮重度释放的宽限期 (快速切回的不被无谓清理); 按整机 RAM 档位放宽(见 initMemTier)
+    private long BG_HYGIENE_MS = 120000;        // 此后后台续做一轮的间隔 → 久置后台占用持续下降而非常驻; 按 RAM 档位放宽
     private static final long ACTIVE_CACHE_BOUND_MS = 600000; // 前台活动标签每 ~10 分钟清一次 RAM 缓存 (无损·不重载·不丢态)
     private static final long HEAP_AGE_MS = 3 * 3600000L;        // 活动账号标签连续运行超 3 小时 → V8 堆已老化, 可在空闲时回收
     private static final long ACTIVE_RELOAD_IDLE_MS = 20 * 60000L; // 活动标签 20 分钟无任何交互(人已离开) 才允许堆回收重载
     private static final long HEAP_RECLAIM_MIN_GAP = 3 * 3600000L; // 两次活动标签堆回收重载最小间隔 (防抖)
     private long activeTabCacheTs = 0;
+
+    // ── 资源档位调度: 依整机 RAM 定回收/常驻尺度 ────────────────────────────────────────
+    //   小内存机型必须激进回收才不 OOM; 但同一套保守尺度照搬到 8~12GB 旗舰机上, 反而把大内存白白闲置:
+    //   后台重页上限 5 张 + 转后台 45s 即重度释放 + 15/30 分钟闲置整页卸载 → 用户「稍微切走一下再回来,
+    //   所有页面都得重新加载」的实测卡顿正源于此(重建成本远高于常驻成本)。这里按 totalMem 分四档,
+    //   大内存机型整体放宽常驻上限与回收节奏 —— 硬件有多少内存就用多少, 重建次数降一个量级。
+    private void initMemTier() {
+        long totalMb = 0;
+        try {
+            android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+            am.getMemoryInfo(mi);
+            totalMb = mi.totalMem / (1024 * 1024);
+        } catch (Exception ignored) {}
+        if (totalMb >= 7500) {          // ≥8GB 旗舰: 大幅放宽 —— 后台可常驻 14 张重页, 久置 2h/6h 才卸载
+            MAX_LIVE_BG_HEAVY = 14;
+            IDLE_UNLOAD_MS = 7200000L;        // 2h
+            ACCT_IDLE_UNLOAD_MS = 21600000L;  // 6h
+            BG_HYGIENE_DELAY_MS = 300000L;    // 转后台 5 分钟内切回 → 一切原样, 零重建
+            BG_HYGIENE_MS = 600000L;          // 后台每 10 分钟温和续做
+        } else if (totalMb >= 5500) {   // 6~8GB: 明显放宽
+            MAX_LIVE_BG_HEAVY = 9;
+            IDLE_UNLOAD_MS = 3600000L;        // 1h
+            ACCT_IDLE_UNLOAD_MS = 10800000L;  // 3h
+            BG_HYGIENE_DELAY_MS = 180000L;    // 3 分钟
+            BG_HYGIENE_MS = 300000L;          // 5 分钟
+        } else if (totalMb >= 3500) {   // 4~6GB: 略放宽
+            MAX_LIVE_BG_HEAVY = 6;
+            IDLE_UNLOAD_MS = 1800000L;        // 30 分钟
+            ACCT_IDLE_UNLOAD_MS = 3600000L;   // 1h
+            BG_HYGIENE_DELAY_MS = 90000L;     // 90s
+            BG_HYGIENE_MS = 180000L;          // 3 分钟
+        }                               // <4GB: 维持原保守值
+        android.util.Log.i(FL, "memTier totalMb=" + totalMb + " bgHeavyCap=" + MAX_LIVE_BG_HEAVY
+                + " idleUnloadMin=" + (IDLE_UNLOAD_MS / 60000) + " acctIdleUnloadMin=" + (ACCT_IDLE_UNLOAD_MS / 60000)
+                + " bgDelaySec=" + (BG_HYGIENE_DELAY_MS / 1000));
+    }
     private final Runnable memHygiene = new Runnable() {
         @Override public void run() {
             if (!appForeground) return;
