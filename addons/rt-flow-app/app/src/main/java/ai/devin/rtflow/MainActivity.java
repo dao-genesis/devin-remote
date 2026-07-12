@@ -6700,6 +6700,9 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
     }
 
+    /** 冷启动错峰间隔: 后台 Devin 账号标签逐张起载, 摊平启动期网络/内存/渲染峰值 (治「切杀后台重开很慢」)。 */
+    private static final long COLD_START_ACCT_LOAD_GAP_MS = 800;
+
     private boolean restoreTabs() {
         try {
             SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
@@ -6719,6 +6722,8 @@ public class MainActivity extends AppCompatActivity {
             org.json.JSONArray arr = new org.json.JSONArray(json);
             if (arr.length() == 0) return false;
             int created = 0, activeTab = -1;
+            java.util.ArrayList<Tab> deferredAcct = new java.util.ArrayList<>();   // 冷启动错峰加载的后台账号标签
+            java.util.ArrayList<String> deferredUrls = new java.util.ArrayList<>();
             for (int i = 0; i < arr.length(); i++) {
                 org.json.JSONObject o = arr.getJSONObject(i);
                 String url = o.optString("url", SWITCH);
@@ -6735,8 +6740,20 @@ public class MainActivity extends AppCompatActivity {
                     nt.url = url;
                     nt.title = o.optString("title", "");
                     nt.pendingReloadUrl = url;            // selectTab 命中即载
+                } else if (!isActive && acc != null && http) {
+                    // Devin 账号·后台标签(多实例需后台保活追踪·不能纯懒加载): 建好 WebView + 配好鉴权注入,
+                    //   但把「网络加载+跑重型 SPA」错峰排到冷启动之后逐个进行 —— 根治「切杀后台后重新加载很慢」:
+                    //   旧逻辑对每个后台账号标签即时 loadUrl → N 张重型 Devin SPA 冷启动同时抢网络+渲染进程+内存,
+                    //   内存压力峰值触发 onRenderProcessGone 强制整页重载 → 启动越久越卡。改为错峰一次只起一张 →
+                    //   峰值内存/网络被摊平, 后台保活追踪仍在数秒内全部就绪 (engineTick 启动本就有延迟)。
+                    nt = makeTab(acc, false);
+                    nt.url = url;
+                    nt.title = o.optString("title", "");
+                    nt.pendingReloadUrl = url;            // 错峰前被选中 → selectTab 照常即载
+                    deferredAcct.add(nt);
+                    deferredUrls.add(url);
                 } else {
-                    // 活动标签 + Devin 账号标签(多实例需后台保活追踪): 即时加载, 不抢前台。
+                    // 活动标签(用户当前所见): 即时加载, 不抢前台。
                     nt = newTabBackground(url, acc);
                 }
                 if (o.has("titleOverride")) { nt.titleOverride = o.optString("titleOverride", null); }
@@ -6745,6 +6762,19 @@ public class MainActivity extends AppCompatActivity {
             }
             if (created == 0) return false;
             selectTab(activeTab >= 0 ? activeTab : 0);
+            // 错峰起后台账号标签: 每 COLD_START_ACCT_LOAD_GAP_MS 起一张, 摊平冷启动峰值 → 启动跟手、少崩渲染进程。
+            for (int k = 0; k < deferredAcct.size(); k++) {
+                final Tab dt = deferredAcct.get(k);
+                final String du = deferredUrls.get(k);
+                main.postDelayed(() -> {
+                    if (dt.web == null || !tabs.contains(dt)) return;
+                    if (dt.pendingReloadUrl == null) return;   // 已被选中触发加载(selectTab 消费掉了) → 跳过
+                    dt.pendingReloadUrl = null;
+                    try { loadInto(dt, du); } catch (Exception ignored) {}
+                    renderTabStrip();
+                }, COLD_START_ACCT_LOAD_GAP_MS * (k + 1));
+            }
+            renderTabStrip();   // 标签条立即显示全部标签(含尚未起载的账号壳), 不必等错峰完成
             return true;
         } catch (Exception e) { return false; }
     }
