@@ -5648,6 +5648,77 @@ function daoGhFleetOpenPat(login: string): { ok: boolean; login: string; launche
     const launched = daoLaunchChromiumIsolated(url, safeKey, fp, proxy, profileDir, patExt ? [patExt] : []);
     return { ok: !!launched, login, launched: !!launched, scopes: cfg.scopes, expDays: cfg.expDays };
 }
+// ═══════════════════════════════════════════════════════════
+// 持久化 Worker · 后端代登助手(用 GitHub 账号登 Cloudflare → 建 API Token → provision)
+//   本源: 内网穿透默认走零账号 dao-relay(无需任何账号·见 AGENTS.md 三)。仅当用户要「固定不漂公网
+//   域名」时才需登 Cloudflare。此助手替能力有限的用户代操作该可选步骤: 隔离档浏览器开 CF API-Token
+//   建页(未登录→自动跳 CF 登录), 助手扩展链式代填——
+//     · CF 登录页: 自动点「Sign in with GitHub / Continue with GitHub」;
+//     · GitHub 登录页: 按账号池存号自动填 user/pass + 本地算 TOTP(守柔·不自动提交登录);
+//     · GitHub OAuth 授权页: 会话内正常点 Authorize(非风控绕过);
+//     · CF 建 Token 页: 按 dao-relay 所需权限(Workers 脚本编辑 + KV 编辑 + 账号读)预勾 + 预填名, 守柔不提交。
+//   建成 Token 后走既有 relayProvisionToken → provision.mjs 部署 Worker → 置顶接管 + 反向注入知识库。
+//   边界(与 GitHub 建 PAT 助手一致): 只代填不代提交登录/2FA/建 Token 终键; 遇验证码/设备验证不绕过。
+// ═══════════════════════════════════════════════════════════
+function daoRelayWriteGhCfAssistExt(profileDir: string, cred: { user?: string; pass?: string; otp?: string }, otpNow: string, tokenName: string): string | null {
+    try {
+        const extDir = path.join(profileDir, '_cf_gh_assist');
+        fs.mkdirSync(extDir, { recursive: true });
+        const manifest = {
+            manifest_version: 3, name: 'DAO CF+GH Login Assist', version: '1.0.0',
+            description: 'DAO 持久 Worker 代登助手(仅本号隔离档·CF↔GitHub 链式代填·守柔不代提交登录/2FA/建Token终键)',
+            content_scripts: [{
+                matches: ['https://github.com/*', 'https://dash.cloudflare.com/*', 'https://*.cloudflare.com/*'],
+                js: ['assist.js'], run_at: 'document_idle', all_frames: false,
+            }],
+        };
+        fs.writeFileSync(path.join(extDir, 'manifest.json'), JSON.stringify(manifest), 'utf8');
+        const C = JSON.stringify({ user: cred.user || '', pass: cred.pass || '', otp: otpNow || '', name: tokenName || 'dao-relay' });
+        // CF dao-relay 部署所需权限(与 daoRelayTokenDeepLink / provision.mjs 同源): Workers 脚本编辑 + KV 编辑 + 账号读。
+        const js = 'try{(function(){var C=' + C + ';var H=location.hostname;' +
+            'function setV(el,v){if(!el||!v)return;try{el.focus();el.value=v;el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}}' +
+            'function bar(t){try{if(document.getElementById("__dao_cf_bar")){document.getElementById("__dao_cf_bar").textContent=t;return;}var b=document.createElement("div");b.id="__dao_cf_bar";b.textContent=t;b.style.cssText="position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#f38020;color:#fff;font:13px sans-serif;padding:6px 10px;text-align:center";document.documentElement.appendChild(b);}catch(e){}}' +
+            'function findBtn(re){var els=document.querySelectorAll("a,button,[role=button]");for(var i=0;i<els.length;i++){if(re.test((els[i].textContent||"").trim())){return els[i];}}return null;}' +
+            'function onCf(){try{' +
+            'if(/\\/login|\\/sign-?up/.test(location.pathname)){var g=findBtn(/github/i);if(g){bar("DAO 代登·检测到 Cloudflare 登录页 → 用 GitHub 账号登录(点击 Sign in with GitHub)");g.click();return;}bar("DAO 代登·请在 Cloudflare 登录页选择「Sign in with GitHub」");return;}' +
+            'if(/api-tokens/.test(location.pathname+location.search)){' +
+            'var nm=document.querySelector("input[name=name],input#token-name,input[placeholder*=name i]");if(nm&&C.name&&!nm.value)setV(nm,C.name);' +
+            'bar("DAO 代登·Cloudflare 建 API Token 页·请套用 dao-relay 所需权限(Workers 脚本编辑+KV 编辑+账号读)后手动 Create·勿改风控项");return;}' +
+            '}catch(e){}}' +
+            'function onGh(){try{' +
+            'var lf=document.querySelector("#login_field, input[name=login]");if(lf&&C.user)setV(lf,C.user);' +
+            'var pf=document.querySelector("#password, input[name=password]");if(pf&&C.pass)setV(pf,C.pass);' +
+            'var of=document.querySelector("#app_totp, input[name=otp], input[autocomplete=one-time-code]");if(of&&C.otp)setV(of,C.otp);' +
+            'if(lf||pf||of){bar("DAO 代登·GitHub 登录已自动填充"+(C.otp?(" · 2FA "+C.otp):"")+"·核对后手动登入(守柔不代提交)");return;}' +
+            'var az=findBtn(/^authorize|授权/i);if(az&&/oauth|login\\/oauth/.test(location.pathname)){bar("DAO 代登·GitHub 授权 Cloudflare(会话内正常授权)");az.click();return;}' +
+            '}catch(e){}}' +
+            'function run(){if(/github\\.com$/.test(H)||/github\\.com$/.test(location.hostname))onGh();else onCf();}' +
+            'run();setTimeout(run,800);setTimeout(run,2000);setTimeout(run,4000);' +
+            '})();}catch(e){}';
+        fs.writeFileSync(path.join(extDir, 'assist.js'), js, 'utf8');
+        return extDir;
+    } catch { return null; }
+}
+// 后端代登编排: 选一个 GitHub 账号 → 隔离档开 CF 建 Token 页(触发 GitHub 代登链) → 助手代填。
+//   守柔: 只代填不代提交登录/2FA/建 Token 终键。返回不含任何明文(账密/2FA/Token)。
+async function daoRelayGhAutoLogin(login: string): Promise<{ ok: boolean; login: string; launched?: boolean; hasOtp?: boolean; tokenUrl?: string; error?: string }> {
+    login = String(login || '').trim().replace(/^@/, '');
+    const prof = loadInjectProfile();
+    const a = (prof.ghFleet || []).find(x => x.login.toLowerCase() === login.toLowerCase());
+    if (!a) return { ok: false, login, error: '账号不在池中' };
+    const cred = a.cred;
+    if (!cred || !cred.user) return { ok: false, login, error: '该账号无账密存号 — 用「③ 账密+2FA」模式添号后再代登 Cloudflare' };
+    const otpNow = cred.otp ? ghTotp(cred.otp) : '';
+    const safeKey = ('cf:gh:' + login).replace(/[^a-zA-Z0-9._@-]/g, '_');
+    const profileDir = path.join(DAO_DIR, 'browser-profiles', safeKey);
+    try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* 守柔 */ }
+    const tokenUrl = daoRelayTokenDeepLink('dao-relay');
+    const assistExt = daoRelayWriteGhCfAssistExt(profileDir, cred, otpNow, 'dao-relay');
+    const fp = daoAcctFingerprint(safeKey);
+    const proxy = daoAcctProxy(safeKey);
+    const launched = daoLaunchChromiumIsolated(tokenUrl, safeKey, fp, proxy, profileDir, assistExt ? [assistExt] : []);
+    return { ok: !!launched, login, launched: !!launched, hasOtp: !!otpNow, tokenUrl };
+}
 // GitHub 管理中心 MD(一键复制/打开 · 对照 Bridge MD 模式): 只含脱敏元数据 + 热接入指引, 绝不含明文 PAT/密码/2FA。
 function ghGenerateMgmtMd(): string {
     const prof = loadInjectProfile();
@@ -7855,6 +7926,12 @@ function rBridgeFull(){
   if(cfOn)h+='<button class="btn sm danger" onclick="if(confirm(&#39;退出账号并清空全部 CloudFlare 凭证残留(含 cert.pem)，回到无账号快速隧道？&#39;))cmd(&#39;bridgeLogout&#39;)">🚪 退出/重置</button>';
   h+='</div>';
   h+='</div>';
+  // ── 代登 Cloudflare · 用 GitHub 账号(账密+2FA 已存号)后端代操作 → 隔离档链式代填建 API Token(守柔不代提交) ──
+  h+='<div class="card">';
+  h+='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">不懂建 Token？填一个已在 <b style="color:var(--fg)">GitHub 板块</b>用「账密+2FA」添加的账号 login，后端即在其<b style="color:var(--fg)">隔离浏览器档</b>代你打开 Cloudflare 建 Token 页并链式代填(CF 选 Sign in with GitHub → GitHub 自动填账密/2FA → 建 Token 页按 dao-relay 所需权限预勾)。<b style="color:var(--warn)">守柔</b>: 只代填不代提交登录/2FA/建 Token 终键, 遇验证码/设备验证不绕过, 你核对后手动点最后一步; 建成的 Token 贴到上方即全自动部署。</div>';
+  h+='<input id="relayGhLogin" type="text" placeholder="GitHub 账号 login(需先在 GitHub 板块以账密+2FA 添加)" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
+  h+='<div class="br" style="margin-top:4px"><button class="btn sm" onclick="relayGhAutoLogin()" title="隔离档浏览器代登 Cloudflare(GitHub 代登链)→ 建 Token 页链式代填, 守柔不代提交">🤖 用 GitHub 账号代登 Cloudflare</button></div>';
+  h+='</div>';
   // ── 末·更深层能力 → 已独立为 MCP (内穿面板回归本源·只管整机直连; 四大模块不再内联此处) ──
   h+='<div class="st" style="margin-top:14px">🧩 更深层专业操作 · DAO Bridge MCP</div>';
   h+='<div class="card" style="font-size:11px;color:var(--muted)">日常远程操作整机走上方内网穿透即可。浏览器自动化(CDP) / GUI 鼠键截屏 / 插件本体 / VSCode 命令等<b style="color:var(--fg)">四大模块</b>能力，已独立为 <b style="color:var(--fg)">DAO Bridge MCP</b>(随账号反向注入·HTTP 传输·无需手动配置)。用法见知识库「DAO Bridge MCP 使用文档(四大模块)」, 或在「MCP」面板查看。</div>';
@@ -7880,6 +7957,8 @@ function rBridgeAgents(){
 function bridgeCfLogin(){var e=document.getElementById('cfEmail'),k=document.getElementById('cfKey');var email=e?e.value.trim():'';var key=k?k.value.trim():'';if(!key){toast('请填写 Token / API Key',false);return}toast('验证中…',true);cmd('bridgeCfLogin',{email:email,key:key})}
 // 兜底通道·单一接口: 贴 API Token → 后端全自动 provision 持久 Worker(+尽力绑定凭证/命名隧道)。
 function relayTokenGo(){var k=document.getElementById('cfKey');var token=k?k.value.trim():'';if(!token){toast('请先贴入 Cloudflare API Token',false);return}toast('全自动打通中…(取账号→部署 Worker→落盘置顶, 约 1-2 分钟)',true);cmd('relayProvisionToken',{token:token})}
+// 代登 Cloudflare: 用 GitHub 账号(账密+2FA 存号)后端代操作 → 隔离档链式代填建 API Token(守柔不代提交)。
+function relayGhAutoLogin(){var el=document.getElementById('relayGhLogin');var login=el?el.value.trim().replace(/^@/,''):'';if(!login){toast('请先填一个 GitHub 账号 login(需先在 GitHub 板块以账密+2FA 添加)',false);return}toast('🤖 代登 Cloudflare 中…隔离档浏览器将打开(GitHub 代登链→建 Token 页代填·守柔不代提交)',true);cmd('relayGhAutoLogin',{login:login})}
 function bridgeExec(){var c=document.getElementById('bridgeCmd');var v=c?c.value.trim():'';if(!v)return;var o=document.getElementById('bridgeOut');if(o)o.textContent='执行中…';cmd('bridgeExec',{cmd:v})}
 // 问题②③ · 备份板块: 全账号×全对话备份成果 + 查看/下载 (路由 rt-flow 同源备份 · 纯本地·免 cog_ key)
 function rBackups(){
@@ -8946,7 +9025,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
     // GitHub 纵向板块独立于 Devin 账号池(自带 PAT 鉴权) — daoGh* 一律免 Devin 登录
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command) && !/^daoGh/.test(String(msg.command || ''))) {
         reply({ type: 'error', msg: 'Not logged in' });
@@ -10556,6 +10635,13 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // 同一 Token 顺手绑定 CF 凭证 + 尽力开通命名隧道(有自有域名才成, 后台尽力而为不阻塞)。
                 if (r.ok) bridgeCfLogin('', String(msg.token || '')).then(() => { try { refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ } }).catch(() => { /* 守柔 */ });
                 refreshReply({ type: 'actionResult', command: 'relayProvisionToken', ok: !!r.ok, url: r.url, error: r.error });
+                break;
+            }
+            // 后端代登: 用 GitHub 账号(账密+2FA 存号)代登 Cloudflare → 隔离档链式代填建 API Token(守柔不代提交)。
+            case 'relayGhAutoLogin': {
+                const r = await daoRelayGhAutoLogin(String(msg.login || ''));
+                vscode.window[r.ok ? 'showInformationMessage' : 'showErrorMessage']('DAO 持久通道·代登 Cloudflare: ' + (r.ok ? ('已在 ' + r.login + ' 隔离档打开 CF 建 Token 页(GitHub 代登链)' + (r.hasOtp ? '·2FA已填充' : '')) : (r.error || '失败')));
+                reply({ type: 'actionResult', command: 'relayGhAutoLogin', ok: !!r.ok, login: r.login, error: r.error });
                 break;
             }
             case 'relayOAuthRefresh': {
