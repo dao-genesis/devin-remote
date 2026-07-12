@@ -2061,7 +2061,7 @@ async function shellHandleMessage(sid, m) {
       case 'getAccounts': {
         const list = (((_store && _store.accounts) || [])).map((a, i) => {
           let dollars = 0;
-          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
           return { accNo: i + 1, email: a.email, name: a.name || String(a.email || '').split('@')[0], dollars };
         });
         send({ type: 'accounts', list });
@@ -2596,7 +2596,7 @@ function _wireMultiPanel(panel) {
       if (m.type === "getAccounts") {
         const list = (((_store && _store.accounts) || [])).map((a, i) => {
           let dollars = 0;
-          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
           return { accNo: i + 1, email: a.email, name: a.name || String(a.email || "").split("@")[0], dollars: dollars };
         });
         try { panel.webview.postMessage({ type: "accounts", list: list }); } catch (e) {}
