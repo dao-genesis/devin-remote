@@ -2840,17 +2840,35 @@ public class MainActivity extends AppCompatActivity {
         }
         return Math.max(sCookieMintAt, 0);
     }
-    /** 确保目标组织的 attachments_token 就绪 (单飞铸造·同组织 3s 防抖, 防并发媒体请求触发铸造风暴)。 */
+    private static java.util.concurrent.CountDownLatch sMintInFlight = null;
+    /** 确保目标组织的 attachments_token 就绪 (单飞铸造·同组织 3s 防抖, 防并发媒体请求触发铸造风暴)。
+     *  铸造的网络 IO 在锁外执行: 本方法可被 WebView 拦截线程并发调用, 锁内做网络请求会把
+     *  所有并发媒体请求串到一把全局锁上(整页图片/视频互相饿死); 后到者只对在飞铸造做有界等待。 */
     static boolean ensureAttachmentCookie(String auth1, String orgId, String url) {
         if (attachmentCookieFresh(url, orgId)) return true;
         if (auth1 == null || auth1.isEmpty()) return false;
+        java.util.concurrent.CountDownLatch mine = null, inFlight = null;
         synchronized (MINT_LOCK) {
             if (attachmentCookieFresh(url, orgId)) return true;
-            long now = System.currentTimeMillis();
-            boolean sameOrg = (orgId == null) ? (sLastMintOrg == null) : orgId.equals(sLastMintOrg);
-            if (sameOrg && now - sLastMintAt < 3000) return false;
-            sLastMintAt = now; sLastMintOrg = orgId;
+            if (sMintInFlight != null) inFlight = sMintInFlight;
+            else {
+                long now = System.currentTimeMillis();
+                boolean sameOrg = (orgId == null) ? (sLastMintOrg == null) : orgId.equals(sLastMintOrg);
+                if (sameOrg && now - sLastMintAt < 3000) return false;
+                sLastMintAt = now; sLastMintOrg = orgId;
+                mine = sMintInFlight = new java.util.concurrent.CountDownLatch(1);
+            }
+        }
+        if (inFlight != null) {
+            try { inFlight.await(5, java.util.concurrent.TimeUnit.SECONDS); }
+            catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+            return attachmentCookieFresh(url, orgId);
+        }
+        try {
             return mintAttachmentCookie(auth1, orgId) && attachmentCookieFresh(url, orgId);
+        } finally {
+            synchronized (MINT_LOCK) { if (sMintInFlight == mine) sMintInFlight = null; }
+            mine.countDown();
         }
     }
     /** 铸造 attachments_token Cookie: POST set-attachment-cookie(Bearer 有效) → Set-Cookie 落入 CookieManager。 */
@@ -2930,14 +2948,14 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
     }
     /** 广告/追踪域名命中 (内置精简黑名单)。 */
+    private static final String[] AD_HOSTS = {"doubleclick.net","googlesyndication.com","googleadservices.com","google-analytics.com",
+            "googletagmanager.com","googletagservices.com","adservice.google.com","adnxs.com","adsystem.com",
+            "scorecardresearch.com","moatads.com","amazon-adsystem.com","facebook.net","analytics.","pagead2.",
+            "ads.","adservice.","track.","tracker.","pixel.","taboola.com","outbrain.com","criteo.com","pubmatic.com"};
     static boolean isAdHost(String host) {
         if (host == null) return false;
         host = host.toLowerCase();
-        String[] ad = {"doubleclick.net","googlesyndication.com","googleadservices.com","google-analytics.com",
-                "googletagmanager.com","googletagservices.com","adservice.google.com","adnxs.com","adsystem.com",
-                "scorecardresearch.com","moatads.com","amazon-adsystem.com","facebook.net","analytics.","pagead2.",
-                "ads.","adservice.","track.","tracker.","pixel.","taboola.com","outbrain.com","criteo.com","pubmatic.com"};
-        for (String a : ad) { if (a.endsWith(".") ? host.contains(a) : (host.equals(a) || host.endsWith("." + a) || host.contains(a))) return true; }
+        for (String a : AD_HOSTS) { if (a.endsWith(".") ? host.contains(a) : (host.equals(a) || host.endsWith("." + a) || host.contains(a))) return true; }
         return false;
     }
     /** 夜间反色: 整页 invert 滤镜 (图片/视频再 invert 还原)。 */
