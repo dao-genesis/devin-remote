@@ -2778,7 +2778,8 @@ async function _refreshHealthForTick(email, minGapSec) {
         if (au && au.auth1) {
           const q = await _tryDevinBillingFallback(au.auth1);
           if (q) _store.setHealth(k, q);
-        }
+          try { log('health直探 ' + k + ' → ' + (q ? ('$' + q.overageDollars) : '拉空')); } catch (e) {}
+        } else { try { log('health直探 ' + k + ' → 无auth1'); } catch (e) {} }
       } finally { _healthInflight.delete(k); }
       return;
     }
