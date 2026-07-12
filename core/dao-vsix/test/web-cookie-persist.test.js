@@ -31,6 +31,6 @@ ok(/if\s*\(\s*changed\s*\)\s*webProxyPersistCookies\(\)/.test(store), "仅在真
 // 落盘为 debounce(定时器合并写), 且写前建目录
 const persist = src.slice(src.indexOf("function webProxyPersistCookies"), src.indexOf("function webProxyCookieHeader"));
 ok(/setTimeout\(/.test(persist) && /_webCookieSaveTimer/.test(persist), "落盘 debounce 合并写(_webCookieSaveTimer)");
-ok(/fs\.mkdirSync\(DAO_DIR/.test(persist) && /fs\.writeFileSync\(WEB_COOKIE_FILE/.test(persist), "写前建 DAO_DIR 目录再写文件");
+ok(/writeSecretFile\(WEB_COOKIE_FILE/.test(persist), "经 writeSecretFile 落盘(内建目录 0700·文件 0600)");
 
 console.log("全部通过 (" + pass + " 项)");
