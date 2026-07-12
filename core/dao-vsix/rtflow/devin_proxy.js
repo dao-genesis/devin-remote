@@ -101,7 +101,7 @@ function upstreamRequest(reqOpts, bodyBuf, onRes, onFail, log) {
     pr.on("timeout", () => { try { pr.destroy(new Error("upstream timeout")); } catch {} });
     pr.on("error", (e) => {
       if (!_isTransientNetErr(e)) return onFail(e);
-      if (n === 0) { if (log) try { log("[proxy] direct " + (e && e.message) + " → fresh-socket retry"); } catch {} return direct(1, { agent: false }); }
+      if (n === 0) { if (log) try { log("[proxy] direct " + (e && e.message) + " → fresh-socket retry(v4)"); } catch {} return direct(1, { agent: false, family: 4 }); }
       _probeProxyPort(host, (pp) => { if (!pp) return onFail(e); if (log) try { log("[proxy] direct dead → local proxy :" + pp); } catch {} viaProxy(pp, e); });
     });
     if (bodyBuf && bodyBuf.length) pr.write(bodyBuf);

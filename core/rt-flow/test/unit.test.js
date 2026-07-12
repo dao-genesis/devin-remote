@@ -1508,7 +1508,7 @@ function test(name, fn) {
     for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
       const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
       assert.ok(/_netpProbePort/.test(src) && /_netpTunnel/.test(src), rel.join("/") + " 须有本机代理探测/CONNECT 兜底 — 旧病灶: TLS 瞬断即 planStatus 拉空·额度长期陈旧");
-      assert.ok(/direct\(1, \{ agent: false \}\)/.test(src), rel.join("/") + " 瞬断须换新 socket 直连重试");
+      assert.ok(/direct\(1, \{ agent: false, family: 4 \}\)/.test(src), rel.join("/") + " 瞬断须换新 socket + 钉 IPv4 直连重试(国内 IPv6 到 AWS 黑洞)");
     }
   });
 

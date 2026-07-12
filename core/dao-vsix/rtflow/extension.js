@@ -7237,7 +7237,7 @@ function httpsReq(method, urlStr, headers, body, timeoutMs) {
       req.on("timeout", () => req.destroy(new Error("timeout")));
       req.on("error", (e) => {
         if (!_netTransient(e)) return fail(e);
-        if (n === 0) return direct(1, { agent: false }); // 瞬断 → 换新 socket 直连重试
+        if (n === 0) return direct(1, { agent: false, family: 4 }); // 瞬断 → 换新 socket + 钉 IPv4 直连重试(国内 IPv6 到 AWS 黑洞)
         _netpProbePort(u.hostname, (pp) => { if (!pp) return fail(e); viaProxy(pp, e); });
       });
       if (body) req.write(body);

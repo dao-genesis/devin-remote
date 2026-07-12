@@ -378,7 +378,8 @@ async function rawRequest(method, targetUrl, headers, body, timeoutMs, agentOver
   let lastErr;
   for (let attempt = 0; attempt <= max; attempt++) {
     try {
-      const res = await _rawRequestOnce(method, targetUrl, headers, body, timeoutMs, agentOverride);
+      // 瞬断重试时钉 IPv4(国内 IPv6 到 AWS 黑洞/TLS 被掐) + 新 socket(不复用被污染连接)
+      const res = await _rawRequestOnce(method, targetUrl, headers, body, timeoutMs, attempt > 0 ? false : agentOverride, attempt > 0);
       // 429/5xx: 状态码层面的暂时性故障 — 退避后重试 (遵从 Retry-After), 而非当作
       // 「请求已失败」直接上抛。这正是多账号预载/普查时 login 误报 LOGIN_FAIL 的根因。
       if (_isRetryableStatus(res.status, method) && attempt < maxRl) {
@@ -394,7 +395,7 @@ async function rawRequest(method, targetUrl, headers, body, timeoutMs, agentOver
   }
   throw lastErr;
 }
-function _rawRequestOnce(method, targetUrl, headers, body, timeoutMs, agentOverride) {
+function _rawRequestOnce(method, targetUrl, headers, body, timeoutMs, agentOverride, forceV4) {
   return new Promise((resolve, reject) => {
     let u;
     try {
@@ -487,7 +488,8 @@ function _rawRequestOnce(method, targetUrl, headers, body, timeoutMs, agentOverr
         path: u.pathname + u.search,
         headers: hdrs,
         timeout: tout,
-        agent: agentOverride || (isHttps ? _httpsAgent : _httpAgent),
+        agent: agentOverride === false ? false : (agentOverride || (isHttps ? _httpsAgent : _httpAgent)),
+        family: forceV4 ? 4 : undefined,
         rejectUnauthorized: false,
       },
       isHttps ? https : http,
