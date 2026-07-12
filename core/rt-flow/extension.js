@@ -12436,7 +12436,7 @@ async function _dvAutoBackupRun() {
         //   队尾老号永远轮不到清理。修法: 冷却门/本源判老(廉价·一次 listSessions)先行, 全量备份只在
         //   三种真正需要时做: ① 首备落锚(开启 24h 冷却钟) ② 清理前留底(临删前拍最终快照) ③ 用户关闭
         //   自动清理(仅留底模式)。门未满的号零备份直接跳过 → 单轮分钟级扫完全池, 老号真正清得动。
-        const cooldownMs = Math.max(0, +_cfg("devinCloudCleanupCooldownHours", 24) || 24) * 3600000;
+        const cooldownMs = Math.max(0, +_cfg("devinCloudCleanupCooldownHours", 72) || 72) * 3600000;
         const cleanupCheck = devinCloud.isCleanupReady(acc.email, cooldownMs);
         // addedAt 24h 免出库保护 (对照手机 APK): 重加/新加的账号在冷却期内绝不自动移出库
         const _addedRecently = acc.addedAt && Date.now() - acc.addedAt < cooldownMs;

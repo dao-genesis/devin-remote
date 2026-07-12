@@ -266,8 +266,8 @@
 				},
 				"wam.devinCloudCleanupCooldownHours": {
 					"type": "number",
-					"default": 24,
-					"description": "v4.9.11 · 清理冷却期 (小时·默认24). 全量备份完成后须经过此时长且期间无任何对话更新, 才允许自动清理 (先备份后清理·留足回旋余地)"
+					"default": 72,
+					"description": "v4.31 · 清理/出库冷却期 (小时·默认72·可调). 全量备份完成后须经过此时长且期间无任何对话更新, 才允许自动清理并移出账号库 (先备份后清理·留足回旋余地; 切号板块「出库保留时长」可页面直调)"
 				},
 				"wam.devinCloudAutoRemoveZeroQuota": {
 					"type": "boolean",

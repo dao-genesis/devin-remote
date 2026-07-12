@@ -2695,7 +2695,7 @@ function isCleanupReady(email, cooldownMs) {
   const st = getCleanupState(email);
   if (!st || !st.backupCompletedAt) return { ready: false, reason: "no_backup" };
   const now = Date.now();
-  const cd = cooldownMs || 24 * 60 * 60 * 1000;
+  const cd = cooldownMs || 72 * 60 * 60 * 1000;
   const sinceBk = now - st.backupCompletedAt;
   if (sinceBk < cd) return { ready: false, reason: "cooldown", remaining: cd - sinceBk };
   if (st.lastConvUpdateAt && (now - st.lastConvUpdateAt) < cd)

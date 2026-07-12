@@ -875,6 +875,11 @@ function test(name, fn) {
       // 上轮清理(cleanedAt>=锚点)且无新备份 → already_cleaned
       cloud.setCleanupState(em, { lastConvUpdateAt: now - 25 * H, cleanedAt: now - 24 * H });
       assert.strictEqual(cloud.isCleanupReady(em, cd).reason, "already_cleaned");
+      // v4.31 可调冷却期: 自定义时长 (如 72h) 生效 — 锚点 25h 前在 72h 门下仍未满
+      cloud.setCleanupState(em, { backupCompletedAt: now - 25 * H, lastConvUpdateAt: 0, cleanedAt: 0 });
+      assert.strictEqual(cloud.isCleanupReady(em, 72 * H).reason, "cooldown");
+      cloud.setCleanupState(em, { backupCompletedAt: now - 73 * H });
+      assert.strictEqual(cloud.isCleanupReady(em, 72 * H).ready, true);
     } finally {
       // 清理测试残留, 不污染真库
       try {
@@ -883,6 +888,15 @@ function test(name, fn) {
         if (fs.existsSync(p)) { const all = JSON.parse(fs.readFileSync(p, "utf8")); delete all[em.toLowerCase()]; fs.writeFileSync(p, JSON.stringify(all, null, 2)); }
       } catch (e) {}
     }
+  });
+  test("清理/出库冷却期: 默认 72h 可调 (devin_cloud 兜底 + extension.js 配置默认)", () => {
+    const fs = require("fs"), path = require("path");
+    const dcSrc = fs.readFileSync(path.join(__dirname, "..", "devin_cloud.js"), "utf8");
+    assert.ok(/const cd = cooldownMs \|\| 72 \* 60 \* 60 \* 1000;/.test(dcSrc), "isCleanupReady 兜底须为 72h");
+    const extSrc = fs.readFileSync(path.join(__dirname, "..", "extension.js"), "utf8");
+    assert.ok(/_cfg\("devinCloudCleanupCooldownHours", 72\)/.test(extSrc), "extension.js 配置默认须为 72h");
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+    assert.strictEqual(pkg.contributes.configuration.properties["wam.devinCloudCleanupCooldownHours"].default, 72, "package.json 默认须为 72");
   });
   test("devin_cloud.archiveSettledConvZips: 沉寂对话打 ZIP 归档 + 增量免重打; 未沉寂不打", () => {
     const fs = require("fs"), path = require("path"), os = require("os");

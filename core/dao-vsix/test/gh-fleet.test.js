@@ -55,8 +55,10 @@ ok(/不自动提交|autofill|自动填充/.test(src) && !/\.submit\(\)/.test(src
   "续登助手守柔: 自动填充但绝不自动提交(不做无头登录)");
 ok(/async function daoGhFleetAssistLogin\(/.test(src),
   "daoGhFleetAssistLogin: 该号专属隔离档打开 GitHub 登录页 + 填充");
-ok(/function daoGhFleetOpenPat\(/.test(src) && /launchIsolatedBrowser\(url,\s*'gh:'/.test(src),
-  "daoGhFleetOpenPat: 同一隔离档打开建 PAT 页(必为本号建·不张冠李戴)");
+ok(/function daoGhFleetOpenPat\(/.test(src) &&
+   /const safeKey = \('gh:' \+ login\)/.test(src) &&
+   /daoLaunchChromiumIsolated\(url, safeKey, fp, proxy, profileDir, patExt/.test(src),
+  "daoGhFleetOpenPat: 同一隔离档(gh:<login>)打开建 PAT 页+注入助手(必为本号建·不张冠李戴)");
 ok(/无有效 auth1|该账号无账密存号|账号不在池中/.test(src),
   "无账密存号/不在池中 → 明确报错(不回退活动号)");
 for (const c of ["daoGhFleetAssistLogin", "daoGhFleetOpenPat"]) {
@@ -99,5 +101,120 @@ ok(/a\.verify === 'pending' \? \{ verify: 'pending' \}/.test(src),
 ok(/out = Object\.assign\(\{\}, raw\);/.test(src) &&
    /if \(\(p as any\)\[k\] !== undefined\) out\[k\] = \(p as any\)\[k\];/.test(src),
   "saveInjectProfile: 合并磁盘档未知顶层字段·只覆盖已知字段(多窗多版本共档不互抹)");
+
+// 11) PAT 通用配置(账号池共用·官网建 PAT 权限/有效期): 默认全 scope + 30 天·用户可调·隔离档助手预勾不自动提交
+ok(/const GH_PAT_SCOPES:/.test(src) && /key: 'repo'/.test(src) && /key: 'admin:org'/.test(src) && /key: 'workflow'/.test(src),
+  "GH_PAT_SCOPES: 全量 scope 清单(对齐官网)含 repo/admin:org/workflow");
+ok(/const GH_PAT_EXP_DAYS:\s*number\[\]\s*=\s*\[0, 7, 30, 60, 90\]/.test(src),
+  "GH_PAT_EXP_DAYS: 有效期天数(0=永不过期) 对齐官网下拉");
+ok(/function _ghDefaultPatCfg\(\)[\s\S]*?expDays:\s*30/.test(src),
+  "_ghDefaultPatCfg: 默认全 scope + 30 天");
+ok(/function daoGhGetPatCfg\(/.test(src) && /function daoGhSavePatCfg\(/.test(src),
+  "daoGhGetPatCfg/daoGhSavePatCfg: 读写账号池通用 PAT 配置");
+ok(/prof\.ghPatCfg = \{ scopes: sc, expDays: ed \}/.test(src) && /const sc = Array\.isArray\(scopes\)[\s\S]*?valid\.has\(s\)/.test(src),
+  "daoGhSavePatCfg: scope 白名单过滤 + 有效期归一后落档");
+ok(/ghPatCfg\?:\s*\{\s*scopes:\s*string\[\];\s*expDays:\s*number\s*\}/.test(src),
+  "InjectProfile 声明 ghPatCfg(仅非密元数据)");
+ok(/function daoGhWritePatAssistExt\(/.test(src) && /settings\/tokens\/new\*/.test(src),
+  "daoGhWritePatAssistExt: 建 PAT 页助手扩展(仅本号隔离档·匹配 tokens/new)");
+{
+  const patExtBlock = src.split("daoGhWritePatAssistExt")[1].slice(0, 1800);
+  ok(!/\.submit\(\)/.test(patExtBlock) && /Generate token|不自动提交/.test(patExtBlock),
+    "建 PAT 助手守柔: 预勾 scope/有效期但绝不自动提交");
+}
+ok(/scopes=' \+ encodeURIComponent\(scopeStr\)/.test(src),
+  "daoGhFleetOpenPat: URL scope 由通用配置生成(非硬编码 admin:org,repo,workflow)");
+for (const c of ["daoGhGetPatCfg", "daoGhSavePatCfg"]) {
+  ok(new RegExp("case '" + c + "':").test(src), "消息处理: case '" + c + "'");
+}
+ok(/function ghPatCfgOpen\(/.test(src) && /function ghPatCfgShow\(/.test(src),
+  "前端 ghPatCfgOpen/ghPatCfgShow: PAT 通用配置悬浮窗");
+ok(/d\.kind==='patCfg'/.test(src) && /d\.kind==='patCfgSaved'/.test(src),
+  "前端 ghOnResult 处理 patCfg / patCfgSaved 回包");
+ok(/onclick="ghPatCfgOpen\(\)"/.test(src),
+  "账号池区提供「⚙ PAT 通用配置」按钮");
+
+// 12) security 多 PAT 分布式注入(规避「只能注一枚 PAT」单点) — 显示各账号 PAT 状态·可多选注入·脱敏
+ok(/function _ghPatSecretName\(login: string\): string/.test(src) &&
+   /'GITHUB_PAT_' \+ String\(login \|\| ''\)\.toUpperCase\(\)/.test(src),
+  "_ghPatSecretName: 每账号一条 GITHUB_PAT_<LOGIN> 键名(多 PAT 分布式)");
+ok(/function _ghMaskPat\(pat: string\): string/.test(src) &&
+   /p\.slice\(0, 7\) \+ '…\(脱敏\)'/.test(src),
+  "_ghMaskPat: PAT 仅回脱敏前缀(明文永不出前端)");
+ok(/function daoGhPatStatus\(\)/.test(src) &&
+   /injectedCount:/.test(src) && /patPrefix:/.test(src) && /injected,/.test(src) && /primary: isPrimary/.test(src),
+  "daoGhPatStatus: 回各账号非密 PAT 状态(hasPat/injected/primary/脱敏前缀)");
+{
+  // daoGhPatStatus 只回脱敏元数据, 绝不回明文 PAT 值
+  const psBlock = src.split("function daoGhPatStatus")[1].split("async function daoGhInjectPats")[0];
+  ok(!/value:\s*pat\b/.test(psBlock) && !/pat:\s*pat\b/.test(psBlock),
+    "daoGhPatStatus: 返回体不含明文 PAT 值(只 patPrefix 脱敏)");
+}
+ok(/async function daoGhInjectPats\(logins: string\[\], primary: string, prune: boolean\)/.test(src),
+  "daoGhInjectPats: 多选账号 → 逐条注入 security(可指定主 PAT·可 prune)");
+ok(/prof\.secrets\.push\(\{ name, value: pat \}\)/.test(src) &&
+   /wantSecretNames\.add\(name\)/.test(src),
+  "daoGhInjectPats: 每选中账号各写一条 GITHUB_PAT_<LOGIN> 密钥");
+ok(/if \(!pat\) \{ skipped\.push\(\{ login: lg, reason: '无 PAT/.test(src),
+  "daoGhInjectPats: 无 PAT 账号被跳过并回原因(不冒名·不回退活动号)");
+ok(/const allPer = new Set\(fleet\.map\(a => _ghPatSecretName\(a\.login\)\)\);/.test(src) &&
+   /prof\.secrets = prof\.secrets\.filter\(s => !\(allPer\.has\(s\.name\) && !wantSecretNames\.has\(s\.name\)\)\)/.test(src),
+  "daoGhInjectPats: prune 只清未选中账号遗留的 GITHUB_PAT_* (不动主 GITHUB_PAT/非本机制密钥)");
+ok(/const exP = prof\.secrets\.find\(s => s\.name === DAO_PAT_SECRET_NAME\)/.test(src) &&
+   /gm\.headers = \{ \.\.\.\(gm\.headers \|\| \{\}\), Authorization: 'Bearer ' \+ patNorm \}/.test(src.split("async function daoGhInjectPats")[1].split("// 一键拷贝")[0]),
+  "daoGhInjectPats: 主 PAT 写 GITHUB_PAT + 同步钉 GitHub MCP(Bearer)");
+for (const c of ["daoGhPatStatus", "daoGhInjectPats"]) {
+  ok(new RegExp("case '" + c + "':").test(src), "消息处理: case '" + c + "'");
+}
+ok(/未选择任何账号/.test(src),
+  "daoGhInjectPats 处理: 空选拒绝注入");
+ok(/function ghRenderPatInject\(\)/.test(src) &&
+   /id="ghPatInjectList"/.test(src),
+  "前端 ghRenderPatInject: 多 PAT 可多选注入清单渲染");
+ok(/function ghPatSelToggle\(/.test(src) && /function ghPatInjectAll\(/.test(src) &&
+   /function ghPatSetPrimary\(/.test(src) && /function ghPatInjectSel\(/.test(src),
+  "前端 ghPatSelToggle/ghPatInjectAll/ghPatSetPrimary/ghPatInjectSel: 多选+主 PAT 交互");
+ok(/cmd\('daoGhInjectPats',\{logins:logins,primary:st\.patPrimary\|\|'',prune:true\}\)/.test(src),
+  "ghPatInjectSel: 提交所选 logins + 主 PAT 给后端");
+ok(/d\.kind==='patStatus'/.test(src) && /d\.kind==='injectPats'/.test(src),
+  "前端 ghOnResult 处理 patStatus / injectPats 回包");
+ok(/onclick="ghPatInjectSel\(\)"/.test(src) && /注入所选到 security/.test(src),
+  "多 PAT 区提供「💉 注入所选到 security」按钮");
+{
+  // 前端渲染函数不得把 PAT 明文写入 DOM — 只用 patPrefix(脱敏)
+  const riBlock = src.split("function ghRenderPatInject")[1].split("// ④ 仅 GitHub MCP")[0];
+  ok(/a\.patPrefix/.test(riBlock) && !/a\.pat\b/.test(riBlock),
+    "ghRenderPatInject: 只渲染脱敏 patPrefix, 不触碰明文 a.pat");
+}
+
+// 8) 批量验证 PAT (逐号 GET /user · 落非密元数据 · 不冒称有效)
+ok(/tokenExpiration: res\.headers\['github-authentication-token-expiration'\] \|\| ''/.test(src),
+  "ghApiRequest: 捕获 github-authentication-token-expiration 过期头(非密)");
+ok(/async function daoGhValidatePats\(logins: string\[\]\)/.test(src),
+  "daoGhValidatePats: 批量验证入口(可按 logins 过滤·空=全部有 PAT 账号)");
+{
+  const vb = src.split("async function daoGhValidatePats")[1].split("// 一键拷贝")[0];
+  ok(/if \(r\.status === 200\) state = 'valid';/.test(vb) && /else if \(r\.status === 401\) state = 'invalid';/.test(vb),
+    "daoGhValidatePats: 200→valid · 401→invalid(不冒称有效)");
+  ok(/let state = 'offline';/.test(vb) && /if \(state !== 'offline'\) \{/.test(vb),
+    "daoGhValidatePats: 网络失败→offline 且不覆盖旧验证元数据");
+  ok(/rec\.patExpiresAt = String\(r\.tokenExpiration \|\| ''\)/.test(vb) && /rec\.patScopes = String\(r\.scopes \|\| ''\)/.test(vb) && /rec\.patCheckedAt = Date\.now\(\)/.test(vb),
+    "daoGhValidatePats: 落 patExpiresAt/patScopes/patCheckedAt 非密元数据");
+  ok(/results\.push\(\{ login: a\.login, state, expiresAt/.test(vb) && !/results\.push\([^)]*\bpat\b/.test(vb),
+    "daoGhValidatePats: 返回体只含非密状态(无 PAT 明文)");
+}
+ok(/patState: String\(rec\.patState \|\| ''\), patExpiresAt: String\(rec\.patExpiresAt \|\| ''\)/.test(src),
+  "daoGhPatStatus: 状态清单携带 patState/patExpiresAt(非密)");
+ok(new RegExp("case 'daoGhValidatePats':").test(src),
+  "消息处理: case 'daoGhValidatePats'(验证后回最新 patStatus)");
+ok(/function ghPatValidateAll\(\)/.test(src) && /onclick="ghPatValidateAll\(\)"/.test(src),
+  "前端: 「🔍 批量验证」按钮 + ghPatValidateAll 交互");
+ok(/d\.kind==='validatePats'/.test(src),
+  "前端 ghOnResult 处理 validatePats 回包");
+{
+  const riBlock = src.split("function ghRenderPatInject")[1].split("// ④ 仅 GitHub MCP")[0];
+  ok(/a\.patState==='valid'/.test(riBlock) && /a\.patState==='invalid'/.test(riBlock) && /a\.patExpiresAt/.test(riBlock),
+    "ghRenderPatInject: 渲染 有效/失效 状态与过期余天(非密)");
+}
 
 console.log("[gh-fleet] " + pass + " assertion(s) passed\n");
