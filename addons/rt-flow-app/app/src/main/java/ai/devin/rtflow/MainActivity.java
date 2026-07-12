@@ -198,6 +198,9 @@ public class MainActivity extends AppCompatActivity {
         androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe; // 下拉刷新容器
         String auth1 = "";          // 该标签绑定账号的 auth1 token (原生层媒体代取鉴权用)
         String orgId = "";          // 该标签绑定账号的 org id
+        String acctId = "";        // accountJson 解析缓存: id (chipTitle 每次标签条渲染都要用, 免重复 JSON 解析)
+        String acctEmail = "";     // accountJson 解析缓存: email
+        int acctNoSnap = 0;         // accountJson 解析缓存: 开标签时的账号池序号快照 (兜底用)
         volatile long remoteDriveUntil = 0; // 影子驱动保活窗: 远程 browse* 正在直驱本标签 → 停泊/转后台/内存保洁一律不暂停·不卸载 (道并行而不相悖)
     }
 
@@ -1190,7 +1193,10 @@ public class MainActivity extends AppCompatActivity {
         if (accountJson != null) {
             String token = "", org = "", uid = "", orgName = "";
             try { JSONObject a = new JSONObject(accountJson); token = a.optString("auth1", ""); org = a.optString("orgId", "");
-                uid = a.optString("userId", ""); orgName = a.optString("orgName", ""); } catch (Exception ignored) {}
+                uid = a.optString("userId", ""); orgName = a.optString("orgName", "");
+                tab.acctId = a.optString("id", a.optString("email", ""));
+                tab.acctEmail = a.optString("email", tab.acctId);
+                tab.acctNoSnap = a.optInt("no", 0); } catch (Exception ignored) {}
             tab.auth1 = token; tab.orgId = org;
             injectScript0 = TabActivity.buildInjection(token, uid, org, orgName);
             if (docStartSupported) {
@@ -1864,9 +1870,8 @@ public class MainActivity extends AppCompatActivity {
         if (t.url != null && t.url.endsWith("vpn.html")) return "VPN";
         if (t.accountJson != null) {
             try {
-                JSONObject a = new JSONObject(t.accountJson);
-                String id = a.optString("id", a.optString("email", ""));
-                String email = a.optString("email", id);
+                String id = t.acctId;
+                String email = t.acctEmail.isEmpty() ? id : t.acctEmail;
                 // 标签标题优先显示该账号最活跃对话名 + 实时状态点 (运行/卡顿/结束)
                 String emailLc = email.toLowerCase();
                 // 最左账号池序号【N】(切号板块列表同序·紧凑小占位)
@@ -1874,7 +1879,7 @@ public class MainActivity extends AppCompatActivity {
                 // 时的陈旧快照, 只作兜底 —— 否则他号出库后序号平移, 页签仍显旧序号。
                 Integer no = sAcctNo.get(id.toLowerCase());
                 if (no == null) no = sAcctNo.get(emailLc);
-                if ((no == null || no <= 0) && a.has("no")) no = a.optInt("no", 0);
+                if ((no == null || no <= 0) && t.acctNoSnap > 0) no = t.acctNoSnap;
                 String nop = (no != null && no > 0) ? (no + "\u00B7") : "";
                 String money = sTabDollars.get(id);
                 if (money == null) money = sTabDollars.get(id.toLowerCase());
@@ -6771,7 +6776,7 @@ public class MainActivity extends AppCompatActivity {
                     if (dt.pendingReloadUrl == null) return;   // 已被选中触发加载(selectTab 消费掉了) → 跳过
                     dt.pendingReloadUrl = null;
                     try { loadInto(dt, du); } catch (Exception ignored) {}
-                    renderTabStrip();
+                    scheduleRenderTabStrip();
                 }, COLD_START_ACCT_LOAD_GAP_MS * (k + 1));
             }
             renderTabStrip();   // 标签条立即显示全部标签(含尚未起载的账号壳), 不必等错峰完成
