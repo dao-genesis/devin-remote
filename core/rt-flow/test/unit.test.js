@@ -445,6 +445,35 @@ function test(name, fn) {
     assert.ok(/const isPrefix = localBase\.charAt\(0\) === "\/"/.test(venP), "打包 devin_proxy 须含前缀模式");
   });
 
+  // ── 11a2. devin_proxy · 网络软编码 (直连优先·瞬断重试·本机代理仅兜底) ──
+  console.log("\n[devin_proxy · upstreamRequest 直连优先/代理兜底]");
+  {
+    const _fs = require("fs"), _p = require("path");
+    for (const rel of [["..", "devin_proxy.js"], ["..", "..", "dao-vsix", "rtflow", "devin_proxy.js"]]) {
+      const src = _fs.readFileSync(_p.join(__dirname, ...rel), "utf8");
+      const tag = rel.join("/");
+      test(tag + " 含三级自愈组件 (upstreamRequest/_probeProxyPort/_tunnelConnect)", () => {
+        assert.ok(/function upstreamRequest\(/.test(src), "缺 upstreamRequest");
+        assert.ok(/function _probeProxyPort\(/.test(src), "缺 _probeProxyPort");
+        assert.ok(/function _tunnelConnect\(/.test(src), "缺 _tunnelConnect");
+        assert.ok(/function _isTransientNetErr\(/.test(src), "缺瞬断判别");
+      });
+      test(tag + " 主反代经 upstreamRequest (非裸 https.request 一击即溃)", () => {
+        assert.ok(/upstreamRequest\(\s*\{\s*hostname: u\.hostname/.test(src), "主路径未走 upstreamRequest");
+      });
+      test(tag + " 直连成功即清代理偏好 (直连恢复自动回归)", () => {
+        assert.ok(src.indexOf("_lastGoodProxy = 0; onRes(r)") >= 0, "缺直连回归");
+      });
+      test(tag + " WS 升级直连失败亦走本机代理兜底", () => {
+        assert.ok(/const viaProxy = \(\) => \{\s*\n\s*_probeProxyPort\(host,/.test(src), "WS 缺代理兜底");
+      });
+      test(tag + " 页级失败回自动重试页 (非裸 proxy error 文本)", () => {
+        assert.ok(src.indexOf('http-equiv="refresh"') >= 0, "缺自动重试页");
+        assert.ok(src.indexOf("upstream unreachable") >= 0, "缺失败标识");
+      });
+    }
+  }
+
   // ── 11b. devin_proxy · 磁盘二级缓存 L2 (v4.14.0 · 重载秒恢复 · 跨端口重定基) ──
   console.log("\n[devin_proxy._diskCache · L2]");
   {
