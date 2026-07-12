@@ -396,6 +396,57 @@ function _listDaoDownloads() {
     });
   } catch (e) { return []; }
 }
+// 本页资源 ⬇下载: 把页内图片/视频/附件 URL 拉到下载库(同浏览器下载管理同源 _index.json · 对齐手机 APK 媒体悬浮窗保存)。
+function _daoDlSafeName(n, url) {
+  let s = String(n || "").trim();
+  if (!s) { try { s = decodeURIComponent(String(new URL(url).pathname).split("/").pop() || ""); } catch (e) {} }
+  s = s.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_").slice(0, 120);
+  return s || ("file_" + Date.now().toString(36));
+}
+function _daoDlIndexAdd(entry) {
+  const p = _daoDownloadsIndexPath();
+  let idx = []; try { idx = JSON.parse(fs.readFileSync(p, "utf8")) || []; } catch (e) {}
+  idx.unshift(entry); idx = idx.slice(0, 500);
+  try { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(idx)); } catch (e) {}
+}
+async function _daoDownloadUrl(url, name) {
+  url = String(url || "");
+  const dir = _daoDownloadsDir();
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+  let fname = _daoDlSafeName(name, url);
+  let dest = path.join(dir, fname);
+  for (let n = 1; fs.existsSync(dest) && n < 100; n++) { const ext = path.extname(fname); dest = path.join(dir, path.basename(fname, ext) + "(" + n + ")" + ext); }
+  try {
+    if (/^data:/i.test(url)) {
+      const mm = url.match(/^data:([^;,]*)(;base64)?,(.*)$/i);
+      if (!mm) return { ok: false, error: "data URL 不可解" };
+      const buf = mm[2] ? Buffer.from(mm[3], "base64") : Buffer.from(decodeURIComponent(mm[3]), "utf8");
+      fs.writeFileSync(dest, buf);
+      _daoDlIndexAdd({ name: path.basename(dest), path: dest, size: buf.length, url: "", time: Date.now() });
+      return { ok: true, name: path.basename(dest), path: dest, size: buf.length };
+    }
+    if (!/^https?:\/\//i.test(url)) return { ok: false, error: "仅支持 http(s)/data 链接" };
+    const buf = await new Promise((resolve, reject) => {
+      const get = (u, left) => {
+        const mod = /^https:/i.test(u) ? https : require("node:http");
+        const req = mod.get(u, { headers: { "user-agent": "Mozilla/5.0", accept: "*/*" } }, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && left > 0) { res.resume(); return get(new URL(res.headers.location, u).toString(), left - 1); }
+          if (res.statusCode !== 200) { res.resume(); return reject(new Error("HTTP " + res.statusCode)); }
+          const chunks = []; let total = 0;
+          res.on("data", (c) => { total += c.length; if (total > 512 * 1024 * 1024) { req.destroy(); return reject(new Error("文件超 512MB")); } chunks.push(c); });
+          res.on("end", () => resolve(Buffer.concat(chunks)));
+          res.on("error", reject);
+        });
+        req.on("error", reject);
+        req.setTimeout(120000, () => { req.destroy(); reject(new Error("下载超时")); });
+      };
+      get(url, 5);
+    });
+    fs.writeFileSync(dest, buf);
+    _daoDlIndexAdd({ name: path.basename(dest), path: dest, size: buf.length, url, time: Date.now() });
+    return { ok: true, name: path.basename(dest), path: dest, size: buf.length };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
 function _delDaoDownload(p) {
   try {
     if (p) { try { fs.unlinkSync(p); } catch (e) {} }
@@ -932,7 +983,7 @@ function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[
   btn.title='双击复制账号密码';
   BAR.appendChild(btn);
   var fr=document.createElement('iframe');fr.setAttribute('allow','clipboard-read; clipboard-write; microphone; camera');fr.style.display='none';
-  fr.addEventListener('load',function(){setLoading(id,false);});fr.addEventListener('error',function(){setLoading(id,false);});
+  fr.addEventListener('load',function(){setLoading(id,false);try{_mrPrecollect(id);}catch(e){}});fr.addEventListener('error',function(){setLoading(id,false);});
   S.appendChild(fr);
   m.baseLabel=m.baseLabel||m.label||'';
   tabs[id]={btn:btn,frame:fr,url:m.url,email:m.email||'',zoom:1,meta:m,loading:false,_loaded:false,_dot:dot,_lbl:lb,_amt:am};order.push(id);applyZoom(tabs[id]);setActive(id);sync();schedPersist();try{schedStatusSoon();}catch(e){}
@@ -1161,6 +1212,9 @@ function renderDownloads(){if(!_bkTree){showOverlay('⬇ 下载','<div class="em
   showOverlay('⬇ 下载 ('+all.length+')',body);_bkBindActions();}
 // ── 归一 · 下载/备份悬浮窗(复刻手机端 APK daopan.html) · CSP 安全(事件委托·无内联 onclick) ──
 var DAO_REC=[],CV_TABS=[],CV_ACT=-1,_daoBkQ='',_convDrag=null,_convDragActive=false,_bkOpen={};
+// 自动化对话默认隐藏(对齐手机 daopan.html: 只隐不删·搜索时不隐免漏检)
+var _showAuto=false;try{_showAuto=localStorage.getItem('dao.showAutoConv')==='1';}catch(e){}
+function daoToggleAuto(){_showAuto=!_showAuto;try{localStorage.setItem('dao.showAutoConv',_showAuto?'1':'0');}catch(e){}daoRenderRecent();}
 var DAO_REC_VIEW_MAX=34; // 近期对话(☁)无搜索时只显示最近此条数(对齐手机 APK·精简);全量按号分层在「🗂 对话记录(备份)」
 function _dEl(id){return document.getElementById(id);}
 function daoToast(msg,bad){var t=_dEl('daotoast');if(!t)return;t.textContent=msg;t.className='dtoast show'+(bad?' fail':' ok');clearTimeout(t._tm);t._tm=setTimeout(function(){t.className='dtoast';},2200);}
@@ -1193,9 +1247,12 @@ function dlRender(){var box=_dEl('dlList');if(!box)return;
   clearTimeout(_dlAutoT);if(nAct&&_dEl('dlwin')&&_dEl('dlwin').className==='on')_dlAutoT=setTimeout(dlLoad,1200);}
 // ── 本页资源悬浮窗(对齐手机 APK media.html): 扫当前标签页内全部图片/视频/音频/文档/附件 ──
 //   同源 iframe 直扫 DOM; 跨源(仍经代理但文档不可达)时用页内桥(__daoMediaScan → __daoMediaList)。
-var MR_ITEMS=[],MR_PAGE='',_mrWaitT=null;
+var MR_ITEMS=[],MR_PAGE='',_mrWaitT=null,MR_CACHE={},_mrPreT={};
 var MR_META={img:['🖼','图片'],video:['🎬','视频'],audio:['🎵','音频'],md:['📄','Markdown 文档'],file:['📦','文件 / 附件']};
-function mrOpen(){_dEl('mrwin').className='on';mrLoad();}
+function mrOpen(){_dEl('mrwin').className='on';var c=active&&MR_CACHE[active];if(c&&c.items&&c.items.length){MR_ITEMS=c.items;MR_PAGE=c.page||'';mrRender();}mrLoad();}
+// 页面加载后延迟预采集(对齐手机 APK scheduleMediaPrecollect): 同源可直扫则缓存, 开窗秒显。
+function _mrPrecollect(id){clearTimeout(_mrPreT[id]);_mrPreT[id]=setTimeout(function(){try{var t=tabs[id];if(!t||!t.frame)return;var doc=null;try{doc=t.frame.contentDocument||(t.frame.contentWindow&&t.frame.contentWindow.document);}catch(e){}
+  if(doc&&doc.documentElement){MR_CACHE[id]={items:_mrScanDoc(doc,(t.url||doc.baseURI||'')),page:t.url||doc.baseURI||'',ts:Date.now()};}}catch(e){}},1200);}
 function mrClose(){_dEl('mrwin').className='';}
 function _mrScanDoc(doc,base){var out=[],seen={};function push(u,tp,nm){try{if(!u)return;u=String(u);if(u.indexOf('data:')===0&&u.length>2048)return;try{u=new URL(u,base).href;}catch(e){}if(seen[u])return;seen[u]=1;out.push({u:u,t:tp,n:nm||decodeURIComponent((u.split('/').pop()||'').split('?')[0])||tp});}catch(e){}}
   function walk(root){var i,es;try{es=root.querySelectorAll('img[src]');}catch(e){return;}for(i=0;i<es.length;i++){var el=es[i];if((el.naturalWidth||0)>32||(el.width||0)>32)push(el.currentSrc||el.src,'img',el.alt);}
@@ -1207,12 +1264,12 @@ function _mrScanDoc(doc,base){var out=[],seen={};function push(u,tp,nm){try{if(!
 function mrLoad(){var t=active?tabs[active]:null;var box=_dEl('mrList');
   if(!t||!t.frame){if(box)box.innerHTML='<div class="empty">没有活动标签页</div>';return;}
   var doc=null;try{doc=t.frame.contentDocument||(t.frame.contentWindow&&t.frame.contentWindow.document);}catch(e){}
-  if(doc&&doc.documentElement){MR_ITEMS=_mrScanDoc(doc,(t.url||doc.baseURI||''));MR_PAGE=t.url||doc.baseURI||'';mrRender();return;}
+  if(doc&&doc.documentElement){MR_ITEMS=_mrScanDoc(doc,(t.url||doc.baseURI||''));MR_PAGE=t.url||doc.baseURI||'';MR_CACHE[active]={items:MR_ITEMS,page:MR_PAGE,ts:Date.now()};mrRender();return;}
   // 跨源 → 页内桥扫描(代理页已注入 /__daobridge.js 响应 __daoMediaScan)
   if(box&&!MR_ITEMS.length)box.innerHTML='<div class="empty">扫描中…</div>';
   try{t.frame.contentWindow.postMessage({__daoMediaScan:1},'*');}catch(e){}
   clearTimeout(_mrWaitT);_mrWaitT=setTimeout(function(){if(box&&!MR_ITEMS.length)box.innerHTML='<div class="empty">本页不可扫描(跨源且页内桥未就绪) · 可先刷新页面</div>';},2500);}
-function _mrOnList(m){clearTimeout(_mrWaitT);MR_ITEMS=m.__daoMediaList||[];MR_PAGE=m.__daoPage||'';mrRender();}
+function _mrOnList(m){clearTimeout(_mrWaitT);MR_ITEMS=m.__daoMediaList||[];MR_PAGE=m.__daoPage||'';if(active)MR_CACHE[active]={items:MR_ITEMS,page:MR_PAGE,ts:Date.now()};mrRender();}
 function mrRender(){var box=_dEl('mrList');if(!box)return;var sr=_dEl('mrSrc');if(sr)sr.textContent=MR_PAGE?('来源: '+MR_PAGE):'';
   if(!MR_ITEMS.length){box.innerHTML='<div class="empty">本页未发现媒体资源<br>(图片 / 视频 / 文档 / 附件)</div>';var tt0=_dEl('mrTitle');if(tt0)tt0.textContent='本页资源';return;}
   var ord=['img','video','audio','md','file'],h='';
@@ -1221,7 +1278,7 @@ function mrRender(){var box=_dEl('mrList');if(!box)return;var sr=_dEl('mrSrc');i
     for(var i=0;i<grp.length;i++){var it=grp[i];var idx=MR_ITEMS.indexOf(it);
       h+='<div class="rc">'+(tp==='img'?'<img class="th" loading="lazy" src="'+esc(it.u)+'" onerror="this.style.opacity=.25">':'<span class="th" style="display:flex;align-items:center;justify-content:center;font-size:20px">'+MR_META[tp][0]+'</span>')
         +'<div class="bd"><div class="ti" title="'+esc(it.n||'')+'">'+esc(it.n||'(未命名)')+'</div><div class="meta" title="'+esc(it.u)+'">'+esc(it.u)+'</div></div>'
-        +'<div class="acts"><span class="b" data-mropen="'+idx+'">打开</span><span class="b" data-mrcopy="'+idx+'">复制链接</span></div></div>';}}
+        +'<div class="acts"><span class="b" data-mropen="'+idx+'">打开</span><span class="b pri" data-mrdl="'+idx+'" title="下载此资源到下载库(⬇悬浮窗可见·可拖上传)">⬇ 下载</span><span class="b" data-mrcopy="'+idx+'">复制链接</span></div></div>';}}
   box.innerHTML=h;var tt=_dEl('mrTitle');if(tt)tt.textContent='本页资源 ('+MR_ITEMS.length+')';}
 function daoTab(t){var rec=t==='recent';
   _dEl('dwTabR').classList.toggle('on',rec);_dEl('dwTabB').classList.toggle('on',!rec);
@@ -1267,11 +1324,13 @@ function daoRenderRecent(){var q=(_dEl('dwQ').value||'').trim().toLowerCase(),bo
   // 无搜索时只渲染最近 DAO_REC_VIEW_MAX 条(DAO_REC 已按 updatedAt 降序;slice 自头取保留原 idx 映射);
   // 有搜索时跨全量匹配。全量历史在「🗂 对话记录(备份)」按号分层。
   var src=q?DAO_REC:DAO_REC.slice(0,DAO_REC_VIEW_MAX);
-  var html='';src.forEach(function(it,idx){
+  var html='',hidAuto=0;src.forEach(function(it,idx){
+    if(it.auto&&!_showAuto&&!q){hidAuto++;return;}
     if(q){var hay=((it.email||'')+' '+it.title+' '+it.sid+' '+it.accNo).toLowerCase();if(hay.indexOf(q)<0)return;}
     html+='<div class="rc" draggable="false" data-cdrag="1" data-email="'+esc(it.email||'')+'" data-sid="'+esc(it.sid||'')+'" data-title="'+esc(it.title||'')+'"><div class="r1"><span class="acc-no">#'+esc(String(it.accNo))+'</span><span class="st '+esc(it.statusClass||'')+'" title="'+esc(it.status||'')+'"></span><span class="ti" title="'+esc(it.title)+'">'+esc(String(it.title).slice(0,70))+'</span></div>'+
       '<div class="meta"><span>'+esc(String(it.email||'').split('@')[0])+'</span>'+(it.status?'<span>'+esc(it.status)+'</span>':'')+(it.updatedAt?'<span>'+daoAgo(it.updatedAt)+'</span>':'')+'</div>'+
       '<div class="acts"><span class="b" data-act="view" data-idx="'+idx+'">👁 查看</span><span class="b" data-act="enter" data-idx="'+idx+'" title="切到该账号并在网页端打开此对话">🌐 进入</span><span class="b" data-act="md" data-idx="'+idx+'">⬇ MD</span><span class="b pri" data-act="zip" data-idx="'+idx+'">📦 全部文件</span><span class="b" data-act="up" data-idx="'+idx+'" title="上传此对话内容(MD)到当前打开的网页上传框(对齐手机 APK·免拖拽)">⬆ 传网页</span></div></div>';});
+  if(!q&&(hidAuto>0||_showAuto)){html='<div class="empty" style="padding:8px 0;font-size:12px">'+(_showAuto?'自动化对话已展开':'已隐藏 '+hidAuto+' 个自动化对话')+' · <a href="javascript:void 0" data-autotoggle="1" style="color:#58a6ff;cursor:pointer">'+(_showAuto?'收起':'显示')+'</a></div>'+html;}
   if(!q&&DAO_REC.length>DAO_REC_VIEW_MAX){html+='<div class="empty" style="padding:8px 4px;line-height:1.5">仅显示最近 '+DAO_REC_VIEW_MAX+' 条 · 共 '+DAO_REC.length+' 条<br>搜索可跨全部 · 全量历史见 🗂 对话记录(备份)</div>';}
   box.innerHTML=html||'<div class="empty">无匹配 · 清空搜索查看全部</div>';try{box.scrollTop=_sc;}catch(e){}}
 function daoEnter(idx){var it=DAO_REC[idx];if(!it)return;vscode.postMessage({type:'openCloudPage',path:'sessions/'+String(it.sid||'').replace(/^devin-/,''),label:it.title});daoToast('已请求打开 · '+String(it.email||'').split('@')[0]);}
@@ -1327,7 +1386,8 @@ function daoRenderBackup(){var box=_dEl('dwBackup');if(!box)return;if(!_bkTree){
   box.innerHTML=body||'<div class="empty">无备份记录 · 先在「💬对话备份」板块备份或开启自动备份</div>';
   var ttl=_dEl('dwTitle');if(ttl)ttl.textContent='下载 / 备份库 ('+na+'账号·'+nc+'对话'+(q?'·已筛':'')+')';}
 // 事件委托(CSP 安全): 所有悬浮窗内点击统一在 #daowin 上处理
-_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal],[data-bkcopy],[data-bkacc]');if(!el)return;
+_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal],[data-bkcopy],[data-bkacc],[data-autotoggle]');if(!el)return;
+  if(el.hasAttribute('data-autotoggle')){daoToggleAuto();return;}
   var bcp=el.getAttribute('data-bkcopy');if(bcp!=null){e.stopPropagation();vscode.postMessage({type:'copyCredEmail',email:bcp});return;}
   var bk=el.getAttribute('data-bkacc');if(bk!=null){_bkOpen[bk]=!_bkOpen[bk];daoRenderBackup();return;}
   var a=el.getAttribute('data-act');if(a){var idx=+el.getAttribute('data-idx');if(a==='view')daoView(idx);else if(a==='enter')daoEnter(idx);else if(a==='md')daoMd(idx);else if(a==='zip')daoZip(idx);else if(a==='up'){var _it=DAO_REC[idx];if(_it){if(_daoUploadToActive({kind:'conv',email:_it.email,sid:_it.sid,title:_it.title})){daoToast('⏳ 上传此对话到当前网页 · '+String(_it.title||_it.sid||'').slice(0,24));try{daoClose();}catch(_e){}}}}return;}
@@ -1498,8 +1558,9 @@ document.getElementById('bDl').onclick=function(){dlOpen();};
 document.getElementById('bMr').onclick=function(){mrOpen();};
 _dEl('mrClose').onclick=function(){mrClose();};
 _dEl('mrRefresh').onclick=function(){MR_ITEMS=[];mrLoad();};
-_dEl('mrList').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-mropen],[data-mrcopy]');if(!el)return;
-  var i=+((el.getAttribute('data-mropen')||el.getAttribute('data-mrcopy'))||0);var it=MR_ITEMS[i];if(!it)return;
+_dEl('mrList').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-mropen],[data-mrcopy],[data-mrdl]');if(!el)return;
+  var i=+((el.getAttribute('data-mropen')||el.getAttribute('data-mrcopy')||el.getAttribute('data-mrdl'))||0);var it=MR_ITEMS[i];if(!it)return;
+  if(el.hasAttribute('data-mrdl')){daoToast('⬇ 下载中… '+String(it.n||it.u||'').slice(0,40));vscode.postMessage({type:'mrDownload',url:it.u,name:it.n||''});return;}
   if(el.hasAttribute('data-mropen')){openWebTab(it.u,it.n||it.u);}
   else{try{navigator.clipboard.writeText(it.u);daoToast('✓ 已复制链接');}catch(e2){daoToast('复制失败',true);}}});
 document.getElementById('bBk').onclick=function(){daoOpen('recent');};
@@ -1615,7 +1676,8 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.__daoMediaList){try{_mrOnList(m);}catch(e){}}
   else if(m.type==='dlRecentData'){try{daoOnRecent(m);}catch(e){}}
   else if(m.type==='dlExportData'){try{daoOnExport(m);}catch(e){}}
-  else if(m.type==='dlZipDone'){try{daoToast(m.ok?('✓ 已打包: '+(m.name||'')):('打包失败: '+(m.error||'')),!m.ok);}catch(e){}}
+  else if(m.type==='dlZipDone'){try{daoToast(m.ok?('✓ 已打包: '+(m.name||'')+' · 存入备份库 🗂(可打开文件夹)'):('打包失败: '+(m.error||'')),!m.ok);if(m.ok&&_dEl('dwViewB').classList.contains('on'))daoLoadBackup();}catch(e){}}
+  else if(m.type==='mrDlDone'){try{daoToast(m.ok?('✓ 已下载: '+(m.name||'')+' · 见 ⬇下载悬浮窗'):('下载失败: '+(m.error||'')),!m.ok);if(m.ok&&_dEl('dlwin').className==='on')dlLoad();}catch(e){}}
   else if(m.type==='migBundle'){try{migDownload(m);}catch(e){}}
   else if(m.type==='migDone'){try{daoToast(m.ok?('✓ 导入完成 · '+(m.summary||'')):('导入失败: '+(m.error||'')),!m.ok);}catch(e){}}
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}
@@ -2287,7 +2349,14 @@ async function shellHandleMessage(sid, m) {
         return;
       }
       case 'dlRecent': case 'dlExportMd': case 'dlZip':
-        await _daoDownloadData(m, send); return;
+        // 外部浏览器 /shell 侧: 不触发 IDE 机器的 revealFileInOS(旧病灶: 弹空白页/无感定位), 结果以回推+toast 明示。
+        await _daoDownloadData(Object.assign({}, m, { noReveal: true }), send); return;
+      case 'mrDownload': {
+        const r = await _daoDownloadUrl(m.url, m.name);
+        send(Object.assign({ type: 'mrDlDone' }, r));
+        send({ type: 'shellDownloadsData', list: _listDaoDownloads() });
+        return;
+      }
       case 'shellBackups': {
         try {
           let root; try { root = vscode.workspace.getConfiguration('wam').get('devinCloudBackupDir'); } catch (e) {}
@@ -2396,7 +2465,7 @@ async function _daoDownloadData(m, reply) {
         if (!st || !Array.isArray(st.items)) continue;
         for (const it of st.items) {
           const sid = String((it && it.id) || ""); if (!sid) continue;
-          live.push({ email: em, accNo: noOf(em), sid, title: (it && it.title) || sid, status: (it && it.cls) || "", statusClass: (it && it.cls) || "", updatedAt: st.ts || Date.now(), live: true });
+          live.push({ email: em, accNo: noOf(em), sid, title: (it && it.title) || sid, status: (it && it.cls) || "", statusClass: (it && it.cls) || "", updatedAt: st.ts || Date.now(), live: true, auto: !!(devinCloud.isAutoConv && devinCloud.isAutoConv(it)) });
         }
       }
       if (live.length) reply({ type: "dlRecentData", list: live.slice(0, 80), accounts: emails.length, partial: true, done: 0, total: emails.length, covered: [] });
@@ -2413,7 +2482,7 @@ async function _daoDownloadData(m, reply) {
           if (ls && ls.ok) {
             (ls.sessions || []).forEach((s) => {
               const sid = s.devin_id || s.session_id || s.id; if (!sid) return;
-              out.push({ email, accNo: noOf(email), sid, title: s.title || s.name || s.prompt || sid, status: s.status || s.activity_status || "", statusClass: devinCloud.classifySession(s), updatedAt: _daoRecencyMs(s) });
+              out.push({ email, accNo: noOf(email), sid, title: s.title || s.name || s.prompt || sid, status: s.status || s.activity_status || "", statusClass: devinCloud.classifySession(s), updatedAt: _daoRecencyMs(s), auto: !!(devinCloud.isAutoConv && devinCloud.isAutoConv(s)) });
             });
           }
         }
@@ -2439,7 +2508,7 @@ async function _daoDownloadData(m, reply) {
         const dir = _dvFindOrMakeConvDir(email, sid, title);
         const outPath = path.join(dir, "对话.md");
         fs.writeFileSync(outPath, md, "utf8");
-        try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(outPath)); } catch (e) {}
+        if (!m.noReveal) { try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(outPath)); } catch (e) {} }
         reply({ type: "dlExportData", save: true, ok: true, sid, name: path.basename(outPath), path: outPath });
       } else {
         reply({ type: "dlExportData", save: false, ok: true, sid, title, md });
@@ -2454,7 +2523,7 @@ async function _daoDownloadData(m, reply) {
       if (!auth || !auth.auth1) { reply({ type: "dlZipDone", ok: false, sid, error: "账号未解锁(无 auth1)" }); return true; }
       const title = m.title || sid;
       const one = await devinCloud.backupOneConversation(auth, { devin_id: sid, title }, _dvAccountBackupDir(email), { incremental: false, turbo: true });
-      if (one && one.zip) { try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(one.zip)); } catch (e) {} reply({ type: "dlZipDone", ok: true, sid, name: path.basename(one.zip), path: one.zip }); }
+      if (one && one.zip) { if (!m.noReveal) { try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(one.zip)); } catch (e) {} } reply({ type: "dlZipDone", ok: true, sid, name: path.basename(one.zip), path: one.zip }); }
       else reply({ type: "dlZipDone", ok: false, sid, error: "打包失败" });
     } catch (e) { reply({ type: "dlZipDone", ok: false, sid, error: String((e && e.message) || e) }); }
     return true;
@@ -2571,6 +2640,12 @@ function _wireMultiPanel(panel) {
       }
       if (m.type === "dlRecent" || m.type === "dlExportMd" || m.type === "dlZip") {
         await _daoDownloadData(m, (x) => { try { panel.webview.postMessage(x); } catch (e) {} });
+        return;
+      }
+      if (m.type === "mrDownload") {
+        const r = await _daoDownloadUrl(m.url, m.name);
+        try { panel.webview.postMessage(Object.assign({ type: "mrDlDone" }, r)); } catch (e) {}
+        try { panel.webview.postMessage({ type: "shellDownloadsData", list: _listDaoDownloads() }); } catch (e) {}
         return;
       }
       // 归一 · ⬇下载 / 📁备份库 悬浮窗数据源: 复用内联备份引擎 devinCloud.listBackups(同 dao-vsix 六大板块备份板块同源)。
