@@ -2930,7 +2930,7 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
     }
     /** 广告/追踪域名命中 (内置精简黑名单)。 */
-    private boolean isAdHost(String host) {
+    static boolean isAdHost(String host) {
         if (host == null) return false;
         host = host.toLowerCase();
         String[] ad = {"doubleclick.net","googlesyndication.com","googleadservices.com","google-analytics.com",

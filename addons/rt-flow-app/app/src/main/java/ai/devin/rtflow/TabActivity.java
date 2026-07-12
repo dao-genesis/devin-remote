@@ -152,6 +152,8 @@ public class TabActivity extends AppCompatActivity {
             }
             // 媒体鉴权代取: /attachments/ 图片视频与主壳同源同一套 (Cookie 转发 + 401 铸造自愈)
             @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView v, android.webkit.WebResourceRequest req) {
+                if (req != null && req.getUrl() != null && MainActivity.isAdHost(req.getUrl().getHost()))
+                    return new android.webkit.WebResourceResponse("text/plain", "utf-8", new java.io.ByteArrayInputStream(new byte[0]));
                 android.webkit.WebResourceResponse am = MainActivity.authMediaResponseFor(fToken, fOrg, req);
                 if (am != null) return am;
                 return super.shouldInterceptRequest(v, req);
