@@ -198,6 +198,7 @@ public class MainActivity extends AppCompatActivity {
         androidx.swiperefreshlayout.widget.SwipeRefreshLayout swipe; // 下拉刷新容器
         String auth1 = "";          // 该标签绑定账号的 auth1 token (原生层媒体代取鉴权用)
         String orgId = "";          // 该标签绑定账号的 org id
+        volatile long remoteDriveUntil = 0; // 影子驱动保活窗: 远程 browse* 正在直驱本标签 → 停泊/转后台/内存保洁一律不暂停·不卸载 (道并行而不相悖)
     }
 
     // 退格「左右同删」正解在 JS 层(见 installBackspaceGuard): AVD+受控测试输入法全链路实证,
@@ -843,7 +844,7 @@ public class MainActivity extends AppCompatActivity {
     private void unloadBackgroundTab(int idx) {
         if (idx < 0 || idx >= tabs.size() || idx == active) return;
         Tab t = tabs.get(idx);
-        if (t.internal || t.accountJson != null || t.pendingReloadUrl != null) return;
+        if (t.internal || t.accountJson != null || t.pendingReloadUrl != null || remoteDriven(t)) return;
         String u = (t.url != null && !t.url.isEmpty()) ? t.url : null;
         if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) return;
         boolean incognito = t.incognito, night = t.night;
@@ -1411,11 +1412,11 @@ public class MainActivity extends AppCompatActivity {
     private void parkHost(Tab t) {
         if (t == null || autoHost == null) return;
         android.view.View host = t.swipe != null ? t.swipe : t.web;
-        if (host == null || host.getParent() == autoHost) { pauseWeb(t.web); return; }
+        if (host == null || host.getParent() == autoHost) { if (!remoteDriven(t)) pauseWeb(t.web); return; }
         if (host.getParent() != null) ((ViewGroup) host.getParent()).removeView(host);
         autoHost.addView(host, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        pauseWeb(t.web);
-        keepRenderer(t.web, false);   // 停泊即还原可降权 → 后台标签仍可被系统按需回收, 不拖整机
+        if (!remoteDriven(t)) pauseWeb(t.web);
+        keepRenderer(t.web, remoteDriven(t));   // 停泊即还原可降权(影子驱动窗内保优) → 后台标签仍可被系统按需回收, 不拖整机
     }
 
     /** 活动标签渲染进程保优(API26+): 默认策略下 App 一转后台, 各标签的沙盒渲染进程即降为可牺牲优先级
@@ -1425,6 +1426,22 @@ public class MainActivity extends AppCompatActivity {
     private void keepRenderer(final WebView w, boolean keep) {
         if (w == null || Build.VERSION.SDK_INT < 26) return;
         try { w.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, !keep); } catch (Exception ignored) {}
+    }
+
+    /** 影子驱动保活: 远程 browse* 直驱某标签时唤醒其 WebView 并开一段保活窗 —— 期间该页即使停泊后台/整 App 转后台,
+     *  渲染与网络请求(fetch/XHR/媒体)照常进行, 与用户可见页互不干扰; 窗口过期即回归普通后台调度。 */
+    private static final long REMOTE_DRIVE_KEEP_MS = 90_000L;
+    private void touchRemoteDrive(Tab t) {
+        if (t == null) return;
+        t.remoteDriveUntil = System.currentTimeMillis() + REMOTE_DRIVE_KEEP_MS;
+        if (t.web != null) {
+            try { t.web.onResume(); } catch (Exception ignored) {}
+            try { t.web.resumeTimers(); } catch (Exception ignored) {}
+            keepRenderer(t.web, true);
+        }
+    }
+    private static boolean remoteDriven(Tab t) {
+        return t != null && System.currentTimeMillis() < t.remoteDriveUntil;
     }
 
     /** 暂停一个后台 WebView 的「额外处理」(渲染合成/动画/插件), 让出系统资源。仅 onPause(), 不动全局 pauseTimers()
@@ -7254,7 +7271,7 @@ public class MainActivity extends AppCompatActivity {
         try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {} // 持久化其它网站登录 Cookie
         // App 整体转后台(切到别的应用/锁屏): 没有任何标签可见 → 暂停全部 WebView 的渲染合成/动画, 不再空耗 CPU/GPU/电量
         // (仿真浏览器: 不可见即不渲染)。JS 不停, 远程自动化仍可经 execJs 驱动; 镜像/截图取帧前各自 resumeWeb → 不受影响。
-        for (int i = 0; i < tabs.size(); i++) pauseWeb(tabs.get(i).web);
+        for (int i = 0; i < tabs.size(); i++) { Tab bt = tabs.get(i); if (!remoteDriven(bt)) pauseWeb(bt.web); }
         // 转后台后起重度内存保洁 (45s 宽限避开快速切回); 续做直至回前台 → 久置后台占用持续下降, 回前台即顺。
         main.removeCallbacks(bgHygiene);
         main.postDelayed(bgHygiene, BG_HYGIENE_DELAY_MS);
@@ -7562,6 +7579,7 @@ public class MainActivity extends AppCompatActivity {
     public void ipcExecJs(int tabIndex, String js, android.webkit.ValueCallback<String> cb) {
         if (tabIndex < 0 || tabIndex >= tabs.size()) { if (cb != null) cb.onReceiveValue("null"); return; }
         Tab t = tabs.get(tabIndex);
+        touchRemoteDrive(t);   // 影子驱动: 后台/停泊标签被远程直驱 → 唤醒渲染与网络, 页内 fetch/媒体不再停摆
         if (t.web != null) t.web.evaluateJavascript(js, cb);
         else if (cb != null) cb.onReceiveValue("null");
     }
@@ -7570,6 +7588,7 @@ public class MainActivity extends AppCompatActivity {
     public void ipcNavigate(int tabIndex, String action, String url) {
         if (tabIndex < 0 || tabIndex >= tabs.size()) return;
         Tab t = tabs.get(tabIndex);
+        touchRemoteDrive(t);
         if (t.web == null) return;
         switch (action) {
             case "back": t.web.goBack(); break;
@@ -7770,7 +7789,7 @@ public class MainActivity extends AppCompatActivity {
 
     /** 开新标签 (从 IPC 调用) — 远程自动化: 后台静默开, 不抢占用户当前前台页 (道并行而不相悖)。 */
     public void ipcOpenTab(String url, String accountJson) {
-        main.post(() -> newTabBackground(url == null ? DEVIN : url, accountJson));
+        main.post(() -> touchRemoteDrive(newTabBackground(url == null ? DEVIN : url, accountJson)));
     }
 
     /** 把指定标签提到前台 (从 IPC 调用) — 仅当 Agent 显式需要"前端同步反映"时调用。 */
