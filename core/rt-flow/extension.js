@@ -2112,7 +2112,10 @@ async function shellHandleMessage(sid, m) {
         } catch (e) {}
         if (!email) email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || '');
         if (!email) { _toast('无可用账号'); return; }
-        const open = await _shellResolveOpen({ email, path, label: m.label });
+        // 账号首页与手机同构: 每次点开都新开一张独立页(fresh), 不折叠到已开页(一号多页多实例);
+        //   指定对话/子路径仍按 id 折叠复用。
+        const fresh = !path || path === '/' || path === '/?';
+        const open = await _shellResolveOpen({ email, path, label: m.label, fresh });
         if (open) send(open);
         return;
       }
