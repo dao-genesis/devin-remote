@@ -2768,19 +2768,22 @@ async function _refreshHealthForTick(email, minGapSec) {
     const last = _healthTickAt.get(k) || 0; if (Date.now() - last < iv) return;
     if (_healthInflight.has(k)) return;
     const a = (_store.accounts || []).find((x) => String(x.email || '').toLowerCase() === k); if (!a) return;
+    let slowLane = false, slow = 0;
     if (!_getCachedSession(a.email)) {
       // 无缓存会话 → 慢道: 打开中的标签值得一次真登录取额度(否则 $ 永远陈旧),
       //   但须 900s/号限频 + 尊重全局 devinLogin 限速窗(防批量登录触限速)
       if (Date.now() < _devinLoginRateLimitedUntil) return;
-      const slow = Math.max(300, +_cfg('statusHealthLoginRefreshSec', 900) || 900) * 1000;
+      slow = Math.max(300, +_cfg('statusHealthLoginRefreshSec', 900) || 900) * 1000;
       const lg = _healthLoginAt.get(k) || 0; if (Date.now() - lg < slow) return;
       _healthLoginAt.set(k, Date.now());
+      slowLane = true;
     }
     _healthTickAt.set(k, Date.now());
     _healthInflight.add(k);
     try {
       const vr = await verifyOneAccount(a);
       if (vr && vr.ok && vr.q) _store.setHealth(a.email, vr.q);
+      else if (slowLane) _healthLoginAt.set(k, Date.now() - slow + 180000); // 失败不烧满 900s 槽: 180s 后可再试(网络瞬断自愈)
     } finally { _healthInflight.delete(k); }
   } catch (e) {}
 }
