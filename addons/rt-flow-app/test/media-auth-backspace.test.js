@@ -150,6 +150,16 @@ ok(/viaEdge && edgeRelayLevelError\(code, c\.getContentType\(\)\)/.test(main), "
 ok(/directRetried = true; viaEdge = false; openUrl = url; continue;/.test(main), "边缘健康门: 中继失效即回退直连一次");
 ok(/hostBlocked && edgeUsable\(\)\) \{/.test(main), "边缘健康门: 直连实败只有中继可用才切边缘");
 
+// ②g 影子驱动保活 (远程 browse* 直驱后台标签 → 渲染/网络全活, 与用户可见页道并行而不相悖)
+ok(/volatile long remoteDriveUntil = 0/.test(main), "影子驱动: Tab.remoteDriveUntil 保活窗存在");
+ok(/private void touchRemoteDrive\(Tab t\)/.test(main), "影子驱动: touchRemoteDrive 存在");
+ok(/static boolean remoteDriven\(Tab t\)/.test(main), "影子驱动: remoteDriven 判据存在");
+ok(/touchRemoteDrive\(t\);   \/\/ 影子驱动/.test(main), "影子驱动: ipcExecJs 直驱即唤醒目标标签");
+ok(/Tab bt = tabs\.get\(i\); if \(!remoteDriven\(bt\)\) pauseWeb\(bt\.web\);/.test(main), "影子驱动: App 转后台不暂停被驱动标签");
+ok(/if \(!remoteDriven\(t\)\) pauseWeb\(t\.web\); return;/.test(main), "影子驱动: 停泊不暂停被驱动标签");
+ok(/\|\| remoteDriven\(t\)\) return;/.test(main), "影子驱动: 内存保洁不卸载被驱动标签");
+ok(/touchRemoteDrive\(newTabBackground\(/.test(main), "影子驱动: browseOpen 后台开页即入保活窗");
+
 // ③ 视频全屏承接
 ok(/public void onShowCustomView\(View view, CustomViewCallback callback\)/.test(main), "onShowCustomView 承接");
 ok(/public void onHideCustomView\(\)/.test(main), "onHideCustomView 承接");
