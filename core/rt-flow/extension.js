@@ -1373,6 +1373,15 @@ function _trRunOnce(S,doc){var all=_trCollect(S,doc,doc.body||doc.documentElemen
     _trNative(texts).then(function(tr){if(tr&&tr.length){for(var i=0;i<grp.length;i++){_trRemember(texts[i],tr[i]);done+=_trApply(grp[i],tr[i]);}}next();});}next();});}
 function _trObserveRoot(S,root){try{if(!root||S.observed.indexOf(root)>=0)return;var mo=new MutationObserver(function(){clearTimeout(S.debounce);S.debounce=setTimeout(function(){if(S.active)_trRunOnce(S,S.doc);},250);});mo.observe(root,{childList:true,subtree:true,characterData:true});S.observed.push(root);S.mos.push(mo);}catch(e){}}
 function _trRestore(S){try{S.active=false;for(var i=0;i<S.mos.length;i++){try{S.mos[i].disconnect();}catch(e){}}S.mos=[];S.observed=[];var roots=_trAllRoots(S.doc.documentElement);for(var r=0;r<roots.length;r++){try{var w=S.doc.createTreeWalker(roots[r],NodeFilter.SHOW_TEXT,null);var n;while((n=w.nextNode())){if(n.__dcOrig!==undefined){n.nodeValue=n.__dcOrig;delete n.__dcOrig;}}}catch(e){}}}catch(e){}}
+function _trBridgeTry(fr,cb){
+  // 页内翻译桥(与手机 APK 悬浮球同构·同源代理注入): postMessage 令页内 __daoTransToggle 就地翻译,
+  //   收 {__daoTransAck} 即成 — webview 父源(vscode-webview)恒无法触达 http iframe 的 contentDocument,
+  //   页内桥才是跨源可达的翻译通道; 无桥(直连外站未经代理)则 1.2s 内回 false 由调方续走重载自愈。
+  var got=false,fin=false;function done(ok){if(fin)return;fin=true;try{window.removeEventListener('message',h);}catch(e){}cb(ok);}
+  function h(e){try{if(e&&e.data&&e.data.__daoTransAck){got=true;done(true);}}catch(x){}}
+  window.addEventListener('message',h);
+  try{fr.contentWindow.postMessage({__daoTransToggle:1},'*');}catch(e){done(false);return;}
+  setTimeout(function(){done(got);},1200);}
 function toggleTranslate(){var t=tabs[active];var fr=t?t.frame:(isBoard()&&BOARDS[activeBoardTab()]?BOARDS[activeBoardTab()].frame:null);
   if(!fr){daoToast('请先打开一个页面再翻译',true);return;}
   var doc;try{doc=fr.contentDocument||(fr.contentWindow&&fr.contentWindow.document);}catch(e){doc=null;}
@@ -1381,9 +1390,12 @@ function toggleTranslate(){var t=tabs[active];var fr=t?t.frame:(isBoard()&&BOARD
     //   (旧病灶: 前端自拼 /__web?u= — webview 里相对路径落在 vscode-webview 源、Devin SPA 经 /__web
     //    又被 ES module CORS 全拦 → 点译即整页白屏。现由宿主按运行态选同源反代/代理地址, 无可达地址则不动原页。)
     var ru=t&&t.url?String(t.url):'';
-    if(t&&ru&&t.__trRerouted!==ru){ // 按 URL 记重载: 换页后又可自愈, 同页只重载一次不无限循环
-      t.__trRerouted=ru;window.__trPendTid=active;vscode.postMessage({type:'trReroute',url:ru});return;}
-    daoToast('本页不可翻译(跨源)',true);return;}
+    _trBridgeTry(fr,function(ok){ // 先试页内桥(同源代理/Devin 反代页已注入·手机同构), 成即就地译/还原
+      if(ok){if(t)t.__trRerouted=null;return;}
+      if(t&&ru&&t.__trRerouted!==ru){ // 按 URL 记重载: 换页后又可自愈, 同页只重载一次不无限循环
+        t.__trRerouted=ru;window.__trPendTid=active;vscode.postMessage({type:'trReroute',url:ru});return;}
+      daoToast('本页不可翻译(跨源)',true);});
+    return;}
   if(t)t.__trRerouted=null;
   var win=fr.contentWindow;var S=win.__daoTrans;
   if(S&&S.active){_trRestore(S);daoToast('已恢复原文');return;}
@@ -1515,7 +1527,8 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
       var onl=function(){fr2.removeEventListener('load',onl);var n=0;(function poll(){if(active!==_ttid)return;
         var d2=null;try{d2=fr2.contentDocument||(fr2.contentWindow&&fr2.contentWindow.document);}catch(e){}
         if(d2&&d2.documentElement){toggleTranslate();return;}
-        if(++n<20)setTimeout(poll,500);else daoToast('本页不可翻译(重载后仍跨源)',true);})();};
+        _trBridgeTry(fr2,function(ok){if(ok)return;if(active!==_ttid)return; // webview 里重载后仍跨源 → 页内桥接管
+          if(++n<12)setTimeout(poll,600);else daoToast('本页不可翻译(重载后仍跨源)',true);});})();};
       fr2.addEventListener('load',onl);
       _tt.url=m.src;_tt._loaded=true;fr2.setAttribute('src',m.src);setLoading(_ttid,true);}}catch(e){}}
   else if(m.type==='winOpen'&&m.url){try{window.open(m.url,'_blank','noopener');}catch(e){}}});

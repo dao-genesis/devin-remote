@@ -16485,6 +16485,30 @@ async function daoTranslateTexts(texts: string[], to: string): Promise<string[] 
         return (Array.isArray(tr) && tr.length) ? String(tr[0].text || '') : '';
     });
 }
+// 整页翻译桥 (页内内联 · 对齐手机 APK 悬浮球「译」): __dcTr 桥走原生 fetch(__daoNF 优先, 免被代理拦截器改写)
+//   → 同源 /__translate 宿主代调 Edge 翻译; 引擎 /__translate.js 懒加载; 悬浮球切换 翻译/还原;
+//   并听父窗 postMessage {__daoTransToggle} → 回 ack 后就地翻译 — 外壳工具栏「译」对跨源 iframe
+//   (vscode-webview 父源恒无法触达 contentDocument)由此桥接管, 与 /__web 外站页、Devin 反代页同构。
+function daoTransBridgeInlineJs(): string {
+    return '(function(){try{'
+        + 'var O=location.origin;function NF(){return window.__daoNF||window.fetch}'
+        + 'function toast(t){try{var d=document.createElement("div");d.textContent=t;d.style.cssText="position:fixed;z-index:2147483647;left:50%;top:18px;transform:translateX(-50%);background:#11161d;color:#cdd3de;border:1px solid #2a313b;border-radius:8px;padding:8px 14px;font:13px sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.45)";(document.body||document.documentElement).appendChild(d);setTimeout(function(){try{d.parentNode.removeChild(d)}catch(e){}},2600)}catch(e){}}'
+        + 'window.__dcTr={translate:function(id,tj,to){var ts=[];try{ts=JSON.parse(tj)}catch(e){}'
+        + 'NF()(O+"/__translate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({texts:ts,to:to||"zh-Hans"})})'
+        + '.then(function(r){return r.json()}).then(function(j){var b64=btoa(unescape(encodeURIComponent(JSON.stringify((j&&j.translations)||[]))));try{window.__dcTrCb&&window.__dcTrCb(id,b64)}catch(e){}})'
+        + '.catch(function(){try{window.__dcTrCb&&window.__dcTrCb(id,btoa("[]"))}catch(e){}})},'
+        + 'report:function(n){toast(n>0?("\u5df2\u7ffb\u8bd1 "+n+" \u6bb5"):"\u672c\u9875\u65e0\u53ef\u7ffb\u8bd1\u5185\u5bb9")}};'
+        + 'var eng=null;function ensureEng(){if(eng)return Promise.resolve(eng);return NF()(O+"/__translate.js").then(function(r){return r.text()}).then(function(s){eng=s;return s})}'
+        + 'function setBtn(on){try{var b=document.getElementById("__daoTransBtn");if(b){b.textContent=on?"\u539f":"\u8bd1";b.title=on?"\u6062\u590d\u539f\u6587":"\u7ffb\u8bd1\u6b64\u9875"}}catch(e){}}'
+        + 'window.__daoTransToggle=function(){'
+        + 'if(window.__dcTransOn){window.__dcTransOn=false;try{window.__dcTransRestore&&window.__dcTransRestore()}catch(e){}toast("\u6062\u590d\u539f\u6587");setBtn(false);return}'
+        + 'window.__dcTransTo=window.__dcTransTo||"zh-Hans";window.__dcTransOn=true;toast("\u7ffb\u8bd1\u4e2d\u2026");setBtn(true);'
+        + 'ensureEng().then(function(s){try{(new Function(s))()}catch(e){window.__dcTransOn=false;setBtn(false);toast("\u7ffb\u8bd1\u5f15\u64ce\u52a0\u8f7d\u5931\u8d25")}}).catch(function(){window.__dcTransOn=false;setBtn(false);toast("\u7ffb\u8bd1\u5f15\u64ce\u52a0\u8f7d\u5931\u8d25")})};'
+        + 'window.addEventListener("message",function(e){try{var d=e&&e.data;if(d&&d.__daoTransToggle){try{e.source&&e.source.postMessage({__daoTransAck:1},"*")}catch(x){}window.__daoTransToggle()}}catch(x){}});'
+        + 'function addBtn(){try{if(document.getElementById("__daoTransBtn"))return;var d=document.createElement("div");d.id="__daoTransBtn";d.textContent=window.__dcTransOn?"\u539f":"\u8bd1";d.title="\u7ffb\u8bd1\u6b64\u9875";d.setAttribute("translate","no");d.style.cssText="position:fixed;z-index:2147483646;right:14px;bottom:64px;width:38px;height:38px;border-radius:50%;background:#1f6feb;color:#fff;display:flex;align-items:center;justify-content:center;font:15px/1 sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35);user-select:none";d.addEventListener("click",function(e){e.stopPropagation();window.__daoTransToggle()});(document.body||document.documentElement).appendChild(d)}catch(e){}}'
+        + 'if(document.readyState!=="loading")addBtn();document.addEventListener("DOMContentLoaded",function(){addBtn()});setInterval(addBtn,3000);'
+        + '}catch(e){}})();';
+}
 // 整页翻译引擎 (内容脚本 · 与手机 APK assets/engine/translate.js 同源同构):
 //   遍历可见文本节点(含开放 Shadow DOM) → 经 __dcTr 桥翻译 → 回填并保留原文(node.__dcOrig) →
 //   MutationObserver 增量翻译动态内容; window.__dcTransRestore() 一键恢复原文。
@@ -16823,25 +16847,8 @@ async function genericWebProxy(targetUrl, depth = 0, reqCtx: any = null, isSub =
                 + 'try{new MutationObserver(function(ms){for(var i=0;i<ms.length;i++){var an=ms[i].addedNodes||[];for(var j=0;j<an.length;j++){var n=an[j];if(n&&n.nodeType===1){if(n.tagName==="IFRAME"||n.tagName==="FRAME"){var s=n.getAttribute("src");if(s&&!isProxied(s)&&/^https?:/i.test(ab(s)))n.setAttribute("src",P+encodeURIComponent(ab(s)))}else fixFrames(n)}}}}).observe(document.documentElement,{childList:true,subtree:true});}catch(e){}'
                 + '})();<\/script>'
                 + '<script src="/__daobridge.js"><\/script>' // 拖拽上传桥(下载文件/会话MD → 投递页面上传框)
-                // 整页翻译桥(对齐手机 APK 悬浮球「译」): __dcTr 桥走原生 fetch(__daoNF, 免被代理拦截器改写)
-                //   → 同源 /__translate 宏主代调 Edge 翻译; 引擎 /__translate.js 懒加载, 按钮切换 翻译/还原。
-                + '<script>(function(){try{'
-                + 'var O=location.origin;function NF(){return window.__daoNF||window.fetch}'
-                + 'function toast(t){try{var d=document.createElement("div");d.textContent=t;d.style.cssText="position:fixed;z-index:2147483647;left:50%;top:18px;transform:translateX(-50%);background:#11161d;color:#cdd3de;border:1px solid #2a313b;border-radius:8px;padding:8px 14px;font:13px sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.45)";(document.body||document.documentElement).appendChild(d);setTimeout(function(){try{d.parentNode.removeChild(d)}catch(e){}},2600)}catch(e){}}'
-                + 'window.__dcTr={translate:function(id,tj,to){var ts=[];try{ts=JSON.parse(tj)}catch(e){}'
-                + 'NF()(O+"/__translate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({texts:ts,to:to||"zh-Hans"})})'
-                + '.then(function(r){return r.json()}).then(function(j){var b64=btoa(unescape(encodeURIComponent(JSON.stringify((j&&j.translations)||[]))));try{window.__dcTrCb&&window.__dcTrCb(id,b64)}catch(e){}})'
-                + '.catch(function(){try{window.__dcTrCb&&window.__dcTrCb(id,btoa("[]"))}catch(e){}})},'
-                + 'report:function(n){toast(n>0?("\u5df2\u7ffb\u8bd1 "+n+" \u6bb5"):"\u672c\u9875\u65e0\u53ef\u7ffb\u8bd1\u5185\u5bb9")}};'
-                + 'var eng=null;function ensureEng(){if(eng)return Promise.resolve(eng);return NF()(O+"/__translate.js").then(function(r){return r.text()}).then(function(s){eng=s;return s})}'
-                + 'function setBtn(on){try{var b=document.getElementById("__daoTransBtn");if(b){b.textContent=on?"\u539f":"\u8bd1";b.title=on?"\u6062\u590d\u539f\u6587":"\u7ffb\u8bd1\u6b64\u9875"}}catch(e){}}'
-                + 'window.__daoTransToggle=function(){'
-                + 'if(window.__dcTransOn){window.__dcTransOn=false;try{window.__dcTransRestore&&window.__dcTransRestore()}catch(e){}toast("\u6062\u590d\u539f\u6587");setBtn(false);return}'
-                + 'window.__dcTransTo=window.__dcTransTo||"zh-Hans";window.__dcTransOn=true;toast("\u7ffb\u8bd1\u4e2d\u2026");setBtn(true);'
-                + 'ensureEng().then(function(s){try{(new Function(s))()}catch(e){window.__dcTransOn=false;setBtn(false);toast("\u7ffb\u8bd1\u5f15\u64ce\u52a0\u8f7d\u5931\u8d25")}}).catch(function(){window.__dcTransOn=false;setBtn(false);toast("\u7ffb\u8bd1\u5f15\u64ce\u52a0\u8f7d\u5931\u8d25")})};'
-                + 'function addBtn(){try{if(document.getElementById("__daoTransBtn"))return;var d=document.createElement("div");d.id="__daoTransBtn";d.textContent=window.__dcTransOn?"\u539f":"\u8bd1";d.title="\u7ffb\u8bd1\u6b64\u9875";d.setAttribute("translate","no");d.style.cssText="position:fixed;z-index:2147483646;right:14px;bottom:64px;width:38px;height:38px;border-radius:50%;background:#1f6feb;color:#fff;display:flex;align-items:center;justify-content:center;font:15px/1 sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35);user-select:none";d.addEventListener("click",function(e){e.stopPropagation();window.__daoTransToggle()});(document.body||document.documentElement).appendChild(d)}catch(e){}}'
-                + 'if(document.readyState!=="loading")addBtn();document.addEventListener("DOMContentLoaded",function(){addBtn()});setInterval(addBtn,3000);'
-                + '}catch(e){}})();<\/script>';
+                // 整页翻译桥(对齐手机 APK 悬浮球「译」): 见 daoTransBridgeInlineJs — /__web 外站页与 Devin 反代页同构注入。
+                + '<script>' + daoTransBridgeInlineJs() + '<\/script>';
             html = /<head[^>]*>/i.test(html) ? html.replace(/<head([^>]*)>/i, '<head$1>' + inj) : (inj + html);
             finish({ _proxy: true, status: sc, contentType: 'text/html; charset=utf-8', body: html });
         };
@@ -17471,7 +17478,10 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         const dragBridgeInline = '<script>' + daoDropBridgeJs() + '</script>';
                         // 客户端持久缓存 SW 注册(同源·scope '/' · 仅缓存哈希不可变静态资产 → IDE webview 重载零往返)。
                         const swRegInline = '<script>(function(){try{if(navigator.serviceWorker){navigator.serviceWorker.register("/__dao_sw.js",{scope:"/"}).catch(function(){});}}catch(e){}})();<\/script>';
-                        const headInject = authBridge + swRegInline + dragBridgeInline;
+                        // 整页翻译桥(同源·与 /__web 外站页同构): Devin 反代页也注入悬浮球「译」+ __dcTr 桥
+                        //   — vscode-webview 外壳恒无法触达 iframe contentDocument, 页内桥才是唯一可达翻译通道。
+                        const transBridgeInline = '<script>' + daoTransBridgeInlineJs() + '<\/script>';
+                        const headInject = authBridge + swRegInline + dragBridgeInline + transBridgeInline;
                         if (/<head[^>]*>/i.test(html)) {
                             html = html.replace(/(<head[^>]*>)/i, '$1' + headInject);
                         } else {

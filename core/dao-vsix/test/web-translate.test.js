@@ -49,6 +49,22 @@ ok(/__daoTransBtn/.test(src), "悬浮「译」按钮注入");
 ok(/window\.__daoTransToggle/.test(src), "翻译/还原切换 __daoTransToggle");
 ok(/window\.__dcTransRestore&&window\.__dcTransRestore\(\)/.test(src), "还原走 __dcTransRestore (对齐手机)");
 
+console.log("[整页翻译 · Devin 反代页同构注入 + 外壳跨源页内桥]");
+// 病灶(桌面实测): IDE webview 父源恒 vscode-webview → http iframe 的 contentDocument 永不可达,
+//   工具栏「译」在 Devin 反代页/外站页恒报「本页不可翻译(跨源)」。根治: 翻译桥抽为
+//   daoTransBridgeInlineJs 同构注入 /__web 与 Devin 反代页; 外壳先 postMessage {__daoTransToggle}
+//   问页内桥, 收 {__daoTransAck} 即就地译/还原, 无桥才走 trReroute 重载自愈。
+ok(/function daoTransBridgeInlineJs\(/.test(src), "翻译桥抽为 daoTransBridgeInlineJs 共用函数");
+ok(/const transBridgeInline = '<script>' \+ daoTransBridgeInlineJs\(\)/.test(src), "Devin 反代页 headInject 注入翻译桥");
+ok(/dragBridgeInline \+ transBridgeInline/.test(src), "翻译桥并入 headInject");
+ok(/__daoTransToggle\)\{try\{e\.source&&e\.source\.postMessage\(\{__daoTransAck:1\}/.test(src), "页内桥听 {__daoTransToggle} 并回 {__daoTransAck}");
+for (const rel of [["..", "..", "rt-flow", "extension.js"], ["..", "rtflow", "extension.js"]]) {
+  const sh = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+  ok(/function _trBridgeTry\(/.test(sh), rel.join("/") + " 外壳有 _trBridgeTry 页内桥探询");
+  ok(/_trBridgeTry\(fr,function\(ok\)/.test(sh), rel.join("/") + " 跨源分支先试页内桥再 trReroute");
+  ok(/_trBridgeTry\(fr2,function\(ok\)/.test(sh), rel.join("/") + " 重载后轮询兜底也试页内桥");
+}
+
 console.log("[下载捕获 · 内联资源不误判为下载]");
 // 病灶(桌面实测·Bing): 脚本以 application/x-javascript 下发, 旧白名单只排 application/javascript,
 //   落进 application/x- 兜底被误存为下载(下载目录被数十个 .js 塞满)。护栏: 一切 JS/ES 变体皆排除。
