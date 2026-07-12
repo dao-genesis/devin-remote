@@ -141,6 +141,15 @@ ok(/HttpBridge\.vpnActive\(\) && HttpBridge\.directNetwork\(\) != null/.test(mai
 ok(/private static boolean proxyHealthy\(String hp\)/.test(main), "代理真健康检查 (真经代理发请求·非只探端口)");
 ok(/clearWebViewProxy\(\)\) \{ toast\("代理已失效, 已自动转直连"\)/.test(main), "页面加载失败+代理死 → 自动清代理转直连重载");
 
+// ②f 边缘中继自身健康门 (Cloudflare Worker 限额 1027/错误页 → 记忆失效并回退直连)
+ok(/static boolean edgeUsable\(\)/.test(main), "边缘健康门: edgeUsable 存在");
+ok(/static void markEdgeDead\(\)/.test(main), "边缘健康门: markEdgeDead 存在");
+ok(/sMediaEdgeUntil && edgeUsable\(\)/.test(main), "边缘健康门: edgePreferred 受 edgeUsable 约束 (中继死则一切媒体/下载回直连)");
+ok(/static boolean edgeRelayLevelError\(int code, String ctype\)/.test(main), "边缘健康门: 中继层错误判据 (5xx / text/html 错误页)");
+ok(/viaEdge && edgeRelayLevelError\(code, c\.getContentType\(\)\)/.test(main), "边缘健康门: 中继答复错误页不当媒体回灌");
+ok(/directRetried = true; viaEdge = false; openUrl = url; continue;/.test(main), "边缘健康门: 中继失效即回退直连一次");
+ok(/hostBlocked && edgeUsable\(\)\) \{/.test(main), "边缘健康门: 直连实败只有中继可用才切边缘");
+
 // ③ 视频全屏承接
 ok(/public void onShowCustomView\(View view, CustomViewCallback callback\)/.test(main), "onShowCustomView 承接");
 ok(/public void onHideCustomView\(\)/.test(main), "onHideCustomView 承接");

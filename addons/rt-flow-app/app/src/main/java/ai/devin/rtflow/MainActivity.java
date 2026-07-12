@@ -2419,6 +2419,7 @@ public class MainActivity extends AppCompatActivity {
             boolean hostBlocked = blockedMediaHost(host);
             boolean viaEdge = hostBlocked && edgePreferred();
             String openUrl = viaEdge ? edgeWrap(url) : url;
+            boolean directRetried = false;
             int code;
             for (;;) {
                 c = HttpBridge.openConn(openUrl, direct && !viaEdge);
@@ -2450,13 +2451,26 @@ public class MainActivity extends AppCompatActivity {
                 catch (Exception ex) {
                     try { c.disconnect(); } catch (Exception ignored) {}
                     c = null;
-                    if (!viaEdge && hostBlocked) {   // S3/CloudFront 直连实败(国内被墙) → 记忆并改经边缘代理重试
+                    if (!viaEdge && hostBlocked && edgeUsable()) {   // S3/CloudFront 直连实败(国内被墙) → 记忆并改经边缘代理重试
                         markDirectMediaBlocked();
                         viaEdge = true;
                         openUrl = edgeWrap(url);
                         continue;
                     }
+                    if (viaEdge) {   // 边缘中继连接实败 → 记忆失效, 回退直连一次 (直连可能本就可达)
+                        markEdgeDead();
+                        if (!directRetried) { directRetried = true; viaEdge = false; openUrl = url; continue; }
+                    }
                     throw ex;
+                }
+                // 边缘中继答复但为中继层错误 (Cloudflare Worker 限额 1027 错误页/5xx):
+                //   记忆中继失效并回退直连一次, 否则错误页字节会被当媒体回灌 → 图片/视频全部空白。
+                if (viaEdge && edgeRelayLevelError(code, c.getContentType())) {
+                    markEdgeDead();
+                    try { c.disconnect(); } catch (Exception ignored2) {}
+                    c = null;
+                    if (!directRetried) { directRetried = true; viaEdge = false; openUrl = url; continue; }
+                    return null;
                 }
                 break;
             }
@@ -2478,6 +2492,7 @@ public class MainActivity extends AppCompatActivity {
     //   直连实败/探测不可达即记忆 10 分钟优先边缘; 预签名 URL 无需凭据, 不外泄任何鉴权头。
     private static volatile long sMediaEdgeUntil;
     private static volatile long sMediaProbeAt;
+    private static volatile long sEdgeDeadUntil;
     private static volatile String sEdgeBase;
     static boolean blockedMediaHost(String h) {
         if (h == null) return false;
@@ -2511,8 +2526,18 @@ public class MainActivity extends AppCompatActivity {
         try { return edgeFetchBase() + "/fetch?u=" + java.net.URLEncoder.encode(url, "UTF-8"); }
         catch (Exception e) { return url; }
     }
-    static boolean edgePreferred() { return System.currentTimeMillis() < sMediaEdgeUntil; }
+    static boolean edgePreferred() { return System.currentTimeMillis() < sMediaEdgeUntil && edgeUsable(); }
     static void markDirectMediaBlocked() { sMediaEdgeUntil = System.currentTimeMillis() + 10 * 60_000L; }
+    /** 边缘中继自身健康门: 中继失效(Cloudflare Worker 限额 1027/5xx/错误页)时绝不再把媒体/下载引到死路。 */
+    static boolean edgeUsable() { return System.currentTimeMillis() >= sEdgeDeadUntil; }
+    static void markEdgeDead() { sEdgeDeadUntil = System.currentTimeMillis() + 5 * 60_000L; }
+    /** 中继答复是否属于中继层错误 (源站错误是 XML/JSON 之外的判据: Worker 限额/错误页为 text/html, 网关级为 5xx)。 */
+    static boolean edgeRelayLevelError(int code, String ctype) {
+        if (code >= 500) return true;
+        if (code < 400) return false;
+        String ct = ctype == null ? "" : ctype.toLowerCase(java.util.Locale.US);
+        return ct.contains("text/html");
+    }
     /** 后台探测 S3 直连可达性(4s 快判·10 分钟一次): 不可达即首张图就走边缘, 免首次破图。 */
     static void kickMediaRouteProbe() {
         long now = System.currentTimeMillis();
