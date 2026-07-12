@@ -5195,9 +5195,14 @@ function ghProxyAgent(proxyUrl: string): any {
     if (!/^https?:$/.test(u.protocol)) return undefined;
     const net = require('net'); const tls = require('tls'); const https = require('https');
     const agent = new https.Agent({ keepAlive: false });
-    (agent as any).createConnection = (opts: any, cb: (err: Error | null, sock?: any) => void) => {
+    (agent as any).createConnection = (opts: any, rawCb: (err: Error | null, sock?: any) => void) => {
+        // 建隧整段(TCP握手+CONNECT应答+TLS)限时: 未成隧时请求尚无 socket, 外层 req.setTimeout
+        //   适用不上, 代理节点一旦半路卡住即永悬。
+        let settled = false;
+        const cb = (e: Error | null, sock?: any) => { if (settled) return; settled = true; clearTimeout(guard); rawCb(e, sock); };
         const proxyPort = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
         const socket = net.connect(proxyPort, u.hostname);
+        const guard = setTimeout(() => { try { socket.destroy(); } catch { /* 守柔 */ } cb(new Error('proxy CONNECT timeout')); }, 15000);
         socket.once('error', (e: Error) => cb(e));
         socket.once('connect', () => {
             const host = opts.host || opts.hostname; const port = opts.port || 443;
