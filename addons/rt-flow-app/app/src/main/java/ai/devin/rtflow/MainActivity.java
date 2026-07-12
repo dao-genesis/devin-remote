@@ -2321,33 +2321,39 @@ public class MainActivity extends AppCompatActivity {
             Uri u = req.getUrl();
             if (u == null || !"GET".equalsIgnoreCase(req.getMethod())) return null;
             String host = u.getHost(), path = u.getPath();
-            if (host == null || path == null || !host.equalsIgnoreCase("app.devin.ai")) return null;
-            if (!path.startsWith("/attachments/")) return null;
+            if (host == null || path == null) return null;
+            boolean devinAtt = host.equalsIgnoreCase("app.devin.ai") && path.startsWith("/attachments/");
+            // 被墙对象存储/CDN 直链(S3/CloudFront/devinapps·预签名无需凭据): 悬浮窗/页内媒体元素
+            //   直连必超时 → 已判定优先边缘时在原生层经边缘代理代取回灌(含 Range/206)。
+            boolean edgeBypass = !devinAtt && blockedMediaHost(host) && edgePreferred();
+            if (!devinAtt && !edgeBypass) return null;
             java.util.Map<String, String> rh = req.getRequestHeaders();
-            // 已整取落盘的附件(视频/录屏等) → 直接本地供给(含 Range/seek), 零网络零鉴权秒开,
-            //   弱网/国内网络/离线皆可播 —— 视频「只有境外好网络反复重启才能看」之解。
-            WebResourceResponse cached = mediaCacheServe(u, rh);
-            if (cached != null) return cached;
             // SPA 生成的附件链接偶见二次编码(%25xx) → 服务端 400; 交原生代取(内含单层解码重试)自愈。
             boolean doubleEnc = u.toString().contains("%25");
-            if (!doubleEnc && rh != null) for (String k : rh.keySet())
-                if (k != null && k.equalsIgnoreCase("Authorization")) return null;   // fetch/XHR 已带鉴权 → 不重复代取
-            // 本源: /attachments/ 的真鉴权是 httpOnly Cookie attachments_token。Cookie 就绪时应
-            //   一律交还 WebView 原生网络栈(返回 null): 原生并发加载/HTTP 缓存/Range·206·seek 全部
-            //   与真浏览器一致 —— 代取字节流会 ① 把 <video> 的响应变成不可 seek 流 → FFmpegDemuxer
-            //   "data source error" 无限重试; ② 每个图片/文档都占用 WebView 有限的拦截线程做 15-30s
-            //   超时的同步网络 IO, 并发图片一多即互相饿死 → 图片时载时不载、整页请求(含点链接)僵死。
-            //   Cookie 按 JWT exp 判新鲜(过期自动重铸), 铸不出时才回退代取(下方旧路径)。
-            // 一切附件(视频/音频的 Range 分段流 + 图片/截图等整取)首见即后台整取落盘:
-            //   本次仍走原生网络, 下次(重进/刷新/换网/离线)即命中磁盘缓存秒开 ——
-            //   「图片时有时无」与视频重播慢的本源同解(单飞去重·限容, 见 mediaCachePrefetch)。
-            mediaCachePrefetch(auth1, orgId, u.toString(), path);
-            kickMediaRouteProbe();
-            boolean cookieOk = ensureAttachmentCookie(auth1, orgId, u.toString());
-            // Cookie 就绪且 S3 直连健康 → 交还 WebView 原生并发直取(快路径·含 Range/206/seek);
-            // 被墙(国内无 VPN)/Cookie 铸不出/二次编码链接 → 原生代取: Range 头透传、206 原样回灌
-            //   (拖动/分段可用), 被墙跳经边缘代理 → 国内视频/图片首次即可加载。
-            if (cookieOk && !edgePreferred() && !doubleEnc) return null;   // 原生直取(带 Cookie)
+            if (devinAtt) {
+                // 已整取落盘的附件(视频/录屏等) → 直接本地供给(含 Range/seek), 零网络零鉴权秒开,
+                //   弱网/国内网络/离线皆可播 —— 视频「只有境外好网络反复重启才能看」之解。
+                WebResourceResponse cached = mediaCacheServe(u, rh);
+                if (cached != null) return cached;
+                if (!doubleEnc && rh != null) for (String k : rh.keySet())
+                    if (k != null && k.equalsIgnoreCase("Authorization")) return null;   // fetch/XHR 已带鉴权 → 不重复代取
+                // 本源: /attachments/ 的真鉴权是 httpOnly Cookie attachments_token。Cookie 就绪时应
+                //   一律交还 WebView 原生网络栈(返回 null): 原生并发加载/HTTP 缓存/Range·206·seek 全部
+                //   与真浏览器一致 —— 代取字节流会 ① 把 <video> 的响应变成不可 seek 流 → FFmpegDemuxer
+                //   "data source error" 无限重试; ② 每个图片/文档都占用 WebView 有限的拦截线程做 15-30s
+                //   超时的同步网络 IO, 并发图片一多即互相饿死 → 图片时载时不载、整页请求(含点链接)僵死。
+                //   Cookie 按 JWT exp 判新鲜(过期自动重铸), 铸不出时才回退代取(下方旧路径)。
+                // 一切附件(视频/音频的 Range 分段流 + 图片/截图等整取)首见即后台整取落盘:
+                //   本次仍走原生网络, 下次(重进/刷新/换网/离线)即命中磁盘缓存秒开 ——
+                //   「图片时有时无」与视频重播慢的本源同解(单飞去重·限容, 见 mediaCachePrefetch)。
+                mediaCachePrefetch(auth1, orgId, u.toString(), path);
+                kickMediaRouteProbe();
+                boolean cookieOk = ensureAttachmentCookie(auth1, orgId, u.toString());
+                // Cookie 就绪且 S3 直连健康 → 交还 WebView 原生并发直取(快路径·含 Range/206/seek);
+                // 被墙(国内无 VPN)/Cookie 铸不出/二次编码链接 → 原生代取: Range 头透传、206 原样回灌
+                //   (拖动/分段可用), 被墙跳经边缘代理 → 国内视频/图片首次即可加载。
+                if (cookieOk && !edgePreferred() && !doubleEnc) return null;   // 原生直取(带 Cookie)
+            }
             java.net.HttpURLConnection c;
             try { c = fetchAttachment(auth1, orgId, u.toString(), rh, false); }
             catch (Exception e1) {
@@ -3988,6 +3994,21 @@ public class MainActivity extends AppCompatActivity {
         // blob:/data: 无法走系统 DownloadManager → 转 JS 取内容, 统一收进应用内下载列表
         if (url != null && url.startsWith("blob:")) { captureBlobDownload(url); return; }
         if (url != null && url.startsWith("data:")) { captureDataUrl(url, contentDisposition); return; }
+        // DownloadManager 必败先知 → 首点即直走原生代取(含二次编码自愈+边缘代理), 免 3 次白试:
+        //   ① %25xx 二次编码链接(服务端 400, DM 无解码能力) ② 目标/落点宿主被墙且已判定优先边缘代理
+        if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
+            boolean doomed = url.contains("%25");
+            try {
+                String h = Uri.parse(url).getHost();
+                if (!doomed && edgePreferred() && (blockedMediaHost(h) || isAttachmentDownloadUrl(url))) doomed = true;
+            } catch (Exception ignored) {}
+            if (doomed) {
+                String nm = sanitizeFileName(android.webkit.URLUtil.guessFileName(url, contentDisposition, mime));
+                runOnUiThread(() -> toast("经代理通道下载: " + nm));
+                nativeFetchDownload(url, nm, mime);
+                return;
+            }
+        }
         // 附件下载首点即成 (不再需重启+刷新): 入队前确保 attachments_token 就绪, 否则 DownloadManager
         //   无鉴权 Cookie → 403 失败。铸造是网络操作 → 整个入队流程放后台线程 (回 UI 线程弹提示)。
         final Tab dt = cur();
@@ -4391,7 +4412,13 @@ public class MainActivity extends AppCompatActivity {
                     // 至多 2 次; 仍败才报失败, 免用户手点重来。
                     int at = 0; try { if (meta != null && meta.length > 3) at = Integer.parseInt(meta[3]); } catch (Exception ignored) {}
                     String srcUrl = (meta != null && meta.length > 2) ? meta[2] : null;
-                    if (srcUrl != null && !srcUrl.isEmpty() && at < 2) {
+                    if (srcUrl != null && !srcUrl.isEmpty() && srcUrl.contains("%25")) {
+                        // 二次编码链接 DM 重试必败 → 直接改原生代取(内含单层解码重试自愈)
+                        String nm0 = meta != null ? meta[0] : "download";
+                        String mm0 = (meta != null && !meta[1].isEmpty()) ? meta[1] : null;
+                        toast("改走代理通道下载: " + nm0);
+                        nativeFetchDownload(srcUrl, nm0, mm0);
+                    } else if (srcUrl != null && !srcUrl.isEmpty() && at < 2) {
                         String nm = meta[0]; String mm = meta[1].isEmpty() ? null : meta[1];
                         toast("下载中断, 自动重试: " + nm);
                         startDownload(srcUrl, null, "attachment; filename=\"" + nm + "\"", mm, at + 1);
@@ -5102,6 +5129,19 @@ public class MainActivity extends AppCompatActivity {
         showMediaPanel();
         if (mediaPageReady) deliverPendingDoc();
     }
+    // 下载中心点开已下载的图片/视频/音频 → 同一媒体悬浮窗直看 (本地 file:// / content:// 源)
+    private volatile String[] pendingMediaView = null;
+    private void viewMediaInPanel(String url, String type, String name) {
+        pendingMediaView = new String[]{ url, type == null ? "file" : type, name == null ? "" : name };
+        showMediaPanel();
+        if (mediaPageReady) deliverPendingMedia();
+    }
+    private void deliverPendingMedia() {
+        String[] p = pendingMediaView;
+        if (p == null || mediaWeb == null) return;
+        pendingMediaView = null;
+        try { mediaWeb.evaluateJavascript("openMediaExt(" + JSONObject.quote(p[0]) + "," + JSONObject.quote(p[1]) + "," + JSONObject.quote(p[2]) + ")", null); } catch (Exception ignored) {}
+    }
     private void deliverPendingDoc() {
         String[] p = pendingDocView;
         if (p == null || mediaWeb == null) return;
@@ -5109,7 +5149,7 @@ public class MainActivity extends AppCompatActivity {
         try { mediaWeb.evaluateJavascript("openDocExt(" + JSONObject.quote(p[0]) + "," + JSONObject.quote(p[1]) + ")", null); } catch (Exception ignored) {}
     }
     private class MediaHost {
-        @android.webkit.JavascriptInterface public void ready() { main.post(() -> { mediaPageReady = true; deliverPendingDoc(); if (mediaOpen) collectPageMedia(); }); }
+        @android.webkit.JavascriptInterface public void ready() { main.post(() -> { mediaPageReady = true; deliverPendingDoc(); deliverPendingMedia(); if (mediaOpen) collectPageMedia(); }); }
         @android.webkit.JavascriptInterface public void refresh() { main.post(() -> collectPageMedia()); }
         @android.webkit.JavascriptInterface public void openUrl(final String url) {
             main.post(() -> {
@@ -5137,6 +5177,21 @@ public class MainActivity extends AppCompatActivity {
                 String err = null, text = null;
                 java.net.HttpURLConnection c = null;
                 try {
+                    if (url != null && (url.startsWith("file:") || url.startsWith("content:"))) {
+                        // 本地已下载文档(下载中心直看): 直读文件/ContentResolver, 不走网络
+                        java.io.InputStream lis = getContentResolver().openInputStream(Uri.parse(url));
+                        if (lis == null) throw new Exception("本地文件不可读");
+                        ByteArrayOutputStream lbos = new ByteArrayOutputStream();
+                        byte[] lbuf = new byte[65536]; int ln; long lcap = 4L * 1024 * 1024;
+                        while ((ln = lis.read(lbuf)) > 0) { lbos.write(lbuf, 0, ln); if (lbos.size() > lcap) break; }
+                        lis.close();
+                        final String lT = new String(lbos.toByteArray(), StandardCharsets.UTF_8);
+                        main.post(() -> {
+                            if (mediaWeb == null) return;
+                            try { mediaWeb.evaluateJavascript("docLoaded(" + reqId + "," + JSONObject.quote(lT) + ")", null); } catch (Exception ignored) {}
+                        });
+                        return;
+                    }
                     c = fetchAttachment(a1, org, url, null, false);
                     int code = (c != null) ? c.getResponseCode() : -1;
                     if ((code == 401 || code == 403) && !a1.isEmpty()) {
@@ -5410,13 +5465,13 @@ public class MainActivity extends AppCompatActivity {
                 File f = new File(path);
                 boolean avail = f.exists() || !uri.isEmpty();
                 TextView sub = new TextView(this);
-                sub.setText((avail ? (f.exists() ? humanSize(f.length()) : "已入系统下载") : "(文件已删)") + " · 点击打开 · 长按拖拽");
+                sub.setText((avail ? (f.exists() ? humanSize(f.length()) : "已入系统下载") : "(文件已删)") + " · 点击查看 · 长按拖拽");
                 sub.setTextColor(0xFF8B949E); sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
                 txt.addView(nm); txt.addView(sub);
                 Button more = chipBtnSm("\u22EE");
                 more.setOnClickListener(v -> showDownloadActions(v, recIdx, path, uri, name, mime));
                 row.addView(txt); row.addView(more);
-                txt.setOnClickListener(v -> openDownloaded(path, uri, mime));
+                txt.setOnClickListener(v -> openDownloadedInline(path, uri, name, mime));
                 txt.setOnLongClickListener(v -> { dragDownloaded(v, path, uri, mime); return true; });
                 listCol.addView(row);
             }
@@ -5570,6 +5625,41 @@ public class MainActivity extends AppCompatActivity {
     private Intent label(Intent target, String name) {
         try { return new android.content.pm.LabeledIntent(target, getPackageName(), name, 0); }
         catch (Exception e) { return target; }
+    }
+    /** 下载列表点击: MD/文本/图片/视频/音频 → 统一媒体悬浮窗内直看; 其余类型回退系统打开。 */
+    private void openDownloadedInline(String path, String uri, String name, String mime) {
+        try {
+            String nm = (name == null || name.isEmpty()) ? new File(path == null ? "" : path).getName() : name;
+            String type = inlineViewType(nm, mime);
+            if (type != null) {
+                String u = null;
+                File f = (path == null || path.isEmpty()) ? null : new File(path);
+                if (f != null && f.exists()) u = Uri.fromFile(f).toString();
+                else if (uri != null && !uri.isEmpty()) u = uri;
+                if (u != null) {
+                    if ("doc".equals(type)) viewDocInPanel(u, nm);
+                    else viewMediaInPanel(u, type, nm);
+                    return;
+                }
+            }
+        } catch (Exception ignored) {}
+        openDownloaded(path, uri, mime);
+    }
+    /** 可在悬浮窗内直看的类型: doc(文本/MD) / img / video / audio; 否则 null。 */
+    static String inlineViewType(String name, String mime) {
+        String m = mime == null ? "" : mime.toLowerCase(java.util.Locale.US);
+        if (m.startsWith("image/")) return "img";
+        if (m.startsWith("video/")) return "video";
+        if (m.startsWith("audio/")) return "audio";
+        if (m.startsWith("text/") || m.equals("application/json")) return "doc";
+        if (isTextDocName(name)) return "doc";
+        String n = name == null ? "" : name.toLowerCase(java.util.Locale.US);
+        int i = n.lastIndexOf('.');
+        String ext = i < 0 ? "" : n.substring(i + 1);
+        if (ext.matches("png|jpe?g|gif|webp|bmp|svg")) return "img";
+        if (ext.matches("mp4|webm|mov|mkv|3gp")) return "video";
+        if (ext.matches("mp3|wav|ogg|m4a|flac|aac")) return "audio";
+        return null;
     }
     private void openDownloaded(String path, String uri, String mime) {
         try {

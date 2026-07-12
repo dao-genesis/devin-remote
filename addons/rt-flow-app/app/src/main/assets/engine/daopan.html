@@ -26,6 +26,7 @@ html,body{margin:0;height:100%;background:#0e1116;color:#cdd3de;font:13px/1.5 -a
 .acc-no{flex:0 0 auto;min-width:20px;height:18px;line-height:18px;text-align:center;font-size:11px;font-weight:800;color:#9cdcfe;background:#1c2733;border:1px solid #2d4a63;border-radius:4px;padding:0 3px}
 .ti{flex:1;font-size:13px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .meta{font-size:11px;color:#8b949e;margin-top:3px;display:flex;gap:8px;flex-wrap:wrap;padding-left:30px}
+.pv{font-size:11px;color:#9aa4af;margin-top:3px;padding-left:30px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .acts{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap;padding-left:30px}
 .b{flex:1;min-width:60px;text-align:center;background:#21262d;border:1px solid #30363d;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer;color:#cdd3de}
 .b.pri{background:#0e639c;border-color:#0e639c;color:#fff}
@@ -95,7 +96,7 @@ var _rot = 0, _seeded = false;
 var CONC = 6, PERACC = 6, BATCH = 16, MAXREC = 40, MAXREC_STEP = 40, CACHE_KEY = "rtflow.recentConv", CACHE_TTL = 45000;
 function _accId(a){ return (a&&(a.id||a.email))||""; }
 function _statusOf(s){ try{ if(window.DaoCloud&&DaoCloud.sessStatus) return DaoCloud.sessStatus(s); }catch(e){} return ["",""]; }
-function _itemOf(a,no,s){ var st=_statusOf(s); return { acc:a, no:no, sid:sidOf(s), title:titleOf(s), status:(s.status_enum||s.status||s.state||""), cls:st[0]||"", label:st[1]||"", t:recencyMs(s), auto:_isAuto(s), s:s }; }
+function _itemOf(a,no,s){ var st=_statusOf(s); return { acc:a, no:no, sid:sidOf(s), title:titleOf(s), pv:previewOf(s), status:(s.status_enum||s.status||s.state||""), cls:st[0]||"", label:st[1]||"", t:recencyMs(s), auto:_isAuto(s), s:s }; }
 // 自动化对话判定 (devin-cloud.js isAutoConv 同源·唯一真源): 接会话对象或标题
 function _isAuto(x){ try{ if(window.DaoCloud&&DaoCloud.isAutoConv) return DaoCloud.isAutoConv(x); }catch(e){} return false; }
 var _showAuto=false; try{ _showAuto=localStorage.getItem("rtflow.showAutoConv")==="1"; }catch(e){}
@@ -120,7 +121,7 @@ function loadMore(){
   MAXREC+=MAXREC_STEP; _rebuild(); renderRecent(); _saveCache();
 }
 function _saveCache(){
-  try{ localStorage.setItem(CACHE_KEY, JSON.stringify({ ts:Date.now(), list:REC.slice(0,MAXREC).map(function(it){ return {accId:_accId(it.acc),accEmail:(it.acc&&it.acc.email)||"",no:it.no,sid:it.sid,title:it.title,status:it.status,cls:it.cls,label:it.label,t:it.t,auto:it.auto?1:0}; }) })); }catch(e){}
+  try{ localStorage.setItem(CACHE_KEY, JSON.stringify({ ts:Date.now(), list:REC.slice(0,MAXREC).map(function(it){ return {accId:_accId(it.acc),accEmail:(it.acc&&it.acc.email)||"",no:it.no,sid:it.sid,title:it.title,pv:it.pv||"",status:it.status,cls:it.cls,label:it.label,t:it.t,auto:it.auto?1:0}; }) })); }catch(e){}
 }
 // ── 公网单网页: 一次 RPC 从设备原生聚合近期对话 (与 APK 同一份数据·最终状态齐平) ──
 //   病灶(用户截图「加载中 0/248」): web 端逐号 listSessions 各经 mesh 一个 /api/http 往返,
@@ -139,7 +140,7 @@ function _ingestDeviceList(list){
   _accSess=Object.create(null);
   list.forEach(function(r){
     var a=byId[r.accId]||byEmail[String(r.accEmail||"").toLowerCase()]||{id:r.accId,email:r.accEmail};
-    var k=_accId(a); (_accSess[k]=_accSess[k]||[]).push({acc:a,no:r.no,sid:r.sid,title:r.title,status:r.status,cls:r.cls||"",label:r.label||"",t:r.t,auto:(r.auto!=null?!!r.auto:_isAuto(r.title)),s:{}});
+    var k=_accId(a); (_accSess[k]=_accSess[k]||[]).push({acc:a,no:r.no,sid:r.sid,title:r.title,pv:r.pv||"",status:r.status,cls:r.cls||"",label:r.label||"",t:r.t,auto:(r.auto!=null?!!r.auto:_isAuto(r.title)),s:{}});
   });
   _rebuild();
 }
@@ -158,7 +159,7 @@ function _seedFromCache(){
     var list = raw && (raw.list || (Array.isArray(raw)?raw:null));
     if(raw && raw.ts) cacheTs=raw.ts;
     if(list && list.length){
-      list.forEach(function(r){ var a=byId[r.accId]||byEmail[String(r.accEmail||"").toLowerCase()]; if(!a)return; var k=_accId(a); (_accSess[k]=_accSess[k]||[]).push({acc:a,no:r.no,sid:r.sid,title:r.title,status:r.status,cls:r.cls||"",label:r.label||"",t:r.t,auto:(r.auto!=null?!!r.auto:_isAuto(r.title)),s:{}}); });
+      list.forEach(function(r){ var a=byId[r.accId]||byEmail[String(r.accEmail||"").toLowerCase()]; if(!a)return; var k=_accId(a); (_accSess[k]=_accSess[k]||[]).push({acc:a,no:r.no,sid:r.sid,title:r.title,pv:r.pv||"",status:r.status,cls:r.cls||"",label:r.label||"",t:r.t,auto:(r.auto!=null?!!r.auto:_isAuto(r.title)),s:{}}); });
     }
   }catch(e){}
   try{
@@ -185,6 +186,15 @@ function accList(){ try{ return DaoCore.loadAcc(); }catch(e){ return []; } }
 function hasAuth(a){ return !!(a&&a.auth1&&a.orgId); }
 function sidOf(s){ return s.devin_id||s.session_id||s.id||""; }
 function titleOf(s){ var sid=sidOf(s); return s.title||s.name||s.prompt||sid; }
+// 内容预览: 取会话对象里可得的正文/提示词片段 (与标题重复则不重显)
+function previewOf(s){
+  var p=s.snippet||s.summary||s.last_message||s.latest_message||s.prompt||s.description||"";
+  p=String(p||"").replace(/\s+/g," ").trim();
+  if(!p) return "";
+  var t=String(titleOf(s)||"").trim();
+  if(t&&(p===t||t.indexOf(p)===0)) return "";
+  return p.slice(0,110);
+}
 function recencyMs(s){
   var t=s.updated_at||s.updated_at_ms||s.last_updated_at||s.last_message_at||s.last_message_sent_at||s.last_event_at||s.last_activity_at||s.modified_at||s.created_at||s.created||0;
   if(typeof t==="number") return t>1e12?t:t*1000;
@@ -268,6 +278,7 @@ function renderRecent(){
         '<span class="st '+(it.cls||stClass(it.status))+'" title="'+_esc(it.label||it.status)+'"></span>'+
         '<span class="ti" title="'+_esc(it.title)+'">'+_esc(String(it.title).slice(0,70))+'</span>'+
       '</div>'+
+      (it.pv?('<div class="pv">'+_esc(it.pv)+'</div>'):'')+
       '<div class="meta"><span>'+_esc((it.acc.email||it.acc.id||"").split("@")[0])+'</span>'+((it.label||it.status)?'<span>'+_esc(it.label||it.status)+'</span>':'')+(it.t?'<span>'+fmtAgo(it.t)+'</span>':'')+'</div>'+
       '<div class="acts">'+
         '<span class="b" onclick="viewConv('+idx+')">&#128065; 查看</span>'+

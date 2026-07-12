@@ -2,9 +2,9 @@
 // 实测「归零账号 备份→清理→移出库」共用引擎 (问题: 该流水线过去只由切号板可见性门控的
 // 心跳驱动 → 用户不在切号板时从不触发·实测全失效):
 //   直接加载真代码 autoclean.js (DaoAutoClean), 注入 mock N/DaoCloud, 断言:
-//   1) 归零 + 勾选「归零移出库」+ 全部对话 24h 无更新 → 先备份 → 移出账号库 → onRemoved;
+//   1) 归零 + 勾选「归零移出库」+ 全部对话超无活跃窗口(默认 72h·可调)无更新 → 先备份 → 移出账号库 → onRemoved;
 //   2) 备份失败 → backup-fail, 绝不清理/移出;
-//   3) 有 24h 内更新的对话 → 只清理陈旧对话, 账号保留 (不移出);
+//   3) 有无活跃窗口内更新的对话 → 只清理陈旧对话, 账号保留 (不移出);
 //   4) 额度充足 → skip, 零网络调用;
 //   5) 1h 节流 (force 可跳过);
 //   6) 源级护栏: engine.html 与 switch.html 皆引入 autoclean.js 并接入同一流水线;
@@ -72,7 +72,7 @@ function makeEnv(opts) {
   const now = Date.now();
   // ── 场景 1: 归零 + 勾选移出 + 全部对话陈旧 → 备份 → 清理 → 移出库 ──
   {
-    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [{ devin_id: "s1", title: "老对话", ts: now - 2 * DAY }] });
+    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [{ devin_id: "s1", title: "老对话", ts: now - 4 * DAY }] });
     const r = await env.inst.autoCleanFor(env.getAccs()[0]);
     ok(r.state === "removed", "归零+全陈旧: state=removed (" + r.state + ")");
     ok(env.calls.purged.length === 1 && env.calls.purged[0] === "s1", "归零+全陈旧: 陈旧对话已真删");
@@ -82,20 +82,20 @@ function makeEnv(opts) {
   }
   // ── 场景 2: 备份失败 → 绝不清理/移出 ──
   {
-    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, backupFail: true, sessions: [{ devin_id: "s1", ts: now - 2 * DAY }] });
+    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, backupFail: true, sessions: [{ devin_id: "s1", ts: now - 4 * DAY }] });
     const r = await env.inst.autoCleanFor(env.getAccs()[0]);
     ok(r.state === "backup-fail", "备份失败: state=backup-fail (" + r.state + ")");
     ok(env.calls.purged.length === 0, "备份失败: 未清理任何对话");
     ok(env.getAccs().length === 1, "备份失败: 账号保留在库");
   }
-  // ── 场景 3: 有 24h 内更新的对话 → 只清陈旧, 账号不移出 ──
+  // ── 场景 3: 有无活跃窗口内更新的对话 → 只清陈旧, 账号不移出 ──
   {
     const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [
-      { devin_id: "sOld", ts: now - 2 * DAY }, { devin_id: "sLive", ts: now - H }] });
+      { devin_id: "sOld", ts: now - 4 * DAY }, { devin_id: "sLive", ts: now - H }] });
     const r = await env.inst.autoCleanFor(env.getAccs()[0]);
-    ok(r.state === "cleaned", "存在 24h 内更新: state=cleaned 不移出 (" + r.state + ")");
-    ok(env.calls.purged.length === 1 && env.calls.purged[0] === "sOld", "存在 24h 内更新: 只清陈旧对话");
-    ok(env.getAccs().length === 1, "存在 24h 内更新: 账号保留在库");
+    ok(r.state === "cleaned", "存在活跃窗口内更新: state=cleaned 不移出 (" + r.state + ")");
+    ok(env.calls.purged.length === 1 && env.calls.purged[0] === "sOld", "存在活跃窗口内更新: 只清陈旧对话");
+    ok(env.getAccs().length === 1, "存在活跃窗口内更新: 账号保留在库");
   }
   // ── 场景 4: 额度充足 → skip, 零网络 ──
   {
@@ -106,7 +106,7 @@ function makeEnv(opts) {
   }
   // ── 场景 5: 1h 节流 (force 跳过) ──
   {
-    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [{ devin_id: "s1", ts: now - 2 * DAY }], cfg: { autoRemove: false } });
+    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [{ devin_id: "s1", ts: now - 4 * DAY }], cfg: { autoRemove: false } });
     const a = env.getAccs()[0];
     const r1 = await env.inst.autoCleanFor(a);
     ok(r1.state === "cleaned", "节流: 首轮 cleaned");
@@ -120,13 +120,13 @@ function makeEnv(opts) {
   }
   // ── 场景 6: 计费网络 → 自动暂缓 (force 不受限) ──
   {
-    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, metered: true, sessions: [{ devin_id: "s1", ts: now - 2 * DAY }] });
+    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, metered: true, sessions: [{ devin_id: "s1", ts: now - 4 * DAY }] });
     const r = await env.inst.autoCleanFor(env.getAccs()[0]);
     ok(r.state === "skip" && /WiFi/.test(r.reason), "计费网络: 自动清理暂缓");
   }
   // ── 场景 7: 对话列表获取失败 → 绝不清理/移出 (列表失败≠无对话·旧病灶: 近期活跃号未备份即被移出) ──
   {
-    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, listFail: true, sessions: [{ devin_id: "s1", ts: now - 2 * DAY }] });
+    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, listFail: true, sessions: [{ devin_id: "s1", ts: now - 4 * DAY }] });
     const r = await env.inst.autoCleanFor(env.getAccs()[0]);
     ok(r.state === "backup-fail" && /列表/.test(r.reason), "列表失败: state=backup-fail 不清理不移出 (" + r.state + ")");
     ok(env.calls.purged.length === 0, "列表失败: 未清理任何对话");
@@ -135,23 +135,23 @@ function makeEnv(opts) {
   // ── 场景 8: 部分对话备份失败 → 备份未齐全·不移出 (全量备份后才移除) ──
   {
     const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, failSids: ["s2"], sessions: [
-      { devin_id: "s1", ts: now - 2 * DAY }, { devin_id: "s2", ts: now - 3 * DAY }] });
+      { devin_id: "s1", ts: now - 4 * DAY }, { devin_id: "s2", ts: now - 5 * DAY }] });
     const r = await env.inst.autoCleanFor(env.getAccs()[0]);
     ok(r.state === "cleaned" && /不移出/.test(r.reason), "部分备份失败: 不移出 (" + r.reason + ")");
     ok(env.calls.purged.indexOf("s2") < 0, "部分备份失败: 未备份的对话绝不清理");
     ok(env.getAccs().length === 1, "部分备份失败: 账号保留在库");
   }
-  // ── 场景 9: 刚重新添加的号 (addedAt 24h 内) → 免自动移出保护 (消除「重加即被再移出」幽灵循环) ──
+  // ── 场景 9: 刚重新添加的号 (addedAt 在无活跃窗口内) → 免自动移出保护 (消除「重加即被再移出」幽灵循环) ──
   {
-    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [{ devin_id: "s1", ts: now - 2 * DAY }],
+    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [{ devin_id: "s1", ts: now - 4 * DAY }],
       accs: [{ id: "a1", email: "z@x.com", auth1: "t", orgId: "o", quota: { dPct: 0, overageDollars: 0 }, addedAt: now - H }] });
     const r = await env.inst.autoCleanFor(env.getAccs()[0]);
-    ok(r.state === "cleaned" && /24h 保护/.test(r.reason), "新加号 24h 保护: 不移出 (" + r.reason + ")");
-    ok(env.getAccs().length === 1, "新加号 24h 保护: 账号保留在库");
+    ok(r.state === "cleaned" && /保护/.test(r.reason), "新加号保护期: 不移出 (" + r.reason + ")");
+    ok(env.getAccs().length === 1, "新加号保护期: 账号保留在库");
   }
   // ── 场景 10: 移出时落「移出记录」留底 (可追溯可恢复) ──
   {
-    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [{ devin_id: "s1", ts: now - 2 * DAY }] });
+    const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [{ devin_id: "s1", ts: now - 4 * DAY }] });
     const r = await env.inst.autoCleanFor(env.getAccs()[0]);
     ok(r.state === "removed", "移出留底: 确已移出");
     ok(Object.keys(env.files).some((k) => k.indexOf("移出记录.json") >= 0), "移出留底: 金库落移出记录(含账号快照)");
@@ -159,10 +159,26 @@ function makeEnv(opts) {
   // ── 场景 11: 已归档对话 → 登记已清理·不重复归档·不阻移出 (平台无硬删·archive 即最强清除) ──
   {
     const env = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [
-      { devin_id: "sArch", ts: now - 3 * DAY, is_archived: true }, { devin_id: "sOld", ts: now - 2 * DAY }] });
+      { devin_id: "sArch", ts: now - 5 * DAY, is_archived: true }, { devin_id: "sOld", ts: now - 4 * DAY }] });
     const r = await env.inst.autoCleanFor(env.getAccs()[0]);
     ok(env.calls.purged.length === 1 && env.calls.purged[0] === "sOld", "已归档: 不重复归档 (只清理未归档陈旧对话)");
     ok(r.state === "removed", "已归档: 不阻塞归零移出 (" + r.state + ")");
+  }
+  // ── 场景 12: 无活跃窗口可调 (rtflow.cfg.cleanStaleHours·默认 72h) ──
+  {
+    // 默认 72h: 48h 前更新的对话仍在窗口内 → 不清理不移出
+    const envDef = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [{ devin_id: "s48", ts: now - 48 * H }] });
+    const rDef = await envDef.inst.autoCleanFor(envDef.getAccs()[0]);
+    ok(rDef.state === "cleaned" && envDef.calls.purged.length === 0 && envDef.getAccs().length === 1,
+      "默认 72h: 48h 前更新仍受保护不清不移 (" + rDef.state + ")");
+    // 调小到 24h: 同一对话即为陈旧 → 备份→清理→移出
+    const envCut = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, cfg: { cleanStaleHours: 24 }, sessions: [{ devin_id: "s48", ts: now - 48 * H }] });
+    const rCut = await envCut.inst.autoCleanFor(envCut.getAccs()[0]);
+    ok(rCut.state === "removed" && envCut.calls.purged[0] === "s48", "调小 24h: 48h 无更新即备份清理移出 (" + rCut.state + ")");
+    // 调大到 240h: 4 天前更新仍受保护
+    const envBig = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, cfg: { cleanStaleHours: 240 }, sessions: [{ devin_id: "s96", ts: now - 4 * DAY }] });
+    const rBig = await envBig.inst.autoCleanFor(envBig.getAccs()[0]);
+    ok(rBig.state === "cleaned" && envBig.calls.purged.length === 0, "调大 240h: 4 天前更新仍受保护 (" + rBig.state + ")");
   }
   // ── 源级护栏: purgeSession 以 archive 为最强清除 (平台无硬删 REST 路由·DELETE 恒 404/405) ──
   {
@@ -195,7 +211,7 @@ function makeEnv(opts) {
     ok(/NotFoundError/.test(bsg), "退格根治 v6: 保留白屏兜底");
   }
   // ── 源级护栏: 重加号消幽灵 (doAdd 落 addedAt + 立即镜像金库·不被回拉覆盖) ──
-  ok(/addedAt:Date\.now\(\)/.test(switchSrc), "doAdd 落 addedAt (重加号 24h 免移出保护)");
+  ok(/addedAt:Date\.now\(\)/.test(switchSrc), "doAdd 落 addedAt (重加号保护期免移出)");
   ok(/saveAcc\(accs\); try\{ mirrorAccountsToVault\(\); \}catch\(e\)\{\}/.test(switchSrc), "doAdd 后立即镜像金库 (重加号不被金库回拉抓回幽灵态)");
   ok(/window\.__rtBsGuard6\)return/.test(mainSrc), "退格护栏: 幂等守卫 v6");
 
@@ -215,14 +231,14 @@ function makeEnv(opts) {
   }
   // ── 增量备份行为: 对话更新时间变化 → 重新备份 ZIP (与最新内容同步) ──
   {
-    const sess = [{ devin_id: "sInc", ts: now - 2 * DAY, title: "t" }];
+    const sess = [{ devin_id: "sInc", ts: now - 4 * DAY, title: "t" }];
     const env = makeEnv({ quota: { dPct: 50, overageDollars: 42 }, sessions: sess });
     const a = env.getAccs()[0];
     const bk1 = await env.inst.fullBackupAccount(a);
     ok(bk1.ok && bk1.count === 1, "增量: 首次备份落 ZIP");
     const bk2 = await env.inst.fullBackupAccount(a);
     ok(bk2.ok && bk2.count === 0, "增量: 未变更 → 廉价跳过不重备");
-    sess[0].ts = now - 2 * DAY + 60000;   // 对话有新内容 → updated_at 前移
+    sess[0].ts = now - 4 * DAY + 60000;   // 对话有新内容 → updated_at 前移
     const bk3 = await env.inst.fullBackupAccount(a);
     ok(bk3.ok && bk3.count === 1, "增量: 对话更新时间变化 → 重新备份 ZIP (跟随最新)");
     const sess2 = [{ devin_id: "sNoTs", title: "t" }];   // 列表不带任何时间字段

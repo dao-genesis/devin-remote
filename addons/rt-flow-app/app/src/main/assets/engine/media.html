@@ -105,6 +105,21 @@ function openDoc(it){
 }
 // 正页点开 MD/文本附件 → 原生直送悬浮窗直看 (查看为主, 不再跳下载)
 function openDocExt(url,name){ openDoc({u:url,n:name||""}); }
+// 下载中心点开已下载资源 → 同一面板直看 (图片/视频/音频 file:// 或 content:// 本地源)
+function openMediaExt(url,type,name){
+  var it={u:url,t:type||"file",n:name||""};
+  if(it.t==="img"||it.t==="video"||it.t==="audio"){
+    var tag=it.t==="img"?('<img src="'+esc(it.u)+'">'):(it.t==="video"?('<video src="'+esc(it.u)+'" controls autoplay playsinline></video>'):('<audio src="'+esc(it.u)+'" controls autoplay></audio>'));
+    var d=document.createElement("div"); d.className="big";
+    d.innerHTML=tag+'<button class="x">✕</button>';
+    d.onclick=function(ev){ if(ev.target===d||ev.target.className==="x"){ try{var v=d.querySelector("video,audio");if(v)v.pause();}catch(e){} d.remove(); } };
+    document.body.appendChild(d);
+    var mv=d.querySelector("video,audio,img");
+    if(mv) mv.onerror=function(){ d.insertAdjacentHTML("beforeend",'<div style="color:#f85149;font-size:12px;padding:0 12px;text-align:center">⚠ 媒体加载失败 — 可回下载列表用「⋮ → 其它应用打开」</div>'); };
+    return;
+  }
+  openDoc(it);
+}
 function docLoaded(id,text){
   var box=document.getElementById("db"+id), m=DOCS[id]; if(!box) return;
   if(m&&/^(md|markdown)$/.test(m.ext)){ box.className="db mdv"; box.innerHTML=mdRender(text); }
