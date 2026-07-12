@@ -187,4 +187,34 @@ ok(/onclick="ghPatInjectSel\(\)"/.test(src) && /注入所选到 security/.test(s
     "ghRenderPatInject: 只渲染脱敏 patPrefix, 不触碰明文 a.pat");
 }
 
+// 8) 批量验证 PAT (逐号 GET /user · 落非密元数据 · 不冒称有效)
+ok(/tokenExpiration: res\.headers\['github-authentication-token-expiration'\] \|\| ''/.test(src),
+  "ghApiRequest: 捕获 github-authentication-token-expiration 过期头(非密)");
+ok(/async function daoGhValidatePats\(logins: string\[\]\)/.test(src),
+  "daoGhValidatePats: 批量验证入口(可按 logins 过滤·空=全部有 PAT 账号)");
+{
+  const vb = src.split("async function daoGhValidatePats")[1].split("// 一键拷贝")[0];
+  ok(/if \(r\.status === 200\) state = 'valid';/.test(vb) && /else if \(r\.status === 401\) state = 'invalid';/.test(vb),
+    "daoGhValidatePats: 200→valid · 401→invalid(不冒称有效)");
+  ok(/let state = 'offline';/.test(vb) && /if \(state !== 'offline'\) \{/.test(vb),
+    "daoGhValidatePats: 网络失败→offline 且不覆盖旧验证元数据");
+  ok(/rec\.patExpiresAt = String\(r\.tokenExpiration \|\| ''\)/.test(vb) && /rec\.patScopes = String\(r\.scopes \|\| ''\)/.test(vb) && /rec\.patCheckedAt = Date\.now\(\)/.test(vb),
+    "daoGhValidatePats: 落 patExpiresAt/patScopes/patCheckedAt 非密元数据");
+  ok(/results\.push\(\{ login: a\.login, state, expiresAt/.test(vb) && !/results\.push\([^)]*\bpat\b/.test(vb),
+    "daoGhValidatePats: 返回体只含非密状态(无 PAT 明文)");
+}
+ok(/patState: String\(rec\.patState \|\| ''\), patExpiresAt: String\(rec\.patExpiresAt \|\| ''\)/.test(src),
+  "daoGhPatStatus: 状态清单携带 patState/patExpiresAt(非密)");
+ok(new RegExp("case 'daoGhValidatePats':").test(src),
+  "消息处理: case 'daoGhValidatePats'(验证后回最新 patStatus)");
+ok(/function ghPatValidateAll\(\)/.test(src) && /onclick="ghPatValidateAll\(\)"/.test(src),
+  "前端: 「🔍 批量验证」按钮 + ghPatValidateAll 交互");
+ok(/d\.kind==='validatePats'/.test(src),
+  "前端 ghOnResult 处理 validatePats 回包");
+{
+  const riBlock = src.split("function ghRenderPatInject")[1].split("// ④ 仅 GitHub MCP")[0];
+  ok(/a\.patState==='valid'/.test(riBlock) && /a\.patState==='invalid'/.test(riBlock) && /a\.patExpiresAt/.test(riBlock),
+    "ghRenderPatInject: 渲染 有效/失效 状态与过期余天(非密)");
+}
+
 console.log("[gh-fleet] " + pass + " assertion(s) passed\n");

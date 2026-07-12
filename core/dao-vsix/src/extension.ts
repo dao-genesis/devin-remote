@@ -5223,7 +5223,7 @@ function ghProxyAgent(proxyUrl: string): any {
     return agent;
 }
 // GitHub REST 统一封装: Bearer PAT + 版本头 + 超时, 返回 status/json/文本 + 限速余量。
-function ghApiRequest(method: string, apiPath: string, pat: string, body?: any): Promise<{ status: number; json?: any; text?: string; error?: string; rateRemaining?: number; rateReset?: number; scopes?: string }> {
+function ghApiRequest(method: string, apiPath: string, pat: string, body?: any): Promise<{ status: number; json?: any; text?: string; error?: string; rateRemaining?: number; rateReset?: number; scopes?: string; tokenExpiration?: string }> {
     return new Promise((resolve) => {
         const https = require('https');
         const data = body ? JSON.stringify(body) : null;
@@ -5246,6 +5246,7 @@ function ghApiRequest(method: string, apiPath: string, pat: string, body?: any):
                     rateRemaining: isNaN(rr) ? undefined : rr,
                     rateReset: isNaN(rt) ? undefined : rt,
                     scopes: res.headers['x-oauth-scopes'] || '',
+                    tokenExpiration: res.headers['github-authentication-token-expiration'] || '',
                 };
                 try { out.json = d ? JSON.parse(d) : undefined; } catch { out.text = d; }
                 resolve(out);
@@ -5799,9 +5800,37 @@ function daoGhPatStatus(): { ok: boolean; primary: string; injectedCount: number
         const perVal = String((prof.secrets.find(s => s.name === secretName) || { value: '' }).value || '').trim();
         const isPrimary = !!pat && !!primaryVal && pat === primaryVal;
         const injected = (!!pat && perVal === pat) || isPrimary;
-        return { login: a.login, role: a.role || 'member', hasPat: !!pat, hasCred: !!(a.cred && a.cred.user), pending: (a as any).verify === 'pending', patPrefix: _ghMaskPat(pat), injected, primary: isPrimary, secretName };
+        const rec: any = a;
+        return { login: a.login, role: a.role || 'member', hasPat: !!pat, hasCred: !!(a.cred && a.cred.user), pending: (a as any).verify === 'pending', patPrefix: _ghMaskPat(pat), injected, primary: isPrimary, secretName, patState: String(rec.patState || ''), patExpiresAt: String(rec.patExpiresAt || ''), patScopes: String(rec.patScopes || ''), patCheckedAt: Number(rec.patCheckedAt || 0) };
     });
     return { ok: true, primary: (accounts.find(a => a.primary) || { login: '' }).login, injectedCount: accounts.filter(a => a.injected).length, total: accounts.length, accounts };
+}
+// 批量验证 PAT: 逐号用其自身 PAT 打 GET /user, 落非密元数据(patState/patExpiresAt/patScopes/patCheckedAt)到舰队存档。
+//   未验证通过绝不冒称有效: 200→valid · 401→invalid(失效/吊销/过期) · 网络失败→offline(状态不明·不覆盖旧证)。
+//   PAT 明文只在后端; 返回仅非密状态。
+async function daoGhValidatePats(logins: string[]): Promise<{ ok: boolean; checked: number; results: { login: string; state: string; expiresAt: string; error?: string }[] }> {
+    const prof = loadInjectProfile();
+    const fleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
+    const want = (logins || []).map(s => String(s || '').trim().toLowerCase()).filter(Boolean);
+    const targets = fleet.filter(a => String(a.pat || '').trim() && (!want.length || want.indexOf(String(a.login || '').toLowerCase()) >= 0));
+    const results: { login: string; state: string; expiresAt: string; error?: string }[] = [];
+    for (const a of targets) {
+        const rec: any = a;
+        const r = await ghApiRequest('GET', '/user', String(a.pat || '').trim());
+        let state = 'offline';
+        if (r.status === 200) state = 'valid';
+        else if (r.status === 401) state = 'invalid';
+        else if (r.status > 0) state = 'error_' + r.status;
+        if (state !== 'offline') {
+            rec.patState = state;
+            rec.patCheckedAt = Date.now();
+            if (r.status === 200) { rec.patExpiresAt = String(r.tokenExpiration || ''); rec.patScopes = String(r.scopes || ''); }
+        }
+        results.push({ login: a.login, state, expiresAt: String(rec.patExpiresAt || ''), ...(r.error ? { error: r.error } : {}) });
+        await _ghSleep(300);
+    }
+    saveInjectProfile(prof);
+    return { ok: true, checked: results.length, results };
 }
 // 多选注入: 把选中账号的 PAT 逐条写入 security(GITHUB_PAT_<LOGIN>) + 主 PAT(GITHUB_PAT=primary) + 钉 GitHub MCP。
 // prune=true 清掉未选中账号遗留的 GITHUB_PAT_* 条目(安全合并·分布式管理), 不动主 GITHUB_PAT 与非本机制密钥。
@@ -8440,6 +8469,9 @@ function ghRenderPatInject(){var st=_ghState();var v=document.getElementById('gh
     var st2=a.injected?'<span style="color:var(--success)" title="已注入 security">✓ 已注入</span>':(a.hasPat?'<span style="color:var(--warn)">待注入</span>':'<span style="color:var(--muted)">无 PAT</span>');
     if(a.primary)st2+=' · <span style="color:var(--success)" title="当前主 PAT(GITHUB_PAT/绑 MCP)">◆ 主</span>';
     if(a.pending)st2+=' · <span style="color:var(--warn)">⏳待验证</span>';
+    if(a.patState==='valid'){var exp='';if(a.patExpiresAt){var dl=Math.ceil((new Date(a.patExpiresAt).getTime()-Date.now())/86400000);exp=isFinite(dl)?(' · 余'+dl+'天'):''}st2+=' · <span style="color:var(--success)" title="'+esc(a.patExpiresAt||'无过期信息')+'">✓有效'+exp+'</span>';}
+    else if(a.patState==='invalid')st2+=' · <span style="color:var(--danger)" title="401: 失效/吊销/过期">✗失效</span>';
+    else if(a.patState&&a.patState.indexOf('error_')===0)st2+=' · <span style="color:var(--warn)">'+esc(a.patState)+'</span>';
     var checked=(can&&sel[a.login])?' checked':'';
     var pre=a.patPrefix?('<code style="font-size:10px">'+esc(a.patPrefix)+'</code>'):'<span style="color:var(--muted);font-size:10px">—</span>';
     h+='<div class="cr" style="padding:3px 0">';
@@ -8452,6 +8484,7 @@ function ghRenderPatInject(){var st=_ghState();var v=document.getElementById('gh
   v.innerHTML=h;}
 function ghPatSelToggle(login,on){var st=_ghState();st.patSel=st.patSel||{};if(on)st.patSel[login]=true;else delete st.patSel[login];}
 function ghPatSetPrimary(login){var st=_ghState();st.patPrimary=login;st.patSel=st.patSel||{};st.patSel[login]=true;ghRenderPatInject();}
+function ghPatValidateAll(){var st=_ghState();var ps=st.patStatus;var n=(ps&&ps.accounts)?ps.accounts.filter(function(a){return a.hasPat}).length:0;if(!n){toast('账号池无 PAT 可验',false);return}ghMsg('ghPatInjectOut','⏳ 批量验证中('+n+' 枚·逐号 GET /user)…');cmd('daoGhValidatePats',{logins:[]})}
 function ghPatInjectAll(on){var st=_ghState();var ps=st.patStatus;if(!ps||!ps.accounts)return;st.patSel={};if(on)ps.accounts.forEach(function(a){if(a.hasPat)st.patSel[a.login]=true});ghRenderPatInject();}
 function ghPatInjectSel(){var st=_ghState();var sel=st.patSel||{};var logins=Object.keys(sel).filter(function(k){return sel[k]});if(!logins.length){toast('先勾选至少一个有 PAT 的账号',false);return}ghMsg('ghPatInjectOut','⏳ 多 PAT 分布式注入中('+logins.length+' 枚)…');cmd('daoGhInjectPats',{logins:logins,primary:st.patPrimary||'',prune:true})}
 // ④ 仅 GitHub MCP 一条(非整个 MCP 板块镜像) · 与 MCP 板块双端同源(同一条 injectProfile.mcps 条目)
@@ -8523,6 +8556,7 @@ function ghOnResult(d){
     else ghMsg('ghInjectOut','<span style="color:var(--danger)">✗ '+esc(d.error||'注入失败')+'</span>');
   }
   else if(d.kind==='patStatus'){st.patStatus=d;if(!st.patPrimary&&d.primary)st.patPrimary=d.primary;ghRenderPatInject();}
+  else if(d.kind==='validatePats'){var rs=(d.results||[]);ghMsg('ghPatInjectOut','🔍 批量验证 '+(d.checked||0)+' 枚: '+rs.map(function(x){return esc(x.login)+'('+esc(x.state)+')'}).join(', '));}
   else if(d.kind==='injectPats'){
     if(d.ok){var inj=(d.injected||[]);var sk=(d.skipped||[]);ghMsg('ghPatInjectOut','<span style="color:var(--success)">✓ 多 PAT 分布式注入: '+inj.length+' 枚 → 已同步 '+(d.okCount||0)+'/'+(d.total||0)+' 账号 · 主 PAT: '+esc(d.primary||'')+'</span>'+(inj.length?'<br>注入: '+inj.map(function(x){return esc(x)}).join(', '):'')+(sk.length?('<br><span style="color:var(--warn)">跳过: '+sk.map(function(x){return esc(x.login)+'('+esc(x.reason)+')'}).join(', ')+'</span>'):''));cmd('getInjectProfile');cmd('daoGhPatStatus',{})}
     else ghMsg('ghPatInjectOut','<span style="color:var(--danger)">✗ '+esc(d.error||'注入失败')+'</span>');
@@ -8582,7 +8616,7 @@ function rGitHub(){
   // ②· security 多 PAT 分布式注入
   h+='<div class="st">🔐 多 PAT 分布式注入 (security)</div><div class="card">';
   h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 6px">勾选多个账号, 把各自 PAT <b>同时</b>反向注入 security(每号一条 <code>GITHUB_PAT_&lt;LOGIN&gt;</code> + 主号写 <code>GITHUB_PAT</code>)——分布式管理, 彻底规避「只能注一枚 PAT」的单点。选「主」的 PAT 兼容 GitHub MCP/组织统管。PAT 明文只在后端, 此处仅显脱敏前缀与状态。</p>';
-  h+='<div class="br" style="margin:2px 0 6px"><button class="btn sm" onclick="ghPatInjectAll(true)" title="全选所有有 PAT 的账号">全选有PAT</button><button class="btn sm" onclick="ghPatInjectAll(false)">清空</button><button class="btn sm primary" onclick="ghPatInjectSel()" title="把勾选账号的 PAT 一并反向注入 security(多 PAT 分布式)">💉 注入所选到 security</button><button class="btn sm ghost" onclick="cmd(&#39;daoGhPatStatus&#39;,{})">⟳ 刷新状态</button></div>';
+  h+='<div class="br" style="margin:2px 0 6px"><button class="btn sm" onclick="ghPatInjectAll(true)" title="全选所有有 PAT 的账号">全选有PAT</button><button class="btn sm" onclick="ghPatInjectAll(false)">清空</button><button class="btn sm primary" onclick="ghPatInjectSel()" title="把勾选账号的 PAT 一并反向注入 security(多 PAT 分布式)">💉 注入所选到 security</button><button class="btn sm ghost" onclick="cmd(&#39;daoGhPatStatus&#39;,{})">⟳ 刷新状态</button><button class="btn sm ghost" onclick="ghPatValidateAll()" title="逐号用其自身 PAT 打 GitHub /user 验证有效性与过期时间(非密元数据)">🔍 批量验证</button></div>';
   h+='<div id="ghPatInjectList"></div>';
   h+='<div id="ghPatInjectOut" style="font-size:11px;line-height:1.6;margin-top:4px"></div></div>';
   h+='</div>'; // /左栏
@@ -9613,6 +9647,13 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             }
             case 'daoGhPatStatus': {
                 // 各账号 PAT 状态(非密) — 供 security 多选注入清单渲染。
+                reply({ type: 'daoGhResult', kind: 'patStatus', ...daoGhPatStatus() });
+                break;
+            }
+            case 'daoGhValidatePats': {
+                // 批量验证 PAT(GET /user 逐号·落非密元数据) — 完毕即回最新状态清单。
+                const vr = await daoGhValidatePats(Array.isArray(msg.logins) ? msg.logins : []);
+                reply({ type: 'daoGhResult', kind: 'validatePats', ...vr });
                 reply({ type: 'daoGhResult', kind: 'patStatus', ...daoGhPatStatus() });
                 break;
             }
