@@ -951,17 +951,25 @@ try{setInterval(shellStatusTick,5000);}catch(e){}
 var _persistT=null;
 function _liveWebUrl(t){try{var loc=t.frame.contentWindow.location;if((loc.pathname||'').indexOf('/__web')!==0)return '';var m=/[?&]u=([^&]+)/.exec(loc.search||'');return m?decodeURIComponent(m[1]):'';}catch(e){return '';}}
 function _liveAccPath(t){try{var loc=t.frame.contentWindow.location;var p=(loc.pathname||'')+(loc.search||'');p=p.replace(/[?&]dao_acct=[^&]*/g,'');if(p.indexOf('?')<0)p=p.replace('&','?');if(!p||p==='/'||p==='/?'||p.indexOf('/__web')===0)return '';return p;}catch(e){return '';}}
-function persistShell(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];
-  if(id.indexOf('board:')===0){arr.push({kind:'board',board:id.slice(6)});}
-  else if(id.indexOf('web:')===0){var tw=tabs[id];var mw=(tw&&tw.meta)||{};var wu=_liveWebUrl(tw)||mw.origUrl||'';if(wu)arr.push({kind:'web',url:wu,label:mw.label||wu});}
-  else{var t=tabs[id];var mt=(t&&t.meta)||{};if(mt.email)arr.push({kind:'acc',email:mt.email,devinId:mt.devinId||'',path:_liveAccPath(t),title:mt.label||'',status:mt.status||''});}}
+function persistShell(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];var act=(id===active)?1:0;
+  if(id.indexOf('board:')===0){arr.push({kind:'board',board:id.slice(6),act:act});}
+  else if(id.indexOf('web:')===0){var tw=tabs[id];var mw=(tw&&tw.meta)||{};var wu=_liveWebUrl(tw)||mw.origUrl||'';if(wu)arr.push({kind:'web',url:wu,label:mw.label||wu,act:act});}
+  else{var t=tabs[id];var mt=(t&&t.meta)||{};if(mt.email)arr.push({kind:'acc',id:id,email:mt.email,devinId:mt.devinId||'',path:_liveAccPath(t),title:mt.label||'',status:mt.status||'',act:act});}}
   vscode.postMessage({type:'shellSaveTabs',tabs:arr});}catch(e){}}
 function schedPersist(){clearTimeout(_persistT);_persistT=setTimeout(persistShell,400);}
 setInterval(function(){try{persistShell();}catch(e){}},15000); // 页内导航(iframe 内跳转)无事件可钩 → 周期性抓实时位置持久化
+var _restoreAct=null; // 恢复后回到用户上次停留的标签(与上次状态一致)
+function _tryRestoreActive(){if(!_restoreAct)return;var s=_restoreAct,id='';
+  if(s.kind==='board'){id='board:'+(s.board||'home');}
+  else if(s.kind==='acc'){id=s.id||'';}
+  else if(s.kind==='web'){for(var k in tabs){if(k.indexOf('web:')===0&&tabs[k].meta&&tabs[k].meta.origUrl===s.url){id=k;break;}}}
+  if(id&&tabs[id]){setActive(id);_restoreAct=null;}}
 function restoreTabs(arr){if(!arr||!arr.length)return;for(var i=0;i<arr.length;i++){var s=arr[i]||{};try{
+  if(s.act)_restoreAct=s;
   if(s.kind==='board'){openBoard(s.board||'home');}
   else if(s.kind==='web'&&s.url){vscode.postMessage({type:'openWebTab',url:s.url,label:s.label||s.url});}
-  else if(s.kind==='acc'&&s.email){vscode.postMessage({type:'reopen',email:s.email,devinId:s.devinId||'',path:s.path||''});}}catch(e){}}}
+  else if(s.kind==='acc'&&s.email){vscode.postMessage({type:'reopen',id:s.id||'',email:s.email,devinId:s.devinId||'',path:s.path||''});}}catch(e){}}
+  setTimeout(_tryRestoreActive,1500);setTimeout(_tryRestoreActive,4000);setTimeout(_tryRestoreActive,9000);}
 // 归一 · 站内新标签开任意网页/搜索(复刻手机端 APK · 不再弹外部系统浏览器):
 //   经本地 HTTP 代理 /__web?u= 直出(剥 XFO/CSP · 注入 base + 链接/表单拦截), 当 iframe 挂一张站内标签。
 function openWebTab(u,label){if(!u)return;vscode.postMessage({type:'openWebTab',url:u,label:(label||u).slice(0,60),hist:1});}
@@ -1950,8 +1958,9 @@ async function _shellResolveOpen(opts) {
     url = '/?' + acctQ;
   }
   const short = email.split('@')[0];
-  const fresh = !!opts.fresh; // 新建标签/汉堡「新建 Devin 标签」→ 每次开一张全新页(唯一 id·不折叠到已存在的账号首页)
-  const id = email.toLowerCase() + '|' + (pagePath ? ('page' + pagePath) : (sid || 'home')) + (fresh ? ('|n' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36)) : '');
+  const fresh = !!opts.fresh; // 新建标签/切号「登录/打开」→ 每次开一张全新页(唯一 id·不折叠到已存在的账号首页·对齐手机一号多页)
+  const givenId = String(opts.id || '').trim(); // 标签恢复(reopen)按原 id 还原 → 同号多页各归各位不合并
+  const id = givenId || (email.toLowerCase() + '|' + (pagePath ? ('page' + pagePath) : (sid || 'home')) + (fresh ? ('|n' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36)) : ''));
   let accNo = 0, dollars = 0;
   try {
     const idx = ((_store && _store.accounts) || []).findIndex(
@@ -2075,9 +2084,14 @@ async function shellHandleMessage(sid, m) {
         if (open) send(open); else _toast('账号反代未就绪 · 请先在切号面板登录一个账号');
         return;
       }
-      case 'switchOpen':
+      case 'switchOpen': {
+        // 切号板块「登录/打开」→ 与手机同构: 账号首页每次点开都新开一张独立页(不折叠到已开页)。
+        const open = await _shellResolveOpen({ email: m.email, devinId: m.devinId, path: m.path, fresh: !m.devinId && !m.path });
+        if (open) send(open);
+        return;
+      }
       case 'reopen': {
-        const open = await _shellResolveOpen({ email: m.email, devinId: m.devinId, path: m.path });
+        const open = await _shellResolveOpen({ email: m.email, devinId: m.devinId, path: m.path, id: m.id });
         if (open) send(open);
         return;
       }
@@ -2348,6 +2362,11 @@ function _wireMultiPanel(panel) {
         try { panel.webview.postMessage({ type: "favs", list: _getMultiFavs() }); } catch (e) {}
         try { panel.webview.postMessage({ type: "history", list: _getMultiHist() }); } catch (e) {}
         try { panel.webview.postMessage({ type: "userscripts", list: _getUserScripts() }); } catch (e) {}
+        // 网页存留归一: 板块/外站/搜索标签也跨重载还原(非仅账号页; 账号页由 _resumePersistedTabs 预热还原·id 去重不双开)。
+        try {
+          const st = ((_ctx && _ctx.globalState && _ctx.globalState.get("dao.shellTabs")) || []).filter((s) => s && (s.kind !== "acc" || s.act));
+          if (st.length) panel.webview.postMessage({ type: "restoreTabs", tabs: st.map((s) => (s.kind === "acc" ? { kind: "acc", id: s.id, email: s.email, devinId: s.devinId, path: s.path, act: 1 } : s)) });
+        } catch (e) {}
         return;
       }
       // 归一 · 用户脚本 (与公网 /shell 一致): IDE webview 路径补齐 us* 处理, 否则同一套前端的脚本面板在 IDE 内形同虚设。
@@ -2525,7 +2544,7 @@ function _wireMultiPanel(panel) {
       }
       if (m.type === "shellSaveTabs") { try { if (_ctx && _ctx.globalState) _ctx.globalState.update("dao.shellTabs", Array.isArray(m.tabs) ? m.tabs.slice(0, 40) : []); } catch (e) {} return; }
       if (m.type === "reopen") {
-        try { await openMultiInstance({ email: m.email, devinId: m.devinId, path: m.path }); } catch (e) {}
+        try { await openMultiInstance({ id: m.id, email: m.email, devinId: m.devinId, path: m.path }); } catch (e) {}
         return;
       }
       if (m.type === "histPush") { _pushMultiHist(m.url, m.label, m.kind); try { panel.webview.postMessage({ type: "history", list: _getMultiHist() }); } catch (e) {} return; }
@@ -2567,7 +2586,7 @@ function _wireMultiPanel(panel) {
         return;
       }
       if (m.type === "switchOpen") {
-        if (m.email) { try { await openMultiInstance({ email: m.email }); } catch (e) {} }
+        if (m.email) { try { await openMultiInstance({ email: m.email, fresh: !m.devinId, devinId: m.devinId }); } catch (e) {} }
         return;
       }
       if (m.type === "getBridge") {
@@ -2793,7 +2812,8 @@ async function openMultiInstance(opts) {
   const fresh = !!opts.fresh && !pagePath && !sid;
   const url = pagePath ? (base + pagePath) : (sid ? (base + '/sessions/' + encodeURIComponent(sid)) : (base + '/'));
   const short = email.split('@')[0];
-  const id = email.toLowerCase() + '|' + (pagePath ? ('page' + pagePath) : (sid || (fresh ? ('new' + Date.now()) : 'home')));
+  const givenId = String(opts.id || '').trim(); // 重载续接按原 id 还原 → 同号多页不合并
+  const id = givenId || (email.toLowerCase() + '|' + (pagePath ? ('page' + pagePath) : (sid || (fresh ? ('new' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36)) : 'home'))));
   // 富标签 (对齐手机版): #账号编号 + 名称 + $额度 + 对话状态点。
   let accNo = 0, dollars = 0;
   try {
@@ -2916,7 +2936,7 @@ async function _resumePersistedTabs() {
   //   下面的 openMultiInstance 即命中缓存秒开 · 不再逐个串行慢登录)。
   try { await _prewarmAuthThrottled(saved.map((t) => t && t.email)); } catch (e) {}
   for (const t of saved) {
-    try { await openMultiInstance({ email: t.email, devinId: t.devinId, title: t.title, status: t.status, statusClass: t.statusClass, path: t.path, label: t.pageLabel }); }
+    try { await openMultiInstance({ id: t.id, email: t.email, devinId: t.devinId, title: t.title, status: t.status, statusClass: t.statusClass, path: t.path, label: t.pageLabel }); }
     catch (e) { try { log("[multi] resume err: " + (e && e.message)); } catch (x) {} }
   }
 }

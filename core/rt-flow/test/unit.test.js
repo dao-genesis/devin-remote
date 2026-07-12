@@ -474,6 +474,36 @@ function test(name, fn) {
     }
   }
 
+  // ── 11a3. 多实例 · 一号多页 (对齐手机: 切号「登录/打开」每次新开独立页·恢复按原 id 不合并) ──
+  console.log("\n[多实例 · 一号多页/恢复不合并]");
+  {
+    const _fs = require("fs"), _p = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = _fs.readFileSync(_p.join(__dirname, ...rel), "utf8");
+      const tag = rel.join("/");
+      test(tag + " switchOpen 账号首页 fresh 开新页 (不折叠到已开页)", () => {
+        assert.ok(/case 'switchOpen': \{[\s\S]{0,400}fresh: !m\.devinId && !m\.path/.test(src), "shell switchOpen 缺 fresh");
+        assert.ok(/openMultiInstance\(\{ email: m\.email, fresh: !m\.devinId/.test(src), "webview switchOpen 缺 fresh");
+      });
+      test(tag + " 恢复按原 id 还原 (reopen 带 id·resume 带 t.id → 同号多页不合并)", () => {
+        assert.ok(/type:'reopen',id:s\.id\|\|''/.test(src), "restoreTabs 未带 id");
+        assert.ok(/const givenId = String\(opts\.id \|\| ''\)\.trim\(\)/.test(src), "resolve/open 未接受给定 id");
+        assert.ok(/openMultiInstance\(\{ id: t\.id,/.test(src), "_resumePersistedTabs 未带 id");
+      });
+      test(tag + " persistShell 账号页持久化含 id", () => {
+        assert.ok(/kind:'acc',id:id,email:mt\.email/.test(src), "persistShell 缺 id");
+      });
+      test(tag + " 网页存留: 全类标签带 act 活动位·恢复回到上次停留标签", () => {
+        assert.ok(/kind:'board',board:id\.slice\(6\),act:act/.test(src), "board 标签缺 act");
+        assert.ok(/kind:'web',url:wu,label:mw\.label\|\|wu,act:act/.test(src), "web 标签缺 act");
+        assert.ok(/function _tryRestoreActive\(\)/.test(src), "缺活动标签恢复");
+      });
+      test(tag + " IDE webview ready 亦还原板块/外站标签 (非仅账号页)", () => {
+        assert.ok(/dao\.shellTabs"\)\) \|\| \[\]\)\.filter\(\(s\) => s && \(s\.kind !== "acc" \|\| s\.act\)\)/.test(src), "webview ready 未还原 shellTabs");
+      });
+    }
+  }
+
   // ── 11b. devin_proxy · 磁盘二级缓存 L2 (v4.14.0 · 重载秒恢复 · 跨端口重定基) ──
   console.log("\n[devin_proxy._diskCache · L2]");
   {
