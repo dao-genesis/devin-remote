@@ -1759,6 +1759,29 @@ async function backupConversationsBundle(auth, sessList, outDir, opts) {
 }
 
 // 备份某账号全部对话 (增量) → <root>/<账号名>/
+// 非本人「自动化对话」判定 — 与手机 APK devin-cloud.js isAutoConv 同源(唯一真源):
+//   只认可靠结构化信号(onboarding/自动化标签·playbook·automation 字段·样板仓名),
+//   绝不用「动词起头/超短名」等标题启发式(否则本人英文对话被误判)。
+const DC_AUTO_REPO = /\b(blog-drafts|notes|dotfiles|code-snippets|utils-py|learn-cs)-\d+/i;
+const DC_AUTO_TAG = /^(auto|automation|automated|batch|scheduled|schedule|cron|bot|onboarding)\b|自动/i;
+function isAutoConv(x) {
+  try {
+    const s = (x && typeof x === "object") ? x : null;
+    const title = s ? String(s.title || s.name || s.prompt || s.devin_id || s.session_id || s.id || "") : String(x == null ? "" : x);
+    if (s) {
+      const tags = s.tags || s.session_tags || (s.session && s.session.tags) || [];
+      if (Array.isArray(tags)) for (let i = 0; i < tags.length; i++)
+        if (DC_AUTO_TAG.test(String(tags[i] && tags[i].name || tags[i]))) return true;
+      if (s.playbook_id || s.playbookId) return true;
+      if (s.is_automated === true || s.created_by_automation === true || s.origin === "automation" || s.trigger_type === "scheduled" || s.source === "automation") return true;
+    }
+    const t = title.trim();
+    if (!t) return false;
+    if (DC_AUTO_REPO.test(t)) return true;
+    return false;
+  } catch (e) { return false; }
+}
+
 async function backupAccount(auth, opts) {
   opts = opts || {};
   const root = opts.targetDir || DC_BACKUP_DEFAULT;
@@ -1766,10 +1789,12 @@ async function backupAccount(auth, opts) {
   const accountDir = resolveAccountDir(root, auth, opts);
   const r = await listSessions(auth, 1000);
   const sessions = r.sessions || [];
-  const result = { ok: true, account: auth.email, dir: accountDir, total: sessions.length, backedUp: 0, skipped: 0, failed: 0, items: [] };
+  const result = { ok: true, account: auth.email, dir: accountDir, total: sessions.length, backedUp: 0, skipped: 0, skippedAuto: 0, failed: 0, items: [] };
   for (let i = 0; i < sessions.length; i++) {
     prog("备份 " + (i + 1) + "/" + sessions.length + " ...");
     try {
+      // 自动化对话不进新备份, 只跳过不删 —— 历史备份数据一律不动(与手机 APK 同源)。
+      if (isAutoConv(sessions[i])) { result.skippedAuto++; result.skipped++; result.items.push({ devinId: sessions[i] && (sessions[i].session_id || sessions[i].id) || "", skipped: true, reason: "auto-conv" }); continue; }
       const one = await backupOneConversation(auth, sessions[i], accountDir, opts);
       result.items.push(one);
       one.skipped ? result.skipped++ : result.backedUp++;
@@ -2937,6 +2962,7 @@ module.exports = {
   authHeaders,
   // reads
   listSessions,
+  isAutoConv,
   getSessionDetail,
   getEventStream,
   fetchEventStreamDetailed,

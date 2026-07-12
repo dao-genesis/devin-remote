@@ -8058,18 +8058,28 @@ function bkConvRow(c,i,ci,showAcct){
   h+='<div id="'+cid+'" style="display:none;margin-top:4px"></div></div>';
   return h;
 }
-// 非本人「自动化对话」判定 — 与手机 APK cloud.html _isAutoConv 同源(保守·宁漏勿误):
-//   含中文一律判本人; 样板仓库名(blog-drafts-123 等)/超短名/英文动词起头的机器任务名 → 非本人自动化。
-//   仅用于「下沉/可隐藏」, 绝不删数据。
-var BK_AUTO_VERB=/^(review|improve|add|fix|update|refactor|implement|create|investigate|analy[sz]e|debug|optimi[sz]e|test|write|build|set ?up|configure|migrate|remove|delete|clean|security|enhance|document|resolve|merge|deploy|integrate|verify|check|explore|research|design|develop|generate|handle|support|enable|disable|rename|move|extract|inspect|audit|scan|repair|patch|port|sync|convert|validate|ensure|prepare|establish|continue|complete|finish|start|begin)\b/i;
-function bkIsAuto(title){
-  var t=String(title==null?'':title).trim();
-  if(!t)return false;
-  if(/[\u4e00-\u9fff]/.test(t))return false;
-  if(/(blog-drafts|notes|dotfiles|code-snippets|utils-py|learn-cs)-\d+/i.test(t))return true;
-  if(t.length<=3)return true;
-  if(BK_AUTO_VERB.test(t))return true;
-  return false;
+// 非本人「自动化对话」判定 — 与手机 APK devin-cloud.js isAutoConv 同源(唯一真源):
+//   只认可靠结构化信号(onboarding/自动化标签·playbook·automation 字段·样板仓名), 绝不用
+//   「动词起头/超短名」等标题启发式 —— 否则本人正常英文对话("Fix …"/"Integrate …")会被误判。
+//   接会话对象或标题字符串; 仅用于「下沉/可隐藏」, 绝不删数据。
+var BK_AUTO_REPO=/\b(blog-drafts|notes|dotfiles|code-snippets|utils-py|learn-cs)-\d+/i;
+var BK_AUTO_TAG=/^(auto|automation|automated|batch|scheduled|schedule|cron|bot|onboarding)\b|自动/i;
+function bkIsAuto(x){
+  try{
+    var s=(x&&typeof x==='object')?x:null;
+    var title=s?String(s.title||s.name||s.prompt||s.devinId||s.devin_id||s.session_id||s.id||''):String(x==null?'':x);
+    if(s){
+      var tags=s.tags||s.session_tags||(s.session&&s.session.tags)||[];
+      if(Array.isArray(tags))for(var i=0;i<tags.length;i++)
+        if(BK_AUTO_TAG.test(String(tags[i]&&tags[i].name||tags[i])))return true;
+      if(s.playbook_id||s.playbookId)return true;
+      if(s.is_automated===true||s.created_by_automation===true||s.origin==='automation'||s.trigger_type==='scheduled'||s.source==='automation')return true;
+    }
+    var t=title.trim();
+    if(!t)return false;
+    if(BK_AUTO_REPO.test(t))return true;
+    return false;
+  }catch(e){return false;}
 }
 // 实时条目行(尚无本地备份) — 与悬浮窗同源 dlRecent 数据; 可直接多实例进入官网对话。
 function bkLiveRow(li){
