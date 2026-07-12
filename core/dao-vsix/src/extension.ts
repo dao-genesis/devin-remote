@@ -7433,7 +7433,7 @@ const S={
     hostname:'${mpEsc(hostname)}'
   },
   bridge:${JSON.stringify(bridge || null)},
-  hostCaps:${JSON.stringify(hostCaps || { appName: 'VS Code', isCascade: false, hasConvTracking: false, cascadePlugin: false, cascadeEmail: '' })},
+  hostCaps:${JSON.stringify(hostCaps || { appName: 'VS Code', isCascade: false, hasConvTracking: false, cascadePlugin: false, cascadeEmail: '', fused: null })},
   inject:null,
   injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],automations:[],messageLimit:null,messageLimitAuto:true,messageLimitOffset:3,lastInjectedOrg:''},
   tab:'${_solo || 'overview'}',
@@ -7871,7 +7871,7 @@ function rBackupsData(tree,err){
   v.innerHTML=h;
 }
 // 帛书·「为而弗恃」: API Key 全程底层自动获取, 面板永不出现手动输入 — 旧 submitCogKey* 已删
-function rHost(){var hc=S.hostCaps||{};var nm=hc.appName||'VS Code';var ct=hc.hasConvTracking;var cp=hc.cascadePlugin;var cascadeOk=ct||cp;var srcLabel=cp&&!(nm.toLowerCase().indexOf('windsurf')>=0||nm.toLowerCase().indexOf('devin')>=0)?' (插件版 dao-desktop)':'';var h='<div class="st">运行环境 · 适配</div><div class="card"><div class="cr"><span class="l">IDE</span><span class="v">'+esc(nm)+esc(srcLabel)+'</span></div><div class="cr"><span class="l">Devin Cloud 全功能</span><span class="v" style="color:var(--success);font-size:10px">✓ 追踪·备份·切号反向注入·K/P/S/MCP·多实例</span></div><div class="cr"><span class="l">Cascade 对话追踪/备份</span><span class="v" style="font-size:10px;color:'+(cascadeOk?'var(--success)':'var(--warn)')+'">'+(cascadeOk?('✓ 可用'+(cp?' · 插件版':'')):'⚠ 此IDE非Cascade·其余全部正常')+'</span></div>'+(hc.cascadeEmail?'<div class="cr"><span class="l">Cascade 登录账号</span><span class="v" style="font-size:10px">'+esc(hc.cascadeEmail)+'</span></div>':'')+'</div>';return h}
+function rHost(){var hc=S.hostCaps||{};var nm=hc.appName||'VS Code';var ct=hc.hasConvTracking;var cp=hc.cascadePlugin;var cascadeOk=ct||cp;var srcLabel=cp&&!(nm.toLowerCase().indexOf('windsurf')>=0||nm.toLowerCase().indexOf('devin')>=0)?' (插件版 dao-desktop)':'';var h='<div class="st">运行环境 · 适配</div><div class="card"><div class="cr"><span class="l">IDE</span><span class="v">'+esc(nm)+esc(srcLabel)+'</span></div><div class="cr"><span class="l">Devin Cloud 全功能</span><span class="v" style="color:var(--success);font-size:10px">✓ 追踪·备份·切号反向注入·K/P/S/MCP·多实例</span></div><div class="cr"><span class="l">Cascade 对话追踪/备份</span><span class="v" style="font-size:10px;color:'+(cascadeOk?'var(--success)':'var(--warn)')+'">'+(cascadeOk?('✓ 可用'+(cp?' · 插件版':'')):'⚠ 此IDE非Cascade·其余全部正常')+'</span></div>'+(hc.cascadeEmail?'<div class="cr"><span class="l">Cascade 登录账号</span><span class="v" style="font-size:10px">'+esc(hc.cascadeEmail)+'</span></div>':'')+'</div>';var f=hc.fused||null;if(f&&(f.account||f.mcp||f.cascadeBackup)){var fa=f.account||{};var fm=(f.mcp&&f.mcp.servers)||null;var fb=f.cascadeBackup||null;var q=function(x){return (x===0||x)?(x+'%'):'—'};h+='<div class="st">Cascade · Devin Desktop 插件版(插件自持真源)</div><div class="card">'+(fa.email?'<div class="cr"><span class="l">账号</span><span class="v" style="font-size:10px">'+esc(fa.name||'')+(fa.name?' · ':'')+esc(fa.email)+'</span></div>':'')+(fa.plan?'<div class="cr"><span class="l">套餐</span><span class="v" style="font-size:10px">'+esc(fa.plan)+'</span></div>':'')+((fa.dailyQuotaPct!==undefined||fa.weeklyQuotaPct!==undefined)?'<div class="cr"><span class="l">配额(日/周)</span><span class="v" style="font-size:10px">'+q(fa.dailyQuotaPct)+' / '+q(fa.weeklyQuotaPct)+'</span></div>':'')+(fb?'<div class="cr"><span class="l">Cascade 对话备份</span><span class="v" style="font-size:10px;color:var(--success)">✓ 共 '+(fb.total||0)+' 条'+(fb.root?(' · '+esc(String(fb.root).split(/[\\\\/]/).slice(-2).join('/'))):'')+'</span></div>':'')+(fm?'<div class="cr"><span class="l">本地 MCP(插件版)</span><span class="v" style="font-size:10px">'+(fm.length?(fm.length+' 个 · '+fm.filter(function(s){return String(s.status||'').toUpperCase().indexOf('RUN')>=0}).length+' 运行中'):'无已配置')+'</span></div>':'')+(fa.updatedAt?'<div class="cr"><span class="l">更新于</span><span class="v" style="font-size:9px;color:var(--muted)">'+esc(String(fa.updatedAt).replace('T',' ').slice(0,19))+'</span></div>':'')+'</div>'}return h}
 function rO(){
   const v=document.getElementById('v-overview');
   if(!S.auth.loggedIn){
@@ -8528,7 +8528,19 @@ function toggleDaoCloudMiddlePanel(context: vscode.ExtensionContext) {
 
 // ⑤ 适配所有 VS Code — 探测宿主 IDE 能力: Devin Cloud 全功能处处可用;
 // Cascade/Windsurf 专属(对话追踪·自动备份)仅在能读到 Windsurf 凭证缓存时可用, 否则优雅降级。
-interface HostCaps { appName: string; isCascade: boolean; hasConvTracking: boolean; cascadePlugin: boolean; cascadeEmail: string; }
+interface CascadeFusedAccount { name?: string; email?: string; plan?: string; dailyQuotaPct?: number | null; weeklyQuotaPct?: number | null; flexCredits?: number | null; updatedAt?: string; }
+interface CascadeFusedMcp { servers?: { name: string; status?: string; disabled?: boolean; toolCount?: number }[]; updatedAt?: string; }
+interface CascadeFusedBackup { root?: string; saved?: number; total?: number; updatedAt?: string; }
+interface CascadeFused { account?: CascadeFusedAccount; mcp?: CascadeFusedMcp; cascadeBackup?: CascadeFusedBackup; }
+// 插件自持真源(底层换源): dao-desktop 插件版把自身账号/套餐/配额、MCP 实时态、Cascade 备份水位
+// 归一发布到 ~/.dao/windsurf-host.json 的 fused 字段 —— 不依赖宿主 IDE 任何数据, 插件即本源。
+function readCascadeFused(): CascadeFused | null {
+    try {
+        const j = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.dao', 'windsurf-host.json'), 'utf8'));
+        return (j && j.fused && typeof j.fused === 'object') ? (j.fused as CascadeFused) : null;
+    } catch { return null; }
+}
+interface HostCaps { appName: string; isCascade: boolean; hasConvTracking: boolean; cascadePlugin: boolean; cascadeEmail: string; fused: CascadeFused | null; }
 // 插件版 Cascade(dao-desktop): 官方 Devin Desktop 降为单一 VSIX 装进任意 VS Code 系 IDE。
 // 它在场时宏主 IDE 即使是纯 VS Code 也具备 Cascade 能力(同源 LS + ~/.codeium 目录)。
 function detectCascadePlugin(): boolean {
@@ -8545,9 +8557,11 @@ function detectHostCapabilities(): HostCaps {
     let hasConvTracking = false; let cascadeEmail = '';
     try { const c = readWindsurfCredentials(); hasConvTracking = !!c; cascadeEmail = (c && c.email) || ''; } catch { hasConvTracking = false; }
     const cascadePlugin = detectCascadePlugin();
+    const fused = readCascadeFused();
+    if (!cascadeEmail && fused && fused.account && fused.account.email) cascadeEmail = fused.account.email;
     const lname = appName.toLowerCase();
-    const isCascade = hasConvTracking || cascadePlugin || lname.includes('windsurf') || lname.includes('cascade') || lname.includes('devin');
-    return { appName: appName || 'VS Code', isCascade, hasConvTracking, cascadePlugin, cascadeEmail };
+    const isCascade = hasConvTracking || cascadePlugin || !!(fused && fused.account && fused.account.email) || lname.includes('windsurf') || lname.includes('cascade') || lname.includes('devin');
+    return { appName: appName || 'VS Code', isCascade, hasConvTracking, cascadePlugin, cascadeEmail, fused };
 }
 function getPanelState() {
     return {
@@ -13920,10 +13934,19 @@ async function daoReplyMcpTab(reply: (m: any) => void): Promise<void> {
         mkNote = '未登录 Devin Cloud · 仅列本机 IDE MCP';
     }
     const installedNames = new Set<string>(mkItems.filter((m) => m.installed).map((m) => String(m.name || '').toLowerCase()));
+    // 插件版 Cascade 实时 MCP 态(dao-desktop 经 LS GetMcpServerStates 发布) → 给 Devin Desktop
+    // 来源的本机 MCP 叠加「运行中/工具数」活状态 — 本地 MCP 不再只是静态配置扫描。
+    const fusedMcp = new Map<string, { status?: string; toolCount?: number; disabled?: boolean }>();
+    try {
+        const f = readCascadeFused();
+        for (const s of (f && f.mcp && f.mcp.servers) || []) fusedMcp.set(String(s.name || '').toLowerCase(), s);
+    } catch { /* 守柔 */ }
     const ide = ideRaw.map((e) => {
         const isInstalled = installedNames.has(e.name.toLowerCase());
         const tail = (e.transport === 'HTTP' ? e.url : (e.command + ' ' + (e.args || []).join(' '))).slice(0, 140);
-        const detail = '[' + e.source + (e.disabled ? ' · 已禁用' : '') + '] ' + tail;
+        const live = e.source === 'Devin Desktop' ? fusedMcp.get(e.name.toLowerCase()) : undefined;
+        const liveTag = live ? (' · ' + (String(live.status || '').toUpperCase().includes('RUN') ? '⚡运行中' : (live.status || '未运行')) + (live.toolCount ? (' · ' + live.toolCount + ' 工具') : '')) : '';
+        const detail = '[' + e.source + (e.disabled ? ' · 已禁用' : '') + liveTag + '] ' + tail;
         const mcpObj: any = {
             name: e.name, slug: e.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
             transport: e.transport, detail,
