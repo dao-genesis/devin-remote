@@ -134,4 +134,57 @@ ok(/d\.kind==='patCfg'/.test(src) && /d\.kind==='patCfgSaved'/.test(src),
 ok(/onclick="ghPatCfgOpen\(\)"/.test(src),
   "账号池区提供「⚙ PAT 通用配置」按钮");
 
+// 12) security 多 PAT 分布式注入(规避「只能注一枚 PAT」单点) — 显示各账号 PAT 状态·可多选注入·脱敏
+ok(/function _ghPatSecretName\(login: string\): string/.test(src) &&
+   /'GITHUB_PAT_' \+ String\(login \|\| ''\)\.toUpperCase\(\)/.test(src),
+  "_ghPatSecretName: 每账号一条 GITHUB_PAT_<LOGIN> 键名(多 PAT 分布式)");
+ok(/function _ghMaskPat\(pat: string\): string/.test(src) &&
+   /p\.slice\(0, 7\) \+ '…\(脱敏\)'/.test(src),
+  "_ghMaskPat: PAT 仅回脱敏前缀(明文永不出前端)");
+ok(/function daoGhPatStatus\(\)/.test(src) &&
+   /injectedCount:/.test(src) && /patPrefix:/.test(src) && /injected,/.test(src) && /primary: isPrimary/.test(src),
+  "daoGhPatStatus: 回各账号非密 PAT 状态(hasPat/injected/primary/脱敏前缀)");
+{
+  // daoGhPatStatus 只回脱敏元数据, 绝不回明文 PAT 值
+  const psBlock = src.split("function daoGhPatStatus")[1].split("async function daoGhInjectPats")[0];
+  ok(!/value:\s*pat\b/.test(psBlock) && !/pat:\s*pat\b/.test(psBlock),
+    "daoGhPatStatus: 返回体不含明文 PAT 值(只 patPrefix 脱敏)");
+}
+ok(/async function daoGhInjectPats\(logins: string\[\], primary: string, prune: boolean\)/.test(src),
+  "daoGhInjectPats: 多选账号 → 逐条注入 security(可指定主 PAT·可 prune)");
+ok(/prof\.secrets\.push\(\{ name, value: pat \}\)/.test(src) &&
+   /wantSecretNames\.add\(name\)/.test(src),
+  "daoGhInjectPats: 每选中账号各写一条 GITHUB_PAT_<LOGIN> 密钥");
+ok(/if \(!pat\) \{ skipped\.push\(\{ login: lg, reason: '无 PAT/.test(src),
+  "daoGhInjectPats: 无 PAT 账号被跳过并回原因(不冒名·不回退活动号)");
+ok(/const allPer = new Set\(fleet\.map\(a => _ghPatSecretName\(a\.login\)\)\);/.test(src) &&
+   /prof\.secrets = prof\.secrets\.filter\(s => !\(allPer\.has\(s\.name\) && !wantSecretNames\.has\(s\.name\)\)\)/.test(src),
+  "daoGhInjectPats: prune 只清未选中账号遗留的 GITHUB_PAT_* (不动主 GITHUB_PAT/非本机制密钥)");
+ok(/const exP = prof\.secrets\.find\(s => s\.name === DAO_PAT_SECRET_NAME\)/.test(src) &&
+   /gm\.headers = \{ \.\.\.\(gm\.headers \|\| \{\}\), Authorization: 'Bearer ' \+ patNorm \}/.test(src.split("async function daoGhInjectPats")[1].split("// 一键拷贝")[0]),
+  "daoGhInjectPats: 主 PAT 写 GITHUB_PAT + 同步钉 GitHub MCP(Bearer)");
+for (const c of ["daoGhPatStatus", "daoGhInjectPats"]) {
+  ok(new RegExp("case '" + c + "':").test(src), "消息处理: case '" + c + "'");
+}
+ok(/未选择任何账号/.test(src),
+  "daoGhInjectPats 处理: 空选拒绝注入");
+ok(/function ghRenderPatInject\(\)/.test(src) &&
+   /id="ghPatInjectList"/.test(src),
+  "前端 ghRenderPatInject: 多 PAT 可多选注入清单渲染");
+ok(/function ghPatSelToggle\(/.test(src) && /function ghPatInjectAll\(/.test(src) &&
+   /function ghPatSetPrimary\(/.test(src) && /function ghPatInjectSel\(/.test(src),
+  "前端 ghPatSelToggle/ghPatInjectAll/ghPatSetPrimary/ghPatInjectSel: 多选+主 PAT 交互");
+ok(/cmd\('daoGhInjectPats',\{logins:logins,primary:st\.patPrimary\|\|'',prune:true\}\)/.test(src),
+  "ghPatInjectSel: 提交所选 logins + 主 PAT 给后端");
+ok(/d\.kind==='patStatus'/.test(src) && /d\.kind==='injectPats'/.test(src),
+  "前端 ghOnResult 处理 patStatus / injectPats 回包");
+ok(/onclick="ghPatInjectSel\(\)"/.test(src) && /注入所选到 security/.test(src),
+  "多 PAT 区提供「💉 注入所选到 security」按钮");
+{
+  // 前端渲染函数不得把 PAT 明文写入 DOM — 只用 patPrefix(脱敏)
+  const riBlock = src.split("function ghRenderPatInject")[1].split("// ④ 仅 GitHub MCP")[0];
+  ok(/a\.patPrefix/.test(riBlock) && !/a\.pat\b/.test(riBlock),
+    "ghRenderPatInject: 只渲染脱敏 patPrefix, 不触碰明文 a.pat");
+}
+
 console.log("[gh-fleet] " + pass + " assertion(s) passed\n");

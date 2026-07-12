@@ -5777,6 +5777,77 @@ async function daoGhSetActive(login: string): Promise<{ ok: boolean; login: stri
     saveInjectProfile(prof);
     return { ok: true, login };
 }
+// ── security 多 PAT 分布式注入 ─────────────────────────────────────────────
+// 搞多个 GitHub 账号即为「多 PAT 反向注入」做分布式管理, 彻底规避「只能注一个 PAT」的单点风险。
+// 命名: 主 PAT 仍写 GITHUB_PAT(兼容 MCP/组织统管); 每个选中账号各写一条 GITHUB_PAT_<LOGIN>。
+// 铁律: 只存/回**非密元数据**(login/角色/脱敏前缀/是否已注), UI/日志永不出明文 PAT; 绝不冒名回退活动号。
+function _ghPatSecretName(login: string): string {
+    return 'GITHUB_PAT_' + String(login || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+function _ghMaskPat(pat: string): string {
+    const p = String(pat || '').trim();
+    return p ? (p.slice(0, 7) + '…(脱敏)') : '';
+}
+// 各账号 PAT 状态(非密): 供 security/GitHub 板块渲染「可多选注入」清单。
+function daoGhPatStatus(): { ok: boolean; primary: string; injectedCount: number; total: number; accounts: { login: string; role: string; hasPat: boolean; hasCred: boolean; pending: boolean; patPrefix: string; injected: boolean; primary: boolean; secretName: string }[] } {
+    const prof = loadInjectProfile();
+    const fleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
+    const primaryVal = String((prof.secrets.find(s => s.name === DAO_PAT_SECRET_NAME) || { value: '' }).value || '').trim();
+    const accounts = fleet.map(a => {
+        const pat = String(a.pat || '').trim();
+        const secretName = _ghPatSecretName(a.login);
+        const perVal = String((prof.secrets.find(s => s.name === secretName) || { value: '' }).value || '').trim();
+        const isPrimary = !!pat && !!primaryVal && pat === primaryVal;
+        const injected = (!!pat && perVal === pat) || isPrimary;
+        return { login: a.login, role: a.role || 'member', hasPat: !!pat, hasCred: !!(a.cred && a.cred.user), pending: (a as any).verify === 'pending', patPrefix: _ghMaskPat(pat), injected, primary: isPrimary, secretName };
+    });
+    return { ok: true, primary: (accounts.find(a => a.primary) || { login: '' }).login, injectedCount: accounts.filter(a => a.injected).length, total: accounts.length, accounts };
+}
+// 多选注入: 把选中账号的 PAT 逐条写入 security(GITHUB_PAT_<LOGIN>) + 主 PAT(GITHUB_PAT=primary) + 钉 GitHub MCP。
+// prune=true 清掉未选中账号遗留的 GITHUB_PAT_* 条目(安全合并·分布式管理), 不动主 GITHUB_PAT 与非本机制密钥。
+async function daoGhInjectPats(logins: string[], primary: string, prune: boolean): Promise<{ ok: boolean; okCount: number; total: number; injected: string[]; skipped: { login: string; reason: string }[]; primary: string }> {
+    const prof = loadInjectProfile();
+    if (!Array.isArray(prof.secrets)) prof.secrets = [];
+    const fleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
+    const want = (logins || []).map(s => String(s || '').trim()).filter(Boolean);
+    const injected: string[] = [];
+    const skipped: { login: string; reason: string }[] = [];
+    const wantSecretNames = new Set<string>();
+    for (const lg of want) {
+        const a = fleet.find(x => x.login.toLowerCase() === lg.toLowerCase());
+        if (!a) { skipped.push({ login: lg, reason: '不在账号池' }); continue; }
+        const pat = String(a.pat || '').trim();
+        if (!pat) { skipped.push({ login: lg, reason: '无 PAT(先建 PAT)' }); continue; }
+        const name = _ghPatSecretName(a.login);
+        const ex = prof.secrets.find(s => s.name === name);
+        if (ex) ex.value = pat; else prof.secrets.push({ name, value: pat });
+        wantSecretNames.add(name);
+        injected.push(a.login);
+    }
+    // 主 PAT: 显式 primary(须在已注列表) → 否则第一个已注 → 否则不动原值。
+    let primaryLogin = String(primary || '').trim();
+    if (!primaryLogin || injected.map(s => s.toLowerCase()).indexOf(primaryLogin.toLowerCase()) < 0) primaryLogin = injected[0] || '';
+    if (primaryLogin) {
+        const pa = fleet.find(x => x.login.toLowerCase() === primaryLogin.toLowerCase());
+        const ppat = pa ? String(pa.pat || '').trim() : '';
+        if (ppat) {
+            const exP = prof.secrets.find(s => s.name === DAO_PAT_SECRET_NAME);
+            if (exP) exP.value = ppat; else prof.secrets.push({ name: DAO_PAT_SECRET_NAME, value: ppat });
+            if (!Array.isArray(prof.mcps)) prof.mcps = [];
+            const patNorm = ppat.replace(/^(Bearer\s+)+/i, '');
+            const gm = prof.mcps.find((m: any) => /github/i.test(m.name || ''));
+            if (gm) { gm.transport = 'HTTP'; gm.url = gm.url || 'https://api.githubcopilot.com/mcp/'; gm.headers = { ...(gm.headers || {}), Authorization: 'Bearer ' + patNorm }; }
+            else prof.mcps.push({ name: 'GitHub MCP', transport: 'HTTP', url: 'https://api.githubcopilot.com/mcp/', headers: { Authorization: 'Bearer ' + patNorm }, short_description: 'GitHub official remote MCP' });
+        }
+    }
+    if (prune) {
+        const allPer = new Set(fleet.map(a => _ghPatSecretName(a.login)));
+        prof.secrets = prof.secrets.filter(s => !(allPer.has(s.name) && !wantSecretNames.has(s.name)));
+    }
+    saveInjectProfile(prof);
+    const r = await daoBatchInjectAllAccounts();
+    return { ok: injected.length > 0 && r.ok, okCount: r.okCount, total: r.total, injected, skipped, primary: primaryLogin };
+}
 // 一键拷贝(fork)仓库进组织: POST /repos/{o}/{r}/forks {organization} — 原仓库保留。
 async function daoGhForkRepos(pat: string, org: string, repos: string[]): Promise<{ ok: boolean; org: string; results: { repo: string; ok: boolean; error?: string }[] }> {
     const results: { repo: string; ok: boolean; error?: string }[] = [];
@@ -8341,6 +8412,30 @@ function ghRenderGhFleet(){var st=_ghState();var v=document.getElementById('ghGh
   h+='<div id="gh-ad-'+sid+'" style="font-size:11px;line-height:1.6;margin-top:4px"></div>';
   h+='</div>';
 });v.innerHTML=h;}
+// security 多 PAT 分布式注入清单渲染(非密·脱敏)
+function ghRenderPatInject(){var st=_ghState();var v=document.getElementById('ghPatInjectList');if(!v)return;var ps=st.patStatus;if(!ps||!ps.accounts){v.innerHTML='<p style="font-size:11px;color:var(--muted);margin:4px 0">（点「⟳ 刷新状态」载入各账号 PAT 状态）</p>';return}
+  var accts=ps.accounts||[];if(!accts.length){v.innerHTML='<p style="font-size:11px;color:var(--muted);margin:4px 0">（账号池为空）</p>';return}
+  var sel=st.patSel||{};var h='';
+  accts.forEach(function(a){
+    var lg=esc(a.login);var sid=ghSafe(a.login);
+    var can=a.hasPat;
+    var st2=a.injected?'<span style="color:var(--success)" title="已注入 security">✓ 已注入</span>':(a.hasPat?'<span style="color:var(--warn)">待注入</span>':'<span style="color:var(--muted)">无 PAT</span>');
+    if(a.primary)st2+=' · <span style="color:var(--success)" title="当前主 PAT(GITHUB_PAT/绑 MCP)">◆ 主</span>';
+    if(a.pending)st2+=' · <span style="color:var(--warn)">⏳待验证</span>';
+    var checked=(can&&sel[a.login])?' checked':'';
+    var pre=a.patPrefix?('<code style="font-size:10px">'+esc(a.patPrefix)+'</code>'):'<span style="color:var(--muted);font-size:10px">—</span>';
+    h+='<div class="cr" style="padding:3px 0">';
+    h+='<span class="l" style="font-size:12px"><label style="cursor:pointer"><input type="checkbox" data-ghpat="'+lg+'"'+checked+(can?'':' disabled')+' onchange="ghPatSelToggle(&#39;'+lg+'&#39;,this.checked)"> <b>'+lg+'</b></label> '+pre+'</span>';
+    h+='<span class="v" style="font-size:11px">'+st2+(can?(' <button class="btn sm" onclick="ghPatSetPrimary(&#39;'+lg+'&#39;)" title="设为主 PAT(注入时写 GITHUB_PAT + 绑 MCP)">'+(st.patPrimary===a.login?'◉主':'○设主')+'</button>'):'')+'</span>';
+    h+='</div>';
+  });
+  var ic=(ps.injectedCount||0);
+  h+='<p style="font-size:10px;color:var(--muted);margin:4px 0 0">已注入 '+ic+'/'+(ps.total||0)+' · 主 PAT: '+esc(st.patPrimary||ps.primary||'(未定·取所选第一枚)')+'</p>';
+  v.innerHTML=h;}
+function ghPatSelToggle(login,on){var st=_ghState();st.patSel=st.patSel||{};if(on)st.patSel[login]=true;else delete st.patSel[login];}
+function ghPatSetPrimary(login){var st=_ghState();st.patPrimary=login;st.patSel=st.patSel||{};st.patSel[login]=true;ghRenderPatInject();}
+function ghPatInjectAll(on){var st=_ghState();var ps=st.patStatus;if(!ps||!ps.accounts)return;st.patSel={};if(on)ps.accounts.forEach(function(a){if(a.hasPat)st.patSel[a.login]=true});ghRenderPatInject();}
+function ghPatInjectSel(){var st=_ghState();var sel=st.patSel||{};var logins=Object.keys(sel).filter(function(k){return sel[k]});if(!logins.length){toast('先勾选至少一个有 PAT 的账号',false);return}ghMsg('ghPatInjectOut','⏳ 多 PAT 分布式注入中('+logins.length+' 枚)…');cmd('daoGhInjectPats',{logins:logins,primary:st.patPrimary||'',prune:true})}
 // ④ 仅 GitHub MCP 一条(非整个 MCP 板块镜像) · 与 MCP 板块双端同源(同一条 injectProfile.mcps 条目)
 function ghBearerNorm(v){return String(v||'').replace(/^(Bearer\s+)+/i,'')}
 function ghMcpEntry(){try{var ms=(S.injectProfile&&S.injectProfile.mcps)||[];return ms.filter(function(m){return /github/i.test(m.name||'')})[0]||null}catch(e){return null}}
@@ -8409,6 +8504,11 @@ function ghOnResult(d){
     if(d.ok){ghMsg('ghInjectOut','<span style="color:var(--success)">✓ GITHUB_PAT 已存入注入清单(security)+钉住 GitHub MCP · 已同步 '+(d.okCount||0)+'/'+(d.total||0)+' 账号</span>');cmd('getInjectProfile')}
     else ghMsg('ghInjectOut','<span style="color:var(--danger)">✗ '+esc(d.error||'注入失败')+'</span>');
   }
+  else if(d.kind==='patStatus'){st.patStatus=d;if(!st.patPrimary&&d.primary)st.patPrimary=d.primary;ghRenderPatInject();}
+  else if(d.kind==='injectPats'){
+    if(d.ok){var inj=(d.injected||[]);var sk=(d.skipped||[]);ghMsg('ghPatInjectOut','<span style="color:var(--success)">✓ 多 PAT 分布式注入: '+inj.length+' 枚 → 已同步 '+(d.okCount||0)+'/'+(d.total||0)+' 账号 · 主 PAT: '+esc(d.primary||'')+'</span>'+(inj.length?'<br>注入: '+inj.map(function(x){return esc(x)}).join(', '):'')+(sk.length?('<br><span style="color:var(--warn)">跳过: '+sk.map(function(x){return esc(x.login)+'('+esc(x.reason)+')'}).join(', ')+'</span>'):''));cmd('getInjectProfile');cmd('daoGhPatStatus',{})}
+    else ghMsg('ghPatInjectOut','<span style="color:var(--danger)">✗ '+esc(d.error||'注入失败')+'</span>');
+  }
 }
 // v4.20 · GitHub 板块大改 — 账号中心模型(对齐 Devin 切号: 添号 + 账号管理), 左右分栏网格布局。
 //   不再要「主账号凭证」: 账号池里任一账号「设为本体」即以其 PAT 充当 admin(GITHUB_PAT)。
@@ -8461,6 +8561,12 @@ function rGitHub(){
   h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 6px">每个账号可「详情」下拉看数据(login/名字/scopes/组织)、「仓库」列当前仓库、「建 PAT」按<b>账号池通用配置</b>(下方⚙)在该号隔离档跳官网预勾 scope/有效期、「设为本体」以其 PAT 统管组织。首个默认管理者, 封号即删换新。</p>';
   h+='<div class="br" style="margin:2px 0 6px"><button class="btn sm" onclick="ghPatCfgOpen()" title="配置账号池通用建 PAT 参数(scope 权限 + 有效期)·各账号点「建 PAT」即按此在隔离档预勾/预选">⚙ PAT 通用配置</button></div>';
   h+='<div id="ghGhFleetList"></div></div>';
+  // ②· security 多 PAT 分布式注入
+  h+='<div class="st">🔐 多 PAT 分布式注入 (security)</div><div class="card">';
+  h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 6px">勾选多个账号, 把各自 PAT <b>同时</b>反向注入 security(每号一条 <code>GITHUB_PAT_&lt;LOGIN&gt;</code> + 主号写 <code>GITHUB_PAT</code>)——分布式管理, 彻底规避「只能注一枚 PAT」的单点。选「主」的 PAT 兼容 GitHub MCP/组织统管。PAT 明文只在后端, 此处仅显脱敏前缀与状态。</p>';
+  h+='<div class="br" style="margin:2px 0 6px"><button class="btn sm" onclick="ghPatInjectAll(true)" title="全选所有有 PAT 的账号">全选有PAT</button><button class="btn sm" onclick="ghPatInjectAll(false)">清空</button><button class="btn sm primary" onclick="ghPatInjectSel()" title="把勾选账号的 PAT 一并反向注入 security(多 PAT 分布式)">💉 注入所选到 security</button><button class="btn sm ghost" onclick="cmd(&#39;daoGhPatStatus&#39;,{})">⟳ 刷新状态</button></div>';
+  h+='<div id="ghPatInjectList"></div>';
+  h+='<div id="ghPatInjectOut" style="font-size:11px;line-height:1.6;margin-top:4px"></div></div>';
   h+='</div>'; // /左栏
   // ═══ 右栏: 组织管理 + GitHub MCP ═══
   h+='<div>';
@@ -8487,7 +8593,7 @@ function rGitHub(){
   h+='</div>'; // /右栏
   h+='</div>'; // /grid
   v.innerHTML=h;
-  ghRenderGhFleet();ghRenderMcpOne();cmd('daoGhFleetList',{});cmd('daoGhGetPatCfg',{});
+  ghRenderGhFleet();ghRenderPatInject();ghRenderMcpOne();cmd('daoGhFleetList',{});cmd('daoGhGetPatCfg',{});cmd('daoGhPatStatus',{});
 }
 // 添号模式切换
 function ghAddMode(m){var st=_ghState();st.addMode=m;rGitHub()}
@@ -9474,6 +9580,22 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     const r = await daoBatchInjectAllAccounts();
                     vscode.window.showInformationMessage('GITHUB_PAT 注入完成: ' + r.okCount + '/' + r.total + ' 账号');
                     reply({ type: 'daoGhResult', kind: 'injectPat', ok: r.ok, okCount: r.okCount, total: r.total });
+                });
+                break;
+            }
+            case 'daoGhPatStatus': {
+                // 各账号 PAT 状态(非密) — 供 security 多选注入清单渲染。
+                reply({ type: 'daoGhResult', kind: 'patStatus', ...daoGhPatStatus() });
+                break;
+            }
+            case 'daoGhInjectPats': {
+                // 多 PAT 分布式注入: 选中账号 PAT 逐条注入 security(GITHUB_PAT_<LOGIN>) + 主 PAT + 钉 MCP。
+                const wantLogins = Array.isArray(msg.logins) ? msg.logins.map((s: any) => String(s || '')) : [];
+                if (!wantLogins.length) { reply({ type: 'daoGhResult', kind: 'injectPats', ok: false, error: '未选择任何账号' }); break; }
+                await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '多 PAT 分布式注入到所有账号…' }, async () => {
+                    const r = await daoGhInjectPats(wantLogins, String(msg.primary || ''), msg.prune !== false);
+                    vscode.window.showInformationMessage('多 PAT 注入: ' + r.injected.length + ' 枚 PAT → ' + r.okCount + '/' + r.total + ' 账号');
+                    reply({ type: 'daoGhResult', kind: 'injectPats', ...r });
                 });
                 break;
             }
