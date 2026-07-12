@@ -2098,9 +2098,21 @@ async function shellHandleMessage(sid, m) {
         return;
       }
       case 'openCloudPage': {
-        const email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || '');
+        // path 显式带 dao_acct=<email> → 钉该号(多实例指定号直开), 不回退活动号(串号病灶);
+        //   并从 path 剥除该参(下游 _shellResolveOpen 会按 email 重拼, 防双 dao_acct)。
+        let path = String(m.path || '');
+        let email = '';
+        try {
+          const mm = /[?&]dao_acct=([^&]+)/.exec(path);
+          if (mm) {
+            email = decodeURIComponent(mm[1]).trim().toLowerCase();
+            path = path.replace(/[?&]dao_acct=[^&]*/g, '');
+            if (path.indexOf('?') < 0) path = path.replace('&', '?');
+          }
+        } catch (e) {}
+        if (!email) email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || '');
         if (!email) { _toast('无可用账号'); return; }
-        const open = await _shellResolveOpen({ email, path: m.path, label: m.label });
+        const open = await _shellResolveOpen({ email, path, label: m.label });
         if (open) send(open);
         return;
       }
