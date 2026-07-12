@@ -7433,7 +7433,7 @@ const S={
     hostname:'${mpEsc(hostname)}'
   },
   bridge:${JSON.stringify(bridge || null)},
-  hostCaps:${JSON.stringify(hostCaps || { appName: 'VS Code', isCascade: false, hasConvTracking: false })},
+  hostCaps:${JSON.stringify(hostCaps || { appName: 'VS Code', isCascade: false, hasConvTracking: false, cascadePlugin: false, cascadeEmail: '' })},
   inject:null,
   injectProfile:{enabled:false,autoCleanup:true,secrets:[],knowledge:[],playbooks:[],mcps:[],automations:[],messageLimit:null,messageLimitAuto:true,messageLimitOffset:3,lastInjectedOrg:''},
   tab:'${_solo || 'overview'}',
@@ -7871,7 +7871,7 @@ function rBackupsData(tree,err){
   v.innerHTML=h;
 }
 // 帛书·「为而弗恃」: API Key 全程底层自动获取, 面板永不出现手动输入 — 旧 submitCogKey* 已删
-function rHost(){var hc=S.hostCaps||{};var nm=hc.appName||'VS Code';var ct=hc.hasConvTracking;return '<div class="st">运行环境 · 适配</div><div class="card"><div class="cr"><span class="l">IDE</span><span class="v">'+esc(nm)+'</span></div><div class="cr"><span class="l">Devin Cloud 全功能</span><span class="v" style="color:var(--success);font-size:10px">✓ 追踪·备份·切号反向注入·K/P/S/MCP·多实例</span></div><div class="cr"><span class="l">Cascade 对话追踪/备份</span><span class="v" style="font-size:10px;color:'+(ct?'var(--success)':'var(--warn)')+'">'+(ct?'✓ 可用':'⚠ 此IDE非Cascade·其余全部正常')+'</span></div></div>'}
+function rHost(){var hc=S.hostCaps||{};var nm=hc.appName||'VS Code';var ct=hc.hasConvTracking;var cp=hc.cascadePlugin;var cascadeOk=ct||cp;var srcLabel=cp&&!(nm.toLowerCase().indexOf('windsurf')>=0||nm.toLowerCase().indexOf('devin')>=0)?' (插件版 dao-desktop)':'';var h='<div class="st">运行环境 · 适配</div><div class="card"><div class="cr"><span class="l">IDE</span><span class="v">'+esc(nm)+esc(srcLabel)+'</span></div><div class="cr"><span class="l">Devin Cloud 全功能</span><span class="v" style="color:var(--success);font-size:10px">✓ 追踪·备份·切号反向注入·K/P/S/MCP·多实例</span></div><div class="cr"><span class="l">Cascade 对话追踪/备份</span><span class="v" style="font-size:10px;color:'+(cascadeOk?'var(--success)':'var(--warn)')+'">'+(cascadeOk?('✓ 可用'+(cp?' · 插件版':'')):'⚠ 此IDE非Cascade·其余全部正常')+'</span></div>'+(hc.cascadeEmail?'<div class="cr"><span class="l">Cascade 登录账号</span><span class="v" style="font-size:10px">'+esc(hc.cascadeEmail)+'</span></div>':'')+'</div>';return h}
 function rO(){
   const v=document.getElementById('v-overview');
   if(!S.auth.loggedIn){
@@ -8528,15 +8528,26 @@ function toggleDaoCloudMiddlePanel(context: vscode.ExtensionContext) {
 
 // ⑤ 适配所有 VS Code — 探测宿主 IDE 能力: Devin Cloud 全功能处处可用;
 // Cascade/Windsurf 专属(对话追踪·自动备份)仅在能读到 Windsurf 凭证缓存时可用, 否则优雅降级。
-interface HostCaps { appName: string; isCascade: boolean; hasConvTracking: boolean; }
+interface HostCaps { appName: string; isCascade: boolean; hasConvTracking: boolean; cascadePlugin: boolean; cascadeEmail: string; }
+// 插件版 Cascade(dao-desktop): 官方 Devin Desktop 降为单一 VSIX 装进任意 VS Code 系 IDE。
+// 它在场时宏主 IDE 即使是纯 VS Code 也具备 Cascade 能力(同源 LS + ~/.codeium 目录)。
+function detectCascadePlugin(): boolean {
+    try {
+        if (vscode.extensions.getExtension('dao-agi.dao-desktop')) return true;
+        // dao-one 归一版内折 vendor-desktop 时以全局标记上报(同一扩展内无法 getExtension 自识子引擎)
+        if ((globalThis as any).__daoCascadeEngine) return true;
+    } catch { /* 守柔 */ }
+    return false;
+}
 function detectHostCapabilities(): HostCaps {
     let appName = '';
     try { appName = vscode.env.appName || ''; } catch { /* 守柔 */ }
-    let hasConvTracking = false;
-    try { hasConvTracking = !!readWindsurfCredentials(); } catch { hasConvTracking = false; }
+    let hasConvTracking = false; let cascadeEmail = '';
+    try { const c = readWindsurfCredentials(); hasConvTracking = !!c; cascadeEmail = (c && c.email) || ''; } catch { hasConvTracking = false; }
+    const cascadePlugin = detectCascadePlugin();
     const lname = appName.toLowerCase();
-    const isCascade = hasConvTracking || lname.includes('windsurf') || lname.includes('cascade') || lname.includes('devin');
-    return { appName: appName || 'VS Code', isCascade, hasConvTracking };
+    const isCascade = hasConvTracking || cascadePlugin || lname.includes('windsurf') || lname.includes('cascade') || lname.includes('devin');
+    return { appName: appName || 'VS Code', isCascade, hasConvTracking, cascadePlugin, cascadeEmail };
 }
 function getPanelState() {
     return {
@@ -12157,6 +12168,11 @@ function readWindsurfCredentials(forceRefresh?: boolean): WindsurfCredentials | 
     const vscdbPaths = [
         path.join(os.homedir(), 'AppData', 'Roaming', 'Devin', 'User', 'globalStorage', 'state.vscdb'),
         path.join(os.homedir(), 'AppData', 'Roaming', 'Windsurf', 'User', 'globalStorage', 'state.vscdb'),
+        // Linux / macOS (Devin Desktop 官方 IDE 与 dao-desktop 插件版同源)
+        path.join(os.homedir(), '.config', 'Devin', 'User', 'globalStorage', 'state.vscdb'),
+        path.join(os.homedir(), '.config', 'Windsurf', 'User', 'globalStorage', 'state.vscdb'),
+        path.join(os.homedir(), 'Library', 'Application Support', 'Devin', 'User', 'globalStorage', 'state.vscdb'),
+        path.join(os.homedir(), 'Library', 'Application Support', 'Windsurf', 'User', 'globalStorage', 'state.vscdb'),
     ];
     for (const dbPath of vscdbPaths) {
         try {
@@ -12211,6 +12227,29 @@ except: pass`;
                 }
             }
         } catch {}
+    }
+
+    // 路径0.5: credentials.toml — 官方 `devin auth login` / dao-desktop 插件版登录态真源
+    // (windsurf_api_key 与官方 language server 鉴权同一把钥匙; Linux/macOS 主路径)
+    const tomlPaths = [
+        path.join(os.homedir(), '.local', 'share', 'devin', 'credentials.toml'),
+        path.join(os.homedir(), '.local', 'share', 'windsurf', 'credentials.toml'),
+        path.join(os.homedir(), 'Library', 'Application Support', 'devin', 'credentials.toml'),
+        path.join(os.homedir(), 'AppData', 'Roaming', 'devin', 'credentials.toml'),
+    ];
+    for (const tp of tomlPaths) {
+        try {
+            if (!fs.existsSync(tp)) continue;
+            const t = fs.readFileSync(tp, 'utf8');
+            const km = t.match(/windsurf_api_key\s*=\s*"([^"]+)"/);
+            const em = t.match(/email\s*=\s*"([^"]+)"/);
+            if (km && km[1]) {
+                const creds: WindsurfCredentials = { apiKey: km[1], email: (em && em[1]) || '', source: 'credentials.toml' };
+                cachedVscdbCreds = creds;
+                vscdbCredsReadAt = Date.now();
+                return creds;
+            }
+        } catch { /* 守柔 */ }
     }
 
     // 路径1: cascade-auth.json 等全局存储文件
@@ -13500,6 +13539,9 @@ function daoHostIdeKey(): string {
     try { n = (vscode.env.appName || '').toLowerCase(); } catch { /* 守柔 */ }
     try { root = (process.execPath || '').toLowerCase(); } catch { /* 守柔 */ }
     const hay = n + ' ' + root;
+    // 插件版 Cascade(dao-desktop) 在场: 它用 Devin Desktop 同源 MCP 配置(~/.codeium/windsurf/mcp_config.json),
+    // 故当前 IDE 的 MCP 来源应聚焦 Devin Desktop 配置 — 插件版与官方版统一管理同一份。
+    try { if (detectCascadePlugin()) return 'devin'; } catch { /* 守柔 */ }
     if (hay.includes('devin')) return 'devin';
     if (hay.includes('windsurf') || hay.includes('codeium') || hay.includes('cascade')) return 'windsurf';
     if (hay.includes('cursor')) return 'cursor';

@@ -3,6 +3,7 @@ vendor-vsix/
 vendor-proxy/
 vendor-flow/
 vendor-bridge/
+vendor-desktop/
 node_modules/
 *.vsix
 out/
