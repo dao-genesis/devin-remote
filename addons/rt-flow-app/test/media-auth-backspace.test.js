@@ -31,7 +31,7 @@ ok(/mintAttachmentCookie\(auth1, orgId\)\) c = fetchAttachment/.test(main), "401
 ok(/lk\.equals\("cookie"\)/.test(main), "Cookie 不盲转发 (30x 后不外泄给对象存储)");
 ok(/warmAttachmentCookie\(tab\.auth1, tab\.orgId, u\)/.test(main), "onPageFinished/SPA 路由预铸附件 Cookie");
 ok(/equalsIgnoreCase\("Authorization"\)\) return null/.test(main), "已带鉴权的请求(fetch/XHR)不重复代取");
-ok(/"app\.devin\.ai"\.equalsIgnoreCase\(new java\.net\.URL\(url\)\.getHost\(\)\)/.test(main), "凭据只发 app.devin.ai (30x 后不外泄 token)");
+ok(/String host = new java\.net\.URL\(url\)\.getHost\(\);/.test(main) && /"app\.devin\.ai"\.equalsIgnoreCase\(host\)/.test(main), "凭据只发 app.devin.ai (30x 后不外泄 token)");
 ok(/setInstanceFollowRedirects\(false\)/.test(main), "30x 手动跟随");
 ok(/setStatusCodeAndReasonPhrase\(code, reason\)/.test(main), "状态码原样回灌 (含 206 Range)");
 ok(/lk\.equals\("accept-encoding"\)/.test(main), "Accept-Encoding 不转发 (交由透明 gzip)");

@@ -250,9 +250,10 @@ body{font:12px/1.5 -apple-system,'Segoe UI',sans-serif;background:var(--bg);colo
 <button onclick="dvWipeSel()" class="conv-btn conv-btn-s" title="水过无痕·清理已选账号的全部 Devin Cloud 痕迹">&#127754; 批量清理</button>
 <label class="auto-lbl" title="开启后定时自动增量备份运行/更新过的对话"><input type="checkbox" id="dvAutoBk" onchange="dvToggleAuto(this.checked)">自动备份</label>
 <label class="auto-lbl" title="默认开·省移动数据: 高消耗的自动备份/自动清理前置备份仅在 WiFi/不计费网络进行。关闭则蜂窝数据下也自动备份。手动备份/下载/拉取始终不受限"><input type="checkbox" id="dvBkWifiOnly" onchange="dvToggleBkWifiOnly(this.checked)">仅WiFi自动备份</label>
-<label class="auto-lbl" title="备份完成且额度低于阈值时自动清理 低额且24h未更新 的对话(账号始终保留在库)"><input type="checkbox" id="dvAutoClean" onchange="dvToggleCleanup(this.checked)">自动清理</label>
-<label class="auto-lbl" title="默认关闭: 额度归零的账号备份后自动移出账号库。关闭时归零账号也始终保留在库, 仅由用户手动移除">&#9888;<input type="checkbox" id="dvAutoRemove" onchange="dvToggleAutoRemove(this.checked)">归零移出库</label>
-<button onclick="dvRunAutoCleanNow()" class="conv-btn conv-btn-s" title="立即执行自动清理全流程: 刷额度→预览低额空闲账号→全量备份→清理 低额且24h未更新 的对话 (账号保留在库; 仅当勾选\u0027归零移出库\u0027时才移出归零账号)">&#9889; 立即清理</button>
+<label class="auto-lbl" title="备份完成且额度低于阈值时自动清理 低额且超过无活跃窗口未更新 的对话(账号始终保留在库; 窗口默认72小时·可调)"><input type="checkbox" id="dvAutoClean" onchange="dvToggleCleanup(this.checked)">自动清理</label>
+<label class="auto-lbl" title="默认关闭: 额度归零的账号在自动备份完成、且全部对话超过无活跃窗口(默认72小时·右侧可调)后自动移出账号库。关闭时归零账号也始终保留在库, 仅由用户手动移除">&#9888;<input type="checkbox" id="dvAutoRemove" onchange="dvToggleAutoRemove(this.checked)">归零移出库</label>
+<label class="auto-lbl" title="无活跃窗口(小时): 对话超过此时长无更新才允许自动清理; 归零账号需全部对话都超过此窗口无活跃才备份后移出库。默认 72 小时">无活跃<input type="number" id="dvStaleHours" value="72" min="1" step="1" onchange="dvSetStaleHours(this.value)">h</label>
+<button onclick="dvRunAutoCleanNow()" class="conv-btn conv-btn-s" title="立即执行自动清理全流程: 刷额度→预览低额空闲账号→全量备份→清理 低额且超过无活跃窗口未更新 的对话 (账号保留在库; 仅当勾选\u0027归零移出库\u0027时才移出归零账号)">&#9889; 立即清理</button>
 <label class="auto-lbl" title="额度低于此阈值($)时触发自动备份+清理">$<input type="number" id="dvThreshold" value="3" min="0" step="1" onchange="dvSetThreshold(this.value)"></label>
 <label class="auto-lbl" title="对话缓冲·知止不殆: 单话上限=余额-缓冲, 余额抵缓冲时解除让美金用尽 (默认开)"><input type="checkbox" id="dvConvCap" checked onchange="dvToggleConvCap(this.checked)">对话缓冲</label>
 <label class="auto-lbl" title="每对话上限缓冲($): 上限=余额-此缓冲">缓冲$<input type="number" id="dvConvBuf" value="3" min="0" step="0.01" onchange="dvSetConvBuffer(this.value)"></label>
@@ -733,13 +734,13 @@ async function localConvMd(a, ent){
   try{ if(ent&&ent.zip&&N.vaultReadBackupB64){ var b64=N.vaultReadBackupB64(folder, ent.zip); if(b64){ var m=await DaoCloud.zipReadText(b64, "对话_人类可读.md"); if(m) return m; } } }catch(e){}
   return "";
 }
-// 数据源决策: 已全量备份且(已清理 或 24h无更新)→ 直接本地源(省额度·无感); 否则云端, 云端不可用再回退本地。
+// 数据源决策: 已全量备份且(已清理 或 超无活跃窗口无更新)→ 直接本地源(省额度·无感); 否则云端, 云端不可用再回退本地。
 function _convSourceDecision(a, did){
   var man=loadBackupManifest(a); var ent=(man.sessions&&man.sessions[did])||null;
   var preferLocal=false;
   if(ent && ent.backedUpAt && (ent.md||ent.zip)){
     if(ent.deleted) preferLocal=true;                                  // 已清理 → 必走本地
-    else if(Date.now()-(ent.ts||0) > CLEAN_STALE_MS) preferLocal=true; // 24h 无更新且已备份 → 本地优先
+    else if(Date.now()-(ent.ts||0) > _dvClean.staleMs()) preferLocal=true; // 超过无活跃窗口无更新且已备份 → 本地优先
   }
   return {ent:ent, preferLocal:preferLocal};
 }
@@ -1265,7 +1266,7 @@ function doAdd(){
     (r.accounts||[]).forEach(function(p){ var id=p.email; var k=accs.findIndex(function(x){return x.id===id||x.email===id;}); var rec={id:id,email:p.email,password:p.password,addedAt:Date.now()}; if(k>=0){accs[k]=Object.assign(accs[k],rec);updated++;_touch(id);}else{accs.push(rec);added++;_touch(id);} });
     (r.tokens||[]).forEach(function(t){ var id="tok-"+t.slice(-8); var k=accs.findIndex(function(x){return x.id===id||x.auth1===t;}); var rec={id:id,email:id,auth1:t,addedAt:Date.now()}; if(k>=0){accs[k]=Object.assign(accs[k],rec);updated++;_touch(id);}else{accs.push(rec);added++;_touch(id);} });
   }
-  saveAcc(accs); try{ mirrorAccountsToVault(); }catch(e){} _orderIds=null; render();   // 解冻顺序+立即镜像金库: 重加曾被移除的账号必立即可见且不被金库回拉覆盖(消除幽灵态); addedAt 为重加号提供 24h 免自动移出保护
+  saveAcc(accs); try{ mirrorAccountsToVault(); }catch(e){} _orderIds=null; render();   // 解冻顺序+立即镜像金库: 重加曾被移除的账号必立即可见且不被金库回拉覆盖(消除幽灵态); addedAt 为重加号提供无活跃窗口内免自动移出保护
   document.getElementById("addInput").value="";
   toast("识号完成 · 新增 "+added+" · 更新 "+updated);
   // 添加即自动登录(无论 JSON / token / 邮箱密码) → 用户无需再点 🔑, 行直接翻为可注入态并显示美金额度。
@@ -1323,6 +1324,7 @@ function dvToggleAuto(v){ _setCfg("autoBackup",!!v); toast(v?"自动备份已开
 function dvToggleCleanup(v){ _setCfg("autoCleanup",!!v); toast(v?"自动清理已开":"自动清理已关"); }
 function dvToggleAutoRemove(v){ _setCfg("autoRemove",!!v); toast(v?"⚠ 归零账号将自动备份后移出库":"归零账号也保留在库·仅手动移除"); }
 function dvSetThreshold(v){ _setCfg("autoThreshold",parseFloat(v)||3); }
+function dvSetStaleHours(v){ var h=parseFloat(v); if(!isFinite(h)||h<=0)h=72; _setCfg("cleanStaleHours",h); toast("无活跃窗口: "+h+" 小时 (清理/归零移出库共用)"); }
 function dvToggleConvCap(v){ _setCfg("convCap",!!v); toast(v?"对话缓冲已开·按余额自动设单话上限":"对话缓冲已关·解除单话上限"); if(v){ applyConvCapsAll(); } else { clearConvCapsAll(); } }
 function dvSetConvBuffer(v){ _setCfg("convBuffer",parseFloat(v)||3); _capApplied={}; applyConvCapsAll(); }
 function dvToggleDrain(v){ _setCfg("convDrain",!!v); _capApplied={}; applyConvCapsAll(); }
@@ -1344,6 +1346,7 @@ function _initCfgUI(){
   var ac=document.getElementById("dvAutoClean"); if(ac) ac.checked=_cfg("autoCleanup",true);
   var ar=document.getElementById("dvAutoRemove"); if(ar) ar.checked=_cfg("autoRemove",false);
   var at=document.getElementById("dvThreshold"); if(at) at.value=_cfg("autoThreshold",3);
+  var sh=document.getElementById("dvStaleHours"); if(sh) sh.value=_cfg("cleanStaleHours",72);
   var cc=document.getElementById("dvConvCap"); if(cc) cc.checked=_cfg("convCap",true);
   var cb=document.getElementById("dvConvBuf"); if(cb) cb.value=_cfg("convBuffer",3);
   var cd=document.getElementById("dvConvDrain"); if(cd) cd.checked=_cfg("convDrain",true);
@@ -1446,7 +1449,7 @@ function _quotaAlert(a, cnt, convName){
 // ════════════════════════════════════════════════════════════════════════
 //  备份/清理机制 (重构·道法自然):
 //   ① 自动备份始终增量备份(对话名变更→覆盖); 备份=每对话「完整文件夹ZIP(对话md+工作日志+产出文件)」+清单, 非只MD。
-//   ② 清理=对话级: 仅「账号额度<阈值 且 该对话24h内无更新」的对话才自动清理; 进行中/新更新对话绝不动。
+//   ② 清理=对话级: 仅「账号额度<阈值 且 该对话在无活跃窗口(默认72h·可调)内无更新」的对话才自动清理; 进行中/新更新对话绝不动。
 //   ③ 清理=真删(归档→delete·水过无痕), 且必须先验证该对话已完整备份。
 //   ④ 即使清理后账号仍保留在库; 仅当用户勾选「归零移出库」且额度归零, 才备份后移出。
 // ════════════════════════════════════════════════════════════════════════
@@ -1466,7 +1469,7 @@ var _dvClean = DaoAutoClean.create({
     return null;
   }
 });
-var CLEAN_STALE_MS = _dvClean.CLEAN_STALE_MS; // 24h 无更新才允许清理
+
 function _acctFolder(a){ return String((a&&(a.email||a.id))||"acc").split("@")[0].replace(/[^a-zA-Z0-9_\-]/g,"_")||"acc"; }
 function loadBackupManifest(a){ return _dvClean.loadBackupManifest(a); }
 async function fullBackupAccount(a){ return await _dvClean.fullBackupAccount(a); }

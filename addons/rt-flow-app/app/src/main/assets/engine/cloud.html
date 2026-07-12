@@ -28,6 +28,9 @@ body{margin:0;background:#0e1116;color:#cdd3de;font:13px/1.5 -apple-system,Segoe
 .ad-folder{font-size:16px}
 .ad-meta{font-size:11px;color:#8b949e;margin-top:4px;display:flex;gap:8px;flex-wrap:wrap}
 .ad-pw{font-size:11px;color:#6e7681;font-family:monospace;margin-top:2px;word-break:break-all}
+.ad-recent{font-size:12px;color:#c9d1d9;margin-top:4px;overflow:hidden}
+.ad-recent b{color:#e6edf3;font-weight:600}
+.ad-pv{font-size:11px;color:#8b949e;margin-top:2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .ad-cp{font-size:11px;color:#58a6ff;cursor:pointer;margin-left:auto}
 .tag{font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid}
 .tag.rm{color:#d0965a;border-color:#4a3a1c;background:#2a2013}
@@ -142,13 +145,13 @@ function loadGroups(){
     var hit=_libByKey[key]||_libByKey[String(folder).toLowerCase()];
     var removed=!!rm || !hit;
     // 近期时序: 忽略自动化对话时间, 取本人对话最新备份时间; 无则退回全部/移出/添加时间
-    var tHuman=0, tAny=0;
-    sessions.forEach(function(s){ var bt=s.backedUpAt||0; if(bt>tAny)tAny=bt; if(!_isAutoConv(s.title||s.sid)&&bt>tHuman)tHuman=bt; });
+    var tHuman=0, tAny=0, sHuman=null, sAny=null;
+    sessions.forEach(function(s){ var bt=Math.max(s.backedUpAt||0, s.ts||0); if(bt>tAny){tAny=bt;sAny=s;} if(!_isAutoConv(s.title||s.sid)&&bt>tHuman){tHuman=bt;sHuman=s;} });
     var t=tHuman||tAny||(rm?rm.removedAt:0)||(hit&&hit.acc&&(hit.acc.lastActiveAt||hit.acc.addedAt))||0;
     var allAuto=sessions.length>0 && sessions.every(function(s){return _isAutoConv(s.title||s.sid);});
     _groups.push({folder:folder,email:email,no:hit?hit.no:0,acc:hit?hit.acc:(rm?rm.account:null),
       logged:!!(hit&&hit.acc&&hit.acc.auth1&&hit.acc.orgId),removed:removed,removedAt:rm?rm.removedAt:0,
-      sessions:sessions,t:t,allAuto:allAuto});
+      sessions:sessions,t:t,allAuto:allAuto,recent:sHuman||sAny,recentIsHuman:!!sHuman});
     if(key)seen[key]=1; seen[String(folder).toLowerCase()]=1;
   });
   // 中央移出总账: 夹被同前缀号覆盖后, 总账仍在 → 移出号永远可寻
@@ -216,6 +219,8 @@ function renderAccts(){
         (pw?('<span class="ad-cp" onclick="event.stopPropagation();cpGrp('+i+')">复制账密</span>'):'')+
       '</div>'+
       (pw?('<div class="ad-pw">'+_esc("密码: "+pw)+'</div>'):'')+
+      (g.recent?('<div class="ad-recent">'+(g.recentIsHuman?'💬':'🤖')+' 最近'+(g.recentIsHuman?'对话':'对话(自动化)')+': <b>'+_esc(g.recent.title||g.recent.sid||"(无标题)")+'</b>'+
+        (function(){var pv=_recentPreview(g);return pv?('<div class="ad-pv">'+_esc(pv)+'</div>'):'';})()+'</div>'):'')+
       '<div class="ad-meta"><span>'+status+'</span>'+
         '<span>'+g.sessions.length+' 备份对话</span>'+
         (when?('<span>近期 '+_esc(when)+'</span>'):'')+
@@ -224,6 +229,21 @@ function renderAccts(){
     '</div>';
   }).join("");
   box.innerHTML = html || '<div class="empty">无匹配备份 · 清空搜索查看全部</div>';
+}
+// 最近真实对话内容预览: 优先内联 md, 否则读本地备份 md 前段 (去标题/空行 → 截短)
+function _recentPreview(g){
+  var s=g&&g.recent; if(!s) return "";
+  var md="";
+  try{ if(typeof s.inlineMd==="string"&&s.inlineMd) md=s.inlineMd; }catch(e){}
+  try{ if(!md&&s.md&&g.folder&&N.vaultReadBackup) md=N.vaultReadBackup(g.folder, s.md)||""; }catch(e){}
+  if(!md) return "";
+  var lines=String(md).slice(0,4000).split(/\n/), out=[];
+  for(var i=0;i<lines.length&&out.join(" ").length<120;i++){
+    var ln=lines[i].replace(/^[#>\-\*\s\|`]+/,"").trim();
+    if(!ln||/^!\[/.test(ln)||/^\[.*\]\(.*\)$/.test(ln)) continue;
+    out.push(ln);
+  }
+  return out.join(" ").slice(0,120);
 }
 function cpGrp(i){ var g=_view[i]; if(!g||!g.acc)return; var t=(g.acc.email||g.acc.id||"")+"\n"+(g.acc.password||""); try{N.clip&&N.clip(t);}catch(e){} toast("已复制账号+密码"); }
 

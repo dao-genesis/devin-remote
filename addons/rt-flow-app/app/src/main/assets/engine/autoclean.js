@@ -8,9 +8,9 @@
 //
 //   机制不变(与原 switch.html 内联版逐字对齐):
 //   ① 自动备份始终增量备份; 备份=每对话「完整文件夹ZIP」+清单。
-//   ② 清理=对话级: 仅「账号额度<阈值 且 该对话24h内无更新」的对话才自动清理。
+//   ② 清理=对话级: 仅「账号额度<阈值 且 该对话在无活跃窗口(默认72h·可调)内无更新」的对话才自动清理。
 //   ③ 清理=真删(水过无痕), 且必须先验证该对话已完整备份。
-//   ④ 仅当用户勾选「归零移出库」且额度归零、且**全部对话都已 24h 无更新**, 才备份后移出。
+//   ④ 仅当用户勾选「归零移出库」且额度归零、且**全部对话都超过无活跃窗口无更新**, 才备份后移出。
 //
 //   deps (依赖注入·两端各自供给):
 //     N            原生桥 (vaultReadBackup/vaultSaveBackup/vaultSaveBackupB64/vaultDeleteBackup)
@@ -39,7 +39,13 @@
       return null;
     }
     var _cleanTs = {};                     // id → 上次清理时间 (节流)
-    var CLEAN_STALE_MS = 24 * 3600 * 1000; // 24h 无更新才允许清理
+    // 无活跃窗口(小时): 超过此窗口无更新才允许清理/移出。默认 72h, 用户可在切号板调整 (rtflow.cfg.cleanStaleHours)。
+    var STALE_HOURS_DEFAULT = 72;
+    function staleMs() {
+      var h = parseFloat(cfg("cleanStaleHours", STALE_HOURS_DEFAULT));
+      if (!isFinite(h) || h <= 0) h = STALE_HOURS_DEFAULT;
+      return h * 3600 * 1000;
+    }
     // 终态会话(内容已定格·无人在跑): 平台会周期性触碰其 updated_at, 不能据此判「活跃」
     var _TERM_ST = { suspended: 1, expired: 1, stopped: 1, finished: 1, archived: 1, interrupted: 1, deleted: 1 };
     function _dormant(s) { var st = String((s && (s.status_enum || s.status)) || "").toLowerCase(); return !!_TERM_ST[st]; }
@@ -72,7 +78,7 @@
       var prev = man.sessions[sid]; var folder = _acctFolder(a);
       // 活跃目击登记(本地钟·不信平台触碰): 记录「我们最后一次亲见该会话真在活动」的时刻。
       //   额度耗尽会话在归零后数分钟即转 suspended(终态) → 旧逻辑 fresh=0 当轮即移出账号,
-      //   故 24h 等待期必须以本地目击时刻起算 —— 这是「归零号未等 24h 即被移出」的根治锚点。
+      //   故无活跃等待窗口必须以本地目击时刻起算 —— 这是「归零号未等满窗口即被移出」的根治锚点。
       if (prev && _isActive(s, ts)) prev.activeSeenAt = Date.now();
       // 双轨判定: 闲置 且 WiFi(非计费网络) 才做重量级「全量增量 ZIP」; 否则(活跃/计费网络)只走实时 MD 轻量轨。
       var canFullZip = !_isActive(s, ts) && !autoDlBlocked();
@@ -159,7 +165,7 @@
       // 备份/列表失败常见根因 = auth1 已过期(401) → 用账密自愈重登一次再试, 归零号不再因过期登录态永滞库中
       if ((!bk.ok || !bk.listOk)) { var ra2 = await _tryRelogin(a); if (ra2) { a = ra2; bk = await fullBackupAccount(a); } }
       if (!bk.ok) return { state: "backup-fail", reason: "备份失败·不清理", bal: bal };
-      // 对话列表取失败 → 无从判断「24h 内是否活跃」与「是否已全量备份」→ 绝不清理、绝不移出。
+      // 对话列表取失败 → 无从判断「窗口内是否活跃」与「是否已全量备份」→ 绝不清理、绝不移出。
       //   (旧病灶: 列表失败被当成「0 条对话·皆陈旧」→ 近期活跃号未备份即被移出库)
       if (!bk.listOk) return { state: "backup-fail", reason: "对话列表获取失败·不清理不移出", bal: bal };
       _cleanTs[a.id] = Date.now();
@@ -170,24 +176,25 @@
         // 已归档(平台无硬删·archive 即最强清除) → 登记已清理, 不重复归档不计 kept
         if (s.is_archived === true || s.is_archived === "true") { if (ent && !ent.deleted) { ent.deleted = true; ent.cleanedAt = now; cleaned++; } continue; }
         var ts = DaoCloud.sessTs(s) || 0;
-        // 「24h 内有更新」只对仍在活动的会话成立。平台会周期性触碰终态会话(尤其 suspended)的
+        // 「窗口内有更新」只对仍在活动的会话成立。平台会周期性触碰终态会话(尤其 suspended)的
         // updated_at → 归零死号恒有一条「假·新鲜」会话, fresh 永不归零, 永滞库中(实测 15/15 如此)。
         // 终态(挂起/过期/停止/完成/中断)会话内容已定格且本轮已备份 → 不计 fresh; 一旦被续跑,
         // 状态回到 running 自然重新计 fresh, 安全不失。
-        // 新鲜判定双源: ① 服务端 ts<24h 且非终态; ② 本地目击 activeSeenAt<24h(会话可能已转终态,
-        //   如额度耗尽数分钟即 suspended, 但我们亲见它 24h 内还在活动 → 仍算新鲜, 账号绝不提前移出)。
+        // 新鲜判定双源: ① 服务端 ts<窗口 且非终态; ② 本地目击 activeSeenAt<窗口(会话可能已转终态,
+        //   如额度耗尽数分钟即 suspended, 但我们亲见它窗口内还在活动 → 仍算新鲜, 账号绝不提前移出)。
         //   纯终态死号(从未被目击非终态)无 activeSeenAt → 不计新鲜, 「永滞库中」的旧修复不回退。
-        var seenActive = !!(ent && ent.activeSeenAt && now - ent.activeSeenAt < CLEAN_STALE_MS);
-        if ((now - ts < CLEAN_STALE_MS && !_dormant(s)) || seenActive) { fresh++; }
-        if (now - ts < CLEAN_STALE_MS || seenActive) { kept++; continue; }   // 24h 内有更新/被目击活跃 → 保留(只备份不清理)
+        var STALE = staleMs();
+        var seenActive = !!(ent && ent.activeSeenAt && now - ent.activeSeenAt < STALE);
+        if ((now - ts < STALE && !_dormant(s)) || seenActive) { fresh++; }
+        if (now - ts < STALE || seenActive) { kept++; continue; }   // 窗口内有更新/被目击活跃 → 保留(只备份不清理)
         if (!ent || !ent.backedUpAt || (!ent.md && !ent.zip)) { kept++; continue; }
         try { var r = await DaoCloud.purgeSession(a, sid); if (r && r.deleted) { cleaned++; ent.deleted = true; ent.cleanedAt = now; } else kept++; } catch (e) { kept++; }
       }
       if (cleaned > 0) saveBackupManifest(a, man);
-      // 归零 + 勾选「归零移出库」+ 全部对话皆 24h 无更新 → 备份后移出账号库。
+      // 归零 + 勾选「归零移出库」+ 全部对话皆超过无活跃窗口无更新 → 备份后移出账号库。
       // 移出前置(缺一不可·道法自然·全量备份后才移除):
-      //   ① fresh===0: 全部对话 24h 无更新;  ② 全部对话备份齐全(逐条验 manifest 有 md/zip);
-      //   ③ 本轮无备份失败;  ④ 非刚重新添加的号(addedAt 24h 保护·重加号不会秒被再移出)。
+      //   ① fresh===0: 全部对话超窗口无更新;  ② 全部对话备份齐全(逐条验 manifest 有 md/zip);
+      //   ③ 本轮无备份失败;  ④ 非刚重新添加的号(addedAt 窗口内保护·重加号不会秒被再移出)。
       if (zero && cfg("autoRemove", false) && fresh === 0) {
         if (bk.fails > 0) return { state: "cleaned", reason: "归零但有 " + bk.fails + " 条备份失败·不移出", bal: bal, cleaned: cleaned, kept: kept, backup: bk.count || 0, fresh: fresh };
         var allBacked = true;
@@ -197,7 +204,7 @@
           if (!e2 || !e2.backedUpAt || (!e2.md && !e2.zip)) { allBacked = false; break; }
         }
         if (!allBacked) return { state: "cleaned", reason: "归零但备份未齐全·不移出", bal: bal, cleaned: cleaned, kept: kept, backup: bk.count || 0, fresh: fresh };
-        if (a.addedAt && now - a.addedAt < CLEAN_STALE_MS) return { state: "cleaned", reason: "新加号 24h 保护·不移出", bal: bal, cleaned: cleaned, kept: kept, backup: bk.count || 0, fresh: fresh };
+        if (a.addedAt && now - a.addedAt < staleMs()) return { state: "cleaned", reason: "新加号保护期内·不移出", bal: bal, cleaned: cleaned, kept: kept, backup: bk.count || 0, fresh: fresh };
         // 移出留底(可追溯可恢复): 金库落「移出记录」含完整账号快照 → 重加号直接从 account.json/此文件找回
         try { if (N.vaultSaveBackup) N.vaultSaveBackup(_acctFolder(a), "移出记录.json", JSON.stringify({ removedAt: now, account: { id: a.id, email: a.email || "", password: a.password || "", auth1: a.auth1 || "", orgId: a.orgId || "" }, sessions: bk.sessions.length, cleaned: cleaned })); } catch (e) {}
         var accs = loadAcc(); var k = -1; for (var j = 0; j < accs.length; j++) { if (accs[j].id === a.id) { k = j; break; } }
@@ -210,7 +217,7 @@
     function resetThrottle(id) { try { delete _cleanTs[id]; } catch (e) {} }
     return { loadBackupManifest: loadBackupManifest, saveBackupManifest: saveBackupManifest,
              backupSessionFull: backupSessionFull, fullBackupAccount: fullBackupAccount,
-             autoCleanFor: autoCleanFor, resetThrottle: resetThrottle, CLEAN_STALE_MS: CLEAN_STALE_MS };
+             autoCleanFor: autoCleanFor, resetThrottle: resetThrottle, staleMs: staleMs };
   }
   root.DaoAutoClean = { create: create };
 })(typeof window !== "undefined" ? window : globalThis);
