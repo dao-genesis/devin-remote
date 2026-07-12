@@ -234,7 +234,7 @@ let _autoHealAttempts = 0;
 let _autoHealTimer: ReturnType<typeof setTimeout> | null = null;
 const AUTO_HEAL_DELAYS = [3000, 8000, 20000, 45000];
 // 归一 · 帛书「道生一」— 内联 rt-flow 运行时句柄(左·RT Flow 账号池/切号 入 dao-vsix 本体)
-interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; openShellHome?: (board?: string) => Promise<{ ok: boolean; error?: string }>; openMultiInstance?: (opts: { email?: string; devinId?: string; password?: string; path?: string; label?: string }) => Promise<{ ok: boolean; error?: string; reused?: boolean }>; }
+interface RtflowInternals { buildHtml?: () => string; handleWebviewMessage?: (m: any) => Promise<void> | void; setHostPost?: (fn: ((m: any) => void) | null) => void; openShellHome?: (board?: string) => Promise<{ ok: boolean; error?: string }>; openMultiInstance?: (opts: { email?: string; devinId?: string; password?: string; path?: string; label?: string; fresh?: boolean }) => Promise<{ ok: boolean; error?: string; reused?: boolean }>; }
 interface RtflowModule { activate?: (ctx: vscode.ExtensionContext) => unknown; deactivate?: () => unknown; _internals?: RtflowInternals; }
 let _rtflowModule: RtflowModule | null = null;
 
@@ -1095,7 +1095,8 @@ export async function activate(context: vscode.ExtensionContext) {
                 const ok = launchIsolatedBrowser(url, email || 'default');
                 vscode.window.showInformationMessage(ok ? ('🌐 系统浏览器已路由官网: ' + (email || '当前账号')) : '浏览器启动失败');
             } else {
-                const r = await tryRtflowMultiInstance({ email });
+                // 对齐手机一号多页: 每次点「登录/打开」都新开一张独立页, 不折叠到已开页
+                const r = await tryRtflowMultiInstance({ email, fresh: true });
                 if (!r || !r.ok) openRoutedAccountPanel(context, email, url);
             }
         }),
@@ -10836,11 +10837,11 @@ async function ensureRoutedServerFast(context: vscode.ExtensionContext): Promise
 }
 // 归一 · 优先委托 rt-flow「单面板多窗口」多实例 (每账号独立端口反代·真 origin 隔离·各登各号)。
 //   成功 → {ok:true}; rt-flow 不可用或该账号无 auth1 → null/{ok:false} → 调用方退回本地反代面板。
-async function tryRtflowMultiInstance(arg: { email?: string; devinId?: string }): Promise<{ ok: boolean; error?: string } | null> {
+async function tryRtflowMultiInstance(arg: { email?: string; devinId?: string; fresh?: boolean }): Promise<{ ok: boolean; error?: string } | null> {
     try {
         const open = _rtflowModule && _rtflowModule._internals && _rtflowModule._internals.openMultiInstance;
         if (typeof open !== 'function') return null;
-        const r = await open({ email: arg.email || '', devinId: arg.devinId || '' });
+        const r = await open({ email: arg.email || '', devinId: arg.devinId || '', fresh: !!arg.fresh });
         return r || { ok: false };
     } catch (e) {
         return { ok: false, error: (e as Error)?.message || 'throw' };
