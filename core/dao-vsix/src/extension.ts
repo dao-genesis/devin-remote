@@ -3831,7 +3831,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     // ── 归一 · 拖拽上传桥数据源 (对齐手机 APK: 拖文件=上传该文件 / 拖会话=上传该会话 MD) ──
     //   网页内注入的 drop 桥与外壳同源, 落点后经此同源端点取字节 → 合成 File 喂入页面上传框。
     //   同一服务函数 daoServeBridgeRoute 亦注入 IDE 内多实例反代(devin_proxy)就地同源服务。
-    if (route === '/__dlfile' || route === '/__convmd' || route === '/__convguide' || route === '/__convinfo' || route === '/__convzip' || route === '/__daobridge.js') {
+    if (route === '/__dlfile' || route === '/__convmd' || route === '/__convguide' || route === '/__convinfo' || route === '/__convzip' || route === '/__daobridge.js' || route === '/__daotrans.js') {
         const br = await daoServeBridgeRoute(route, url);
         if (br) return br;
     }
@@ -16278,10 +16278,29 @@ function fetchViaTunnel(u, headers, timeoutMs) {
 // 拖拽上传桥路由服务 (单一来源): 既供 dao-vsix out 层主服务器路由, 又经 rt-flow 注入 IDE 内
 //   多实例反代 devin_proxy 就地同源服务 (各账号端口) → 落点页 location.origin fetch 即达。
 //   全部带 CORS, 故同源/跨域两用皆可。
-async function daoServeBridgeRoute(routePath: string, urlObj: URL): Promise<any> {
+async function daoServeBridgeRoute(routePath: string, urlObj: URL, req?: any): Promise<any> {
     const CORS = { 'Access-Control-Allow-Origin': '*' };
     if (routePath === '/__daobridge.js') {
         return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoDropBridgeJs(), headers: { 'Cache-Control': 'no-store', ...CORS } };
+    }
+    // 整页翻译桥/引擎/文本代调 — 供 IDE 内多实例反代(devin_proxy)就地同源服务各账号端口,
+    //   与主口 /__translate(.js) 同源同构 — 跨源 iframe 页内桥自此可达(根治「本页不可翻译(跨源)」)。
+    if (routePath === '/__daotrans.js') {
+        return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoTransBridgeInlineJs(), headers: { 'Cache-Control': 'no-store', ...CORS } };
+    }
+    if (routePath === '/__translate.js') {
+        return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoTransEngineJs(), headers: { 'Cache-Control': 'no-store', ...CORS } };
+    }
+    if (routePath === '/__translate') {
+        const _tm = String((req && req.method) || 'GET').toUpperCase();
+        const _tCORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', ...CORS };
+        if (_tm === 'OPTIONS') return { _proxy: true, status: 204, contentType: 'text/plain', body: '', headers: _tCORS };
+        let _tp: any = null;
+        try { _tp = req ? JSON.parse((await readBodyBuffer(req)).toString('utf8')) : null; } catch (e) { _tp = null; }
+        const _texts = (_tp && Array.isArray(_tp.texts)) ? _tp.texts.map((t: any) => String(t == null ? '' : t)).slice(0, 128) : null;
+        if (!_texts || !_texts.length) return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: '缺少 texts 数组' }), headers: _tCORS };
+        const _out = await daoTranslateTexts(_texts, String((_tp && _tp.to) || 'zh-Hans'));
+        return { _proxy: true, status: 200, contentType: 'application/json; charset=utf-8', body: JSON.stringify(_out ? { ok: true, translations: _out } : { ok: false, translations: [], error: '翻译服务不可达' }), headers: _tCORS };
     }
     // 防 HTTP 头非法字符: Content-Disposition 的 filename= 仅许 ASCII; 非 ASCII(如中文标题)直塞 →
     //   Node 抛 "Invalid character in header content" → 500。故 ASCII 回退名 + RFC5987 filename*(UTF-8)。

@@ -1784,6 +1784,8 @@ async function shellAccountProxy(accKey, restPath, req, res) {
       try { const inj = _buildUserScriptInject(_csUrl); if (inj) { s = /<\/body>/i.test(s) ? s.replace(/<\/body>/i, inj + '</body>') : (s + inj); } } catch (e) {}
       // 拖拽上传桥(同源 /__daobridge.js): 拖文件/会话到该页 → 投递上传框 (对齐手机 APK)。
       try { const dbg = '<script src="/__daobridge.js"></script>'; s = /<\/body>/i.test(s) ? s.replace(/<\/body>/i, dbg + '</body>') : (s + dbg); } catch (e) {}
+      // 整页翻译桥(同源 /__daotrans.js): 悬浮球「译」+ 父窗 {__daoTransToggle} 页内桥 (与反代页/外站页同构)。
+      try { const tbg = '<script src="/__daotrans.js"></script>'; s = /<\/body>/i.test(s) ? s.replace(/<\/body>/i, tbg + '</body>') : (s + tbg); } catch (e) {}
     }
     if (res && !res.headersSent) {
       res.writeHead(status, {

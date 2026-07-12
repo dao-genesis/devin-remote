@@ -869,9 +869,9 @@ async function handleRequest(req, res, auth, opts, _log) {
   // 拖拽上传桥 (同源直服本反代端口 → 对齐 /i/ 同源页·根治 IDE 内拖拽无反应)。
   if (_bridgeServe) {
     const bp = reqUrl.pathname;
-    if (bp === "/__daobridge.js" || bp === "/__dlfile" || bp === "/__convmd" || bp === "/__convguide" || bp === "/__convinfo" || bp === "/__convzip") {
+    if (bp === "/__daobridge.js" || bp === "/__dlfile" || bp === "/__convmd" || bp === "/__convguide" || bp === "/__convinfo" || bp === "/__convzip" || bp === "/__daotrans.js" || bp === "/__translate" || bp === "/__translate.js") {
       try {
-        const out = await _bridgeServe(bp, reqUrl);
+        const out = await _bridgeServe(bp, reqUrl, req);
         if (out) {
           const h = Object.assign({ "Content-Type": out.contentType || "application/octet-stream", "Access-Control-Allow-Origin": "*" }, out.headers || {});
           res.writeHead(out.status || 200, h);
@@ -1166,6 +1166,17 @@ async function handleRequest(req, res, auth, opts, _log) {
                 else html = dbg + html;
               }
             } catch (e) { /* 守柔: 桥注入失败不阻断反代 */ }
+            // 整页翻译桥: 同为内联 <head> 注入 — 听父窗 {__daoTransToggle} 回 ack 并就地翻译,
+            //   引擎/文本代调经同源 /__translate(.js) 就地服务本反代端口 (与 /__web·主口反代页同构)。
+            try {
+              const _tj = await _bridgeServe("/__daotrans.js", reqUrl);
+              if (_tj && _tj.body) {
+                const tbg = "<script>" + _tj.body + "</script>";
+                if (/<head[^>]*>/i.test(html)) html = html.replace(/(<head[^>]*>)/i, "$1" + tbg);
+                else if (/<\/head>/i.test(html)) html = html.replace(/<\/head>/i, tbg + "</head>");
+                else html = tbg + html;
+              }
+            } catch (e) { /* 守柔 */ }
           }
           safeHeaders["Content-Type"] = "text/html; charset=utf-8";
           res.writeHead(status, safeHeaders);
