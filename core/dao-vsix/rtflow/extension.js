@@ -1968,7 +1968,7 @@ async function _shellResolveOpen(opts) {
     );
     if (idx >= 0) accNo = idx + 1;
     const h = _store && _store.getHealth ? _store.getHealth(email) : null;
-    if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars);
+    if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0));
   } catch (e) {}
   const title = String(opts.title || '').trim();
   const pageLabel = String(opts.label || '').trim();
@@ -2672,7 +2672,8 @@ async function _handleShellStatus(m, send) {
       for (const s of (act || [])) { const id2 = String(s.devinId || '').replace(/^devin-/, ''); if (id2) amap.set(id2, s); }
       let h = null, dollars = null;
       try { await _refreshHealthForTick(email); } catch (e) {}
-      try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+      try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
+      let _qForcedFresh = false; // 疑似额度耗尽 → 每号本 tick 至多强刷一次真额度(45s 限频), 防陈旧缓存误标
       for (const t of tl) {
         const sid = String(t.devinId || '').replace(/^devin-/, '');
         // 账号首页标签(无具体对话·对齐手机 APK): 以该号最新活跃会话回填对话名+状态灯; 无活跃 → idle 灰。
@@ -2680,6 +2681,11 @@ async function _handleShellStatus(m, send) {
         let cls = hit ? (hit.statusClass || 'running') : (sid ? 'finished' : 'idle');
         try {
           if (hit && cls === 'blocked' && QRE.test(JSON.stringify(hit.latest_status_contents || '') + ' ' + String(hit.status || ''))) {
+            if (!_qForcedFresh && (!h || !h.checked || h.staleMin >= 1)) {
+              _qForcedFresh = true;
+              try { await _refreshHealthForTick(email, 45); } catch (e) {}
+              try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
+            }
             const live = !!(h && (((typeof h.dPct === 'number') && h.dPct > 0) || ((typeof h.wPct === 'number') && h.wPct > 0) || ((typeof h.overageDollars === 'number') && h.overageDollars > 0)));
             cls = live ? 'finished' : 'exhausted';
           }
@@ -2741,13 +2747,13 @@ function _classStr(s){s=String(s==null?'':s).toLowerCase().trim();if(!s)return '
   if(/running|working|in_progress|streaming|active|started|resumed|busy|thinking|executing|coding|planning|testing/.test(s))return 'running';
   return 'running';}
 // 归一 · 状态轮询中的额度保鲜(限频·仅 session-cache 快路·零 devinLogin·零限速风险):
-//   getHealth 只读缓存 → 标签 $ 额度可能长期陈旧; 此处每账号限频(默 300s)经 verifyOneAccount
+//   getHealth 只读缓存 → 标签 $ 额度可能长期陈旧; 此处每账号限频(默 120s·疑似耗尽时 45s 强刷)经 verifyOneAccount
 //   缓存快路真拉一次 planStatus 回写 setHealth, 让状态轮询回填的额度真正保鲜。
 const _healthTickAt = new Map();
-async function _refreshHealthForTick(email) {
+async function _refreshHealthForTick(email, minGapSec) {
   try {
     const k = String(email || '').toLowerCase(); if (!k) return;
-    const iv = Math.max(60, +_cfg('statusHealthRefreshSec', 300) || 300) * 1000;
+    const iv = (minGapSec > 0 ? Math.max(30, minGapSec | 0) : Math.max(30, +_cfg('statusHealthRefreshSec', 120) || 120)) * 1000;
     const last = _healthTickAt.get(k) || 0; if (Date.now() - last < iv) return;
     _healthTickAt.set(k, Date.now());
     const a = (_store.accounts || []).find((x) => String(x.email || '').toLowerCase() === k); if (!a) return;
@@ -2775,7 +2781,7 @@ async function _multiTabStatusTick() {
       for (const s of (active || [])) { const id = String(s.devinId || '').replace(/^devin-/, ''); if (id) amap.set(id, s); }
       let dollars = null;
       try { await _refreshHealthForTick(email); } catch (e) {}
-      try { const h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+      try { const h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
       for (const t of tabsForEmail) {
         const sid = String(t.devinId || '').replace(/^devin-/, '');
         const hit = amap.get(sid);
@@ -2822,7 +2828,7 @@ async function openMultiInstance(opts) {
     );
     if (idx >= 0) accNo = idx + 1;
     const h = _store && _store.getHealth ? _store.getHealth(email) : null;
-    if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars);
+    if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0));
   } catch (e) {}
   const title = String(opts.title || '').trim();
   const pageLabel = String(opts.label || '').trim();

@@ -1473,6 +1473,26 @@ function test(name, fn) {
     }
   });
 
+  // ── 账号标签额度/状态保鲜: 耗尽后 $ 须能降到 0 · 疑似耗尽强刷真额度 ──
+  console.log("\n[标签额度保鲜 · 耗尽不再滞留旧 $]");
+  test("extension.js: 标签 $ 回填须允许降为 0 (h.checked 而非 overageDollars>0 门) (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      const n = (src.match(/if \(h && h\.checked\) dollars = Math\.max\(0, Math\.round\(h\.overageDollars \|\| 0\)\);/g) || []).length;
+      assert.ok(n >= 4, rel.join("/") + " 须有 ≥4 处 checked 门额度回填 (实得 " + n + ") — 旧病灶 overageDollars>0 只升不降·耗尽仍显旧 $");
+    }
+  });
+  test("extension.js: 疑似额度耗尽须 45s 限频强刷真额度后再判 exhausted (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/_refreshHealthForTick\(email, 45\)/.test(src), rel.join("/") + " 疑似耗尽须强刷 _refreshHealthForTick(email, 45)");
+      assert.ok(/function _refreshHealthForTick\(email, minGapSec\)/.test(src), rel.join("/") + " _refreshHealthForTick 须支持 minGapSec 覆写");
+      assert.ok(/_cfg\('statusHealthRefreshSec', 120\)/.test(src), rel.join("/") + " 默认保鲜间隔须降至 120s");
+    }
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
