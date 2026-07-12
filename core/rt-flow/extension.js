@@ -2745,6 +2745,15 @@ async function _resolveAuthForEmail(email, password) {
       } catch (e) {}
     }
     if (pw) { const r = await devinCloud.getAuth(email, pw); if (r && r.ok) auth = r; }
+    // 无密码亦无 DC 缓存 → 回落 dao-vsix 多实例钉号已落盘的真 auth1 (~/.dao/dao-accounts-auth.json)。
+    //   标签页能登录渲染却拿不到 auth 刷额度的死区即此: 两套 auth 存储互不相见。
+    if (!auth || !auth.auth1) {
+      try {
+        const f = path.join(os.homedir(), '.dao', 'dao-accounts-auth.json');
+        const rec = JSON.parse(fs.readFileSync(f, 'utf8'))[String(email).toLowerCase()];
+        if (rec && rec.auth1) auth = { auth1: rec.auth1, userId: rec.userId || '', orgId: rec.orgId || '', orgBare: String(rec.orgId || '').replace(/^org-/, ''), orgName: rec.orgName || '', email };
+      } catch (e) {}
+    }
   }
   return auth;
 }
