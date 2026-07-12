@@ -385,7 +385,15 @@ function _daoDownloadsIndexPath() { return path.join(_daoDownloadsDir(), "_index
 function _listDaoDownloads() {
   try {
     const idx = JSON.parse(fs.readFileSync(_daoDownloadsIndexPath(), "utf8")) || [];
-    return idx.filter((d) => { try { return d && d.path && fs.existsSync(d.path); } catch (e) { return false; } });
+    const now = Date.now();
+    // 状态条目(下载中/失败·无 path)一并罗列(浏览器级下载状态); 陈旧的(active>10min / failed>24h)自清。
+    return idx.filter((d) => {
+      try {
+        if (d && d.state === "active") return now - (d.time || 0) < 600000;
+        if (d && d.state === "failed") return now - (d.time || 0) < 86400000;
+        return d && d.path && fs.existsSync(d.path);
+      } catch (e) { return false; }
+    });
   } catch (e) { return []; }
 }
 function _delDaoDownload(p) {
@@ -746,8 +754,28 @@ html.m #hint{font-size:14px;padding:18px}
 #dlwin .dwx{background:#21262d;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:5px 10px;font-size:12px;cursor:pointer;flex:0 0 auto}
 #dlwin .empty{color:#6e7681;text-align:center;padding:26px 12px;font-size:13px}
 #dlwin .tip{font-size:11px;color:#6e7681;padding:4px 4px 6px}
-/* 悬浮窗可缩放(对齐常规软件·拖边框/拖角) — daowin/dlwin 同 */
-#daowin,#dlwin{min-width:340px;min-height:240px}
+/* 本页资源悬浮窗(对齐手机 APK media.html) — 皮肤与 dlwin 同 */
+#mrwin{position:absolute;top:44px;right:10px;width:480px;height:66%;max-width:96vw;max-height:88%;background:#0e1116;border:1px solid #2a313c;border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.6);z-index:27;display:none;flex-direction:column;overflow:hidden}
+#mrwin.on{display:flex}
+#mrwin .dwh{display:flex;align-items:center;gap:8px;padding:8px 11px;background:#161b22;border-bottom:1px solid #21262d;cursor:move;flex:0 0 auto;user-select:none}
+#mrwin .dwh .t{flex:1;font-size:13px;font-weight:700;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mrwin .dwbar{display:flex;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
+#mrwin .dlbody{flex:1;overflow:auto;padding:6px 8px 30px}
+#mrwin .rc{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:8px 9px;margin-bottom:7px;display:flex;gap:9px;align-items:center}
+#mrwin .rc .th{width:44px;height:44px;object-fit:cover;border-radius:6px;background:#21262d;flex:0 0 auto}
+#mrwin .rc .bd{flex:1;min-width:0}
+#mrwin .rc .ti{font-size:13px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mrwin .rc .meta{font-size:11px;color:#8b949e;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mrwin .acts{display:flex;gap:6px;flex:0 0 auto}
+#mrwin .b{background:#21262d;border:1px solid #30363d;border-radius:6px;padding:6px 8px;font-size:12px;cursor:pointer;color:#cdd3de;white-space:nowrap}
+#mrwin .b:hover{background:#2d333b}
+#mrwin .mini{background:#21262d;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:6px 9px;font-size:12px;cursor:pointer;white-space:nowrap}
+#mrwin .dwx{background:#21262d;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:5px 10px;font-size:12px;cursor:pointer;flex:0 0 auto}
+#mrwin .empty{color:#6e7681;text-align:center;padding:26px 12px;font-size:13px}
+#mrwin .tip{font-size:11px;color:#6e7681;padding:4px 4px 6px}
+#mrwin .sec{font-size:12px;font-weight:700;color:#8b949e;margin:8px 2px 5px}
+/* 悬浮窗可缩放(对齐常规软件·拖边框/拖角) — daowin/dlwin/mrwin 同 */
+#daowin,#dlwin,#mrwin{min-width:340px;min-height:240px}
 .rzh{position:absolute;z-index:30;user-select:none;-webkit-user-select:none}
 .rzh.e{top:6px;bottom:14px;right:0;width:6px;cursor:ew-resize}
 .rzh.w{top:6px;bottom:14px;left:0;width:6px;cursor:ew-resize}
@@ -778,6 +806,7 @@ html.m #hint{font-size:14px;padding:18px}
     <button class="tbtn" id="bStar" title="收藏当前页">☆</button>
     <button class="tbtn" id="bTr" title="整页翻译(Edge 引擎·对照手机 APK)·再点恢复原文">译</button>
     <button class="tbtn" id="bDl" title="下载 · 网页内下载的文件(浏览器下载管理)">⬇</button>
+    <button class="tbtn" id="bMr" title="本页资源 · 图片/视频/文档/附件(对齐手机 APK)">🖼</button>
     <button class="tbtn" id="bBk" title="对话备份 · 近期对话 / 对话记录">📁</button>
     <button class="tbtn" id="bExt" title="用系统浏览器打开当前页">↗</button>
   </div>
@@ -811,6 +840,12 @@ html.m #hint{font-size:14px;padding:18px}
   <div class="dwh" id="dlHead"><span>⬇</span><span class="t" id="dlTitle">下载</span><button class="dwx" id="dlClose">✕ 关闭</button></div>
   <div class="dwbar"><button class="mini" id="dlRefresh">🔄 刷新</button><button class="mini" id="dlFolder">📁 下载文件夹</button></div>
   <div class="dlbody"><div class="tip">浏览器下载 · 在网页中下载的文件都会出现在这里 · <b>拖文件卡到网页</b>即上传到当前网页上传框(与对话备份无关 · 对齐手机 APK)</div><div id="dlList"><div class="empty">加载中…</div></div></div>
+  <div class="rzh e" data-rz="e"></div><div class="rzh w" data-rz="w"></div><div class="rzh n" data-rz="n"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
+</div>
+<div id="mrwin">
+  <div class="dwh" id="mrHead"><span>🖼</span><span class="t" id="mrTitle">本页资源</span><button class="dwx" id="mrClose">✕ 关闭</button></div>
+  <div class="dwbar"><button class="mini" id="mrRefresh">🔄 重采</button><span class="tip" id="mrSrc" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span></div>
+  <div class="dlbody"><div class="tip">汇集当前页全部图片 / 视频 / 音频 / 文档 / 附件 · 加载不出的资源也可在此直开(对齐手机 APK 本页媒体悬浮窗)</div><div id="mrList"><div class="empty">点「🔄 重采」扫描当前页</div></div></div>
   <div class="rzh e" data-rz="e"></div><div class="rzh w" data-rz="w"></div><div class="rzh n" data-rz="n"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
 </div>
 <div class="dtoast" id="daotoast"></div>
@@ -1138,13 +1173,56 @@ function _fsize(n){n=+n||0;if(n<1024)return n+' B';if(n<1048576)return (n/1024).
 function dlOpen(){_dEl('dlwin').className='on';dlLoad();}
 function dlClose(){_dEl('dlwin').className='';}
 function dlLoad(){if(!DAO_DL.length)_dEl('dlList').innerHTML='<div class="empty">加载中…</div>';vscode.postMessage({type:'shellDownloads'});}
+var _dlAutoT=null;
 function dlRender(){var box=_dEl('dlList');if(!box)return;
   if(!DAO_DL.length){box.innerHTML='<div class="empty">暂无下载 · 在网页中下载文件后会自动出现在这里</div>';var t=_dEl('dlTitle');if(t)t.textContent='下载';return;}
-  var h='';for(var i=0;i<DAO_DL.length;i++){var d=DAO_DL[i];var host='';try{host=new URL(d.url||'').host;}catch(e){}
+  var h='',nAct=0;for(var i=0;i<DAO_DL.length;i++){var d=DAO_DL[i];var host='';try{host=new URL(d.url||'').host;}catch(e){}
+    // 浏览器级下载状态(对齐手机 APK): active=下载中(进度条), failed=失败, 无 state=已完成。
+    if(d.state==='active'){nAct++;var pct=(d.total>0)?Math.min(100,Math.round(d.size*100/d.total)):-1;
+      h+='<div class="rc"><div class="ti" title="'+esc(d.name||'')+'">⏳ '+esc(d.name||'(未命名)')+'</div>'+
+        '<div class="meta"><span style="color:var(--acc,#4ec9b0)">下载中'+(pct>=0?' '+pct+'%':'…')+'</span><span>'+_fsize(d.size)+(d.total>0?' / '+_fsize(d.total):'')+'</span>'+(host?'<span>'+esc(host)+'</span>':'')+'</div>'+
+        (pct>=0?'<div style="height:3px;border-radius:2px;background:rgba(128,128,128,.25);margin:4px 0"><div style="height:100%;border-radius:2px;width:'+pct+'%;background:var(--acc,#4ec9b0)"></div></div>':'')+'</div>';continue;}
+    if(d.state==='failed'){
+      h+='<div class="rc"><div class="ti" title="'+esc(d.name||'')+'">✖ '+esc(d.name||'(未命名)')+'</div>'+
+        '<div class="meta"><span style="color:#f48771">下载失败</span>'+(host?'<span>'+esc(host)+'</span>':'')+(d.time?'<span>'+daoAgo(d.time)+'</span>':'')+'</div></div>';continue;}
     h+='<div class="rc" draggable="false" data-dldrag="'+esc(d.path||'')+'" data-dlname="'+esc(d.name||'')+'" title="拖拽此文件可上传/发送"><div class="ti" title="'+esc(d.name||'')+'">'+esc(d.name||'(未命名)')+'</div>'+
       '<div class="meta"><span>'+_fsize(d.size)+'</span>'+(host?'<span>'+esc(host)+'</span>':'')+(d.time?'<span>'+daoAgo(d.time)+'</span>':'')+'</div>'+
       '<div class="acts"><span class="b pri" data-dlup="'+esc(d.path||'')+'" data-dlupname="'+esc(d.name||'')+'" title="上传此文件到当前打开的网页上传框(对齐手机 APK·免拖拽)">⬆ 传网页</span><span class="b" data-dlopen="'+esc(d.path||'')+'">打开</span><span class="b" data-dlrev="'+esc(d.path||'')+'">所在文件夹</span><span class="b" data-dldel="'+esc(d.path||'')+'">删除</span></div></div>';}
-  box.innerHTML=h;var tt=_dEl('dlTitle');if(tt)tt.textContent='下载 ('+DAO_DL.length+')';}
+  box.innerHTML=h;var tt=_dEl('dlTitle');if(tt)tt.textContent='下载 ('+DAO_DL.length+(nAct?' · '+nAct+'下载中':'')+')';
+  // 有活跃下载时自动轮刷(悬浮窗开着才轮), 完成即停 — 对齐浏览器下载面板实时性。
+  clearTimeout(_dlAutoT);if(nAct&&_dEl('dlwin')&&_dEl('dlwin').className==='on')_dlAutoT=setTimeout(dlLoad,1200);}
+// ── 本页资源悬浮窗(对齐手机 APK media.html): 扫当前标签页内全部图片/视频/音频/文档/附件 ──
+//   同源 iframe 直扫 DOM; 跨源(仍经代理但文档不可达)时用页内桥(__daoMediaScan → __daoMediaList)。
+var MR_ITEMS=[],MR_PAGE='',_mrWaitT=null;
+var MR_META={img:['🖼','图片'],video:['🎬','视频'],audio:['🎵','音频'],md:['📄','Markdown 文档'],file:['📦','文件 / 附件']};
+function mrOpen(){_dEl('mrwin').className='on';mrLoad();}
+function mrClose(){_dEl('mrwin').className='';}
+function _mrScanDoc(doc,base){var out=[],seen={};function push(u,tp,nm){try{if(!u)return;u=String(u);if(u.indexOf('data:')===0&&u.length>2048)return;try{u=new URL(u,base).href;}catch(e){}if(seen[u])return;seen[u]=1;out.push({u:u,t:tp,n:nm||decodeURIComponent((u.split('/').pop()||'').split('?')[0])||tp});}catch(e){}}
+  function walk(root){var i,es;try{es=root.querySelectorAll('img[src]');}catch(e){return;}for(i=0;i<es.length;i++){var el=es[i];if((el.naturalWidth||0)>32||(el.width||0)>32)push(el.currentSrc||el.src,'img',el.alt);}
+    try{es=root.querySelectorAll('video');}catch(e){es=[];}for(i=0;i<es.length;i++){push(es[i].currentSrc||es[i].src,'video');var ss=es[i].querySelectorAll('source[src]');for(var j=0;j<ss.length;j++)push(ss[j].src,'video');}
+    try{es=root.querySelectorAll('audio[src],audio source[src]');}catch(e){es=[];}for(i=0;i<es.length;i++)push(es[i].src,'audio');
+    try{es=root.querySelectorAll('a[href]');}catch(e){es=[];}for(i=0;i<es.length;i++){var hh=es[i].href||'';if(/\/attachments\//.test(hh)||/\.(md|pdf|zip|txt|json|csv|log|doc|docx|xls|xlsx|apk|mp4|webm|mov|mp3|wav|png|jpe?g|gif|webp|svg)(\?|$)/i.test(hh)){var ext=(hh.split('?')[0].split('.').pop()||'').toLowerCase();var tp=/^(png|jpe?g|gif|webp|svg)$/.test(ext)?'img':(/^(mp4|webm|mov)$/.test(ext)?'video':(/^(mp3|wav)$/.test(ext)?'audio':(ext==='md'?'md':'file')));push(hh,tp,(es[i].getAttribute('download')||es[i].textContent||'').trim().slice(0,80));}}
+    var all;try{all=root.querySelectorAll('*');}catch(e){return;}for(i=0;i<all.length;i++){if(all[i].shadowRoot)walk(all[i].shadowRoot);}}
+  walk(doc);return out.slice(0,300);}
+function mrLoad(){var t=active?tabs[active]:null;var box=_dEl('mrList');
+  if(!t||!t.frame){if(box)box.innerHTML='<div class="empty">没有活动标签页</div>';return;}
+  var doc=null;try{doc=t.frame.contentDocument||(t.frame.contentWindow&&t.frame.contentWindow.document);}catch(e){}
+  if(doc&&doc.documentElement){MR_ITEMS=_mrScanDoc(doc,(t.url||doc.baseURI||''));MR_PAGE=t.url||doc.baseURI||'';mrRender();return;}
+  // 跨源 → 页内桥扫描(代理页已注入 /__daobridge.js 响应 __daoMediaScan)
+  if(box&&!MR_ITEMS.length)box.innerHTML='<div class="empty">扫描中…</div>';
+  try{t.frame.contentWindow.postMessage({__daoMediaScan:1},'*');}catch(e){}
+  clearTimeout(_mrWaitT);_mrWaitT=setTimeout(function(){if(box&&!MR_ITEMS.length)box.innerHTML='<div class="empty">本页不可扫描(跨源且页内桥未就绪) · 可先刷新页面</div>';},2500);}
+function _mrOnList(m){clearTimeout(_mrWaitT);MR_ITEMS=m.__daoMediaList||[];MR_PAGE=m.__daoPage||'';mrRender();}
+function mrRender(){var box=_dEl('mrList');if(!box)return;var sr=_dEl('mrSrc');if(sr)sr.textContent=MR_PAGE?('来源: '+MR_PAGE):'';
+  if(!MR_ITEMS.length){box.innerHTML='<div class="empty">本页未发现媒体资源<br>(图片 / 视频 / 文档 / 附件)</div>';var tt0=_dEl('mrTitle');if(tt0)tt0.textContent='本页资源';return;}
+  var ord=['img','video','audio','md','file'],h='';
+  for(var oi=0;oi<ord.length;oi++){var tp=ord[oi];var grp=MR_ITEMS.filter(function(x){return (x.t||'file')===tp;});if(!grp.length)continue;
+    h+='<div class="sec">'+MR_META[tp][0]+' '+MR_META[tp][1]+' · '+grp.length+'</div>';
+    for(var i=0;i<grp.length;i++){var it=grp[i];var idx=MR_ITEMS.indexOf(it);
+      h+='<div class="rc">'+(tp==='img'?'<img class="th" loading="lazy" src="'+esc(it.u)+'" onerror="this.style.opacity=.25">':'<span class="th" style="display:flex;align-items:center;justify-content:center;font-size:20px">'+MR_META[tp][0]+'</span>')
+        +'<div class="bd"><div class="ti" title="'+esc(it.n||'')+'">'+esc(it.n||'(未命名)')+'</div><div class="meta" title="'+esc(it.u)+'">'+esc(it.u)+'</div></div>'
+        +'<div class="acts"><span class="b" data-mropen="'+idx+'">打开</span><span class="b" data-mrcopy="'+idx+'">复制链接</span></div></div>';}}
+  box.innerHTML=h;var tt=_dEl('mrTitle');if(tt)tt.textContent='本页资源 ('+MR_ITEMS.length+')';}
 function daoTab(t){var rec=t==='recent';
   _dEl('dwTabR').classList.toggle('on',rec);_dEl('dwTabB').classList.toggle('on',!rec);
   _dEl('dwViewR').classList.toggle('on',rec);_dEl('dwViewB').classList.toggle('on',!rec);
@@ -1360,7 +1438,11 @@ _dEl('dlwin').addEventListener('click',function(e){var el=e.target.closest&&e.ta
       if(dir.indexOf('w')>=0){var nw2=Math.max(340,Math.min(window.innerWidth-8,sw-(e.clientX-sx)));w.style.left=(sl+sw-nw2)+'px';w.style.width=nw2+'px';}
       if(dir.indexOf('n')>=0){var nh2=Math.max(240,Math.min(window.innerHeight-8,sh-(e.clientY-sy)));w.style.top=Math.max(0,st+sh-nh2)+'px';w.style.height=nh2+'px';}});
     window.addEventListener('mouseup',function(){if(rz){rz=false;saveSz(w);}});}
-  mk(_dEl('daowin'));mk(_dEl('dlwin'));})();
+  mk(_dEl('daowin'));mk(_dEl('dlwin'));mk(_dEl('mrwin'));})();
+(function(){var w=_dEl('mrwin'),hd=_dEl('mrHead'),dx=0,dy=0,drag=false;if(!w||!hd)return;
+  hd.addEventListener('mousedown',function(e){if(e.target.closest('button'))return;drag=true;var r=w.getBoundingClientRect();dx=e.clientX-r.left;dy=e.clientY-r.top;e.preventDefault();});
+  document.addEventListener('mousemove',function(e){if(!drag)return;w.style.left=Math.max(0,e.clientX-dx)+'px';w.style.top=Math.max(0,e.clientY-dy)+'px';w.style.right='auto';});
+  document.addEventListener('mouseup',function(){drag=false;});})();
 // ── 整页翻译(对照手机 APK translate.js·Edge 免费引擎) ──────────────────────
 //   手机: 原生桥 __dcTr 做 HTTP; 桌面: 宿主做 HTTP(translate 消息), 外壳直改同源 iframe 文本节点。
 //   遍历可见文本节点(含开放 Shadow DOM) → 分批送译 → 回填(保留原文可一键恢复) + MutationObserver 增量。
@@ -1413,6 +1495,13 @@ function toggleTranslate(){var t=tabs[active];var fr=t?t.frame:(isBoard()&&BOARD
   daoToast('🌐 翻译中…');
   _trRunOnce(S,doc).then(function(c){if(!S.active)return;daoToast(c>0?('✓ 已翻译 '+c+' 段'):'本页无可翻译内容');});}
 document.getElementById('bDl').onclick=function(){dlOpen();};
+document.getElementById('bMr').onclick=function(){mrOpen();};
+_dEl('mrClose').onclick=function(){mrClose();};
+_dEl('mrRefresh').onclick=function(){MR_ITEMS=[];mrLoad();};
+_dEl('mrList').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-mropen],[data-mrcopy]');if(!el)return;
+  var i=+((el.getAttribute('data-mropen')||el.getAttribute('data-mrcopy'))||0);var it=MR_ITEMS[i];if(!it)return;
+  if(el.hasAttribute('data-mropen')){openWebTab(it.u,it.n||it.u);}
+  else{try{navigator.clipboard.writeText(it.u);daoToast('✓ 已复制链接');}catch(e2){daoToast('复制失败',true);}}});
 document.getElementById('bBk').onclick=function(){daoOpen('recent');};
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
 // 浏览器细节·点菜单外任意处一键自动收起(对齐桌面浏览器下拉菜单): 捕获阶段判定点击落点不在 #menu/#bMenu 即收起;
@@ -1523,6 +1612,7 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='cloudHost'){_boardHostAll(m.msg||{});}
   else if(m.type==='shellBackupsData'){_bkTree=m.tree||{root:'',accounts:[]};if(OV.className){if(_bkMode==='dl')renderDownloads();else if(_bkMode==='bk')renderBkLib();}try{daoRenderBackup();}catch(e){}}
   else if(m.type==='shellDownloadsData'){DAO_DL=m.list||[];dlRender();}
+  else if(m.__daoMediaList){try{_mrOnList(m);}catch(e){}}
   else if(m.type==='dlRecentData'){try{daoOnRecent(m);}catch(e){}}
   else if(m.type==='dlExportData'){try{daoOnExport(m);}catch(e){}}
   else if(m.type==='dlZipDone'){try{daoToast(m.ok?('✓ 已打包: '+(m.name||'')):('打包失败: '+(m.error||'')),!m.ok);}catch(e){}}

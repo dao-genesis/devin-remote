@@ -16199,11 +16199,47 @@ function daoSaveDownload(name: string, buf: Buffer, ct: string, src: string): an
     fs.writeFileSync(fp, buf);
     let idx: any[] = [];
     try { idx = JSON.parse(fs.readFileSync(daoDownloadsIndex(), 'utf8')) || []; } catch { idx = []; }
+    // 该 URL 的「下载中」占位条目让位于完成条目(浏览器语义: 同一次下载 活跃→完成)。
+    idx = idx.filter((e: any) => !(e && e.state === 'active' && e.url === (src || '')));
     const meta = { name: safe, path: fp, size: buf.length, contentType: ct || '', url: src || '', time: Date.now() };
     idx.unshift(meta);
     if (idx.length > 500) idx = idx.slice(0, 500);
     try { fs.writeFileSync(daoDownloadsIndex(), JSON.stringify(idx)); } catch { /* 守柔 */ }
     return meta;
+}
+// ── 下载「进行中/失败」状态登记(对齐手机 APK 下载悬浮窗·浏览器级状态) ──
+//   活跃条目形如 { id, name, state:'active'|'failed', size(已收), total(预期), url, time };
+//   完成后由 daoSaveDownload 以完成条目取而代之。写盘按 800ms 节流, 陈旧活跃条目(>10min)自清。
+let _dlSeq = 0;
+let _dlLastWrite = 0;
+function _dlReadIdx(): any[] { try { return JSON.parse(fs.readFileSync(daoDownloadsIndex(), 'utf8')) || []; } catch { return []; } }
+function _dlWriteIdx(idx: any[]): void { try { fs.writeFileSync(daoDownloadsIndex(), JSON.stringify(idx.slice(0, 500))); } catch { /* 守柔 */ } }
+function daoDlBegin(name: string, total: number, src: string): string {
+    const id = 'dl' + Date.now().toString(36) + (++_dlSeq);
+    const now = Date.now();
+    let idx = _dlReadIdx();
+    idx = idx.filter((e: any) => !(e && e.state === 'active' && (now - (e.time || 0) > 600000 || e.url === (src || ''))));
+    idx.unshift({ id, name: String(name || 'download'), state: 'active', size: 0, total: total > 0 ? total : 0, url: src || '', time: now });
+    _dlWriteIdx(idx);
+    _dlLastWrite = now;
+    return id;
+}
+function daoDlTick(id: string, got: number): void {
+    const now = Date.now();
+    if (now - _dlLastWrite < 800) return;
+    _dlLastWrite = now;
+    const idx = _dlReadIdx();
+    const e = idx.find((x: any) => x && x.id === id && x.state === 'active');
+    if (!e) return;
+    e.size = got;
+    _dlWriteIdx(idx);
+}
+function daoDlFail(id: string): void {
+    const idx = _dlReadIdx();
+    const e = idx.find((x: any) => x && x.id === id && x.state === 'active');
+    if (!e) return;
+    e.state = 'failed';
+    _dlWriteIdx(idx);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -16423,6 +16459,9 @@ function daoDropBridgeJs() {
         "document.addEventListener('dragover',function(e){try{var ts=(e.dataTransfer&&e.dataTransfer.types)||[];var has=false;for(var i=0;i<ts.length;i++){if(ts[i]==='application/x-dao-file'||ts[i]==='application/x-dao-conv')has=true;}if(has){e.preventDefault();try{e.dataTransfer.dropEffect='copy';}catch(x){}}}catch(x){}},true);",
         "document.addEventListener('drop',function(e){try{var dtt=e.dataTransfer;if(!dtt)return;var fp='',cv='';try{fp=dtt.getData('application/x-dao-file');}catch(x){}try{cv=dtt.getData('application/x-dao-conv');}catch(x){}if(!fp&&!cv)return;e.preventDefault();e.stopPropagation();var tgt=e.target||document.body;toast('\\u23f3 \\u6b63\\u5728\\u4e0a\\u4f20\\u2026');(async function(){try{var fs;if(fp){var o=JSON.parse(fp);fs=[await fetchFile(ORIGIN+'/__dlfile?p='+encodeURIComponent(o.path||''),(o.name||'file'))];}else{fs=await convFiles(JSON.parse(cv));}var nm=fs.map(function(x){return x.name;}).join(' + ');var ok=feed(tgt,fs);toast(ok?('\\u2705 \\u5df2\\u6295\\u9012\\u4e0a\\u4f20 '+nm):('\\u26a0 \\u672a\\u627e\\u5230\\u4e0a\\u4f20\\u6846 '+nm));}catch(err){toast('\\u2715 \\u4e0a\\u4f20\\u5931\\u8d25: '+((err&&err.message)||err));}})();}catch(x){}},true);",
         // 归一·根治拖拽上传: 外壳(父文档)同源可靠接住 drop → postMessage 命令本桥执行上传(不依赖跨源 iframe 原生 DnD)。
+        // 本页资源盘点(对齐手机 APK collectTabMedia): 外壳 postMessage {__daoMediaScan:1} → 回 {__daoMediaList,__daoPage}。
+        "function scanMedia(){var out=[],seen={};function push(u,tp,nm){try{if(!u)return;u=String(u);if(u.indexOf('data:')===0&&u.length>2048)return;if(u.indexOf('http')!==0&&u.indexOf('blob:')!==0&&u.indexOf('/')!==0)return;if(seen[u])return;seen[u]=1;out.push({u:u,t:tp,n:nm||decodeURIComponent((u.split('/').pop()||'').split('?')[0])||tp});}catch(e){}}try{deepCollect('img[src]').forEach(function(el){if((el.naturalWidth||0)>32||(el.width||0)>32)push(el.currentSrc||el.src,'img',el.alt);});deepCollect('video').forEach(function(el){push(el.currentSrc||el.src,'video');var ss=el.querySelectorAll('source[src]');for(var i=0;i<ss.length;i++)push(ss[i].src,'video');});deepCollect('audio[src],audio source[src]').forEach(function(el){push(el.src,'audio');});deepCollect('a[href]').forEach(function(a){var hh=a.href||'';if(/app\\.devin\\.ai\\/attachments\\//.test(hh)||/\\/attachments\\//.test(hh)||/\\.(md|pdf|zip|txt|json|csv|log|doc|docx|xls|xlsx|apk|mp4|webm|mov|mp3|wav|png|jpe?g|gif|webp|svg)(\\?|$)/i.test(hh)){var ext=(hh.split('?')[0].split('.').pop()||'').toLowerCase();var tp=/^(png|jpe?g|gif|webp|svg)$/.test(ext)?'img':(/^(mp4|webm|mov)$/.test(ext)?'video':(/^(mp3|wav)$/.test(ext)?'audio':(ext==='md'?'md':'file')));push(hh,tp,(a.getAttribute('download')||a.textContent||'').trim().slice(0,80));}});}catch(e){}return out.slice(0,300);}",
+        "window.addEventListener('message',function(e){try{var d=e&&e.data;if(!d||!d.__daoMediaScan)return;var lst=scanMedia();(e.source||parent).postMessage({__daoMediaList:lst,__daoPage:location.href},'*');}catch(x){}},false);",
         "window.addEventListener('message',function(e){try{var d=e&&e.data;if(!d||!d.__daoUpload)return;var u=d.__daoUpload;(async function(){try{var fs;if(u.kind==='file'){fs=[await fetchFile(ORIGIN+'/__dlfile?p='+encodeURIComponent(u.path||''),(u.name||'file'))];}else{fs=await convFiles(u);}toast('\\u23f3 \\u6b63\\u5728\\u4e0a\\u4f20\\u2026');var nm=fs.map(function(x){return x.name;}).join(' + ');var ok=feed(document.body,fs);toast(ok?('\\u2705 \\u5df2\\u6295\\u9012\\u4e0a\\u4f20 '+nm):('\\u26a0 \\u672a\\u627e\\u5230\\u4e0a\\u4f20\\u6846 '+nm));}catch(err){toast('\\u2715 \\u4e0a\\u4f20\\u5931\\u8d25: '+((err&&err.message)||err));}})();}catch(x){}},false);",
         "}catch(e){}})();"
     ].join("");
@@ -16917,8 +16956,13 @@ async function genericWebProxy(targetUrl, depth = 0, reqCtx: any = null, isSub =
         proxyReq = lib.request(options, (pr) => {
             const sc = pr.statusCode || 200;
             const chunks = [];
-            pr.on('error', () => directFail());
-            pr.on('data', (c) => chunks.push(c));
+            // 下载「进行中」登记(浏览器级状态·供 ⬇悬浮窗实时显示): 头到即登记, 收流更新进度, 失败落败, 完成由 daoSaveDownload 收编。
+            const _hcd = String(pr.headers['content-disposition'] || '');
+            const _hct = String(pr.headers['content-type'] || '');
+            const _dlId = (sc < 300 && _isDownloadable(_hcd, _hct)) ? daoDlBegin(_dlFilename(_hcd, u, _hct), parseInt(String(pr.headers['content-length'] || '0'), 10) || 0, u.href) : '';
+            let _dlGot = 0;
+            pr.on('error', () => { if (_dlId) daoDlFail(_dlId); directFail(); });
+            pr.on('data', (c) => { chunks.push(c); if (_dlId) { _dlGot += c.length; daoDlTick(_dlId, _dlGot); } });
             pr.on('end', () => handle(sc, pr.headers, Buffer.concat(chunks)));
         });
         proxyReq.on('error', () => directFail());
