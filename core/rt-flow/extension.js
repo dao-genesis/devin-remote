@@ -2746,20 +2746,33 @@ function _classStr(s){s=String(s==null?'':s).toLowerCase().trim();if(!s)return '
   if(/finished|completed|done|stopped|suspend|expired|exited|archived|deleted/.test(s))return 'finished';
   if(/running|working|in_progress|streaming|active|started|resumed|busy|thinking|executing|coding|planning|testing/.test(s))return 'running';
   return 'running';}
-// 归一 · 状态轮询中的额度保鲜(限频·仅 session-cache 快路·零 devinLogin·零限速风险):
-//   getHealth 只读缓存 → 标签 $ 额度可能长期陈旧; 此处每账号限频(默 120s·疑似耗尽时 45s 强刷)经 verifyOneAccount
-//   缓存快路真拉一次 planStatus 回写 setHealth, 让状态轮询回填的额度真正保鲜。
+// 归一 · 状态轮询中的额度保鲜(限频): getHealth 只读缓存 → 标签 $ 额度可能长期陈旧; 此处每账号限频
+//   (默 120s·疑似耗尽时 45s 强刷)经 verifyOneAccount 真拉一次 planStatus 回写 setHealth。
+//   有缓存会话走快路(零 devinLogin); 无缓存会话走慢道真登录(900s/号 + 全局限速窗 + in-flight 去重)。
 const _healthTickAt = new Map();
+const _healthLoginAt = new Map(); // 无缓存会话账号 → 慢道真登录限频(默 900s/号)
+const _healthInflight = new Set(); // in-flight 去重: 同号并发 tick 只跑一次
 async function _refreshHealthForTick(email, minGapSec) {
   try {
     const k = String(email || '').toLowerCase(); if (!k) return;
     const iv = (minGapSec > 0 ? Math.max(30, minGapSec | 0) : Math.max(30, +_cfg('statusHealthRefreshSec', 120) || 120)) * 1000;
     const last = _healthTickAt.get(k) || 0; if (Date.now() - last < iv) return;
-    _healthTickAt.set(k, Date.now());
+    if (_healthInflight.has(k)) return;
     const a = (_store.accounts || []).find((x) => String(x.email || '').toLowerCase() === k); if (!a) return;
-    if (!_getCachedSession(a.email)) return; // 无缓存会话 → 不走全路(防批量 devinLogin 触限速)
-    const vr = await verifyOneAccount(a);
-    if (vr && vr.ok && vr.q) _store.setHealth(a.email, vr.q);
+    if (!_getCachedSession(a.email)) {
+      // 无缓存会话 → 慢道: 打开中的标签值得一次真登录取额度(否则 $ 永远陈旧),
+      //   但须 900s/号限频 + 尊重全局 devinLogin 限速窗(防批量登录触限速)
+      if (Date.now() < _devinLoginRateLimitedUntil) return;
+      const slow = Math.max(300, +_cfg('statusHealthLoginRefreshSec', 900) || 900) * 1000;
+      const lg = _healthLoginAt.get(k) || 0; if (Date.now() - lg < slow) return;
+      _healthLoginAt.set(k, Date.now());
+    }
+    _healthTickAt.set(k, Date.now());
+    _healthInflight.add(k);
+    try {
+      const vr = await verifyOneAccount(a);
+      if (vr && vr.ok && vr.q) _store.setHealth(a.email, vr.q);
+    } finally { _healthInflight.delete(k); }
   } catch (e) {}
 }
 // 归一 · 多实例标签状态实时轮询(对齐手机端·仅打开中的少量标签·每账号一次 listSessions):

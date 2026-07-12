@@ -1493,6 +1493,16 @@ function test(name, fn) {
     }
   });
 
+  test("extension.js: 无缓存会话账号须走慢道真登录保鲜 (900s/号限频+限速窗+in-flight 去重) (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/_cfg\('statusHealthLoginRefreshSec', 900\)/.test(src), rel.join("/") + " 慢道须 900s/号限频 — 旧病灶: 无缓存会话直接 return → $ 永远陈旧");
+      assert.ok(/_devinLoginRateLimitedUntil\) return;/.test(src), rel.join("/") + " 慢道须尊重全局 devinLogin 限速窗");
+      assert.ok(/_healthInflight/.test(src), rel.join("/") + " 须有 in-flight 去重");
+    }
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);
