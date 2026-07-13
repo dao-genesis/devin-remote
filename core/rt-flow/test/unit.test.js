@@ -511,31 +511,38 @@ function test(name, fn) {
     }
   }
 
-  // ── 11a4. 切号板块 · 每账号环境模式(Linux/Windows) 切换按钮 (源级·双副本·vendor 同步) ──
-  console.log("\n[切号 · 每账号 Linux/Windows 环境模式按钮]");
+  // ── 11a4. 切号板块 · 每账号环境模式(Linux/Windows/macOS) 三态循环按钮 (源级·双副本·vendor 同步) ──
+  console.log("\n[切号 · 每账号 Linux/Windows/macOS 三态环境模式按钮]");
   {
     const _fs = require("fs"), _p = require("path");
     for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
       const src = _fs.readFileSync(_p.join(__dirname, ...rel), "utf8");
       const tag = rel.join("/");
-      test(tag + " 账号行含 em 环境模式按钮 (与 ⚡/🖥/🌐 并列·图标随模式变)", () => {
-        assert.ok(/class="b em em-\$\{a\.envMode === "windows" \? "win" : "linux"\}"/.test(src), "缺 em 按钮或模式类");
+      test(tag + " 账号行含 em 三态环境模式按钮 (与 ⚡/🖥/🌐 并列·图标随模式变)", () => {
+        assert.ok(/class="b em em-\$\{a\.envMode === "windows" \? "win" : a\.envMode === "macos" \? "mac" : "linux"\}"/.test(src), "缺 em 三态模式类");
         assert.ok(/onclick="em\(\$\{i\}\)"/.test(src), "em 按钮缺 onclick");
-        assert.ok(/&#129695;/.test(src) && /&#128039;/.test(src), "缺 🪟/🐧 图标 (状态可视)");
+        assert.ok(/&#129695;/.test(src) && /&#128039;/.test(src) && /&#127822;/.test(src), "缺 🪟/🐧/🍎 三态图标 (状态可视)");
       });
-      test(tag + " em 客户端 toggle linux⇄windows (默认 linux·点击互换)", () => {
+      test(tag + " em 客户端三态循环步进 (linux→windows→macos→linux · post cycleEnvModeBatch)", () => {
         assert.ok(/function em\(i\)\{/.test(src), "缺客户端 em(i)");
-        assert.ok(/const next=cur==='windows'\?'linux':'windows'/.test(src), "em 未 linux⇄windows 互换");
-        assert.ok(/type:'setEnvModeBatch'/.test(src), "em 未 post setEnvModeBatch");
+        assert.ok(/type:'cycleEnvModeBatch'/.test(src), "em 未 post cycleEnvModeBatch");
+        assert.ok(/const ix=_selectedFor\(i\);vscode\.postMessage\(\{type:'cycleEnvModeBatch',indices:ix\.length\?ix:\[i\]\}\)/.test(src), "em 未按批量选区步进 (瞬移到下一位)");
       });
-      test(tag + " 宿主 setEnvModeBatch 持久化 + 每号隔离 (钉此号不波及他号)", () => {
-        assert.ok(/case "setEnvModeBatch":/.test(src), "缺宿主 setEnvModeBatch");
-        assert.ok(/acc\.envMode = mode;/.test(src), "未写 acc.envMode");
+      test(tag + " 宿主 cycleEnvModeBatch 每号各自+1 步进 + 每号隔离 (不强制同态)", () => {
+        assert.ok(/case "cycleEnvModeBatch":/.test(src), "缺宿主 cycleEnvModeBatch");
+        assert.ok(/const next = _nextEnvMode\(acc\.envMode\);/.test(src), "未按各号自身当前态步进");
         assert.ok(/_writeEnvModeStates\(items\)/.test(src), "未持久化 env-mode");
       });
-      test(tag + " 环境模式独立持久化文件 + 缺省 linux 归一化 + 读盘还原", () => {
+      test(tag + " 宿主 setEnvModeBatch 显式设同态仍保留 (兼容批量置位)", () => {
+        assert.ok(/case "setEnvModeBatch":/.test(src), "缺宿主 setEnvModeBatch");
+        assert.ok(/acc\.envMode = mode;/.test(src), "未写 acc.envMode");
+      });
+      test(tag + " 三态归一化 + 步进循环 + 独立持久化文件 + 读盘还原", () => {
         assert.ok(/_env_mode\.json/.test(src), "缺 _env_mode.json 持久化");
         assert.ok(/function _normEnvMode\(m\)/.test(src), "缺 _normEnvMode");
+        assert.ok(/"macos" \|\| s === "mac"/.test(src), "_normEnvMode 未识别 macos");
+        assert.ok(/const ENV_MODE_CYCLE = \["linux", "windows", "macos"\]/.test(src), "缺三态循环序");
+        assert.ok(/function _nextEnvMode\(m\)/.test(src), "缺 _nextEnvMode 步进");
         assert.ok(/a\.envMode = _normEnvMode\(em && em\.envMode\)/.test(src), "store 加载未还原 envMode");
       });
     }
