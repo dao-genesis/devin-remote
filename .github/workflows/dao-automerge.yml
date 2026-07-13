@@ -121,6 +121,24 @@ jobs:
               core.info('冷却窗口内，跳过本轮（min_seconds_between_merges）'); return;
             }
 
+            // 合并后发版断链根治: GITHUB_TOKEN 的 merge push 不触发 on:push → android-release 永不跑
+            //   → 改了 rt-flow-app 却永不发包、手机「检查更新」永远检索不到新版。
+            //   合并命中 addons/rt-flow-app/** 的 PR 后, 用备援令牌显式 dispatch android-release.yml。
+            async function kickRelease(prNumber) {
+              try {
+                const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: prNumber, per_page: 100 });
+                if (!files.some(f => (f.filename || '').startsWith('addons/rt-flow-app/'))) return;
+                const tok = process.env.DAO_MERGE_TOKEN;
+                if (!tok) { core.warning(`PR #${prNumber} 含 rt-flow-app 改动但无 DAO_MERGE_TOKEN, 无法触发 android-release 发版`); return; }
+                const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/workflows/android-release.yml/dispatches`, {
+                  method: 'POST',
+                  headers: { authorization: `token ${tok}`, accept: 'application/vnd.github+json' },
+                  body: JSON.stringify({ ref: 'main' })
+                });
+                core.info(`android-release dispatch (PR #${prNumber}): ${r.status}`);
+              } catch (e) { core.warning(`android-release dispatch 失败: ${e.message}`); }
+            }
+
             // ③ 合并：带标签 + 可信 + CI 全绿
             for (const pr of prs) {
               if (budget <= 0) { core.info('本小时合并额度已用尽，限速中'); break; }
@@ -147,6 +165,7 @@ jobs:
                 if (A.delBranch && pr.head.repo && pr.head.repo.full_name === `${owner}/${repo}`) {
                   await github.rest.git.deleteRef({ owner, repo, ref: `heads/${pr.head.ref}` }).catch(()=>{});
                 }
+                await kickRelease(pr.number);
               } catch (e) {
                 // GITHUB_TOKEN 无法合并改动了 workflow 文件的 PR；用备援合并令牌兜底
                 const fb = process.env.DAO_MERGE_TOKEN;
@@ -164,6 +183,7 @@ jobs:
                         method: 'DELETE', headers: { authorization: `token ${fb}` }
                       }).catch(()=>{});
                     }
+                    await kickRelease(pr.number);
                     continue;
                   }
                   core.warning(`PR #${pr.number} 备援合并也失败: ${resp.status} ${await resp.text()}`);
