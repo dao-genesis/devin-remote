@@ -253,7 +253,112 @@ const DaoRelayApp = (function () {
 "  }\n" +
 "}\n";
   }
+  function hubRevoke(id) {
+    var a = hubGetAgent(id); if (!a) return false;
+    try { (a.waiters || []).slice().forEach(function (w) { try { w(); } catch (e) {} }); } catch (e) {}
+    agentRegistry.delete(a.id);
+    return true;
+  }
   //__HUB_END__
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //__CFPROV_START__ Cloudflare 一键建 Worker (可选·固定域名) —— 纯 fetch 移植自
+  //   addons/dao-relay/provision.mjs (桌面版走 wrangler; 手机 WebView 无 Node,
+  //   改走 CF REST 多模块上传, worker 源取自公开仓 raw)。API Token 仅本次内存使用,
+  //   不落盘不过中继; 成功后仅把恒定 URL 前插到 relay 端点(内置端点保留为兜底)。
+  //   经 test/cf-provision.test.js 切片实测, 勿删标记。
+  // ═══════════════════════════════════════════════════════════════════════
+  var CF_API = "https://api.cloudflare.com/client/v4";
+  var CF_WORKER_NAME = "dao-relay-do";
+  var CF_SRC_BASE = "https://raw.githubusercontent.com/dao-genesis/devin-remote/main/addons/dao-relay/";
+  var cfNet = null;   // 测试可注入; 运行时默认全局 fetch
+  function cfFetch() { return (cfNet || fetch).apply(null, arguments); }
+  var cfProv = { phase: "idle", step: 0, msg: "未配置 (使用零账号内置中继)", url: "", subdomain: "", accountId: "", error: "", ts: 0 };
+  function cfSet(phase, step, msg, extra) {
+    cfProv.phase = phase; cfProv.step = step; cfProv.msg = msg; cfProv.ts = Date.now();
+    if (extra) Object.assign(cfProv, extra);
+  }
+  async function cfApi(path, token, init) {
+    init = init || {};
+    var headers = Object.assign({ Authorization: "Bearer " + token }, init.headers || {});
+    if (!(init.body instanceof FormData) && !headers["content-type"]) headers["content-type"] = "application/json";
+    var r = await cfFetch(CF_API + path, Object.assign({}, init, { headers: headers }));
+    var j = null; try { j = await r.json(); } catch (e) { j = {}; }
+    if (!r.ok || j.success === false) {
+      var msg = (j.errors && j.errors.map && j.errors.map(function (e) { return e.message; }).join("; ")) || ("HTTP " + r.status);
+      var err = new Error("CF " + path + ": " + msg); err.cfStatus = r.status; throw err;
+    }
+    return j.result;
+  }
+  async function cfEnsureSubdomain(token, accountId) {
+    try {
+      var r = await cfApi("/accounts/" + accountId + "/workers/subdomain", token);
+      if (r && r.subdomain) return r.subdomain;
+    } catch (e) { /* 未注册 → 下方登记 */ }
+    var cand = "dao-" + String(accountId).slice(0, 8);
+    var put = await cfApi("/accounts/" + accountId + "/workers/subdomain", token, { method: "PUT", body: JSON.stringify({ subdomain: cand }) });
+    return (put && put.subdomain) || cand;
+  }
+  async function cfFetchSrc(name) {
+    var r = await cfFetch(CF_SRC_BASE + name);
+    if (!r.ok) throw new Error("取 worker 源失败 (" + name + ": HTTP " + r.status + ")");
+    return await r.text();
+  }
+  function cfBuildForm(workerSrc, keysSrc, withMigration) {
+    var meta = {
+      main_module: "worker.js",
+      compatibility_date: "2024-09-23",
+      bindings: [{ type: "durable_object_namespace", name: "DAO_RELAY", class_name: "DaoRelayDO" }],
+    };
+    if (withMigration) meta.migrations = { new_tag: "v8", new_sqlite_classes: ["DaoRelayDO"] };
+    var fd = new FormData();
+    fd.append("metadata", new Blob([JSON.stringify(meta)], { type: "application/json" }), "metadata.json");
+    fd.append("worker.js", new Blob([workerSrc], { type: "application/javascript+module" }), "worker.js");
+    fd.append("keys.js", new Blob([keysSrc], { type: "application/javascript+module" }), "keys.js");
+    return fd;
+  }
+  async function cfProvisionRun(token) {
+    cfSet("running", 1, "① 校验 API Token…", { error: "", url: "" });
+    var v = await cfApi("/user/tokens/verify", token);
+    if (!v || v.status !== "active") throw new Error("token 未激活 (status=" + (v && v.status) + ")");
+    cfSet("running", 2, "② 读取账号…");
+    var accounts = await cfApi("/accounts?per_page=50", token);
+    if (!Array.isArray(accounts) || !accounts.length) throw new Error("此 Token 读不到任何账号 (需含 Account 读取权限)");
+    var accountId = accounts[0].id;
+    cfSet("running", 3, "③ 登记 workers.dev 子域…", { accountId: accountId });
+    var subdomain = await cfEnsureSubdomain(token, accountId);
+    var url = "https://" + CF_WORKER_NAME + "." + subdomain + ".workers.dev";
+    cfSet("running", 4, "④ 取中继 Worker 源码 (公开仓最新版)…", { subdomain: subdomain });
+    var workerSrc = await cfFetchSrc("worker.js");
+    var keysSrc = await cfFetchSrc("keys.js");
+    cfSet("running", 5, "⑤ 上传部署 Worker (Durable Object)…");
+    var scriptPath = "/accounts/" + accountId + "/workers/scripts/" + CF_WORKER_NAME;
+    try {
+      await cfApi(scriptPath, token, { method: "PUT", body: cfBuildForm(workerSrc, keysSrc, true) });
+    } catch (e) {
+      // 已部署过同 migration tag → 去掉 migrations 重传 (幂等更新)
+      await cfApi(scriptPath, token, { method: "PUT", body: cfBuildForm(workerSrc, keysSrc, false) });
+    }
+    cfSet("running", 6, "⑥ 开启 workers.dev 路由…");
+    try { await cfApi(scriptPath + "/subdomain", token, { method: "POST", body: JSON.stringify({ enabled: true }) }); } catch (e) { /* 部分套餐默认已开 */ }
+    cfSet("running", 7, "⑦ 健康检查 (边缘传播需几秒)…", { url: url });
+    var healthy = false;
+    for (var i = 0; i < 8 && !healthy; i++) {
+      try {
+        var hr = await cfFetch(url + "/health");
+        if (hr && hr.ok) { var hj = await hr.json(); if (hj && hj.status === "ok") healthy = true; }
+      } catch (e) {}
+      if (!healthy) await new Promise(function (s) { setTimeout(s, 3000); });
+    }
+    // 成功: 把恒定 URL 前插到 relay 端点 (内置端点保留为兜底), 原生落盘后重连即生效。
+    var N = typeof Native !== "undefined" ? Native : {};
+    var urls = [url].concat(candidates.filter(function (u) { return u !== url; }));
+    try { if (N.saveRelayConfig) N.saveRelayConfig(JSON.stringify({ url: urls.join(","), token: cfg.token || "", session: cfg.session || "" })); } catch (e) {}
+    cfSet("done", 8, healthy ? "✅ 恒定通道就绪: " + url : "⚠ 已部署 (边缘传播中, 稍后自动可达): " + url, { url: url, healthy: healthy });
+    try { if (N.relayRestart) N.relayRestart(); } catch (e) {}
+    return cfProv;
+  }
+  //__CFPROV_END__
 
   async function handleFrame(m) {
     const path = (m && m.path) || "/api/health";
@@ -320,6 +425,21 @@ const DaoRelayApp = (function () {
       return { status: 200, body: { ok: true } };
     }
     if (path === "/api/agents") { return { status: 200, body: { agents: hubList() } }; }
+    if (path === "/api/revoke") {
+      var rid = m.body && m.body.agent_id;
+      if (!rid || hubIsSelf(rid)) return { status: 400, body: { error: "need body.agent_id (被控端 id, 不可为 self)" } };
+      var okRevoke = hubRevoke(rid);
+      if (!okRevoke) return { status: 404, body: { error: "agent not found" } };
+      return { status: 200, body: { ok: true, revoked: rid, agents: hubList() } };
+    }
+    if (path === "/api/cf-status") { return { status: 200, body: Object.assign({}, cfProv) }; }
+    if (path === "/api/cf-provision") {
+      var cfTok = (m.body && m.body.token) || "";
+      if (!cfTok || cfTok.length < 20) return { status: 400, body: { error: "need body.token (Cloudflare API Token)" } };
+      if (cfProv.phase === "running") return { status: 200, body: Object.assign({ already: true }, cfProv) };
+      cfProvisionRun(cfTok).catch(function (e) { cfSet("error", cfProv.step, "✗ " + String((e && e.message) || e), { error: String((e && e.message) || e) }); });
+      return { status: 200, body: { started: true, poll: "/api/cf-status" } };
+    }
     if (path === "/api/result-fetch") {
       const a = hubGetAgent(m.body && m.body.agent_id);
       if (!a) return { status: 404, body: { error: "agent not found" } };
@@ -412,7 +532,10 @@ const DaoRelayApp = (function () {
     try { required = !!(N && N.e2eRequired && N.e2eRequired() && N.e2eEnabled && N.e2eEnabled()); } catch (e) {}
     if (required && !enc) {
       var p = (m.path || "");
-      if (p !== "/api/health") {
+      // 门禁例外: 无账号敏感数据的存活探测 + 中枢管理/接入元数据面 (本身已受 Bearer Token 门禁,
+      // 且供本机前端在开启强制 E2E 时仍能读电脑列表/取接入脚本/驱动 Cloudflare 部署)。
+      var _e2eExempt = { "/api/health":1, "/api/agents":1, "/api/revoke":1, "/api/bootstrap.ps1":1, "/bootstrap.ps1":1, "/api/cf-status":1, "/api/cf-provision":1 };
+      if (!_e2eExempt[p]) {
         return { status: 403, body: { error: "e2e_required", hint: "本机已开启强制端到端加密: 请用 E2E Key 加密 RPC 载荷 ({__e2e__:1,c:seal(...)}) 后再发送 (明文请求已拒绝以防账号泄露)" }, enc: false };
       }
     }
@@ -510,6 +633,7 @@ const DaoRelayApp = (function () {
 
   return {
     register(map) { Object.assign(COMMANDS, map || {}); },
+    setNetFn(fn) { cfNet = fn; },   // 测试注入 fetch (CF provisioning 切片实测用)
     setStatusCb(fn) { onStatus = fn; },
     serveLocal: serveLocal,
     start(config) {
