@@ -14,7 +14,7 @@ function ok(cond, msg) { if (cond) { console.log("  ok  - " + msg); } else { fai
 // ── ① 附件预热: DOM 一出现附件即触发后台整取 → 首次点开命中磁盘缓存 ──
 ok(/static void installAttachmentPrefetch\(WebView w\)/.test(main), "installAttachmentPrefetch 存在");
 ok(/installMediaRetry\(v\);\s*\/\/[^\n]*\n\s*installAttachmentPrefetch\(v\);/.test(main), "onPageFinished 安装附件预热");
-ok(/installMediaRetry\(v\); installAttachmentPrefetch\(v\); harvestPageAuth/.test(main), "SPA 路由后重装 (doUpdateVisitedHistory)");
+ok(/installMediaRetry\(v\); installAttachmentPrefetch\(v\); installComposerUpload\(v\); harvestPageAuth/.test(main), "SPA 路由后重装 (doUpdateVisitedHistory)");
 ok(/window\.__daoPf/.test(main), "幂等守卫 __daoPf");
 ok(/location\.host!=='app\.devin\.ai'/.test(main), "只在 app.devin.ai 生效");
 ok(/'Range':'bytes=0-0'/.test(main), "1 字节 Range 探测触发原生预热 (零重复下载)");
