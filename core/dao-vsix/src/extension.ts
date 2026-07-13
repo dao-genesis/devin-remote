@@ -7673,6 +7673,11 @@ input[type=checkbox],input[type=radio],input[type=range]{background:transparent;
 .ft .dot.off{background:var(--danger)}
 .st{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin:16px 0 8px}
 .ovsec{margin-bottom:6px}
+/* 主页响应式多列: 宽屏左右分块(340px 一列·最多4列), 窄边栏(<340px)自动回落单列·观感不变 · 道法自然 */
+#v-overview.active{display:block;column-gap:16px;columns:340px 4}
+#v-overview .ovb{break-inside:avoid;-webkit-column-break-inside:avoid;page-break-inside:avoid;display:block;margin:0 0 6px}
+#v-overview .ovb>.st:first-child{margin-top:0}
+#v-overview .ovb>.br{margin-bottom:0}
 .toast{position:fixed;bottom:20px;right:20px;padding:8px 16px;border-radius:6px;font-size:12px;z-index:200;animation:fi .2s}
 .toast.hid{display:none}
 .toast.ok{background:var(--success);color:#000}
@@ -8261,7 +8266,23 @@ function rO(){
   // 主页专注单账号信息/操作/注入。
   // ② 去芜存菁: 把「当前账号·手动内容」(Knowledge/Playbooks/Secrets/Git) 直接合进主页
   v.innerHTML+=daoOverviewManualHtml();
+  _ovGroup(v);
   daoLoadOverviewManual();
+}
+// 帛书·「大制无割」: 把主页扁平的 (.st + 其后卡片) 序列按标题切分, 每段裹入一个 .ovb 原子块,
+//   使 CSS 多列(columns)分栏时「标题永不与其卡片分离」——纯 DOM 重parent, 保留全部 id, 异步内容照常回填。
+function _ovGroup(v){
+  try{
+    var kids=[].slice.call(v.children);
+    if(!kids.length)return;
+    var frag=document.createDocumentFragment(),cur=null;
+    kids.forEach(function(el){
+      if(el.classList&&el.classList.contains('st')){cur=document.createElement('div');cur.className='ovb';frag.appendChild(cur);}
+      else if(!cur){cur=document.createElement('div');cur.className='ovb';frag.appendChild(cur);}
+      cur.appendChild(el);
+    });
+    v.appendChild(frag);
+  }catch(e){}
 }
 // ② 帛书·「为腹不为目」: 手动·对应当前账号的 K/P/S/Git 不再各占侧栏标签, 统一落主页内查看/修改/修复。
 //   复用既有 loadTabData→rT 渲染(含新建/刷新/删除/🔒手锁), 数据走当前账号实时 API。
