@@ -2619,6 +2619,16 @@ public class MainActivity extends AppCompatActivity {
     //   键 = 附件路径 sha1 (内容按路径不变, 与鉴权 token 无关); LRU 限容 512MB。
     private static final long MEDIA_CACHE_MAX_TOTAL = 512L * 1024 * 1024;
     private static final long MEDIA_CACHE_MAX_ONE = 300L * 1024 * 1024;
+    /** 计费网络(蜂窝/热点)下投机性整取的单文件上限: 大视频/录屏不再后台全量双重下载(播放流+预取各一份)。 */
+    private static final long MEDIA_PF_METERED_MAX = 8L * 1024 * 1024;
+    /** 当前活动网络是否计费 (与系统「省流量」判定一致); 识别不到保守按不计费(放行)。 */
+    static boolean meteredNetwork() {
+        try {
+            android.content.Context ctx = HttpBridge.appCtx;
+            ConnectivityManager cm = ctx == null ? null : (ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            return cm != null && cm.isActiveNetworkMetered();
+        } catch (Exception e) { return false; }
+    }
     private static final java.util.Set<String> sMediaFetching =
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
     // 整取下载走固定 3 线程池: 预热一次可能同时看到几十个附件, 每个开一条裸线程会挤爆弱网带宽
@@ -2747,10 +2757,11 @@ public class MainActivity extends AppCompatActivity {
                 boolean resume = (code == 206 && have > 0);
                 if (code != 200 && !resume) return false;
                 if (!resume) have = 0;
+                long maxOne = meteredNetwork() ? MEDIA_PF_METERED_MAX : MEDIA_CACHE_MAX_ONE;
                 long clen = -1;
                 try { clen = c.getContentLengthLong(); } catch (Throwable ignored) {}
                 if (!resume) {
-                    if (clen > MEDIA_CACHE_MAX_ONE) return false;
+                    if (clen > maxOne) return false;
                     String ctype = c.getContentType();
                     String mime = "application/octet-stream";
                     if (ctype != null && !ctype.isEmpty()) { int sc = ctype.indexOf(';'); mime = (sc >= 0 ? ctype.substring(0, sc) : ctype).trim(); }
@@ -2769,7 +2780,7 @@ public class MainActivity extends AppCompatActivity {
                     byte[] buf = new byte[65536]; int n;
                     while ((n = in.read(buf)) > 0) {
                         out.write(buf, 0, n); w += n;
-                        if (w > MEDIA_CACHE_MAX_ONE) { try { out.close(); } catch (Exception ignored) {} tmp.delete(); lenf.delete(); return false; }
+                        if (w > maxOne) { try { out.close(); } catch (Exception ignored) {} tmp.delete(); lenf.delete(); return false; }
                     }
                 } catch (Exception brk) { /* 断流: 已写入字节留在 .part 供续传 */ }
                 finally { try { out.close(); } catch (Exception ignored) {} try { in.close(); } catch (Exception ignored) {} }
@@ -4364,6 +4375,7 @@ public class MainActivity extends AppCompatActivity {
     //   用户真正点开时已命中磁盘缓存秒开。同源 fetch 零 CORS 问题; 限并发 2·每页去重·上限 300。
     static void installAttachmentPrefetch(WebView w) {
         if (w == null) return;
+        if (meteredNetwork()) return;   // 计费网络: 不装投机性批量预热(每页可达百件×整取落盘); 真点开的媒体仍正常加载+小件缓存
         String js = "(function(){try{if(window.__daoPf)return;"
             + "if(location.host!=='app.devin.ai')return;window.__daoPf=1;"
             + "var seen={},q=[],act=0,total=0;"
