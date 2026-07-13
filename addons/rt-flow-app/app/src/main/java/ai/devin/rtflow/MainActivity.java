@@ -4550,13 +4550,11 @@ public class MainActivity extends AppCompatActivity {
             + "try{window.RTDL&&RTDL.pickUpload&&RTDL.pickUpload();}catch(_){}"
             + "},true);});"
             + "ref.parentNode.appendChild(it);}catch(e){}}"
-            + "function sweep(n){try{if(!n||n.nodeType!==1)return;"
-            + "if(n.matches&&n.matches('[role=\"menu\"],[data-radix-menu-content]'))enhance(n);"
-            + "if(n.querySelectorAll)n.querySelectorAll('[role=\"menu\"],[data-radix-menu-content]').forEach(enhance);}catch(e){}}"
-            + "new MutationObserver(function(ms){ms.forEach(function(m){"
-            + "if(m.addedNodes)for(var i=0;i<m.addedNodes.length;i++)sweep(m.addedNodes[i]);});})"
-            + ".observe(document.documentElement,{childList:true,subtree:true});"
-            + "sweep(document.body);"
+            + "var T=0;function scan(){T=0;try{document.querySelectorAll('[role=\"menu\"],[data-radix-menu-content]').forEach(enhance);}catch(e){}}"
+            + "function kick(){if(T)return;T=setTimeout(scan,50);}"
+            + "new MutationObserver(kick)"
+            + ".observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['role','data-radix-menu-content']});"
+            + "scan();"
             + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }

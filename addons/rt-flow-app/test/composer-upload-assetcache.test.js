@@ -24,6 +24,8 @@ ok(/static void installComposerUpload\(WebView w\)/.test(java), "存在 installC
 ok(/window\.__rtNewUp/.test(java), "注入幂等守卫 __rtNewUp");
 ok(/attach\|upload\|file\|photo\|screenshot\|camera\|附件\|上传\|文件\|图片\|截图\|拍照/.test(java), "语义门: 附件/上传类弹出菜单才追加");
 ok(/\[role=\\"menu\\"\],\[data-radix-menu-content\]/.test(java), "观察 Radix menu 弹出");
+ok(/function scan\(\)\{T=0;try\{document\.querySelectorAll/.test(java), "全文档防抖重扫(Radix portal 先挂节点后置属性也不漏)");
+ok(/attributes:true,attributeFilter:\['role','data-radix-menu-content'\]/.test(java), "同时观察 role 属性变化");
 ok(/RTDL&&RTDL\.pickUpload&&RTDL\.pickUpload\(\)/.test(java), "菜单项点击 → RTDL.pickUpload");
 ok(/installAttachmentPrefetch\(v\); \/\/[^\n]*\n\s*installComposerUpload\(v\);/.test(java), "onPageFinished 装 installComposerUpload");
 ok(/installAttachmentPrefetch\(v\); installComposerUpload\(v\); harvestPageAuth/.test(java), "SPA 路由(doUpdateVisitedHistory)重装");
