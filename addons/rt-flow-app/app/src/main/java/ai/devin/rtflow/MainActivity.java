@@ -4472,27 +4472,35 @@ public class MainActivity extends AppCompatActivity {
     //   归一: 全页只留一个共享观察者, 经 window.__rtWatch(fn) 注册各扫描子; DOM 变更仅置脏,
     //   由 requestIdleCallback 在空闲期单次冲刷所有子(合并三份重扫描为一次); 且检测到「用户
     //   正在打字/组合输入」时顺延冲刷 —— page-side 输入让行, 对齐原生 INPUT_QUIET_MS 之则,
-    //   封顶顺延保证 ＋菜单/附件预热等仍会跑。幂等(window.__rtWatch 守卫)。
+    //   封顶顺延(ric timeout)保证 ＋菜单/附件预热等仍会跑。幂等(window.__rtWatch 守卫), 但每次
+    //   重装均经 __rtWatchArm 重校观察目标: document 被替换(document.open 类)时 window 仍存
+    //   而旧 documentElement 上的观察器已死 —— 重挂到当前 documentElement 才不成僵尸。
     //   兜底: 若 __rtWatch 尚未就绪(注入乱序/极旧内核), 各子退回自建观察者, 功能不降级。
     static void installDomWatch(WebView w) {
         if (w == null) return;
-        String js = "(function(){try{if(window.__rtWatch)return;"
+        String js = "(function(){try{"
+            + "if(window.__rtWatch){if(window.__rtWatchArm)window.__rtWatchArm();return;}"
             + "var subs=[],dirty=false,sched=false,lastType=0,QUIET=900;"
             + "function typing(){try{var a=document.activeElement;"
             + "var e=a&&(a.isContentEditable||/^(INPUT|TEXTAREA)$/.test(a.tagName||''));"
             + "return !!e&&(Date.now()-lastType)<QUIET;}catch(_){return false;}}"
             + "['keydown','compositionstart','compositionupdate'].forEach(function(t){"
             + "document.addEventListener(t,function(){lastType=Date.now();},true);});"
-            + "var ric=window.requestIdleCallback||function(f){return setTimeout(function(){f();},32);};"
+            + "var ric=window.requestIdleCallback?function(f){window.requestIdleCallback(f,{timeout:500});}"
+            + ":function(f){setTimeout(function(){f();},32);};"
             + "function flush(){sched=false;if(!dirty)return;"
             + "if(typing()){schedule(200);return;}"
             + "dirty=false;for(var i=0;i<subs.length;i++){try{subs[i]();}catch(e){}}}"
             + "function schedule(d){if(sched)return;sched=true;"
             + "if(d){setTimeout(function(){ric(flush);},d);}else{ric(flush);}}"
             + "window.__rtWatch=function(fn){if(typeof fn==='function'){subs.push(fn);try{fn();}catch(e){}}};"
-            + "new MutationObserver(function(){dirty=true;schedule(120);})"
-            + ".observe(document.documentElement,{childList:true,subtree:true,attributes:true,"
+            + "var obs=new MutationObserver(function(){dirty=true;schedule(120);}),seen=null;"
+            + "window.__rtWatchArm=function(){var de=document.documentElement;if(!de||de===seen)return;seen=de;"
+            + "try{obs.disconnect();}catch(_){}"
+            + "obs.observe(de,{childList:true,subtree:true,attributes:true,"
             + "attributeFilter:['src','href','poster','role','data-radix-menu-content']});"
+            + "dirty=true;schedule(0);};"
+            + "window.__rtWatchArm();"
             + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
