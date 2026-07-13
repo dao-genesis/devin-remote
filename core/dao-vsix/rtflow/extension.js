@@ -7412,15 +7412,33 @@ function _isValidAutoTarget(i) {
 const _NETP_PORTS = [7890, 10809, 7891, 1080, 10808, 8080, 8118];
 let _netpProbe = { port: 0, ts: 0 }; // port>0=探到可用; -1=探明无; 0=未探测 (60s 缓存)
 let _netpGood = 0; // 上次经该本机代理成功 → 后续先走代理; 直连一成功即清零
+// 软编码·适配一切: 用户显式设的 HTTP(S)_PROXY/ALL_PROXY 本机端口优先于内置常见口清单
+//   (与 dao-vsix detectProxyPort/devin_proxy 同源) → 非标端口(如 SakuraCat)亦可命中, 零硬编码。
+function _netpEnvPort() {
+  const p = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.ALL_PROXY
+    || process.env.http_proxy || process.env.https_proxy || process.env.all_proxy || "";
+  const m = String(p).match(/(?:127\.0\.0\.1|localhost):(\d+)/i);
+  return m ? (parseInt(m[1], 10) || 0) : 0;
+}
+function _netpEffPorts() {
+  const ep = _netpEnvPort();
+  const seen = new Set();
+  const out = [];
+  for (const p of (ep ? [ep] : []).concat(_NETP_PORTS)) {
+    if (p > 0 && !seen.has(p)) { seen.add(p); out.push(p); }
+  }
+  return out;
+}
 function _netTransient(e) {
   return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|disconnected|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND|handshake|TLS/i.test(String((e && e.message) || e || ""));
 }
 function _netpProbePort(host, cb) {
   if (_netpProbe.ts && Date.now() - _netpProbe.ts < 60000) return cb(_netpProbe.port > 0 ? _netpProbe.port : 0);
+  const ports = _netpEffPorts();
   let i = 0;
   const tryNext = () => {
-    if (i >= _NETP_PORTS.length) { _netpProbe = { port: -1, ts: Date.now() }; return cb(0); }
-    const port = _NETP_PORTS[i++];
+    if (i >= ports.length) { _netpProbe = { port: -1, ts: Date.now() }; return cb(0); }
+    const port = ports[i++];
     let done = false;
     const s = net.connect({ host: "127.0.0.1", port, timeout: 800 });
     const fin = (ok) => { if (done) return; done = true; try { s.destroy(); } catch (e) {} if (ok) { _netpProbe = { port, ts: Date.now() }; cb(port); } else tryNext(); };
