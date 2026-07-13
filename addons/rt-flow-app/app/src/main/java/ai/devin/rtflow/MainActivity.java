@@ -2311,6 +2311,9 @@ public class MainActivity extends AppCompatActivity {
     private final Runnable openAcctTick = new Runnable() {
         @Override public void run() {
             if (!appForeground) return;
+            // 输入让行: 与引擎心跳同则, 触摸/打字期间顺延, 不抢共享渲染进程。
+            long sinceInput = android.os.SystemClock.uptimeMillis() - lastUserInputTs;
+            if (sinceInput < INPUT_QUIET_MS) { main.postDelayed(this, INPUT_QUIET_MS - sinceInput + 250); return; }
             pushOpenAcctsToSwitch();
             main.postDelayed(this, OPEN_REFRESH_MS);
         }
@@ -2322,10 +2325,34 @@ public class MainActivity extends AppCompatActivity {
      *  evaluateJavascript 不受计时器节流/页面可见性影响, 故由原生侧可靠驱动。 */
     private static final long ENGINE_TICK_MS = 8000;
     private static final long ENGINE_TICK_BG_MS = 30000;   // 后台降频不停跳: 对话阻塞/耗尽推送无需回前台才发(evaluateJavascript 不受 onPause 影响)
+    private static final long INPUT_QUIET_MS = 3000;       // 输入让行窗口: 用户触摸/打字后 3s 内不驱动重型引擎扫描 (输入优先·消打字卡顿)
+    /** 最近一次用户输入(触摸/按键)时刻 —— 引擎心跳/开号推送对输入让行的依据。 */
+    private volatile long lastUserInputTs = 0;
+    @Override public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
+        lastUserInputTs = android.os.SystemClock.uptimeMillis();
+        return super.dispatchTouchEvent(ev);
+    }
+    @Override public boolean dispatchKeyEvent(android.view.KeyEvent ev) {
+        lastUserInputTs = android.os.SystemClock.uptimeMillis();
+        return super.dispatchKeyEvent(ev);
+    }
+    /** 切号板块当前是否真在前台可见 —— 可见走全量心跳(近实时), 不可见走 lite 心跳(引擎内部拉长重扫描间隔)。 */
+    private boolean switchBoardVisible() {
+        Tab t = cur();
+        return appForeground && t != null && t.url != null && t.url.endsWith("switch.html");
+    }
     private final Runnable engineTick = new Runnable() {
         @Override public void run() {
+            // 输入让行: 用户正在触摸/打字 → 心跳顺延, 绝不与前台输入抢共享渲染进程 (打字一卡一卡之根源)。
+            if (appForeground) {
+                long sinceInput = android.os.SystemClock.uptimeMillis() - lastUserInputTs;
+                if (sinceInput < INPUT_QUIET_MS) { main.postDelayed(this, INPUT_QUIET_MS - sinceInput + 250); return; }
+            }
             WebView sw = switchWeb();
-            if (sw != null) { try { sw.evaluateJavascript("try{engineHeartbeat()}catch(e){}", null); } catch (Exception ignored) {} }
+            if (sw != null) {
+                final String lite = switchBoardVisible() ? "" : "true";
+                try { sw.evaluateJavascript("try{engineHeartbeat(" + lite + ")}catch(e){}", null); } catch (Exception ignored) {}
+            }
             main.postDelayed(this, appForeground ? ENGINE_TICK_MS : ENGINE_TICK_BG_MS);
         }
     };

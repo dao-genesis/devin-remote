@@ -1072,7 +1072,9 @@ public class RelayService extends Service {
                         android.util.Log.w("RTFlowTunnel", "tunnel no URL after " + (TUNNEL_URL_TIMEOUT / 1000) + "s → restart");
                         tunnelRetries++;
                         try { t.stop(); } catch (Exception ignored) {}
-                        startCfTunnel();
+                        // 递增退避重启: 本网络若持续握手不通, 不再零间隔永动轮换(后台常驻 CPU/流量之源), 网络恢复即快速收敛。
+                        long backoff = Math.min(2000L * tunnelRetries, TUNNEL_RETRY_CAP);
+                        main.postDelayed(() -> { if (gen == tunnelGen && tunnelEnabledFlag()) startCfTunnel(); }, backoff);
                     }
                 }, TUNNEL_URL_TIMEOUT);
                 cfHealthFails = 0;
@@ -1146,9 +1148,11 @@ public class RelayService extends Service {
                     SshTunnelManager t = sshTunnel;
                     if (t != null && t.isAlive() && !t.hasUrl()) {
                         android.util.Log.w("RTFlowTunnel", "[ssh] no URL after " + (TUNNEL_URL_TIMEOUT / 1000) + "s → next edge");
-                        sshEdgeIdx++;
+                        sshEdgeIdx++; sshRetries++;
                         try { t.stop(); } catch (Exception ignored) {}
-                        startSshTunnel();
+                        // 递增退避换边缘: 所有公共边缘都拿不到 URL 时不再零间隔永动轮换, 网络恢复即快速收敛。
+                        long backoff = Math.min(2000L * sshRetries, TUNNEL_RETRY_CAP);
+                        main.postDelayed(() -> { if (gen == sshGen && tunnelEnabledFlag()) startSshTunnel(); }, backoff);
                     }
                 }, TUNNEL_URL_TIMEOUT);
                 sshHealthFails = 0;

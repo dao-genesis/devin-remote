@@ -1760,7 +1760,10 @@ async function forceRefreshNow(accId){
 }
 // 原生引擎心跳(外驱): 原生外壳在 App 前台以 Handler 周期调用(evaluateJavascript 不受 Chromium
 //   后台计时器节流/页面 hidden 影响) → 状态轮询/额度心跳/对话提醒全部由此可靠驱动, 与网络环境无关。
-function engineHeartbeat(){
+//   lite=true: 切号板块不可见(用户正用别的标签) → 重扫描按更长的最小间隔节流,
+//   共享渲染进程让位给前台页面(全局卡顿/打字卡之源); 板块可见时 lite 缺省, 保持近实时。
+var _hbTrkTs=0,_hbQuotaTs=0,_hbLiveTs=0;
+function engineHeartbeat(lite){
   _extDriveTs = Date.now();
   try{ DaoCore.pumpTimers(); }catch(e){}   // 冻结免疫计时外驱泵: 停泊页被冻的睡眠/超时由此唤醒
   // 扫描看门狗(外驱时钟): 页面自身 setTimeout 被冻时, 重试退避/超时兜底永不回来,
@@ -1770,9 +1773,10 @@ function engineHeartbeat(){
   if(_trkBusy && n-_trkProg>60000){ _sweepGen++; _trkBusy=false; }
   if(_quotaBusy && n-_quotaProg>60000){ _sweepGen++; _quotaBusy=false; }
   if(_quotaLiveBusy && n-_quotaLiveProg>60000){ _sweepGen++; _quotaLiveBusy=false; }
-  try{ pollTrk(); }catch(e){}
-  try{ autoQuotaTick(); }catch(e){}
-  try{ autoQuotaLiveTick(); }catch(e){}
+  var trkGap=lite?30000:0, quotaGap=lite?60000:0, liveGap=lite?15000:0;
+  if(n-_hbTrkTs>=trkGap){ _hbTrkTs=n; try{ pollTrk(); }catch(e){} }
+  if(n-_hbQuotaTs>=quotaGap){ _hbQuotaTs=n; try{ autoQuotaTick(); }catch(e){} }
+  if(n-_hbLiveTs>=liveGap){ _hbLiveTs=n; try{ autoQuotaLiveTick(); }catch(e){} }
   try{ autoUnlockTick(); }catch(e){}
 }
 setTimeout(function(){ try{ autoUnlockTick(); }catch(e){} }, 4000);
