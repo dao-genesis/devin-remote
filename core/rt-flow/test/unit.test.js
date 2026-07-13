@@ -504,6 +504,36 @@ function test(name, fn) {
     }
   }
 
+  // ── 11a4. 切号板块 · 每账号环境模式(Linux/Windows) 切换按钮 (源级·双副本·vendor 同步) ──
+  console.log("\n[切号 · 每账号 Linux/Windows 环境模式按钮]");
+  {
+    const _fs = require("fs"), _p = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = _fs.readFileSync(_p.join(__dirname, ...rel), "utf8");
+      const tag = rel.join("/");
+      test(tag + " 账号行含 em 环境模式按钮 (与 ⚡/🖥/🌐 并列·图标随模式变)", () => {
+        assert.ok(/class="b em em-\$\{a\.envMode === "windows" \? "win" : "linux"\}"/.test(src), "缺 em 按钮或模式类");
+        assert.ok(/onclick="em\(\$\{i\}\)"/.test(src), "em 按钮缺 onclick");
+        assert.ok(/&#129695;/.test(src) && /&#128039;/.test(src), "缺 🪟/🐧 图标 (状态可视)");
+      });
+      test(tag + " em 客户端 toggle linux⇄windows (默认 linux·点击互换)", () => {
+        assert.ok(/function em\(i\)\{/.test(src), "缺客户端 em(i)");
+        assert.ok(/const next=cur==='windows'\?'linux':'windows'/.test(src), "em 未 linux⇄windows 互换");
+        assert.ok(/type:'setEnvModeBatch'/.test(src), "em 未 post setEnvModeBatch");
+      });
+      test(tag + " 宿主 setEnvModeBatch 持久化 + 每号隔离 (钉此号不波及他号)", () => {
+        assert.ok(/case "setEnvModeBatch":/.test(src), "缺宿主 setEnvModeBatch");
+        assert.ok(/acc\.envMode = mode;/.test(src), "未写 acc.envMode");
+        assert.ok(/_writeEnvModeStates\(items\)/.test(src), "未持久化 env-mode");
+      });
+      test(tag + " 环境模式独立持久化文件 + 缺省 linux 归一化 + 读盘还原", () => {
+        assert.ok(/_env_mode\.json/.test(src), "缺 _env_mode.json 持久化");
+        assert.ok(/function _normEnvMode\(m\)/.test(src), "缺 _normEnvMode");
+        assert.ok(/a\.envMode = _normEnvMode\(em && em\.envMode\)/.test(src), "store 加载未还原 envMode");
+      });
+    }
+  }
+
   // ── 11b. devin_proxy · 磁盘二级缓存 L2 (v4.14.0 · 重载秒恢复 · 跨端口重定基) ──
   console.log("\n[devin_proxy._diskCache · L2]");
   {

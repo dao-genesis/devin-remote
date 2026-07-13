@@ -3863,6 +3863,9 @@ const STATE_FILE = path.join(WAM_DIR, "wam-state.json");
 //   独立🔒持久化 · 专司一事 · 不被 multi-window race 污染 wam-state.json 大对象
 //   只有 toggleSkip 读写 · save() 从此文件读 · multi-process 自宾不争
 const LOCK_FILE = path.join(WAM_DIR, "lock-state.json");
+// 每账号「环境模式」(Linux/Windows) 独立持久化 · 专司一事 · 与 lock-state 同治 (multi-window race-safe)
+//   默认 linux · 用户在切号面板逐号切换才落盘 · 供后端/会话创建按号选运行环境 (runs-on)。
+const ENVMODE_FILE = path.join(WAM_DIR, "_env_mode.json");
 // v3.7.6 · dismiss 跨窗口持久化 · 小邦寺民·各得其欲·大者宜为下
 const DISMISS_FILE = path.join(WAM_DIR, "_conv_dismiss.json"); // uuid→ts 共享持久文件·多窗口共守
 const CONV_DISMISS_TTL = 600000; // 10min dismiss 自动过期时长
@@ -7024,6 +7027,50 @@ function _writeLockStates(items) {
     return { ok: false, changed: 0 };
   }
 }
+// ═══ 环境模式(Linux/Windows) 独立持久化 · 每账号 · multi-window race-safe ═══
+//   与 lock-state 同治法: _env_mode.json 专司此事 · 缺省 linux · 唯 setEnvModeBatch 写。
+function _normEnvMode(m) {
+  return String(m == null ? "" : m).toLowerCase() === "windows"
+    ? "windows"
+    : "linux";
+}
+function _readEnvModeState() {
+  try {
+    if (!fs.existsSync(ENVMODE_FILE)) return {};
+    const j = JSON.parse(fs.readFileSync(ENVMODE_FILE, "utf8"));
+    return j && typeof j === "object" && j.modes ? j.modes : {};
+  } catch (e) {
+    log("_readEnvModeState fail: " + e.message);
+    return {};
+  }
+}
+// 写: read-modify-write · 单进程内 atomic · multi-process last-writer-wins (唯切号面板写)
+function _writeEnvModeStates(items) {
+  try {
+    const cur = _readEnvModeState();
+    let n = 0;
+    for (const it of items || []) {
+      const k = String((it && it.email) || "").toLowerCase();
+      if (!k) continue;
+      const mode = _normEnvMode(it && it.mode);
+      const before = _normEnvMode(cur[k] && cur[k].envMode);
+      cur[k] = { envMode: mode, ts: Date.now() };
+      if (before !== mode) n++;
+    }
+    atomicWrite(
+      ENVMODE_FILE,
+      JSON.stringify(
+        { version: VERSION, savedAt: Date.now(), modes: cur },
+        null,
+        2,
+      ),
+    );
+    return { ok: true, changed: n };
+  } catch (e) {
+    log("_writeEnvModeStates fail: " + e.message);
+    return { ok: false, changed: 0 };
+  }
+}
 function _esc(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;")
@@ -8331,6 +8378,8 @@ class Store {
     //   缺省锁定 ⇒ 自动切号被禁止; 用户主动🔓解锁某号(显式写 false)后, 该号才进入自动切号候选.
     //   兼容回退: wam.lockByDefault=false 复旧行为(缺省解锁).
     const lockByDefault = _cfg("lockByDefault", true);
+    // 环境模式恢复: 缺省 linux · 用户显式切过的号读盘还原 (每号独立·互不相干)
+    const envModes = _readEnvModeState();
     let restored = 0;
     let defaulted = 0;
     for (const a of this.accounts) {
@@ -8342,6 +8391,8 @@ class Store {
         a.skipAutoSwitch = !!lockByDefault; // 无记录 → 默认锁定(反转)
         if (a.skipAutoSwitch) defaulted++;
       }
+      const em = envModes[a.email.toLowerCase()];
+      a.envMode = _normEnvMode(em && em.envMode); // 缺省 linux · 显式记录优先
     }
     if (restored > 0 || defaulted > 0)
       log(
@@ -10420,6 +10471,7 @@ function _computePanelStructSig() {
         checked ? Math.round(h.overageDollars || 0) : 0,
         isClaudeAvailable(h) ? 1 : 0,
         a.skipAutoSwitch ? 1 : 0,
+        a.envMode === "windows" ? "W" : "L",
         h && h.hasSnap ? 1 : 0,
         devinCloud.getTag(a.email) || "",
         checked ? _parseTimeMs(h.planEnd) : 0,
@@ -11258,6 +11310,7 @@ function buildHtml() {
         <button class="b cp" onclick="cp(${i})" title="复制">&#128203;</button>
         <button class="b rt" onclick="rt(${i})" title="路由官网→IDE内置浏览器(自足反代注入该号登录·多实例标签·各登各号)">&#128421;</button>
         <button class="b sb" onclick="sb(${i})" title="系统默认浏览器打开官网(跳出IDE·多实例)">&#127760;</button>
+        <button class="b em em-${a.envMode === "windows" ? "win" : "linux"}" onclick="em(${i})" data-mode="${a.envMode === "windows" ? "windows" : "linux"}" title="${a.envMode === "windows" ? "环境模式: Windows · 点击切回 Linux" : "环境模式: Linux(默认) · 点击切到 Windows"}" style="color:${a.envMode === "windows" ? "#4aa3ff" : "#7ec699"}">${a.envMode === "windows" ? "&#129695;" : "&#128039;"}</button>
         <button class="b wp" onclick="wp(${i})" title="水过无痕·一键清理本账号 Devin Cloud 全部痕迹(对话/知识库/剧本/密钥/Git)">&#127754;</button>
         <button class="b rm" onclick="rm(${i})" title="删除">&times;</button>
       </span>
@@ -11596,6 +11649,7 @@ function vf(i){_clickFb(event);send('verify',i);}
 function cp(i){_clickFb(event);const ix=_selectedFor(i);vscode.postMessage({type:ix.length>1?'copyAccounts':'copyAccount',index:i,indices:ix});}
 function rt(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1){showToast('\u23F3 \u6279\u91cf\u8def\u7531\u5b98\u7f51\u2192IDE \u00b7 '+ix.length+' \u4e2a\u2026');vscode.postMessage({type:'routeToIdeBatch',indices:ix});}else{showToast('\u23F3 \u5207\u6b64\u53f7\u00b7\u8def\u7531\u5b98\u7f51\u2192IDE\u2026');vscode.postMessage({type:'routeToIde',index:i});}}
 function sb(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1){showToast('\u23F3 \u6279\u91cf\u7cfb\u7edf\u6d4f\u89c8\u5668 \u00b7 '+ix.length+' \u4e2a\u2026');vscode.postMessage({type:'openSysBrowserBatch',indices:ix});}else{vscode.postMessage({type:'openSysBrowser',index:i});}}
+function em(i){_clickFb(event);const b=event&&event.target&&event.target.closest('.em');const cur=(b&&b.dataset.mode)==='windows'?'windows':'linux';const next=cur==='windows'?'linux':'windows';const ix=_selectedFor(i);vscode.postMessage({type:'setEnvModeBatch',indices:ix.length?ix:[i],mode:next});}
 function _emailAt(i){const r=document.querySelector('.row[data-i="'+i+'"]');return (r&&r.dataset.email)||'';}
 function rm(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1)vscode.postMessage({type:'removeBatch',indices:ix,emails:ix.map(_emailAt)});else vscode.postMessage({type:'remove',index:i,email:_emailAt(i)});}
 function copyAll(){vscode.postMessage({type:'copyAllAccounts'});}
@@ -13961,6 +14015,42 @@ async function handleWebviewMessage(msg) {
         );
         _toast(
           (locked ? "🔒 已锁定 " : "🔓 已解锁 ") +
+            items.length +
+            " 个账号" +
+            (wr.ok ? "" : " · 持久化失败⚠️"),
+        );
+        _store.save();
+        _broadcastUI();
+        break;
+      }
+      // 每账号环境模式(Linux/Windows) 切换 · 默认 linux · 点击 linux⇄windows · 独立持久化 (每号互不相干)
+      case "setEnvModeBatch": {
+        const mode = _normEnvMode(msg.mode);
+        const indices = [
+          ...new Set((msg.indices || []).map(Number).filter(Number.isInteger)),
+        ];
+        const items = [];
+        for (const i of indices) {
+          const acc = _store.accounts[i];
+          if (!acc) continue;
+          acc.envMode = mode; // 内存即时生效 (钉此号·不波及他号)
+          items.push({ email: acc.email, mode });
+        }
+        if (items.length === 0) {
+          _toast("环境模式: 0 个 (索引无效)");
+          break;
+        }
+        const wr = _writeEnvModeStates(items);
+        log(
+          "🖥 环境模式 → " +
+            mode +
+            " · " +
+            items.length +
+            " 个 · persistOk=" +
+            wr.ok,
+        );
+        _toast(
+          (mode === "windows" ? "🪟 已切 Windows · " : "🐧 已切 Linux · ") +
             items.length +
             " 个账号" +
             (wr.ok ? "" : " · 持久化失败⚠️"),
@@ -17090,6 +17180,14 @@ module.exports = {
     },
     set _predictiveCandidate(v) {
       _predictiveCandidate = v;
+    },
+    // 每账号环境模式(Linux/Windows) · 后端契约: 供 dao-vsix/会话创建按号查运行环境, 及守门测试
+    _normEnvMode,
+    _readEnvModeState,
+    _writeEnvModeStates,
+    getAccountEnvMode(email) {
+      const m = _readEnvModeState()[String(email || "").toLowerCase()];
+      return _normEnvMode(m && m.envMode);
     },
   },
 };
