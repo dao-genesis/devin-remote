@@ -1261,6 +1261,7 @@ public class MainActivity extends AppCompatActivity {
                 if (!tab.internal && u != null && u.startsWith("http")) {
                     autoFillLogin(v, u);        // 有保存的账密 → 自动填充 (无感)
                     installLoginCapture(v);     // 监听登录提交 → 自动弹「保存登录？」
+                    installDomWatch(v);         // 页面侧单观察者+输入让行: 三份全文档 MutationObserver 归一 (打字卡顿之根治)
                     installKbHelper(v);         // 键盘弹出时输入框上滚到可见区中部 (不被遮挡)
                     installBackspaceGuard(v);   // 退格护栏: 拦下输入法误发的左右两侧同删
                     installVideoFit(v);         // 录像播放器窄屏适配: 视频区与步骤栏纵向堆叠同屏
@@ -1282,7 +1283,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); installComposerUpload(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); scheduleMediaPrecollect(tab); }
+                    if (!tab.internal) { installDomWatch(v); installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); installComposerUpload(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); scheduleMediaPrecollect(tab); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -4463,6 +4464,38 @@ public class MainActivity extends AppCompatActivity {
             + "}catch(e){}} ,true);})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
+    // 页面侧「输入让行 · 单观察者」根治 (道法自然·由多归一 —— 打字/语音一卡一卡之本源):
+    //   旧疾: installVideoFit / installAttachmentPrefetch / installComposerUpload 各自在
+    //   document 全子树各挂一个 MutationObserver(含 attributes) → Devin 对话流式吐字时全文档
+    //   每帧海量 DOM 变更被三份观察者分别记账 + 回调, 主线程被反复打断, 恰与前台输入(打字/
+    //   语音上屏)争同一渲染线程 = 「一卡一卡·经常卡死」之根。
+    //   归一: 全页只留一个共享观察者, 经 window.__rtWatch(fn) 注册各扫描子; DOM 变更仅置脏,
+    //   由 requestIdleCallback 在空闲期单次冲刷所有子(合并三份重扫描为一次); 且检测到「用户
+    //   正在打字/组合输入」时顺延冲刷 —— page-side 输入让行, 对齐原生 INPUT_QUIET_MS 之则,
+    //   封顶顺延保证 ＋菜单/附件预热等仍会跑。幂等(window.__rtWatch 守卫)。
+    //   兜底: 若 __rtWatch 尚未就绪(注入乱序/极旧内核), 各子退回自建观察者, 功能不降级。
+    static void installDomWatch(WebView w) {
+        if (w == null) return;
+        String js = "(function(){try{if(window.__rtWatch)return;"
+            + "var subs=[],dirty=false,sched=false,lastType=0,QUIET=900;"
+            + "function typing(){try{var a=document.activeElement;"
+            + "var e=a&&(a.isContentEditable||/^(INPUT|TEXTAREA)$/.test(a.tagName||''));"
+            + "return !!e&&(Date.now()-lastType)<QUIET;}catch(_){return false;}}"
+            + "['keydown','compositionstart','compositionupdate'].forEach(function(t){"
+            + "document.addEventListener(t,function(){lastType=Date.now();},true);});"
+            + "var ric=window.requestIdleCallback||function(f){return setTimeout(function(){f();},32);};"
+            + "function flush(){sched=false;if(!dirty)return;"
+            + "if(typing()){schedule(200);return;}"
+            + "dirty=false;for(var i=0;i<subs.length;i++){try{subs[i]();}catch(e){}}}"
+            + "function schedule(d){if(sched)return;sched=true;"
+            + "if(d){setTimeout(function(){ric(flush);},d);}else{ric(flush);}}"
+            + "window.__rtWatch=function(fn){if(typeof fn==='function'){subs.push(fn);try{fn();}catch(e){}}};"
+            + "new MutationObserver(function(){dirty=true;schedule(120);})"
+            + ".observe(document.documentElement,{childList:true,subtree:true,attributes:true,"
+            + "attributeFilter:['src','href','poster','role','data-radix-menu-content']});"
+            + "}catch(e){}})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
     // 录像/视频播放器窄屏适配: 官网测试录像播放器为「视频区(flex-1) + 步骤侧栏(w-[26rem]·416px 固定宽)」
     //   的 flex 行布局; 手机宽(≈384px)不足以容下侧栏 → 视频列被挤到 0 宽, 只见步骤列表看不见视频。
     //   通用修法(不依赖具体类名): 发现 <video> 所处的 0 宽列且父容器是 flex 行 → 改父容器为纵向堆叠,
@@ -4545,7 +4578,8 @@ public class MainActivity extends AppCompatActivity {
             + "function fit(){try{sweep();document.querySelectorAll('video').forEach(fixOne);}catch(e){}}"
             + "var ts=[];function deb(){while(ts.length)clearTimeout(ts.pop());"
             + "[300,1000,2500].forEach(function(ms){ts.push(setTimeout(fit,ms));});}"
-            + "new MutationObserver(deb).observe(document.body,{childList:true,subtree:true});"
+            + "if(window.__rtWatch){window.__rtWatch(deb);}"
+            + "else{new MutationObserver(deb).observe(document.body,{childList:true,subtree:true});}"
             + "window.addEventListener('resize',deb);"
             + "document.addEventListener('transitionend',function(){setTimeout(fit,60);},true);"
             + "setInterval(function(){try{var need=false;document.querySelectorAll('video').forEach(function(v){"
@@ -4604,7 +4638,8 @@ public class MainActivity extends AppCompatActivity {
             + "source[src*=\"/attachments/\"],a[href*=\"/attachments/\"]');"
             + "for(var i=0;i<els.length;i++){var el=els[i];add(el.src||'');add(el.href||'');add(el.poster||'');}}catch(e){}}"
             + "var T=null;function later(){clearTimeout(T);T=setTimeout(function(){scan(document);},800);}"
-            + "new MutationObserver(later).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['src','href','poster']});"
+            + "if(window.__rtWatch){window.__rtWatch(later);}"
+            + "else{new MutationObserver(later).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['src','href','poster']});}"
             + "scan(document);"
             + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
@@ -4633,8 +4668,9 @@ public class MainActivity extends AppCompatActivity {
             + "ref.parentNode.appendChild(it);}catch(e){}}"
             + "var T=0;function scan(){T=0;try{document.querySelectorAll('[role=\"menu\"],[data-radix-menu-content]').forEach(enhance);}catch(e){}}"
             + "function kick(){if(T)return;T=setTimeout(scan,50);}"
-            + "new MutationObserver(kick)"
-            + ".observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['role','data-radix-menu-content']});"
+            + "if(window.__rtWatch){window.__rtWatch(scan);}"
+            + "else{new MutationObserver(kick)"
+            + ".observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['role','data-radix-menu-content']});}"
             + "scan();"
             + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
