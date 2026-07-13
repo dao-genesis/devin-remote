@@ -133,20 +133,26 @@ public class TabActivity extends AppCompatActivity {
             }
             @Override public void onPageFinished(WebView v, String u) {
                 MainActivity.warmAttachmentCookie(fToken, fOrg, u);   // 预铸附件 Cookie → 图片/视频首次即授权
+                MainActivity.installDomWatch(v);                      // 页面侧单观察者+输入让行 (与主壳一致)
                 MainActivity.installDownloadHook(v);                  // <a download>/blob:/data: 下载捕获
                 MainActivity.installKbHelper(v);                      // 键盘弹出滚动补偿
                 MainActivity.installBackspaceGuard(v);                // IME 退格护栏 (与主壳一致)
                 MainActivity.installVideoFit(v);                      // 录像播放器窄屏适配 (与主壳一致)
                 MainActivity.installMediaRetry(v);                    // 媒体加载自愈 (与主壳一致)
+                MainActivity.installAttachmentPrefetch(v);            // 附件预热 (与主壳一致: 首次点开即秒开)
+                MainActivity.installComposerUpload(v);                // 「新创作/＋」菜单上传入口 (与主壳一致)
             }
             // SPA 客户端路由不触发 onPageFinished, 挂载点可能被替换 → 幂等重装钩子 (与主壳 doUpdateVisitedHistory 一致)
             @Override public void doUpdateVisitedHistory(WebView v, String u, boolean isReload) {
                 if (u != null && u.startsWith("http")) {
+                    MainActivity.installDomWatch(v);
                     MainActivity.installDownloadHook(v);
                     MainActivity.installKbHelper(v);
                     MainActivity.installBackspaceGuard(v);
                     MainActivity.installVideoFit(v);
                     MainActivity.installMediaRetry(v);
+                    MainActivity.installAttachmentPrefetch(v);
+                    MainActivity.installComposerUpload(v);
                     MainActivity.warmAttachmentCookie(fToken, fOrg, u);
                 }
             }
