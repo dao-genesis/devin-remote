@@ -2188,6 +2188,34 @@ const SIG_BACKOFF_MIN = 1500;
 const SIG_BACKOFF_MAX = 20000;
 const SIG_HALFOPEN_MS = 90000;     // >90s 无任何入站(连 ntfy keepalive 都收不到) 即判半开死链 → 主动重连
 const SIG_WATCHDOG_MS = 20000;     // 看门狗巡检周期
+// 帛书·「软编码适配一切」: broker 清单软编码, 不写死 —— 分发给别人时, 若其网络把 4 家默认公共 ntfy
+//   全墙掉, 只需在环境变量 DAO_MESH_SERVERS(逗号/空白分隔) 或 ~/.dao/dao-config.json 的
+//   daoMeshServers 里补一个自托管/可达的 ntfy 实例即打通路线C, 无需改一行代码。与手机版
+//   signal.js normServers 同法: 去空白/去尾斜杠/仅收 http(s)/去重, 最终恒并默认集(用户自定优先在前)。
+//   任一 broker 可达即通 → 单点封锁不致命, 去中心化本源不变。
+function sigNormServers(raw: any): string[] {
+    const list: string[] = Array.isArray(raw) ? raw.slice()
+        : (typeof raw === 'string' && raw ? raw.split(/[\s,]+/) : []);
+    const out: string[] = []; const seen = new Set<string>();
+    for (const item of list) {
+        const u = String(item || '').trim().replace(/\/+$/, '');
+        if (u && /^https?:\/\//i.test(u) && !seen.has(u)) { seen.add(u); out.push(u); }
+    }
+    return out;
+}
+function sigResolveServers(): string[] {
+    let custom: string[] = [];
+    // ① 环境变量(分发/受限网络首选·零落盘)
+    try { custom = custom.concat(sigNormServers(process.env.DAO_MESH_SERVERS || process.env.DAO_NTFY_SERVERS || '')); } catch { /* 守柔 */ }
+    // ② 配置文件 ~/.dao/dao-config.json(与代理口等其它软编码项同源)
+    try {
+        const f = JSON.parse(fs.readFileSync(GLOBAL_CONFIG_FILE, 'utf8'));
+        custom = custom.concat(sigNormServers(f && (f.daoMeshServers || f.meshServers || f.ntfyServers)));
+    } catch { /* 守柔·无配置文件即跳过 */ }
+    // 用户自定在前(其网络已验可达者优先), 恒并默认公共集兜底; 全程去重。
+    const merged = sigNormServers(custom.concat(SIG_DEFAULT_SERVERS));
+    return merged.length ? merged : SIG_DEFAULT_SERVERS.slice();
+}
 
 interface SigState {
     enabled: boolean; session: string; topic: string; servers: string[];
@@ -2420,7 +2448,7 @@ async function sigStart(): Promise<void> {
         sigState.tokenUsed = tok;
         sigState.session = sigSessionIdFor(tok);
         sigState.topic = sigTopicFor(sigState.session);
-        sigState.servers = SIG_DEFAULT_SERVERS.slice();
+        sigState.servers = sigResolveServers();
         sigState.key = sigDeriveKey(sigState.session, tok);
         sigState.reasm = sigMakeReasm();
         sigState.handled = []; sigState.stopping = false;
