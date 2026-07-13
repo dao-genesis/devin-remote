@@ -35,6 +35,9 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 .lbl{color:var(--vscode-descriptionForeground);font-size:11px;margin-top:6px}
 .val{font-size:12px;word-break:break-all}
 .section{margin-top:10px;padding-top:8px;border-top:1px solid var(--vscode-input-border,#3334)}
+details.adv{margin-top:14px;padding-top:8px;border-top:1px solid var(--vscode-input-border,#3334)}
+details.adv>summary{cursor:pointer;font-size:13px;color:var(--vscode-descriptionForeground);list-style-position:inside;padding:4px 0}
+details.adv[open]>summary{color:var(--vscode-textLink-foreground)}
 </style></head><body>
 
 <!-- 模块1: 实时状态 (自 dao-bridge verbatim) -->
@@ -74,6 +77,42 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   </div>
 </div>
 
+<!-- 网页版 (前移: 用户最常用的接入动作之一) -->
+<div class="card">
+  <div class="lbl">🌐 网页版 · 任意浏览器打开即与本机一致</div>
+  <div class="muted" style="font-size:11px;margin-top:4px">把本机当<b>中枢</b>: 任意设备浏览器打开即得本机 APK 真实页面, 多人同连互不干扰。网址内含 Token(=完整接入凭证), 仅发可信方。</div>
+  <div class="row" style="margin-top:6px">
+    <button onclick="copyWebConsole()">📋 复制控制台网址(一键直登)</button>
+    <button onclick="copyWebConsoleBare()">复制纯网址</button>
+  </div>
+</div>
+
+<!-- 接入电脑 · 手机=中枢 (任意公网电脑一条 PowerShell 即接入, Agent 经手机中转操作) -->
+<div class="card">
+  <div class="lbl">💻 接入电脑 · 手机=中枢</div>
+  <div class="muted" style="font-size:11px;margin-top:4px">复制下方指令→任意能上网的电脑 PowerShell 粘贴运行, 即注册到本机中枢; 你或云端 Agent 经手机中转操作它 (每台电脑独立身份·可随时吊销)。</div>
+  <button onclick="copyHubPs1()" style="margin-top:6px;background:#238636">📋 复制 PowerShell 一键接入指令</button>
+  <div class="lbl" style="margin-top:6px">已接入电脑</div>
+  <div id="hubList" class="val"><span class="muted">（暂无 · 复制上方指令到电脑运行即出现）</span></div>
+</div>
+
+<!-- Cloudflare 固定域名 (可选·一键建 Worker·唯一真正需要用户配置的东西) -->
+<div class="card">
+  <div class="lbl">☁️ 固定域名 · Cloudflare 一键建 Worker（可选）</div>
+  <div class="muted" style="font-size:11px;margin-top:4px">默认零账号通道已全自动, <b>无需任何配置</b>。仅当你想要<b>恒定不变的公网地址</b>时: ① 点下方按钮到 Cloudflare 创建 API Token（模板选「编辑 Workers」, 可用 GitHub 账号登录）② 粘贴回来一键部署, 其余全自动。Token 只在本机内存用一次, 不落盘不上传。</div>
+  <button onclick="cfOpenTokenPage()" style="margin-top:6px">🌐 去 Cloudflare 取 API Token</button>
+  <input id="cfProvTok" type="password" placeholder="粘贴 Cloudflare API Token">
+  <div class="row">
+    <button onclick="cfProvision()" style="background:#238636">⚡ 一键部署专属 Worker</button>
+    <button onclick="cfProvReset()" style="background:#a33">重置·回零账号通道</button>
+  </div>
+  <div id="cfProvStat" class="muted" style="font-size:11px;margin-top:4px">未配置（零账号通道已全自动运行）</div>
+</div>
+
+<pre id="out" class="muted">（操作结果）</pre>
+
+<details class="adv"><summary>⚙️ 高级 · 通道细节与诊断（P2P/SSH/LAN/E2E 等已全自动托管, 一般无需进入）</summary>
+
 <!-- 模块1.5: 动态穿透配置 (每设备独立·非固定) -->
 <div class="section">
 <h3>🔧 穿透配置 · 每设备独立（动态）</h3>
@@ -109,15 +148,10 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <div class="muted" style="font-size:11px">开启后，本机<b>拒收任何明文 RPC</b> —— 未用 E2E Key 加密的请求一律被拒(仅存活探测 <code>/api/health</code> 例外)，杜绝明文驱动经中继泄露账号/密码。默认关闭以兼容旧驱动；确认所有驱动方都已用上方 E2E Key 加密后再开。</div>
 </div>
 
-<!-- 模块1.7: 浏览器网页控制台 (手机=中枢, 任意设备浏览器全功能接入) -->
+<!-- 模块1.7: 全部控制台入口明细 (主操作已前移到顶部「网页版」卡片) -->
 <div class="section">
-<h3>🌐 网页版 · 任意浏览器打开即与本机一致</h3>
-<div class="muted">把本机当<b>中枢</b>:任意设备(电脑/平板/别的手机)用浏览器打开下方网址,得到的就是<b>本机 APK 自身的真实页面</b>(切号/穿透/对话…),<b>表层与底层完全一致</b> —— 页面里每个操作都打回本机执行(账号/网络/金库都在本机),所以行为与手机本体逐字节一致;浏览器无状态、本机串行执行,<b>多人同时连不互相干扰</b>。网址内含 Token(=完整接入凭证),仅发可信方。</div>
+<h3>🌐 网页控制台入口明细</h3>
 <div id="webConsoleUrls" class="url" style="margin-top:6px">—</div>
-<div class="row">
-  <button onclick="copyWebConsole()">📋 复制控制台网址(含Token·一键直登)</button>
-  <button onclick="copyWebConsoleBare()">复制纯网址(不含Token)</button>
-</div>
 </div>
 
 <!-- 模块1.8: 投屏镜像 (任意公网设备实时看到并操控手机里被 app.devin.ai 信任的原生标签) -->
@@ -129,22 +163,6 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
   <button onclick="openMirror()" class="acc" style="background:#238636">▶ 在本机打开镜像</button>
   <button onclick="copyMirror()">📋 复制镜像网址(含Token)</button>
 </div>
-</div>
-
-<!-- 模块2: CloudFlare 命名隧道 (可选) -->
-<div class="section">
-<h3>🔑 命名隧道 · 固定域名（可选）</h3>
-<div class="muted">默认快速隧道已可用，<b>无需登录</b>。仅当你想要<b>固定不变的公网域名</b>时，才需配置 CloudFlare 命名隧道令牌（也可放入 <code>~/.dao/dao-config.json</code> 的 <code>cfTunnelToken</code> 自动加载）。</div>
-<div id="cfStatus" class="muted" style="margin-top:4px">未配置（使用零配置快速隧道）</div>
-<div id="cfLoginForm">
-  <input id="cfEmail" type="email" placeholder="CloudFlare Email（可选）">
-  <input id="cfKey" type="password" placeholder="Tunnel Token / API Token（可选）">
-  <button onclick="send('cfLogin',null,{email:v('cfEmail'),key:v('cfKey')})">保存并切到用户通道</button>
-  <div class="muted" style="margin-top:6px">没有 token？用浏览器登录 Cloudflare（<b>可用 GitHub 账号</b>，需自有域名才有固定域名）：</div>
-  <button onclick="send('cfBrowserLogin')">🌐 用浏览器登录 Cloudflare</button>
-</div>
-<button id="logoutBtn" onclick="if(confirm('退出账号并清空全部 Cloudflare 凭证残留，回到无账号快速隧道？'))send('logout')" style="margin-top:6px;background:#a33;display:none">退出账号 / 重置为无账号模式</button>
-<button onclick="send('openCf')" style="margin-top:4px;background:var(--vscode-textLink-foreground)">打开 CloudFlare 控制台</button>
 </div>
 
 <!-- 模块2.1: 局域网直连 (无感等效内网穿透 · 零中继零隧道 · 直连本机) -->
@@ -198,7 +216,9 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 </div>
 </div>
 
-<!-- 模块2.5: 远程操控安全开关 -->
+</details>
+
+<!-- 模块2.5: 远程操控安全开关 (真正需要用户手动操作 → 保持可见) -->
 <div class="section">
 <h3>🛡️ 远程操控 · 安全开关</h3>
 <div class="muted">启用后, 云端 Agent 可通过隧道远程操控浏览器标签和手机本体 (文件/相册/剪贴板/通知/应用/联系人/短信)。<br><b>默认开启</b>, 首次无需手动开即可远程驱动 — 仍受会话 Token 门禁保护; 不需要时可在此关闭。</div>
@@ -239,13 +259,16 @@ pre{white-space:pre-wrap;word-break:break-all;background:var(--vscode-textCodeBl
 <div class="muted" style="font-size:11px">说明：自启动/省电策略页为<b>厂商系统设置</b>，需你在跳转后手动把本应用设为「允许自启动 / 后台高耗电 / 不优化」。已附 BootReceiver，重启与 OTA 自更新后会自动拉起中继。</div>
 </div>
 
+<details class="adv"><summary>⚙️ 能力自测（诊断用）</summary>
+
 <!-- 能力自测 -->
 <div class="section">
 <h3>⚡ 能力自测</h3>
 <div class="row"><button onclick="send('health')">health</button></div>
 <input id="cmd" placeholder="命令" value="getEngineInfo"><button onclick="send('exec',v('cmd'))">RPC 自测</button>
-<pre id="out" class="muted">（结果）</pre>
 </div>
+
+</details>
 
 <script>
 // ── Native 桥 shim: 把 dao-bridge 的 vscode.postMessage 协议映射到手机版中继 ──
@@ -662,7 +685,8 @@ function handle(m){
     return;
   }
   if(op==='cfLogin'||op==='cfBrowserLogin'||op==='openCf'||op==='logout'){
-    _result(op, true, '命名隧道为桌面 dao-bridge 功能。手机版穿透由生产中继托管, 公网入口固定 (session='+(c.session||'')+'), 无需 CloudFlare。');
+    // 旧 email/key 命名隧道入口已下线 → 引导到顶部「固定域名 · Cloudflare 一键建 Worker」token 流程。
+    _result(op, true, '请用顶部「固定域名 · Cloudflare 一键建 Worker」: 到 CF 创建 API Token → 粘贴一键部署, 其余全自动 (默认零账号通道无需任何配置)。');
     return;
   }
   _result(op||'?', false, '未知操作');
@@ -679,11 +703,6 @@ function _render(s){
   var chain=(s.attempts||[]).map(function(a){return a.mode+'/'+a.proto+(a.ok?'✓':'✗');}).join(' → ');
   document.getElementById('net').textContent=(s.proxy?('代理 '+s.proxy):'直连(无代理)')+(chain?(' · '+chain):'');
   document.getElementById('agents').textContent=String(s.agentCount||0);
-  var loggedIn=!!(s.cfLoggedIn||s.mode==='named');
-  document.getElementById('logoutBtn').style.display=loggedIn?'block':'none';
-  var cfSt=document.getElementById('cfStatus');
-  if(loggedIn){cfSt.textContent='✓ 用户通道'+(s.cfEmail?(' · '+s.cfEmail):'')+(s.mode==='named'?'（命名隧道运行中）':'');cfSt.style.color='#3fb950';document.getElementById('cfLoginForm').style.display='none';}
-  else{cfSt.textContent='未配置（使用零配置快速隧道）';cfSt.style.color='';document.getElementById('cfLoginForm').style.display='block';}
 }
 // ── 穿透配置 (每设备独立·原生身份为唯一真源) ──
 //  默认无需填写: 原生已自动生成「设备唯一 session + 持久化复用 token」(P1: token 不再每冷启动轮换, 端点长期稳定; 仅首次或手动刷新时才生成新 token)。此处仅供高级用户自定义中继。
@@ -1071,6 +1090,78 @@ function copyAllChannels(){
   _result('copyAll', true, '已复制 全部可用接入渠道 + Token/Session/E2EKey + curl 模板');
 }
 renderChannels();
+//__HUBUI_START__ 接入电脑(手机=中枢) + Cloudflare 一键建 Worker · 前端 (经本机 LocalServer 回环调 relay-app 路由; 经 test/tunnel-frugal.test.js 切片实测, 勿删标记)
+function _hubPort(){ var l=_lan(); return (l.port|0)||0; }
+async function _hubRpc(path, body){
+  var c=_conn(), port=_hubPort();
+  if(!port) throw new Error("本机服务未就绪(稍候重试)");
+  var res=await fetch("http://127.0.0.1:"+port+"/relay/"+encodeURIComponent(c.session||"local"),{
+    method:"POST",
+    headers:{"Authorization":"Bearer "+(c.token||""),"Content-Type":"application/json"},
+    body:JSON.stringify({path:path,method:"POST",body:body||{}})});
+  return res.json();
+}
+async function copyHubPs1(){
+  try{
+    var r=await _hubRpc("/api/bootstrap.ps1");
+    if(!r||!r.script){ _result('hub',false,'脚本未就绪(等公网入口连通后再试)'); return; }
+    try{N.clip&&N.clip(r.script);}catch(e){}
+    _result('hub',true,'已复制 一键接入指令 · 任意电脑 PowerShell 粘贴运行即接入手机中枢');
+  }catch(e){ _result('hub',false,String(e&&e.message||e)); }
+}
+async function hubRevokeUi(id){
+  if(!confirm('吊销并断开「'+id+'」? 该电脑需重新运行接入指令才能再连。')) return;
+  try{ var r=await _hubRpc("/api/revoke",{agent_id:id}); _result('hub',!!(r&&r.ok),(r&&r.ok)?('已吊销 '+id):((r&&r.error)||'吊销失败')); refreshHub(); }
+  catch(e){ _result('hub',false,String(e&&e.message||e)); }
+}
+async function refreshHub(){
+  var el=document.getElementById('hubList'); if(!el) return;
+  var ag=null; try{ var r=await _hubRpc("/api/agents"); ag=(r&&r.agents)||null; }catch(e){}
+  if(!ag) return;   // 服务未就绪时保持现状, 不闪烁
+  try{ var ael=document.getElementById('agents'); if(ael) ael.textContent=String(ag.filter(function(a){return a.status==='online';}).length); }catch(e){}
+  if(!ag.length){ el.innerHTML='<span class="muted">（暂无 · 复制上方指令到电脑运行即出现）</span>'; return; }
+  el.innerHTML=ag.map(function(a){
+    var on=(a.status==='online');
+    var name=String(a.hostname||a.id||'').replace(/[<>&"]/g,'');
+    return '<div style="display:flex;align-items:center;gap:6px;margin:4px 0">'
+      +'<span class="dot '+(on?'ok':'pending')+'"></span>'
+      +'<span style="flex:1;font-size:12px;word-break:break-all">'+name+' · '+String(a.os||'?').replace(/[<>&"]/g,'')+' · '+(on?'在线':'离线')+(a.pending?(' · 待执行 '+a.pending):'')+'</span>'
+      +'<button style="width:auto;padding:3px 8px;font-size:11px;background:#a33" onclick="hubRevokeUi(\''+String(a.id||'').replace(/[\\'"<>&]/g,'')+'\')">吊销</button></div>';
+  }).join('');
+}
+refreshHub(); setInterval(refreshHub, 10000);
+function cfOpenTokenPage(){
+  var u="https://dash.cloudflare.com/profile/api-tokens";
+  try{ if(N.openTab){N.openTab(u);} else window.open(u,'_blank'); }catch(e){ try{window.open(u,'_blank');}catch(_){} }
+  _result('cf',true,'已打开 Cloudflare API Token 页 (模板选「编辑 Workers」→ 创建 → 复制回来粘贴)');
+}
+var _cfPollTimer=null;
+async function cfProvision(){
+  var tok=(v('cfProvTok')||"").trim();
+  if(tok.length<20){ _result('cf',false,'请先粘贴 Cloudflare API Token'); return; }
+  try{
+    var r=await _hubRpc("/api/cf-provision",{token:tok});
+    document.getElementById('cfProvTok').value="";
+    if(r&&(r.started||r.already)){ _result('cf',true,'部署已启动 · 全自动进行中…'); cfPollStatus(); }
+    else _result('cf',false,(r&&r.error)||'启动失败');
+  }catch(e){ _result('cf',false,String(e&&e.message||e)); }
+}
+async function cfPollStatus(){
+  if(_cfPollTimer){ clearTimeout(_cfPollTimer); _cfPollTimer=null; }
+  var st=document.getElementById('cfProvStat'); if(!st) return;
+  var s=null; try{ s=await _hubRpc("/api/cf-status"); }catch(e){}
+  if(!s||!s.phase||s.phase==='idle') return;
+  st.textContent=(s.msg||('阶段 '+s.step))+(s.url&&s.phase==='done'?'':'');
+  st.style.color= s.phase==='done'?'#3fb950':(s.phase==='error'?'#f85149':'#e8c84a');
+  if(s.phase==='running') _cfPollTimer=setTimeout(cfPollStatus, 3000);
+}
+function cfProvReset(){
+  if(!confirm('重置为零账号自动通道? (仅清除本机自定义中继配置; 已部署的专属 Worker 仍留在你的 Cloudflare 账号, 随时可再一键启用)')) return;
+  clearRelayCfg();
+  var st=document.getElementById('cfProvStat'); if(st){ st.textContent='未配置（零账号通道已全自动运行）'; st.style.color=''; }
+}
+cfPollStatus();
+//__HUBUI_END__
 setInterval(_push, 1500); _push();
 </script>
 </body></html>

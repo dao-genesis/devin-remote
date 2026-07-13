@@ -85,6 +85,20 @@ function ok(c, msg) { if (c) { console.log("  ok  - " + msg); } else { failures+
   const self = await rpc("/api/exec", "POST", { command: "echo local" });
   ok(self.status === 501 && self.body && self.body.error === "shell_bridge_unavailable", "空 agent_id → 本机 shell 路径 (SELF 路由未被中枢劫持)");
 
+  // 11) revoke: 缺 agent_id / self → 400; 未知 → 404; 合法 → 200 且从 agents 移除, per-agent token 失效
+  const rv0 = await rpc("/api/revoke", "POST", {});
+  ok(rv0.status === 400, "revoke 缺 agent_id → 400");
+  const rvSelf = await rpc("/api/revoke", "POST", { agent_id: "self" });
+  ok(rvSelf.status === 400, "revoke self → 400 (不可撤销本机)");
+  const rvNf = await rpc("/api/revoke", "POST", { agent_id: "GHOST" });
+  ok(rvNf.status === 404, "revoke 未知 agent → 404");
+  const rvOk = await rpc("/api/revoke", "POST", { agent_id: "BOX-A" });
+  ok(rvOk.status === 200 && rvOk.body.revoked === "BOX-A", "revoke BOX-A → 200");
+  const after = await rpc("/api/agents", "GET");
+  ok(!after.body.agents.some((a) => a.id === "BOX-A"), "撤销后 BOX-A 不再出现在 agents");
+  const pollDead = await rpc("/api/poll", "POST", { id: aid, token: tok, timeout: 1 });
+  ok(pollDead.status === 401, "撤销后原 per-agent token 失效 (poll → 401)");
+
   console.log(failures ? ("\nFAIL " + failures) : "\nALL GREEN (phone-hub)");
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error("THROW", e); process.exit(1); });

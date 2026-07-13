@@ -300,8 +300,15 @@ var _lastListHtml = null, _lastOpenKey = "", _renderDirty = false, _renderDeferT
 //   使所有被可见性门控的心跳照常工作 —— 本 WebView 停泊后台时 Chromium 会节流/冻结其计时器且
 //   document.hidden 恒真, 若只靠自身计时器+门控, 自动刷新在原生壳里形同虚设(只能手动点刷新)。
 var _extDriveTs = 0;
-function _extDriven(){ return (Date.now() - _extDriveTs) < 30000; }
+// lite 外驱(板块不可见): 只允许心跳自身按 lite 间隔驱动, 不再把「外驱过」当作「板块可见」——
+//   否则本页自身 setInterval(8s/2.2s) 在停泊期间照样全量轰扫共享渲染进程(打字卡/上传慢之残根)。
+var _extLite = false;
+function _extDriven(){ return !_extLite && (Date.now() - _extDriveTs) < 30000; }
 function _notVisible(){ if(_extDriven()) return false; try{ return document.hidden || (document.documentElement && document.documentElement.clientWidth===0); }catch(e){ return false; } }
+// 输入让行(板块内): 用户正在本板块触摸/打字 → 重扫描/额度轮顺延, 输入永远优先。
+var _lastInputTs = 0;
+function _inputBusy(){ return (Date.now() - _lastInputTs) < 1500; }
+["touchstart","keydown"].forEach(function(ev){ document.addEventListener(ev, function(){ _lastInputTs = Date.now(); }, {passive:true, capture:true}); });
 function _vib(ms){ try{ if(N.vibrate){ N.vibrate(ms||30); return; } }catch(e){} try{ if(navigator.vibrate) navigator.vibrate(ms||30); }catch(e){} }
 function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
 function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
@@ -1121,7 +1128,21 @@ var _sweepGen=0, _trkProg=0, _quotaProg=0, _quotaLiveProg=0;
 //   看门狗只杀「60s 零回包」的真挂死, 不误杀单号耗时长(多URL重试/重登)的健康扫描。
 window.__daoNetProg=function(){ var n=Date.now(); if(_trkBusy)_trkProg=n; if(_quotaBusy)_quotaProg=n; if(_quotaLiveBusy)_quotaLiveProg=n; };
 // 单账号会话扫描 → 写入 _trk (从 pollTrk 串行循环抽出, 供并发池调用)。
+var _accScanTs = {};   // 账号 id → 最近一次会话扫描时刻 (pollTrk 与 refreshOpenAccts 去重, 不双份扫同一号)
+// 四象限优先级判定 (前台已开页 × 对话活跃): 本轮该不该扫此号。独立函数以便单测。
+function _tierDue(a, no, force, now){
+  if(force) return true;
+  if(now-(_accScanTs[a.id||a.email||""]||0)<5000) return false;   // 专线刚扫过 → 去重
+  var t=_trk[(a.email||"").toLowerCase()];
+  var active=!t || t.total>0;                       // 从未观测过亦按活跃处理(先建立基线)
+  var open=_isDvOpen(a);
+  if(open && active) return true;                   // ① 前台+活跃 → 每轮
+  if(active) return (no%2)===(_sweepN%2);           // ② 后台+活跃 → 每 2 轮
+  if(open) return (no%4)===(_sweepN%4);             // ③ 前台+空闲 → 每 4 轮
+  return (no%8)===_sweepN;                          // ④ 无页+空闲 → 每 8 轮
+}
 async function _pollOneAcc(a, realNo){
+  _accScanTs[a.id||a.email||""]=Date.now();
   var r=await DaoCloud.listSessions(a,50); if(!r||!r.ok)return;
   var running=0,awaiting=0,blocked=0,exhausted=0,items=[];
   // 该账号「最新对话名」(按近期活跃时间戳择取·与状态无关): 用户要求——只要账号有对话就显示其最新对话名, 无对话才回退账号名。
@@ -1153,24 +1174,25 @@ async function pollTrk(force){
   // 网页镜像端: 绝不自身慢轮陈旧账号宇宙(超量/空白/滞后之源), 一律改走设备端 recentConvAll 权威单RPC
   //   (手机一次并发聚合全部真实账号近期对话, 与 APK 同源) + 金库镜像兜底 → 登入即与手机完全同步。
   if(window.__rnReady){ _deviceRecentRefresh(force); return; }
-  if(!force && _notVisible()) return;     // 性能: 板块隐藏/后台 → 停轮询, 不再无谓轰网络(消除"刷新很忙"); force=用户点刷新, 不受门控
+  var liteRound = force==="lite"; if(liteRound) force=false;   // lite=心跳在板块不可见时的降档驱动: 放行但更省
+  if(!force && !liteRound && _notVisible()) return;     // 性能: 板块隐藏/后台 → 停轮询, 不再无谓轰网络(消除"刷新很忙"); force=用户点刷新, 不受门控
+  if(!force && _inputBusy()) return;      // 输入让行: 正在打字/触摸 → 本轮让路, 下轮自然补上
   if(_trkBusy)return; _trkBusy=true; _trkProg=Date.now(); var __g=_sweepGen;
-  _probeBudget=24; // 每轮事件流探测配额 (旧 12 → 24: 在跑对话多时也能每轮都探到)
+  _probeBudget=liteRound?8:24; // 每轮事件流探测配额; 板块不可见时降配额, 让出网络与渲染进程
   var dot=document.getElementById("monDot"), mstat=document.getElementById("monStat");
   try{
     var full=loadAcc();                       // 全量列表(编号基准): 真正编号=在全量列表中的位置, 不受"是否已登录"影响
     var _noOf={}; full.forEach(function(x,ix){ _noOf[x.id]=ix+1; });   // id → 真实编号(与账号行显示一致), 加号后动态跟随
-    // 省流·分层轮询: 有活跃对话的号每轮(8s)必扫; 空闲号(上轮 total=0)按编号错峰每 4 轮(≈32s)扫一次 ——
-    //   百号级账号池每 8s 全量 listSessions 是移动流量巨耗之源, 空闲号状态变化本就低频, 32s 内必被拾起。
+    // 性能×省流 · 四象限优先级调度 (前台已开页 × 对话活跃):
+    //   ① 前台+活跃 = 重中之重(≤7~8 个) → 每轮必扫 (另有 refreshOpenAccts ~6s 专线, 5s 内扫过则去重跳过)
+    //   ② 后台+活跃 → 中等: 每 2 轮错峰 (~16s; 板块不可见 lite 时 ~60s)
+    //   ③ 前台+空闲 → 低: 每 4 轮错峰 (放一放, 状态变化本就低频)
+    //   ④ 无页+空闲 → 最低: 每 8 轮错峰 (~64s; 百号池几乎不耗网络)
     //   force(用户手动刷新/回前台) 不分层, 全量扫。
-    _sweepN=(_sweepN+1)%4;
+    _sweepN=(_sweepN+1)%8;
     var allAuth=full.filter(hasAuth);
-    var accs=allAuth.filter(function(a){
-      if(force) return true;
-      var t=_trk[(a.email||"").toLowerCase()];
-      if(!t || t.total>0) return true;                  // 从未观测过 / 有活跃对话 → 每轮
-      return ((_noOf[a.id]||0)%4)===_sweepN;            // 空闲号 → 错峰慢轮
-    });
+    var _scanNow=Date.now();
+    var accs=allAuth.filter(function(a){ return _tierDue(a, _noOf[a.id]||0, force, _scanNow); });
     if(dot)dot.className="mon-dot"; if(mstat)mstat.textContent="监测中 · "+allAuth.length+" 号";
     // 以账号为中心并发扫描(6路), 每号返回即增量上色 → 跨设备运行近实时识别, 不再等满全列表才出结果。
     var _lastPaint=0;
@@ -1519,7 +1541,9 @@ async function _cleanDrain(){ if(_cleanRunning)return; _cleanRunning=true;
   try{ while(_cleanQ.length){ var id=_cleanQ.shift(); delete _cleanQIds[id]; var a=DaoCore.findAcc(id); if(a){ try{ await autoCleanFor(a); }catch(e){} } } }finally{ _cleanRunning=false; }
 }
 async function autoQuotaTick(force){
-  if(!force && _notVisible()) return;     // 性能: 板块隐藏/后台 → 暂停额度刷新心跳, 显示时再补; force=用户点刷新, 不受门控
+  var liteRound = force==="lite"; if(liteRound) force=false;   // 心跳 lite 驱动: 放行(60s 一轮), 不受隐藏门控
+  if(!force && !liteRound && _notVisible()) return;     // 性能: 板块隐藏/后台 → 暂停额度刷新心跳, 显示时再补; force=用户点刷新, 不受门控
+  if(!force && _inputBusy()) return;      // 输入让行
   if(_quotaBusy || _quotaLiveBusy) return; _quotaBusy=true; _quotaProg=Date.now(); var __g=_sweepGen;   // 与对话快轮互斥, 不叠加
   try{
     var accs=loadAcc().filter(hasAuth);
@@ -1544,10 +1568,17 @@ async function autoQuotaTick(force){
 // ── 对话使用中 · 金额近实时刷新 ──────────────────────────────────────────────
 //   只刷"有在跑对话"的号(数量少) → ~4s 一轮, 远快于 12s 全量轮, 对话过程中额度近实时可见。
 //   隐藏/后台即停; 与全量额度轮(autoQuotaTick)互斥, 不叠加轰网络、不抢主线程。
-async function autoQuotaLiveTick(){
-  if(_notVisible() || _quotaBusy || _quotaLiveBusy) return;
-  var live=loadAcc().filter(hasAuth).filter(_hasLiveConv);
-  if(!live.length) return;     // 无在跑对话 → 让全量轮负责, 本快轮不空转
+async function autoQuotaLiveTick(mode){
+  var liteRound = mode==="lite";
+  if(!liteRound && _notVisible()) return;
+  if(_quotaBusy || _quotaLiveBusy) return;
+  if(_inputBusy()) return;     // 输入让行: 金额跳动晚 2 秒无妨, 打字不许卡
+  // 近实时金额只服务「前台已开页」的号(用户正盯着的 ≤7~8 个); 后台在跑对话的金额由全量轮(~30s)负责。
+  //   无已开页信息(纯网页控制台等未广播场景)时回退旧口径(在跑对话号), 不失功能。
+  var auth=loadAcc().filter(hasAuth);
+  var live=auth.filter(_isDvOpen);
+  if(!live.length && !Object.keys(_dvOpenAccts).length) live=auth.filter(_hasLiveConv);
+  if(!live.length) return;     // 无在看/在跑对话 → 让全量轮负责, 本快轮不空转
   _quotaLiveBusy=true; _quotaLiveProg=Date.now(); var __g=_sweepGen;
   try{
     for(var i=0;i<live.length;i++){ var a=live[i];
@@ -1737,6 +1768,7 @@ window.addEventListener("message", function(ev){ try{ var d=ev&&ev.data;
 var _openBusy=false;
 async function refreshOpenAccts(){
   if(_openBusy || _quotaBusy || _quotaLiveBusy) return;
+  if(_inputBusy()) return;   // 输入让行: 打字/触摸期间连「已开号专线」也顺延一轮, 输入绝对优先
   var accs=loadAcc().filter(hasAuth).filter(_isDvOpen);
   if(!accs.length) return;
   _openBusy=true; _probeBudget=8;
@@ -1779,6 +1811,7 @@ async function forceRefreshNow(accId){
 //   共享渲染进程让位给前台页面(全局卡顿/打字卡之源); 板块可见时 lite 缺省, 保持近实时。
 var _hbTrkTs=0,_hbQuotaTs=0,_hbLiveTs=0;
 function engineHeartbeat(lite){
+  _extLite = !!lite;
   _extDriveTs = Date.now();
   try{ DaoCore.pumpTimers(); }catch(e){}   // 冻结免疫计时外驱泵: 停泊页被冻的睡眠/超时由此唤醒
   // 扫描看门狗(外驱时钟): 页面自身 setTimeout 被冻时, 重试退避/超时兜底永不回来,
@@ -1789,9 +1822,9 @@ function engineHeartbeat(lite){
   if(_quotaBusy && n-_quotaProg>60000){ _sweepGen++; _quotaBusy=false; }
   if(_quotaLiveBusy && n-_quotaLiveProg>60000){ _sweepGen++; _quotaLiveBusy=false; }
   var trkGap=lite?30000:0, quotaGap=lite?60000:0, liveGap=lite?15000:0;
-  if(n-_hbTrkTs>=trkGap){ _hbTrkTs=n; try{ pollTrk(); }catch(e){} }
-  if(n-_hbQuotaTs>=quotaGap){ _hbQuotaTs=n; try{ autoQuotaTick(); }catch(e){} }
-  if(n-_hbLiveTs>=liveGap){ _hbLiveTs=n; try{ autoQuotaLiveTick(); }catch(e){} }
+  if(n-_hbTrkTs>=trkGap){ _hbTrkTs=n; try{ pollTrk(lite?"lite":false); }catch(e){} }
+  if(n-_hbQuotaTs>=quotaGap){ _hbQuotaTs=n; try{ autoQuotaTick(lite?"lite":false); }catch(e){} }
+  if(n-_hbLiveTs>=liveGap){ _hbLiveTs=n; try{ autoQuotaLiveTick(lite?"lite":false); }catch(e){} }
   try{ autoUnlockTick(); }catch(e){}
 }
 setTimeout(function(){ try{ autoUnlockTick(); }catch(e){} }, 4000);
