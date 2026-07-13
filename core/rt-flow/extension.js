@@ -1886,10 +1886,19 @@ function _shellCloudDispatch(mm) {
   if (_shellCloudActiveSid) _shellSend(_shellCloudActiveSid, { type: 'cloudHost', msg: mm });
   else _shellBroadcast({ type: 'cloudHost', msg: mm });
 }
+// 宿主回推「扇出」: IDE webview 与 /shell HTTP 页是并存的两类消费者。
+// setHostPost 是单指针 — 若各自直接注册, 后写者覆盖前者, 另一方的回包(如 proxyPanel)
+// 就永久丢失(板块卡在加载态)。故注册唯一的稳定扇出器: webview 在场则送 webview,
+// 同时按 sid 送 /shell(无活跃 sid 时为号主共享广播·幂等无害)。
+let _cloudWebviewPost = null; // 多实例 webview 的回推口 (open 时立·dispose 时清)
+function _cloudHostFanout(mm) {
+  if (_cloudWebviewPost) { try { _cloudWebviewPost(mm); } catch (e) {} }
+  try { _shellCloudDispatch(mm); } catch (e) {}
+}
 function _shellCloudRun(sid, fn) {
   _shellCloudQueue = _shellCloudQueue.then(async () => {
     _shellCloudActiveSid = sid || '';
-    try { if (_cloudProvider && _cloudProvider.setHostPost) _cloudProvider.setHostPost(_shellCloudDispatch); } catch (e) {}
+    try { if (_cloudProvider && _cloudProvider.setHostPost) _cloudProvider.setHostPost(_cloudHostFanout); } catch (e) {}
     try { await fn(); } catch (e) { try { log('[shell] cloud task err: ' + (e && e.message)); } catch (x) {} }
     finally { _shellCloudActiveSid = ''; }
   });
@@ -2804,7 +2813,8 @@ function _wireMultiPanel(panel) {
       // 归一 · 六大板块子网页: 外壳请求挂载全功能面板 HTML (blob-iframe + 中继)
       if (m.type === "cloudInit") {
         if (!_cloudProvider) { _toast("六大板块面板未就绪"); return; }
-        try { _cloudProvider.setHostPost((mm) => { try { panel.webview.postMessage({ type: "cloudHost", msg: mm }); } catch (e) {} }); } catch (e) {}
+        _cloudWebviewPost = (mm) => { try { panel.webview.postMessage({ type: "cloudHost", msg: mm }); } catch (e) {} };
+        try { _cloudProvider.setHostPost(_cloudHostFanout); } catch (e) {}
         // webview 框架层封禁 blob: 子帧 → 优先经本地 HTTP(127.0.0.1) 直出板块当 iframe 加载; 无 URL 时回退 blob。
         let url = ""; try { if (typeof _cloudProvider.boardUrl === "function") url = _cloudProvider.boardUrl(m.board) || ""; } catch (e) {}
         let html = ""; if (!url) { try { html = _cloudProvider.buildHtml(m.board) || ""; } catch (e) {} }
@@ -2818,7 +2828,7 @@ function _wireMultiPanel(panel) {
       if (m.type === "toast" && m.msg) { _toast(m.msg); return; }
     } catch (e) { try { log("[multi] msg err: " + (e && e.message)); } catch (x) {} }
   });
-  panel.onDidDispose(() => { _multiPanel = null; _multiReady = false; _multiQueue.length = 0; if (_multiStatusTimer) { clearInterval(_multiStatusTimer); _multiStatusTimer = null; } try { _cloudProvider && _cloudProvider.setHostPost(null); } catch (e) {} });
+  panel.onDidDispose(() => { _multiPanel = null; _multiReady = false; _multiQueue.length = 0; if (_multiStatusTimer) { clearInterval(_multiStatusTimer); _multiStatusTimer = null; } _cloudWebviewPost = null; });
   _multiPanel = panel;
 }
 function _ensureMultiPanel() {
