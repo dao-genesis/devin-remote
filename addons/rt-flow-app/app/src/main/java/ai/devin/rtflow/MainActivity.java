@@ -891,6 +891,10 @@ public class MainActivity extends AppCompatActivity {
         if (idx < 0 || idx >= tabs.size() || idx == active) return;
         Tab t = tabs.get(idx);
         if (t.internal || t.accountJson == null || t.pendingReloadUrl != null) return;
+        // 对齐浏览器 tab freezing 活跃保护: 有活跃对话 / 用户正在交互 / 远程自动化驱动 → 不卸载
+        if (isAccountConvActive(t)) return;                                  // 有新对话/正在运行 → 保活
+        if (userInteracting(t, EDIT_GUARD_MS)) return;                       // 用户打字/语音/滚动/触摸 → 不冻
+        if (remoteDriven(t)) return;                                          // 远程自动化中 → 不冻
         String u = (t.url != null && !t.url.isEmpty()) ? t.url : null;
         if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) return;
         java.util.concurrent.ConcurrentHashMap<String,Long> vw = tabViewers.get(t.vid);
@@ -2147,6 +2151,18 @@ public class MainActivity extends AppCompatActivity {
         if (t == null || t.accountJson == null) return "";
         try { JSONObject a = new JSONObject(t.accountJson); return a.optString("id", a.optString("email", "")); }
         catch (Exception e) { return ""; }
+    }
+
+    /** 该账号标签是否有「活跃对话」(切号面板推送的 status 含 run/work/active) — 对齐浏览器 tab freezing:
+     *  有活跃对话的标签 = "playing audio" 级别保护, 不冻结/不卸载, 跟 Chrome 不冻有声音播放的标签一样。 */
+    private boolean isAccountConvActive(Tab t) {
+        String key = acctKeyOf(t);
+        if (key.isEmpty()) return false;
+        String[] sta = sTabStatus.get(key);
+        if (sta == null) sta = sTabStatus.get(key.toLowerCase(java.util.Locale.US));
+        if (sta == null || sta[1] == null) return false;
+        String s = sta[1].toLowerCase(java.util.Locale.US);
+        return s.contains("run") || s.contains("work") || s.contains("active");
     }
 
     /** 用户点刷新 → 命令切号引擎: 当前账号优先即时刷(额度+状态), 再全量强制刷(绕过可见性门控)。 */
@@ -7757,7 +7773,7 @@ public class MainActivity extends AppCompatActivity {
         //   会话·document-start 重注鉴权), 长会话占用真有界。有联控/有输入焦点/人在交互 → 绝不重载, 不丢草稿不打断。
         if (at != null && at.web != null && at.pendingReloadUrl == null && at.accountJson != null && appForeground
                 && at.loadedAt > 0 && (now - at.loadedAt) > HEAP_AGE_MS
-                && !userInteracting(at, ACTIVE_RELOAD_IDLE_MS)
+                && !userInteracting(at, ACTIVE_RELOAD_IDLE_MS) && !isAccountConvActive(at)
                 && (at.lastHeapReclaimAt == 0 || (now - at.lastHeapReclaimAt) > HEAP_RECLAIM_MIN_GAP)) {
             java.util.concurrent.ConcurrentHashMap<String,Long> vw = tabViewers.get(at.vid);
             if (vw == null || vw.isEmpty()) {   // 正被联控观看/驱动 → 不重载(不打断远程实时操作)
@@ -7790,6 +7806,8 @@ public class MainActivity extends AppCompatActivity {
             long idle = (t.lastShownAt > 0) ? (now - t.lastShownAt) : Long.MAX_VALUE;
             if (t.accountJson != null) {
                 if (idle < ACCT_LRU_MIN_IDLE_MS) continue;     // 刚用过的账号标签不动(防来回切抖动)
+                if (isAccountConvActive(t)) continue;          // 有活跃对话 → 对齐 Chrome 不冻有声音的标签
+                if (remoteDriven(t)) continue;                 // 远程自动化驱动中 → 不打断
                 java.util.concurrent.ConcurrentHashMap<String,Long> vw = tabViewers.get(t.vid);
                 if (vw != null && !vw.isEmpty()) continue;     // 正被联控观看/驱动 → 不打断
             } else {
