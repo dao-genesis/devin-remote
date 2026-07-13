@@ -1129,12 +1129,23 @@ var _sweepGen=0, _trkProg=0, _quotaProg=0, _quotaLiveProg=0;
 window.__daoNetProg=function(){ var n=Date.now(); if(_trkBusy)_trkProg=n; if(_quotaBusy)_quotaProg=n; if(_quotaLiveBusy)_quotaLiveProg=n; };
 // 单账号会话扫描 → 写入 _trk (从 pollTrk 串行循环抽出, 供并发池调用)。
 var _accScanTs = {};   // 账号 id → 最近一次会话扫描时刻 (pollTrk 与 refreshOpenAccts 去重, 不双份扫同一号)
+// 对话活跃判定(本源口径): 运行中/卡住/待输入/额度耗尽 一律算活跃(total 含四态) —— 正常开发就是
+//   等对话中断/卡住后才下一次交互发提示词, 面板此时必须高活性。另加「交互余温」:
+//   对话刚转终态(total→0)的号在 HOLD 窗内仍按活跃调度 —— 结束瞬间正是用户要发下一条
+//   提示词/新对话将起的时刻, 绝不能刚结束就降档致新对话识别慢半拍。
+var ACTIVE_HOLD_MS = 600000;   // 10min 交互余温窗
+var _accActiveTs = {};         // email → 最近一次观测到活跃对话的时刻
+function _convActive(a, now){
+  var em=(a.email||"").toLowerCase(); now=now||Date.now();
+  var t=_trk[em];
+  if(!t || t.total>0){ _accActiveTs[em]=now; return true; }   // 从未观测亦按活跃(先建基线); total 含 运行/卡住/待输入/耗尽
+  return (now-(_accActiveTs[em]||0))<ACTIVE_HOLD_MS;          // 刚结束 → 余温期内仍高活
+}
 // 四象限优先级判定 (前台已开页 × 对话活跃): 本轮该不该扫此号。独立函数以便单测。
 function _tierDue(a, no, force, now){
   if(force) return true;
   if(now-(_accScanTs[a.id||a.email||""]||0)<5000) return false;   // 专线刚扫过 → 去重
-  var t=_trk[(a.email||"").toLowerCase()];
-  var active=!t || t.total>0;                       // 从未观测过亦按活跃处理(先建立基线)
+  var active=_convActive(a, now);
   var open=_isDvOpen(a);
   if(open && active) return true;                   // ① 前台+活跃 → 每轮
   if(active) return (no%2)===(_sweepN%2);           // ② 后台+活跃 → 每 2 轮
@@ -1407,7 +1418,7 @@ function _isDvOpen(a){ if(!a) return false; var now=Date.now();
   return (!!_dvOpenAccts[e] && now-_dvOpenAccts[e]<90000) || (!!i && !!_dvOpenAccts[i] && now-_dvOpenAccts[i]<90000); }
 function _hasLiveConv(a){ if(_isDvOpen(a)) return true; var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<TRK_HOLD_MS); }  // 道·守柔不失: 与显示同窗(后台冻结期沿用), 不因计时器到点而误判"非活跃"→顶置/急刷/清理候选皆稳
 // 有对话(不必正在跑): 追踪到该号有对话且近 25 分钟内见过 → 视为「活跃号」, 额度每轮必刷(不进慢速轮转), 用户最关心的有对话账号额度近实时。
-function _hasConv(a){ var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<1500000); }
+function _hasConv(a){ var st=_trk[(a.email||"").toLowerCase()]; if(st && (st.total|0)>0 && Date.now()-st.ts<1500000) return true; return Date.now()-(_accActiveTs[(a.email||"").toLowerCase()]||0)<ACTIVE_HOLD_MS; }   // 余温期内额度仍高频: 对话刚结束正是用户看余额/发下一条的时刻
 async function applyConvCapFor(a){
   if(!_cfg("convCap",true) || !hasAuth(a)) return;
   var q=a.quota; if(!q||typeof q.dPct!=="number"||typeof q.overageDollars!=="number") return;   // 未知余额不动(美金未取到时绝不据 0 限额)
