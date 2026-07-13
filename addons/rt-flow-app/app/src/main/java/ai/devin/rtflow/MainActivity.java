@@ -2509,6 +2509,9 @@ public class MainActivity extends AppCompatActivity {
                     if (lk.equals("authorization") || lk.equals("host") || lk.equals("accept-encoding") || lk.equals("cookie")) continue;
                     try { c.setRequestProperty(k, e.getValue()); } catch (Exception ignored) {}
                 }
+                // 无 WebView 头可转发(悬浮窗下载/末路代取)时默认 UA 是 Dalvik → Cloudflare 浏览器
+                // 完整性检查直接 403(错误码 1010) → 边缘通道永远不通 —— 补浏览器 UA 才能过门。
+                if (c.getRequestProperty("User-Agent") == null) c.setRequestProperty("User-Agent", BROWSER_UA);
                 if ("app.devin.ai".equalsIgnoreCase(host)) {
                     c.setRequestProperty("Authorization", "Bearer " + auth1);
                     if (orgId != null && !orgId.isEmpty()) c.setRequestProperty("x-cog-org-id", orgId);
@@ -2537,6 +2540,16 @@ public class MainActivity extends AppCompatActivity {
                 }
                 // 边缘中继答复但为中继层错误 (Cloudflare Worker 限额 1027 错误页/5xx):
                 //   记忆中继失效并回退直连一次, 否则错误页字节会被当媒体回灌 → 图片/视频全部空白。
+                // 中继应答但未穿透到 Worker 代码(无 x-dao-proxy 印记的 4xx/5xx = Cloudflare 区域层拦截:
+                //   浏览器完整性检查 1010/WAF/限额页, 含 text/plain 体) → 同样属中继层错误。
+                if (viaEdge && code >= 400 && c.getHeaderField("x-dao-proxy") == null) {
+                    markEdgeDead();
+                    try { c.disconnect(); } catch (Exception ignored2) {}
+                    c = null;
+                    if (hop == 0 && edgeUsable()) { viaEdge = true; openUrl = edgeWrap(url); continue; }   // 轮换后的下一个中继域名重试
+                    if (!directRetried) { directRetried = true; viaEdge = false; openUrl = url; continue; }
+                    return null;
+                }
                 if (viaEdge && edgeRelayLevelError(code, c.getContentType())) {
                     markEdgeDead();
                     try { c.disconnect(); } catch (Exception ignored2) {}
@@ -2566,6 +2579,10 @@ public class MainActivity extends AppCompatActivity {
     private static volatile long sMediaProbeAt;
     private static volatile long sEdgeDeadUntil;
     private static volatile String sEdgeBase;
+    private static volatile int sEdgeIdx;
+    /** 非浏览器 UA(Dalvik/HttpURLConnection 默认)会触发 Cloudflare 浏览器完整性检查(403 错误码 1010)
+     *  → 边缘中继永远拒连。原生代取无 WebView 头可转发时一律补浏览器 UA。 */
+    static final String BROWSER_UA = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
     static boolean blockedMediaHost(String h) {
         if (h == null) return false;
         h = h.toLowerCase(java.util.Locale.US);
@@ -2594,15 +2611,30 @@ public class MainActivity extends AppCompatActivity {
         sEdgeBase = b;
         return b;
     }
+    /** 边缘中继候选序列(去重): 配置域名 → 自有域名 → workers.dev 兑底; 单个中继层面失败即轮换下一个,
+     *  全部轮完才判边缘整体失效 —— 单域名被封/限额不再拖死整条边缘通道。 */
+    static String[] edgeBaseCandidates() {
+        java.util.LinkedHashSet<String> s = new java.util.LinkedHashSet<>();
+        s.add(edgeFetchBase());
+        s.add("https://dao-relay.aiotvr.cloud");
+        s.add("https://dao-relay-do.zhouyoukang.workers.dev");
+        return s.toArray(new String[0]);
+    }
     static String edgeWrap(String url) {
-        try { return edgeFetchBase() + "/fetch?u=" + java.net.URLEncoder.encode(url, "UTF-8"); }
-        catch (Exception e) { return url; }
+        try {
+            String[] bases = edgeBaseCandidates();
+            return bases[Math.floorMod(sEdgeIdx, bases.length)] + "/fetch?u=" + java.net.URLEncoder.encode(url, "UTF-8");
+        } catch (Exception e) { return url; }
     }
     static boolean edgePreferred() { return System.currentTimeMillis() < sMediaEdgeUntil && edgeUsable(); }
     static void markDirectMediaBlocked() { sMediaEdgeUntil = System.currentTimeMillis() + 10 * 60_000L; }
     /** 边缘中继自身健康门: 中继失效(Cloudflare Worker 限额 1027/5xx/错误页)时绝不再把媒体/下载引到死路。 */
     static boolean edgeUsable() { return System.currentTimeMillis() >= sEdgeDeadUntil; }
-    static void markEdgeDead() { sEdgeDeadUntil = System.currentTimeMillis() + 5 * 60_000L; }
+    static void markEdgeDead() {
+        int n = edgeBaseCandidates().length;
+        sEdgeIdx++;   // 先轮换到下一个中继域名
+        if (sEdgeIdx % n == 0) sEdgeDeadUntil = System.currentTimeMillis() + 5 * 60_000L;   // 全部轮完才判边缘整体失效
+    }
     /** 中继答复是否属于中继层错误 (源站错误是 XML/JSON 之外的判据: Worker 限额/错误页为 text/html, 网关级为 5xx)。 */
     static boolean edgeRelayLevelError(int code, String ctype) {
         if (code >= 500) return true;
@@ -2618,9 +2650,11 @@ public class MainActivity extends AppCompatActivity {
         Thread t = new Thread(() -> {
             java.net.HttpURLConnection c = null;
             try {
-                c = HttpBridge.openConn("https://s3.us-west-2.amazonaws.com/", false);
+                // 探真实附件桶宿主(app.devin.ai 附件 307 的落点), 而非泛化区域端点 —— 判据才与实际下载同路
+                c = HttpBridge.openConn("https://devin-public-attachments.s3.dualstack.us-west-2.amazonaws.com/", false);
                 c.setConnectTimeout(4000);
                 c.setReadTimeout(4000);
+                c.setRequestProperty("User-Agent", BROWSER_UA);
                 c.setRequestMethod("HEAD");
                 c.getResponseCode();   // 任何应答(含 4xx)=可达
             } catch (Exception e) { markDirectMediaBlocked(); }
@@ -4272,16 +4306,55 @@ public class MainActivity extends AppCompatActivity {
                 String name = attachmentFileName(fUrl, fCd, fMime);
                 DownloadManager.Request req = new DownloadManager.Request(Uri.parse(fUrl));
                 if (fMime != null) req.setMimeType(fMime);
-                if (fUa != null) req.addRequestHeader("User-Agent", fUa);
+                req.addRequestHeader("User-Agent", fUa != null ? fUa : BROWSER_UA);
                 String cookie = android.webkit.CookieManager.getInstance().getCookie(fUrl);
                 if (cookie != null) req.addRequestHeader("Cookie", cookie);
                 req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
                 // 落到应用专属外部目录 → 由应用内下载管理器统一展示/打开/拖拽
                 req.setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, name);
                 DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-                if (dm != null) { long id = dm.enqueue(req); dlPending.put(id, new String[]{ name, fMime == null ? "" : fMime, fUrl, String.valueOf(attempt) }); runOnUiThread(() -> { toast(attempt > 0 ? ("重试下载: " + name) : ("开始下载: " + name)); if (dlListCol != null) renderDownloadList(dlListCol); }); }
+                if (dm != null) { long id = dm.enqueue(req); dlPending.put(id, new String[]{ name, fMime == null ? "" : fMime, fUrl, String.valueOf(attempt) }); watchDmStall(id, name, fUrl, fMime); runOnUiThread(() -> { toast(attempt > 0 ? ("重试下载: " + name) : ("开始下载: " + name)); if (dlListCol != null) renderDownloadList(dlListCol); }); }
             } catch (Exception e) { runOnUiThread(() -> toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage()))); }
         }).start();
+    }
+    /** DownloadManager 黑洞看门人: 国内网络下 DM 自行跟 307 到被墙的 S3 后会永久停在
+     *  「已暂停·等待网络」(0 B)——既不失败也不完成, 完成广播永不触发 → 任何兑底都轮不到。
+     *  入队后定时回查: 附件/被墙宿主的下载若 25s 后仍 0 字节或处于暂停态, 则斩 DM 改走
+     *  原生代取(含边缘中继), 并标记直连被墙让后续下载首点即走代取。 */
+    private void watchDmStall(final long id, final String name, final String url, final String mime) {
+        boolean watch = false;
+        try {
+            String h = url == null ? null : Uri.parse(url).getHost();
+            watch = isAttachmentDownloadUrl(url) || blockedMediaHost(h);
+        } catch (Exception ignored) {}
+        if (!watch) return;
+        main.postDelayed(() -> {
+            if (!dlPending.containsKey(id)) return;   // 已完成/已取消
+            try {
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm == null) return;
+                android.database.Cursor cur = dm.query(new DownloadManager.Query().setFilterById(id));
+                if (cur == null) return;
+                long got = -1; int st = -1;
+                try {
+                    if (cur.moveToFirst()) {
+                        got = cur.getLong(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                        st = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                    }
+                } finally { cur.close(); }
+                if (st == DownloadManager.STATUS_SUCCESSFUL || st == DownloadManager.STATUS_FAILED) return;   // 正路广播会处理
+                if (st == DownloadManager.STATUS_PAUSED || got <= 0) {
+                    try { dm.remove(id); } catch (Exception ignored) {}
+                    dlPending.remove(id);
+                    markDirectMediaBlocked();
+                    toast("直连不通, 改走代理通道下载: " + name);
+                    nativeFetchDownload(url, name, mime);
+                    if (dlListCol != null) renderDownloadList(dlListCol);
+                } else {
+                    watchDmStall(id, name, url, mime);   // 有进度 → 继续看护(防中途断流卡死)
+                }
+            } catch (Exception ignored) {}
+        }, 25_000L);
     }
 
     /** 附件真名推导: URLUtil.guessFileName 遇路径内二次编码的 %3F('?') 会当作查询串截断 →
@@ -4335,13 +4408,6 @@ public class MainActivity extends AppCompatActivity {
                 long total = -1; try { total = c.getContentLength(); } catch (Exception ignored) {}
                 nativeDlProgress.put(pname, new long[]{ 0, total });
                 main.post(() -> { if (dlListCol != null) renderDownloadList(dlListCol); });
-                java.io.InputStream is = c.getInputStream();
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                byte[] buf = new byte[65536]; int n;
-                while ((n = is.read(buf)) > 0) { bos.write(buf, 0, n); long[] pr = nativeDlProgress.get(pname); if (pr != null) pr[0] = bos.size(); }
-                is.close();
-                byte[] data = bos.toByteArray();
-                if (data.length == 0) { runOnUiThread(() -> toast("代理下载失败: 空响应")); return; }
                 String name = sanitizeFileName(nameIn);
                 String ct = c.getContentType();
                 final String mime = (mimeIn != null && !mimeIn.isEmpty()) ? mimeIn
@@ -4349,12 +4415,27 @@ public class MainActivity extends AppCompatActivity {
                 File dir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
                 if (dir == null) dir = getCacheDir();
                 if (!dir.exists()) dir.mkdirs();
+                // 流式落盘(.part 临时名 → 成功后原子换名): 大视频不再整份压进内存, 半截流不污染成品名
                 File f = new File(dir, name);
-                java.io.FileOutputStream fo = new java.io.FileOutputStream(f);
-                try { fo.write(data); } finally { fo.close(); }
+                File tmp = new File(dir, name + ".part");
+                long written = 0;
+                java.io.InputStream is = c.getInputStream();
+                java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp);
+                try {
+                    byte[] buf = new byte[65536]; int n;
+                    while ((n = is.read(buf)) > 0) { fo.write(buf, 0, n); written += n; long[] pr = nativeDlProgress.get(pname); if (pr != null) pr[0] = written; }
+                } finally { try { is.close(); } catch (Exception ignored) {} fo.close(); }
+                if (written == 0) { try { tmp.delete(); } catch (Exception ignored) {} runOnUiThread(() -> toast("代理下载失败: 空响应")); return; }
+                if (f.exists()) f.delete();
+                if (!tmp.renameTo(f)) f = tmp;
                 File persisted = persistToVault(f, name);
                 String pu = "";
-                try { android.net.Uri pub = publishToDownloads(name, mime, data); if (pub != null) pu = pub.toString(); } catch (Exception ignored) {}
+                try {
+                    if (persisted.length() <= 64L * 1024 * 1024) {   // 超大文件不再整读回内存同步系统下载(保险箱+下载库已可用)
+                        android.net.Uri pub = publishToDownloads(name, mime, readAllBytes(persisted));
+                        if (pub != null) pu = pub.toString();
+                    }
+                } catch (Exception ignored) {}
                 final String puri = pu, path = persisted.getAbsolutePath(), fname = name;
                 final long size = persisted.length();
                 main.post(() -> { addDownloadRecord(fname, path, puri, mime, size); toast("已经代理通道下载完成: " + fname); });
