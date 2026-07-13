@@ -1475,6 +1475,15 @@ function test(name, fn) {
     const html = '<video src="' + url.replace(/&/g, "&amp;") + '"></video>';
     assert.strictEqual(cloud.applyMediaMap(html, map, true), '<video src="media/12ab34cd_v.mp4"></video>');
   });
+  test("applyMediaMap: 短 URL 是长 URL 前缀时长者先替·不残损(降序替换护栏)", () => {
+    const a = "https://s3.y.com/img.png";
+    const b = "https://s3.y.com/img.png?sig=xyz"; // a 是 b 的前缀
+    const map = { [a]: "media/AA_img.png", [b]: "media/BB_img.png" };
+    // 正文同时含两者: 长的必须先替, 否则 b 里的 a 段会被换成 media/AA_… 残损
+    assert.strictEqual(
+      cloud.applyMediaMap("裸 " + a + " 签 " + b + " 尾", map, false),
+      "裸 media/AA_img.png 签 media/BB_img.png 尾");
+  });
   test("devin_cloud.js: 备份落盘前须本地化媒体并计入 _meta (双副本源级护栏)", () => {
     const fs = require("fs"), path = require("path");
     for (const rel of [["..", "devin_cloud.js"], ["..", "..", "dao-vsix", "rtflow", "devin_cloud.js"]]) {

@@ -2293,7 +2293,10 @@ async function localizeConvMedia(auth, convDir, md) {
 // 把 URL→本地相对路径映射应用到正文; escaped=true 时按 HTML 转义形态(& → &amp;)替换。
 function applyMediaMap(text, map, escaped) {
   let s = String(text || "");
-  for (const url of Object.keys(map)) {
+  // 按 URL 长度降序替换: 防「短 URL 是长 URL 前缀」(如 .../a.png 与 .../a.png?sig=…) 时,
+  //   先替短的会把长 URL 里的前缀段也换掉 → 长 URL 残损。长的先替即互不干扰。
+  const urls = Object.keys(map).sort((a, b) => b.length - a.length);
+  for (const url of urls) {
     const from = escaped ? url.replace(/&/g, "&amp;") : url;
     s = s.split(from).join(map[url]);
   }
