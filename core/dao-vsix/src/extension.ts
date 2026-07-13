@@ -1800,10 +1800,18 @@ function dedupeUrls(urls: string[]): string[] {
 // 顶层持久通道 · 预填 Token 创建深链: 打开即已勾好本通道所需最小权限, 用户点一次
 // Create 复制 token 即可, 免手搓权限、免读文档 (与 addons/dao-relay/provision.mjs 同源)。
 function daoRelayTokenDeepLink(name = 'dao-relay'): string {
+    // 权限集须与 addons/dao-relay/provision.mjs 的 tokenDeepLink 单一同源:
+    //   workers_scripts:edit  部署 Worker 脚本
+    //   workers_kv_storage:edit  KV/DO 相关
+    //   account_settings:read  读账号/子域
+    //   zone:read + workers_routes:edit  provision 的 tryCustomDomain 绑 dao-relay.<zone> 自定义域
+    //     (workers.dev 被墙网络的可达入口)所必需 — 缺则代填出的 Token 无权绑域, 兜底入口失效。
     const perms = [
         { key: 'workers_scripts', type: 'edit' },
         { key: 'workers_kv_storage', type: 'edit' },
         { key: 'account_settings', type: 'read' },
+        { key: 'zone', type: 'read' },
+        { key: 'workers_routes', type: 'edit' },
     ];
     const q = new URLSearchParams({ permissionGroupKeys: JSON.stringify(perms), name, accountId: '*', zoneId: 'all' });
     return 'https://dash.cloudflare.com/profile/api-tokens?' + q.toString();
@@ -4140,7 +4148,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         // 插件即经 getRelayConfig 置顶自动采纳; /set 供远端 UI/脚本直接登记 URL。
         // ═══════════════════════════════════════════════════════════
         case '/api/relay/deep-link': {
-            return { ok: true, url: daoRelayTokenDeepLink(), perms: ['workers_scripts:edit', 'workers_kv_storage:edit', 'account_settings:read'],
+            return { ok: true, url: daoRelayTokenDeepLink(), perms: ['workers_scripts:edit', 'workers_kv_storage:edit', 'account_settings:read', 'zone:read', 'workers_routes:edit'],
                 howto: '点开链接 → Continue to summary → Create Token → 复制 → 用 provision.mjs <token> 部署, 或把已部署的 workers.dev 地址 POST 到 /api/relay/set' };
         }
         case '/api/relay/state': {
@@ -5702,7 +5710,7 @@ function daoRelayWriteGhCfAssistExt(profileDir: string, cred: { user?: string; p
         };
         fs.writeFileSync(path.join(extDir, 'manifest.json'), JSON.stringify(manifest), 'utf8');
         const C = JSON.stringify({ user: cred.user || '', pass: cred.pass || '', otp: otpNow || '', name: tokenName || 'dao-relay' });
-        // CF dao-relay 部署所需权限(与 daoRelayTokenDeepLink / provision.mjs 同源): Workers 脚本编辑 + KV 编辑 + 账号读。
+        // CF dao-relay 部署所需权限(与 daoRelayTokenDeepLink / provision.mjs 同源): Workers 脚本编辑 + KV 编辑 + 账号读 + Zone 读 + Workers 路由编辑(绑自定义域兜底)。
         const js = 'try{(function(){var C=' + C + ';var H=location.hostname;' +
             'function setV(el,v){if(!el||!v)return;try{el.focus();el.value=v;el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}}' +
             'function bar(t){try{if(document.getElementById("__dao_cf_bar")){document.getElementById("__dao_cf_bar").textContent=t;return;}var b=document.createElement("div");b.id="__dao_cf_bar";b.textContent=t;b.style.cssText="position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#f38020;color:#fff;font:13px sans-serif;padding:6px 10px;text-align:center";document.documentElement.appendChild(b);}catch(e){}}' +
@@ -5711,7 +5719,7 @@ function daoRelayWriteGhCfAssistExt(profileDir: string, cred: { user?: string; p
             'if(/\\/login|\\/sign-?up/.test(location.pathname)){var g=findBtn(/github/i);if(g){bar("DAO 代登·检测到 Cloudflare 登录页 → 用 GitHub 账号登录(点击 Sign in with GitHub)");g.click();return;}bar("DAO 代登·请在 Cloudflare 登录页选择「Sign in with GitHub」");return;}' +
             'if(/api-tokens/.test(location.pathname+location.search)){' +
             'var nm=document.querySelector("input[name=name],input#token-name,input[placeholder*=name i]");if(nm&&C.name&&!nm.value)setV(nm,C.name);' +
-            'bar("DAO 代登·Cloudflare 建 API Token 页·请套用 dao-relay 所需权限(Workers 脚本编辑+KV 编辑+账号读)后手动 Create·勿改风控项");return;}' +
+            'bar("DAO 代登·Cloudflare 建 API Token 页·请套用 dao-relay 所需权限(Workers 脚本编辑+KV 编辑+账号读+Zone 读+Workers 路由编辑)后手动 Create·勿改风控项");return;}' +
             '}catch(e){}}' +
             'function onGh(){try{' +
             'var lf=document.querySelector("#login_field, input[name=login]");if(lf&&C.user)setV(lf,C.user);' +

@@ -59,4 +59,30 @@ const feStart = src.indexOf("function relayGhAutoLogin()");
 const fe = src.slice(feStart, feStart + 600);
 ok(/cmd\('relayGhAutoLogin',\{login:login\}\)/.test(fe), "前端只上送 login(不碰账密/2FA/Token)");
 
+// ⑥ 深链权限集 = provision.mjs 单一同源, 且覆盖 tryCustomDomain 绑自定义域所需(workers.dev 被墙兜底)。
+//   病灶(已修): daoRelayTokenDeepLink 曾只勾 3 权限(workers_scripts/kv/account), 缺 zone:read + workers_routes:edit,
+//   代填出的 Token 无权绑 dao-relay.<zone> 自定义域 → GFW 下 workers.dev 挂时兜底入口失效。
+function permKeys(fnSrc) {
+    const set = new Set();
+    const re = /key:\s*['"]([a-z_]+)['"]\s*,\s*type:\s*['"](edit|read)['"]/g;
+    let m; while ((m = re.exec(fnSrc))) set.add(m[1] + ':' + m[2]);
+    return set;
+}
+const dlStart = src.indexOf("function daoRelayTokenDeepLink");
+const dlFn = src.slice(dlStart, src.indexOf("\n}", dlStart) + 2);
+const extPerms = permKeys(dlFn);
+ok(extPerms.has("zone:read"), "深链含 zone:read(读 zone 供绑自定义域)");
+ok(extPerms.has("workers_routes:edit"), "深链含 workers_routes:edit(绑 Worker 自定义域·workers.dev 被墙兜底)");
+ok(extPerms.has("workers_scripts:edit") && extPerms.has("account_settings:read"), "深链保留 workers_scripts:edit + account_settings:read");
+
+const provPath = path.join(__dirname, "..", "..", "..", "addons", "dao-relay", "provision.mjs");
+if (fs.existsSync(provPath)) {
+    const prov = fs.readFileSync(provPath, "utf8");
+    const pStart = prov.indexOf("export function tokenDeepLink");
+    const pFn = prov.slice(pStart, prov.indexOf("\n}", pStart) + 2);
+    const provPerms = permKeys(pFn);
+    const missing = [...provPerms].filter(p => !extPerms.has(p));
+    ok(missing.length === 0, "深链权限集 ⊇ provision.mjs tokenDeepLink(单一同源·缺失: " + (missing.join(",") || "无") + ")");
+}
+
 console.log("全部通过 (" + pass + " 项)");
