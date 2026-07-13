@@ -1266,6 +1266,7 @@ public class MainActivity extends AppCompatActivity {
                     installVideoFit(v);         // 录像播放器窄屏适配: 视频区与步骤栏纵向堆叠同屏
                     installMediaRetry(v);       // 媒体加载自愈: 附件/对象存储直链瞬断→退避自动重载
                     installAttachmentPrefetch(v); // 附件预热: DOM 一出现附件即后台整取落盘 → 首次点开即秒开
+                    installComposerUpload(v);   // 「新创作/＋」弹出菜单加「上传到网页端」点击直传入口
                     harvestPageAuth(v, tab, u); // 非账号标签从页面登录态采收 auth → 媒体代取可用
                     warmAttachmentCookie(tab.auth1, tab.orgId, u);   // 预铸附件 Cookie → 首次图片/视频即已授权
                     scheduleMediaPrecollect(tab);   // 本页媒体预采 → 开面板/切标签秒出
@@ -1281,12 +1282,14 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); scheduleMediaPrecollect(tab); }
+                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); installComposerUpload(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); scheduleMediaPrecollect(tab); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
                 if (adBlock && req != null && req.getUrl() != null && isAdHost(req.getUrl().getHost()))
                     return new WebResourceResponse("text/plain", "utf-8", new java.io.ByteArrayInputStream(new byte[0]));
+                WebResourceResponse ac = assetCacheResponse(req);
+                if (ac != null) return ac;
                 WebResourceResponse am = authMediaResponse(tab, req);
                 if (am != null) return am;
                 return super.shouldInterceptRequest(v, req);
@@ -2821,6 +2824,125 @@ public class MainActivity extends AppCompatActivity {
                     total -= len;
                     new File(dir, n.substring(0, n.length() - 4) + ".mime").delete();
                 }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    // ── 静态资产磁盘缓存(体验不变·降流量): app.devin.ai 的 /assets/* 是内容哈希命名的不可变
+    //   bundle(JS/CSS/字体, 单次导航可达数十 MB)。WebView 自带 HTTP 缓存容量小且常被逐出 →
+    //   冷启/切号/多标签反复全量重下, 既慢又耗流量。按媒体缓存同一套路: 首见交还原生网络
+    //   (不占拦截线程做同步 IO)并后台整取落盘; 再见即本地供给(immutable) —— 同一版本 bundle
+    //   全机只下载一次, 切号/重进/多标签零重复流量。内容哈希改名即天然失效, 无陈旧风险。
+    private static final long ASSET_CACHE_MAX_TOTAL = 256L * 1024 * 1024;
+    private static final long ASSET_CACHE_MAX_ONE = 64L * 1024 * 1024;
+    private static final java.util.Set<String> sAssetFetching =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+    static File assetCacheDir() {
+        try {
+            android.content.Context ctx = HttpBridge.appCtx;
+            if (ctx == null) return null;
+            File d = new File(ctx.getExternalFilesDir(null), "asset-cache");
+            if (!d.exists() && !d.mkdirs()) return null;
+            return d;
+        } catch (Exception e) { return null; }
+    }
+    /** 只缓存内容哈希命名的不可变资产 (哈希改名即天然失效, 永不陈旧)。 */
+    static boolean cacheableAssetPath(String host, String path) {
+        if (host == null || path == null) return false;
+        if (!host.equalsIgnoreCase("app.devin.ai")) return false;
+        if (!path.startsWith("/assets/")) return false;
+        String n = path.substring(path.lastIndexOf('/') + 1);
+        return n.matches(".*[-.][A-Za-z0-9_]{8,}\\.[A-Za-z0-9]+");
+    }
+    static String assetMime(String path) {
+        String p = path.toLowerCase(java.util.Locale.US);
+        if (p.endsWith(".js") || p.endsWith(".mjs")) return "application/javascript";
+        if (p.endsWith(".css")) return "text/css";
+        if (p.endsWith(".woff2")) return "font/woff2";
+        if (p.endsWith(".woff")) return "font/woff";
+        if (p.endsWith(".ttf")) return "font/ttf";
+        if (p.endsWith(".svg")) return "image/svg+xml";
+        if (p.endsWith(".png")) return "image/png";
+        if (p.endsWith(".jpg") || p.endsWith(".jpeg")) return "image/jpeg";
+        if (p.endsWith(".gif")) return "image/gif";
+        if (p.endsWith(".webp")) return "image/webp";
+        if (p.endsWith(".json") || p.endsWith(".map")) return "application/json";
+        if (p.endsWith(".wasm")) return "application/wasm";
+        return "application/octet-stream";
+    }
+    /** 命中即本地供给(immutable); 未命中触发后台整取并交还原生网络。 */
+    static WebResourceResponse assetCacheResponse(WebResourceRequest req) {
+        try {
+            if (req == null || req.getUrl() == null || !"GET".equalsIgnoreCase(req.getMethod())) return null;
+            Uri u = req.getUrl();
+            if (!cacheableAssetPath(u.getHost(), u.getPath())) return null;
+            File dir = assetCacheDir(); if (dir == null) return null;
+            String key = mediaCacheKey("asset|" + u.getPath());
+            File f = new File(dir, key + ".bin");
+            if (f.exists() && f.length() > 0) {
+                f.setLastModified(System.currentTimeMillis());   // LRU 触碰
+                java.util.Map<String, String> hdrs = new java.util.HashMap<>();
+                hdrs.put("Cache-Control", "public, max-age=31536000, immutable");
+                hdrs.put("Content-Length", String.valueOf(f.length()));
+                hdrs.put("X-Dao-Asset-Cache", "hit");
+                WebResourceResponse r = new WebResourceResponse(assetMime(u.getPath()), null, new java.io.FileInputStream(f));
+                r.setStatusCodeAndReasonPhrase(200, "OK");
+                r.setResponseHeaders(hdrs);
+                return r;
+            }
+            assetCachePrefetch(u.toString(), u.getPath());
+            return null;
+        } catch (Exception e) { return null; }
+    }
+    /** 后台整取一份落盘 (单飞去重·identity 传输可校验 Content-Length·取不全不落盘免半截 JS 毒缓存)。 */
+    static void assetCachePrefetch(final String url, final String path) {
+        final File dir = assetCacheDir(); if (dir == null) return;
+        final String key = mediaCacheKey("asset|" + path);
+        final File dst = new File(dir, key + ".bin");
+        if (dst.exists()) return;
+        if (!sAssetFetching.add(key)) return;
+        sMediaPfPool.execute(() -> {
+            java.net.HttpURLConnection c = null;
+            File tmp = new File(dir, key + ".part");
+            try {
+                c = HttpBridge.openConn(url, false);
+                c.setConnectTimeout(15000);
+                c.setReadTimeout(30000);
+                c.setInstanceFollowRedirects(true);
+                c.setRequestProperty("Accept-Encoding", "identity");   // 保留 Content-Length 供完整性校验
+                if (c.getResponseCode() != 200) return;
+                long clen = -1;
+                try { clen = c.getContentLengthLong(); } catch (Throwable ignored) {}
+                if (clen > ASSET_CACHE_MAX_ONE) return;
+                java.io.InputStream in = c.getInputStream();
+                java.io.FileOutputStream out = new java.io.FileOutputStream(tmp);
+                long w = 0;
+                try {
+                    byte[] buf = new byte[65536]; int n;
+                    while ((n = in.read(buf)) > 0) {
+                        out.write(buf, 0, n); w += n;
+                        if (w > ASSET_CACHE_MAX_ONE) { try { out.close(); } catch (Exception ignored) {} tmp.delete(); return; }
+                    }
+                } finally { try { out.close(); } catch (Exception ignored) {} try { in.close(); } catch (Exception ignored) {} }
+                if (w == 0 || (clen > 0 && w != clen)) { tmp.delete(); return; }
+                if (tmp.renameTo(dst)) assetCacheTrim(dir);
+            } catch (Exception e) { try { tmp.delete(); } catch (Exception ignored) {} }
+            finally { if (c != null) try { c.disconnect(); } catch (Exception ignored) {} sAssetFetching.remove(key); }
+        });
+    }
+    /** LRU 限容: 超额时从最久未用的资产逐个剔除。 */
+    static void assetCacheTrim(File dir) {
+        try {
+            File[] fs = dir.listFiles((d, n) -> n.endsWith(".bin"));
+            if (fs == null) return;
+            long total = 0;
+            for (File f : fs) total += f.length();
+            if (total <= ASSET_CACHE_MAX_TOTAL) return;
+            java.util.Arrays.sort(fs, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+            for (File f : fs) {
+                if (total <= ASSET_CACHE_MAX_TOTAL) break;
+                long len = f.length();
+                if (f.delete()) total -= len;
             }
         } catch (Exception ignored) {}
     }
@@ -4406,6 +4528,38 @@ public class MainActivity extends AppCompatActivity {
             + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
+    // 「新创作/＋」弹出菜单点击直传: Devin 对话页 composer 的 ＋ 弹出菜单(Radix menu)一出现,
+    //   若其项含 附件/上传/文件 等语义(即新创作/附件类弹窗), 就地追加一项「⬆ 上传到网页端」——
+    //   点击经 RTDL.pickUpload 原生桥拉系统文件选择器(可多选), 与下载悬浮窗同一注入链直传,
+    //   不再依赖拖拽。幂等(window.__rtNewUp 守卫), SPA 路由后可重装。
+    static void installComposerUpload(WebView w) {
+        if (w == null) return;
+        String js = "(function(){try{if(window.__rtNewUp)return;"
+            + "if(!/(^|\\.)devin\\.ai$/.test(location.hostname))return;window.__rtNewUp=1;"
+            + "var RX=/attach|upload|file|photo|screenshot|camera|附件|上传|文件|图片|截图|拍照/i;"
+            + "function enhance(menu){try{if(menu.__rtUp)return;"
+            + "var items=menu.querySelectorAll('[role=\"menuitem\"]');"
+            + "if(!items.length||!RX.test(menu.textContent||''))return;menu.__rtUp=1;"
+            + "var ref=items[items.length-1];"
+            + "var it=ref.cloneNode(false);it.removeAttribute('id');it.setAttribute('data-rtup','1');"
+            + "it.textContent='\u2B06 \u4E0A\u4F20\u5230\u7F51\u9875\u7AEF';"
+            + "['click','pointerdown','pointerup','mousedown','mouseup'].forEach(function(ev){"
+            + "it.addEventListener(ev,function(e){e.preventDefault();e.stopPropagation();"
+            + "if(ev!=='click')return;"
+            + "try{document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));}catch(_){}"
+            + "try{window.RTDL&&RTDL.pickUpload&&RTDL.pickUpload();}catch(_){}"
+            + "},true);});"
+            + "ref.parentNode.appendChild(it);}catch(e){}}"
+            + "function sweep(n){try{if(!n||n.nodeType!==1)return;"
+            + "if(n.matches&&n.matches('[role=\"menu\"],[data-radix-menu-content]'))enhance(n);"
+            + "if(n.querySelectorAll)n.querySelectorAll('[role=\"menu\"],[data-radix-menu-content]').forEach(enhance);}catch(e){}}"
+            + "new MutationObserver(function(ms){ms.forEach(function(m){"
+            + "if(m.addedNodes)for(var i=0;i<m.addedNodes.length;i++)sweep(m.addedNodes[i]);});})"
+            + ".observe(document.documentElement,{childList:true,subtree:true});"
+            + "sweep(document.body);"
+            + "}catch(e){}})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
     // 键盘弹出时把聚焦的输入框滚到可见区中部 (配合 windowSoftInputMode=adjustResize):
     //   消除"输入框被键盘遮住 / 弹来弹去", 体感对齐真浏览器。幂等(window.__rtkb 守卫), SPA 路由后可重装。
     static void installKbHelper(WebView w) {
@@ -4503,6 +4657,9 @@ public class MainActivity extends AppCompatActivity {
             try { byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); writeDownloadBytes(name, mime, data); }
             catch (Exception e) { main.post(() -> toast("下载捕获失败")); }
         }
+        /** 页面「新创作/＋」弹出菜单的「上传到网页端」→ 原生系统文件选择器(可多选)点击直传。 */
+        @android.webkit.JavascriptInterface
+        public void pickUpload() { main.post(() -> pickUploadToPage()); }
     }
     private void writeDownloadBytes(String name, String mime, byte[] data) {
         try {

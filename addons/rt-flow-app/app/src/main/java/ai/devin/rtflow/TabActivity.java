@@ -154,6 +154,8 @@ public class TabActivity extends AppCompatActivity {
             @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView v, android.webkit.WebResourceRequest req) {
                 if (req != null && req.getUrl() != null && MainActivity.isAdHost(req.getUrl().getHost()))
                     return new android.webkit.WebResourceResponse("text/plain", "utf-8", new java.io.ByteArrayInputStream(new byte[0]));
+                android.webkit.WebResourceResponse ac = MainActivity.assetCacheResponse(req);
+                if (ac != null) return ac;
                 android.webkit.WebResourceResponse am = MainActivity.authMediaResponseFor(fToken, fOrg, req);
                 if (am != null) return am;
                 return super.shouldInterceptRequest(v, req);
