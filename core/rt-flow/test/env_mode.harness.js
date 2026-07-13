@@ -62,14 +62,27 @@ t("缺省无记录 → linux (默认)", () => {
   assert.strictEqual(I.getAccountEnvMode(B), "linux");
 });
 
-t("_normEnvMode 归一化 (仅 windows/linux · 大小写/垃圾值皆归 linux)", () => {
+t("_normEnvMode 三态归一化 (windows/macos/linux · 大小写/别名/垃圾值)", () => {
   assert.strictEqual(I._normEnvMode("windows"), "windows");
   assert.strictEqual(I._normEnvMode("WINDOWS"), "windows");
+  assert.strictEqual(I._normEnvMode("win"), "windows");
   assert.strictEqual(I._normEnvMode("linux"), "linux");
-  assert.strictEqual(I._normEnvMode("mac"), "linux");
+  assert.strictEqual(I._normEnvMode("macos"), "macos");
+  assert.strictEqual(I._normEnvMode("mac"), "macos");
+  assert.strictEqual(I._normEnvMode("OSX"), "macos");
+  assert.strictEqual(I._normEnvMode("darwin"), "macos");
+  assert.strictEqual(I._normEnvMode("solaris"), "linux");
   assert.strictEqual(I._normEnvMode(null), "linux");
   assert.strictEqual(I._normEnvMode(undefined), "linux");
   assert.strictEqual(I._normEnvMode(123), "linux");
+});
+
+t("_nextEnvMode 三态循环步进 (linux→windows→macos→linux)", () => {
+  assert.strictEqual(I._nextEnvMode("linux"), "windows");
+  assert.strictEqual(I._nextEnvMode("windows"), "macos");
+  assert.strictEqual(I._nextEnvMode("macos"), "linux");
+  assert.strictEqual(I._nextEnvMode("garbage"), "windows"); // 归一 linux → 下一步 windows
+  assert.deepStrictEqual(I.ENV_MODE_CYCLE, ["linux", "windows", "macos"]);
 });
 
 t("写 A→windows 落盘 + 读盘还原 (round-trip)", () => {
@@ -88,7 +101,12 @@ t("每号隔离: 切 A 不波及 B (B 仍 linux)", () => {
   assert.strictEqual(I.getAccountEnvMode(B), "linux");
 });
 
-t("切回 A→linux (linux⇄windows 往返)", () => {
+t("A→macos 落盘还原 (三态)", () => {
+  I._writeEnvModeStates([{ email: A, mode: "macos" }]);
+  assert.strictEqual(I.getAccountEnvMode(A), "macos");
+});
+
+t("切回 A→linux (三态往返闭环)", () => {
   I._writeEnvModeStates([{ email: A, mode: "linux" }]);
   assert.strictEqual(I.getAccountEnvMode(A), "linux");
 });

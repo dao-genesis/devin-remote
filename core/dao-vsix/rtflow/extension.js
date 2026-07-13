@@ -7027,12 +7027,30 @@ function _writeLockStates(items) {
     return { ok: false, changed: 0 };
   }
 }
-// ═══ 环境模式(Linux/Windows) 独立持久化 · 每账号 · multi-window race-safe ═══
-//   与 lock-state 同治法: _env_mode.json 专司此事 · 缺省 linux · 唯 setEnvModeBatch 写。
+// ═══ 环境模式(Linux/Windows/macOS) 独立持久化 · 每账号 · multi-window race-safe ═══
+//   与 lock-state 同治法: _env_mode.json 专司此事 · 缺省 linux · 唯 env-mode 消息写。
+//   三态循环: linux → windows → macos → linux (点击 +1 步进·每号各自推进)。
+const ENV_MODE_CYCLE = ["linux", "windows", "macos"];
 function _normEnvMode(m) {
-  return String(m == null ? "" : m).toLowerCase() === "windows"
-    ? "windows"
-    : "linux";
+  const s = String(m == null ? "" : m).toLowerCase();
+  if (s === "windows" || s === "win") return "windows";
+  if (s === "macos" || s === "mac" || s === "osx" || s === "darwin")
+    return "macos";
+  return "linux";
+}
+// 三态步进: 从当前态推进到循环下一态 (linux→windows→macos→linux)
+function _nextEnvMode(m) {
+  const i = ENV_MODE_CYCLE.indexOf(_normEnvMode(m));
+  return ENV_MODE_CYCLE[(i + 1) % ENV_MODE_CYCLE.length];
+}
+// UI 提示文案 (图标+名) · 三态
+function _envModeLabel(m) {
+  const n = _normEnvMode(m);
+  return n === "windows"
+    ? "🪟 已切 Windows"
+    : n === "macos"
+      ? "🍎 已切 macOS"
+      : "🐧 已切 Linux";
 }
 function _readEnvModeState() {
   try {
@@ -10489,7 +10507,7 @@ function _computePanelStructSig() {
         checked ? Math.round(h.overageDollars || 0) : 0,
         isClaudeAvailable(h) ? 1 : 0,
         a.skipAutoSwitch ? 1 : 0,
-        a.envMode === "windows" ? "W" : "L",
+        a.envMode === "windows" ? "W" : a.envMode === "macos" ? "M" : "L",
         h && h.hasSnap ? 1 : 0,
         devinCloud.getTag(a.email) || "",
         checked ? _parseTimeMs(h.planEnd) : 0,
@@ -11328,7 +11346,7 @@ function buildHtml() {
         <button class="b cp" onclick="cp(${i})" title="复制">&#128203;</button>
         <button class="b rt" onclick="rt(${i})" title="路由官网→IDE内置浏览器(自足反代注入该号登录·多实例标签·各登各号)">&#128421;</button>
         <button class="b sb" onclick="sb(${i})" title="系统默认浏览器打开官网(跳出IDE·多实例)">&#127760;</button>
-        <button class="b em em-${a.envMode === "windows" ? "win" : "linux"}" onclick="em(${i})" data-mode="${a.envMode === "windows" ? "windows" : "linux"}" title="${a.envMode === "windows" ? "环境模式: Windows · 点击切回 Linux" : "环境模式: Linux(默认) · 点击切到 Windows"}" style="color:${a.envMode === "windows" ? "#4aa3ff" : "#7ec699"}">${a.envMode === "windows" ? "&#129695;" : "&#128039;"}</button>
+        <button class="b em em-${a.envMode === "windows" ? "win" : a.envMode === "macos" ? "mac" : "linux"}" onclick="em(${i})" data-mode="${a.envMode === "windows" ? "windows" : a.envMode === "macos" ? "macos" : "linux"}" title="${a.envMode === "windows" ? "环境模式: Windows · 点击切到 macOS" : a.envMode === "macos" ? "环境模式: macOS · 点击切回 Linux" : "环境模式: Linux(默认) · 点击切到 Windows"}" style="color:${a.envMode === "windows" ? "#4aa3ff" : a.envMode === "macos" ? "#d08bff" : "#7ec699"}">${a.envMode === "windows" ? "&#129695;" : a.envMode === "macos" ? "&#127822;" : "&#128039;"}</button>
         <button class="b wp" onclick="wp(${i})" title="水过无痕·一键清理本账号 Devin Cloud 全部痕迹(对话/知识库/剧本/密钥/Git)">&#127754;</button>
         <button class="b rm" onclick="rm(${i})" title="删除">&times;</button>
       </span>
@@ -11667,7 +11685,7 @@ function vf(i){_clickFb(event);send('verify',i);}
 function cp(i){_clickFb(event);const ix=_selectedFor(i);vscode.postMessage({type:ix.length>1?'copyAccounts':'copyAccount',index:i,indices:ix});}
 function rt(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1){showToast('\u23F3 \u6279\u91cf\u8def\u7531\u5b98\u7f51\u2192IDE \u00b7 '+ix.length+' \u4e2a\u2026');vscode.postMessage({type:'routeToIdeBatch',indices:ix});}else{showToast('\u23F3 \u5207\u6b64\u53f7\u00b7\u8def\u7531\u5b98\u7f51\u2192IDE\u2026');vscode.postMessage({type:'routeToIde',index:i});}}
 function sb(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1){showToast('\u23F3 \u6279\u91cf\u7cfb\u7edf\u6d4f\u89c8\u5668 \u00b7 '+ix.length+' \u4e2a\u2026');vscode.postMessage({type:'openSysBrowserBatch',indices:ix});}else{vscode.postMessage({type:'openSysBrowser',index:i});}}
-function em(i){_clickFb(event);const b=event&&event.target&&event.target.closest('.em');const cur=(b&&b.dataset.mode)==='windows'?'windows':'linux';const next=cur==='windows'?'linux':'windows';const ix=_selectedFor(i);vscode.postMessage({type:'setEnvModeBatch',indices:ix.length?ix:[i],mode:next});}
+function em(i){_clickFb(event);const ix=_selectedFor(i);vscode.postMessage({type:'cycleEnvModeBatch',indices:ix.length?ix:[i]});}
 function _emailAt(i){const r=document.querySelector('.row[data-i="'+i+'"]');return (r&&r.dataset.email)||'';}
 function rm(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1)vscode.postMessage({type:'removeBatch',indices:ix,emails:ix.map(_emailAt)});else vscode.postMessage({type:'remove',index:i,email:_emailAt(i)});}
 function copyAll(){vscode.postMessage({type:'copyAllAccounts'});}
@@ -14041,7 +14059,7 @@ async function handleWebviewMessage(msg) {
         _broadcastUI();
         break;
       }
-      // 每账号环境模式(Linux/Windows) 切换 · 默认 linux · 点击 linux⇄windows · 独立持久化 (每号互不相干)
+      // 每账号环境模式(Linux/Windows/macOS) 显式设为同一态 · 独立持久化 (每号互不相干)
       case "setEnvModeBatch": {
         const mode = _normEnvMode(msg.mode);
         const indices = [
@@ -14068,7 +14086,48 @@ async function handleWebviewMessage(msg) {
             wr.ok,
         );
         _toast(
-          (mode === "windows" ? "🪟 已切 Windows · " : "🐧 已切 Linux · ") +
+          _envModeLabel(mode) +
+            " · " +
+            items.length +
+            " 个账号" +
+            (wr.ok ? "" : " · 持久化失败⚠️"),
+        );
+        _store.save();
+        _broadcastUI();
+        break;
+      }
+      // 每账号环境模式三态循环步进 · linux→windows→macos→linux · 每号从各自当前态各自+1 (批量多选同步步进·瞬移到下一位)
+      case "cycleEnvModeBatch": {
+        const indices = [
+          ...new Set((msg.indices || []).map(Number).filter(Number.isInteger)),
+        ];
+        const items = [];
+        for (const i of indices) {
+          const acc = _store.accounts[i];
+          if (!acc) continue;
+          const next = _nextEnvMode(acc.envMode); // 从该号自身当前态推进 (不强制同态)
+          acc.envMode = next; // 内存即时生效 (钉此号·不波及他号)
+          items.push({ email: acc.email, mode: next });
+        }
+        if (items.length === 0) {
+          _toast("环境模式: 0 个 (索引无效)");
+          break;
+        }
+        const wr = _writeEnvModeStates(items);
+        log(
+          "🖥 环境模式步进 · " +
+            items.length +
+            " 个 · " +
+            items.map((x) => x.mode[0].toUpperCase()).join("") +
+            " · persistOk=" +
+            wr.ok,
+        );
+        const uniq = [...new Set(items.map((x) => x.mode))];
+        _toast(
+          (uniq.length === 1
+            ? _envModeLabel(uniq[0])
+            : "🖥 环境模式已步进") +
+            " · " +
             items.length +
             " 个账号" +
             (wr.ok ? "" : " · 持久化失败⚠️"),
@@ -17199,10 +17258,12 @@ module.exports = {
     set _predictiveCandidate(v) {
       _predictiveCandidate = v;
     },
-    // 每账号环境模式(Linux/Windows) · 后端契约: 供 dao-vsix/会话创建按号查运行环境, 及守门测试
+    // 每账号环境模式(Linux/Windows/macOS) · 后端契约: 供 dao-vsix/会话创建按号查运行环境, 及守门测试
     _normEnvMode,
+    _nextEnvMode,
     _readEnvModeState,
     _writeEnvModeStates,
+    ENV_MODE_CYCLE,
     getAccountEnvMode(email) {
       const m = _readEnvModeState()[String(email || "").toLowerCase()];
       return _normEnvMode(m && m.envMode);
