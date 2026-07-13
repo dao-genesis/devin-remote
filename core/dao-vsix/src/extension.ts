@@ -5986,15 +5986,19 @@ async function daoGhInjectPats(logins: string[], primary: string, prune: boolean
 }
 // 一键拷贝(fork)仓库进组织: POST /repos/{o}/{r}/forks {organization} — 原仓库保留。
 async function daoGhForkRepos(pat: string, org: string, repos: string[]): Promise<{ ok: boolean; org: string; results: { repo: string; ok: boolean; error?: string }[] }> {
+    pat = String(pat || '').trim(); org = String(org || '').trim();
     const results: { repo: string; ok: boolean; error?: string }[] = [];
-    for (let i = 0; i < repos.length; i++) {
-        const full = repos[i];
+    // 与 daoOrgSyncRepos/daoGhListRepos 同源归一: 去 github.com 前缀 + .git 后缀 + 去重, 使
+    //   贴整链接(https://github.com/o/r)/o/r.git 与裸 o/r 一致可用(旧仅裸 o/r 匹配·体验割裂)。
+    const uniq = Array.from(new Set(repos.map(s => String(s || '').trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '')).filter(Boolean)));
+    for (let i = 0; i < uniq.length; i++) {
+        const full = uniq[i];
         const mm = /^([^\s/]+)\/([^\s/]+)$/.exec(full);
         if (!mm) { results.push({ repo: full, ok: false, error: '格式应为 owner/repo' }); continue; }
         const r = await ghApiRequest('POST', '/repos/' + encodeURIComponent(mm[1]) + '/' + encodeURIComponent(mm[2]) + '/forks', pat, { organization: org });
         if (r.status === 202 || r.status === 200) results.push({ repo: full, ok: true });
         else results.push({ repo: full, ok: false, error: (r.json && r.json.message) || r.error || ('HTTP ' + r.status) });
-        if (i < repos.length - 1) await _ghSleep(1200);
+        if (i < uniq.length - 1) await _ghSleep(1200);
     }
     return { ok: results.some(x => x.ok), org, results };
 }
