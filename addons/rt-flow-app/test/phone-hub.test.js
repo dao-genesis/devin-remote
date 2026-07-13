@@ -99,6 +99,36 @@ function ok(c, msg) { if (c) { console.log("  ok  - " + msg); } else { failures+
   const pollDead = await rpc("/api/poll", "POST", { id: aid, token: tok, timeout: 1 });
   ok(pollDead.status === 401, "撤销后原 per-agent token 失效 (poll → 401)");
 
+  // 12) _hubPs1Local (tunnel.html 前端兜底) 与后端 hubBootstrapPs1 逐字节同构: 保证前端兜底脚本
+  //     与后端规范脚本内容一致, 改一处必须两处同步 —— 偏差即此断言红, 杜绝潜在漂移。
+  const EP_TEST = "https://test.example.com/relay/session-x";
+  const TK_TEST = "tok-abc";
+  const backendScript = (await rpc("/api/bootstrap.ps1", "POST", { endpoint: EP_TEST, token: TK_TEST })).body.script;
+  // eval-slice _hubPs1Local from tunnel.html (找函数体: 起始 "function _hubPs1Local(){" 到独占行 "}")
+  const tunnelHtml = require("fs").readFileSync(
+    require("path").join(__dirname, "..", "app", "src", "main", "assets", "engine", "tunnel.html"), "utf8");
+  const fnStart = tunnelHtml.indexOf("function _hubPs1Local(){");
+  let frontendScript = "";
+  if (fnStart >= 0) {
+    // 提取函数体: 从 { 到对应的闭合 } (利用结构: 函数末尾行为 "}\n"; 换行 })
+    const slice = tunnelHtml.slice(fnStart);
+    const marker = '}\\n";\n}';
+    const endIdx = slice.indexOf(marker);
+    const fnBody = endIdx > 0 ? slice.slice(0, endIdx + marker.length) : "";
+    if (fnBody) {
+      // 构造可执行: 替换 _conn()/_tunnel() 调用为直接引用参数
+      const execBody = fnBody
+        .replace("function _hubPs1Local(){", "function _hubPs1Local(_conn_v,_tunnel_v){")
+        .replace("var c=_conn(), t=_tunnel();", "var c=_conn_v, t=_tunnel_v;");
+      const fn = new Function("return (" + execBody + ")")();
+      frontendScript = fn(
+        { url: "https://test.example.com", session: "session-x", token: TK_TEST },
+        {}
+      );
+    }
+  }
+  ok(backendScript === frontendScript, "_hubPs1Local === hubBootstrapPs1 (前端兜底与后端规范同构)");
+
   console.log(failures ? ("\nFAIL " + failures) : "\nALL GREEN (phone-hub)");
   process.exit(failures ? 1 : 0);
 })().catch((e) => { console.error("THROW", e); process.exit(1); });

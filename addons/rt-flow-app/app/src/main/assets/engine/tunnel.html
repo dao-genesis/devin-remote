@@ -429,6 +429,22 @@ function _push(){
   try{ renderPubWebUrl(); }catch(e){}
 }
 function _result(op,ok,text){ var o=document.getElementById('out'); if(o){o.className='';o.textContent='['+op+'] '+(ok?'✓':'✗')+' '+(text||'');} }
+// 统一复制 + 诚实结果: N.clip(原生剪贴板·安卓 WebView 最稳) → navigator.clipboard → execCommand(临时 textarea)
+// 逐级兜底, 任一成功即真·成功; 全失败返回 false → 调用方据此如实上前端。根治「吞掉异常却报绿灯」: 以前
+// 各复制点写死 _result(...,true,...), 无论 N.clip 是否抛错/缺失都报成功 —— 这正是用户实测「复制不了却全绿」之源。
+function _doClip(text){
+  text = (text==null)?"":String(text);
+  try{ if(N.clip){ N.clip(text); return true; } }catch(e){}
+  try{ if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(text); return true; } }catch(e){}
+  try{
+    var ta=document.createElement('textarea'); ta.value=text;
+    ta.style.position='fixed'; ta.style.left='-9999px'; ta.style.top='0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    var ok=document.execCommand('copy'); document.body.removeChild(ta); return !!ok;
+  }catch(e){ return false; }
+}
+// 复制失败兜底: 把内容摊进结果区 pre, 供用户长按手动复制 (不让「复制失败」变成空手而归)。
+function _showForManualCopy(text){ var o=document.getElementById('out'); if(o){ o.className=''; o.style.userSelect='text'; o.textContent=String(text||""); } }
 // 唯一一份接入文档: 两大模块(① 软件本体含浏览器子模块 ② 手机本体)全部命令直接平铺, 无渐进式披露、无隐藏。
 function _cloudMd(){
   var c=_conn(); var bp=_bestPublic(); var pub=((bp.base||c.url)||"").replace(/\/$/,'')+"/relay/"+(c.session||""); var web=_bestWeb();
@@ -661,9 +677,9 @@ function handle(m){
       "  "+_fallbackUrl,
       "  ↑ 经中继 Worker(已下放为末位兜底·Cloudflare 托管), 万一公共 CDN/ntfy 在对端被封时备用; 单网页已内置通道自愈。"); }
     block=block.join("\n");
-    try{N.clip&&N.clip(block);}catch(e){} _result('copyAccess',true,'已复制·轻量快速接入(接入信息+授权+常用命令+局域网直连), 全量见接入文档'); return; }
-  if(op==='copyUrl'){ var u=c.url.replace(/\/$/,'')+"/relay/"+c.session; try{N.clip&&N.clip(u);}catch(e){} _result('copyUrl',true,'已复制公网入口'); return; }
-  if(op==='copyToken'){ try{N.clip&&N.clip(c.token||"");}catch(e){} _result('copyToken',true,'已复制 Token'); return; }
+    var _ok=_doClip(block); _result('copyAccess',_ok,_ok?'已复制·轻量快速接入(接入信息+授权+常用命令+局域网直连), 全量见接入文档':'复制失败(剪贴板不可用)'); return; }
+  if(op==='copyUrl'){ var u=c.url.replace(/\/$/,'')+"/relay/"+c.session; var _ok=_doClip(u); _result('copyUrl',_ok,_ok?'已复制公网入口':'复制失败'); return; }
+  if(op==='copyToken'){ var _ok=_doClip(c.token||""); _result('copyToken',_ok,_ok?'已复制 Token':'复制失败'); return; }
   if(op==='restart'){ try{N.relayRestart&&N.relayRestart();}catch(e){} _result('restart',true,'已请求重连中继'); setTimeout(_push,800); return; }
   if(op==='rotateToken'){
     // 由原生 SecureRandom 轮换 (保留设备 url/session 身份, 旧 token 立即失效)
@@ -673,7 +689,7 @@ function handle(m){
     setTimeout(_push,1200);
     return;
   }
-  if(op==='exportCloudMd'){ try{N.clip&&N.clip(_cloudMd());}catch(e){} _result('exportCloudMd',true,'接入文档已复制 (两大模块全量·发给云端 Agent)'); return; }
+  if(op==='exportCloudMd'){ var _ok=_doClip(_cloudMd()); _result('exportCloudMd',_ok,_ok?'接入文档已复制 (两大模块全量·发给云端 Agent)':'复制失败(剪贴板不可用)'); return; }
   if(op==='openCloudMd'){ try{N.openText&&N.openText("接入文档 (两大模块全量)",_cloudMd());}catch(e){} return; }
   if(op==='health'){
     var r=_relay();
@@ -752,8 +768,8 @@ function copyDecentAccess(){
   var NAME={cloudflared:'cloudflared 主隧道', ssh:'SSH 反向隧道(备·独立于 Cloudflare)'};
   var lines=list.map(function(x){ return (NAME[x.name]||'隧道')+': '+x.url+"/relay/"+sid; });
   var block="去中心化公网入口（任一可用·互为冗余）:\n"+lines.join("\n")+"\nToken: "+(c.token||"")+"\nSession: "+sid+"\nE2E Key: "+(c.e2eKey||"");
-  try{N.clip&&N.clip(block);}catch(e){}
-  _result('copyDecent', true, '已复制 '+list.length+' 条去中心化入口+Token+Session+E2EKey (均直连本设备, 不经任何共享 Worker)');
+  var _ok=_doClip(block);
+  _result('copyDecent', _ok, _ok?('已复制 '+list.length+' 条去中心化入口+Token+Session+E2EKey (均直连本设备, 不经任何共享 Worker)'):'复制失败');
 }
 function copyP2PAccess(){
   var t=_tunnel(), c=_conn();
@@ -761,8 +777,8 @@ function copyP2PAccess(){
   if(!list.length){ _result('copyP2P', false, '需先有公网入口 (开启去中心化隧道并等其连通)'); return; }
   var sid=c.session||"";
   var block="P2P 直连 (WebRTC·路线B):\n1) 控制端打开 p2p-client.html\n2) 公网入口(握手用任一): "+list[0].url+"\n   Token: "+(c.token||"")+"\n   Session: "+sid+"\n握手后 RPC 全程 P2P DataChannel, 不再经隧道。";
-  try{N.clip&&N.clip(block);}catch(e){}
-  _result('copyP2P', true, '已复制 P2P 接入信息 (打开 p2p-client.html 填入即直连)');
+  var _ok=_doClip(block);
+  _result('copyP2P', _ok, _ok?'已复制 P2P 接入信息 (打开 p2p-client.html 填入即直连)':'复制失败');
 }
 function updateDecentUI(t){
   t=t||{}; var on=!!t.enabled; var fb=!!t.fallback;
@@ -851,15 +867,15 @@ function copyWebConsole(){
   var lines=["═══ Devin Cloud · 网页版 (任意浏览器打开即得本机真实页面) ═══"];
   bases.forEach(function(b){ lines.push("网页版: "+_webConsoleUrl(b,true)); });
   lines.push(""); lines.push("(网址已含 Session+Token=完整接入凭证, 仅发可信方)");
-  try{N.clip&&N.clip(lines.join("\n"));}catch(e){}
-  _result('webConsole', true, '已复制网页版网址(含Token, 浏览器打开即与本机一致)');
+  var _ok=_doClip(lines.join("\n"));
+  _result('webConsole', _ok, _ok?'已复制网页版网址(含Token, 浏览器打开即与本机一致)':'复制失败');
 }
 function copyWebConsoleBare(){
   var bases=_webConsoleBases();
   if(!bases.length){ _result('webConsole', false, '暂无可用入口'); return; }
   var lines=bases.map(function(b){ return _webConsoleUrl(b,false); });
-  try{N.clip&&N.clip(lines.join("\n"));}catch(e){}
-  _result('webConsole', true, '已复制纯网址(不含Token, 打开后需手动填 Session/Token)');
+  var _ok=_doClip(lines.join("\n"));
+  _result('webConsole', _ok, _ok?'已复制纯网址(不含Token, 打开后需手动填 Session/Token)':'复制失败');
 }
 renderWebConsole(); setInterval(renderWebConsole, 4000);
 // ── 公网网址 (跟随当前生效公网通道·任意浏览器打开即与 APK 同款操作) ──
@@ -867,8 +883,8 @@ renderWebConsole(); setInterval(renderWebConsole, 4000);
 function copyPublicWebUrl(){
   var web=_bestWeb();
   if(!web.url){ _result('pubWeb', false, '暂无可用公网入口 (等中继连通; 无需任何隧道/凭证)'); return; }
-  try{N.clip&&N.clip(web.url);}catch(e){}
-  _result('pubWeb', true, '已复制网页直开网址 · 经['+web.label+'] · 任意浏览器打开即与 APK 同款操作 (多设备同时打开互不干扰)');
+  var _ok=_doClip(web.url);
+  _result('pubWeb', _ok, _ok?('已复制网页直开网址 · 经['+web.label+'] · 任意浏览器打开即与 APK 同款操作'):'复制失败');
 }
 function renderPubWebUrl(){
   var el=document.getElementById('pubWebUrl'); if(!el) return;
@@ -903,8 +919,8 @@ function copyMirror(){
   var lines=["═══ Devin Cloud · 投屏镜像 (任意设备浏览器实时操控本机 Devin) ═══"];
   bases.forEach(function(b){ lines.push("镜像: "+_mirrorUrl(b,true)); });
   lines.push(""); lines.push("(网址含 Session+Token=完整接入凭证, 仅发可信方; 需保持手机端「远程操控」开启)");
-  try{N.clip&&N.clip(lines.join("\n"));}catch(e){}
-  _result('mirror', true, '已复制投屏镜像网址(含Token, 任意设备浏览器打开即可操控本机 Devin)');
+  var _ok=_doClip(lines.join("\n"));
+  _result('mirror', _ok, _ok?'已复制投屏镜像网址(含Token, 任意设备浏览器打开即可操控本机 Devin)':'复制失败');
 }
 renderMirror(); setInterval(renderMirror, 4000);
 function copyLanAccess(){
@@ -918,8 +934,8 @@ function copyLanAccess(){
   lines.push("");
   lines.push("调用模板 (控制端与手机同一 Wi-Fi 时直接可用):");
   lines.push("curl -s -X POST "+urls[0]+"/relay/"+(c.session||"")+" -H 'Authorization: Bearer "+(c.token||l.token||"<TOKEN>")+"' -H 'Content-Type: application/json' -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"getState\"}}'");
-  try{N.clip&&N.clip(lines.join("\n"));}catch(e){}
-  _result('copyLan', true, '已复制 局域网直连接入信息 (该地址直连本设备, 不经任何 Worker/隧道/公网)');
+  var _ok=_doClip(lines.join("\n"));
+  _result('copyLan', _ok, _ok?'已复制 局域网直连接入信息 (该地址直连本设备, 不经任何 Worker/隧道/公网)':'复制失败');
 }
 refreshLan(); setInterval(refreshLan, 4000);
 // ── 强制端到端加密开关 (Native 桥: e2eRequired/setE2eRequired) ──
@@ -1086,8 +1102,8 @@ function copyAllChannels(){
   lines.push(""); lines.push("Token: "+(c.token||"")); lines.push("Session: "+(c.session||"")); lines.push("E2E Key: "+(c.e2eKey||""));
   lines.push(""); lines.push("调用模板 (任一入口通用):");
   lines.push("curl -s -X POST "+(first||"<入口>")+" -H 'Authorization: Bearer "+(c.token||"<TOKEN>")+"' -H 'Content-Type: application/json' -d '{\"path\":\"/api/rpc\",\"body\":{\"cmd\":\"getState\"}}'");
-  try{N.clip&&N.clip(lines.join("\n"));}catch(e){}
-  _result('copyAll', true, '已复制 全部可用接入渠道 + Token/Session/E2EKey + curl 模板');
+  var _ok=_doClip(lines.join("\n"));
+  _result('copyAll', _ok, _ok?'已复制 全部可用接入渠道 + Token/Session/E2EKey + curl 模板':'复制失败');
 }
 renderChannels();
 //__HUBUI_START__ 接入电脑(手机=中枢) + Cloudflare 一键建 Worker · 前端 (经本机 LocalServer 回环调 relay-app 路由; 经 test/tunnel-frugal.test.js 切片实测, 勿删标记)
@@ -1099,33 +1115,98 @@ async function _hubRpc(path, body){
     method:"POST",
     headers:{"Authorization":"Bearer "+(c.token||""),"Content-Type":"application/json"},
     body:JSON.stringify({path:path,method:"POST",body:body||{}})});
+  if(!res.ok) throw new Error("本机回环 HTTP "+res.status);
   return res.json();
 }
+// 前端兜底生成「电脑一行接入」PowerShell —— 与 relay-app.js 的 hubBootstrapPs1() 逐字节同构
+// (由 test/phone-hub.test.js 断言二者一致, 改一处必须两处同步)。回环 RPC 未就绪(localServer 未起/
+// 端口未探到)时据此用当前设备身份直接生成, 保证「随时可复制」, 不再空手报错。
+function _hubPs1Local(){
+  var c=_conn(), t=_tunnel();
+  var base=(t&&t.url)?String(t.url).replace(/\/$/,''):(c.url?String(c.url).replace(/\/$/,''):"");
+  if(!base||!c.session) return "";
+  var endpoint=base+"/relay/"+c.session, token=c.token||"";
+  endpoint = endpoint || "<hub-endpoint>"; token = token || "<relay-token>";
+  return "# dao 手机中枢 · 被控端一行接入 · 道生一,一命接万机\n" +
+"$ErrorActionPreference='SilentlyContinue'; $ProgressPreference='SilentlyContinue'\n" +
+"try{ $OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8 }catch{}\n" +
+"$EP='" + endpoint + "'; $TK='" + token + "'\n" +
+"function Dao-Rpc($p,$o){ $f=@{path=$p;method='POST';body=$o}; $b=[Text.Encoding]::UTF8.GetBytes(($f|ConvertTo-Json -Depth 8 -Compress)); return irm $EP -Method POST -Body $b -ContentType 'application/json; charset=utf-8' -Headers @{Authorization=\"Bearer $TK\"} -TimeoutSec 35 }\n" +
+"$sys=@{ hostname=$env:COMPUTERNAME; username=$env:USERNAME; platform='win32'; os_version=[Environment]::OSVersion.VersionString; ps_version=$PSVersionTable.PSVersion.ToString(); capabilities=@('shell','cmd','run','detached') }\n" +
+"try { $reg = Dao-Rpc '/api/connect' @{sysinfo=$sys} } catch { Write-Host \"[dao] connect failed: $($_.Exception.Message)\" -ForegroundColor Red; return }\n" +
+"$aid=$reg.agent_id; $tok=$reg.token\n" +
+"Write-Host \"[dao] 已接入手机中枢 as $aid  (Ctrl+C 退出)\" -ForegroundColor Green\n" +
+"while($true){\n" +
+"  try{\n" +
+"    $poll = Dao-Rpc '/api/poll' @{id=$aid;token=$tok;timeout=25}\n" +
+"    foreach($__daoCmd in @($poll.commands)){\n" +
+"      if(-not $__daoCmd){ continue }\n" +
+"      $__daoCid=$__daoCmd.cmd_id; $__daoType=$__daoCmd.type; $__daoPayloadCmd=$__daoCmd.payload.command\n" +
+"      $out='';$err='';$code=0; $sw=[Diagnostics.Stopwatch]::StartNew(); $global:LASTEXITCODE=0\n" +
+"      try{\n" +
+"        switch($__daoType){\n" +
+"          'sysinfo' { $out=(Get-ComputerInfo | Out-String) }\n" +
+"          default {\n" +
+"            $Error.Clear(); $ErrorActionPreference='Continue'\n" +
+"            $raw = & { Invoke-Expression $args[0] } $__daoPayloadCmd 2>&1\n" +
+"            $ErrorActionPreference='SilentlyContinue'; $out=($raw | Out-String)\n" +
+"            if($Error.Count -gt 0){ $code=1; $msgs=(@($Error|Select-Object -First 20)|ForEach-Object{$_.ToString()}) -join [Environment]::NewLine; if([string]::IsNullOrWhiteSpace($out)){$out=$msgs}else{$out=$out+[Environment]::NewLine+$msgs} }\n" +
+"            if($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0){ $code=$LASTEXITCODE }\n" +
+"          }\n" +
+"        }\n" +
+"      }catch{ $err=$_.Exception.Message; $code=1 }\n" +
+"      $sw.Stop()\n" +
+"      $res=@{ stdout=$out; stderr=$err; exit_code=$code; execution_time_ms=$sw.ElapsedMilliseconds }\n" +
+"      try{ Dao-Rpc '/api/result' @{agent_id=$aid;token=$tok;cmd_id=$__daoCid;result=$res} | Out-Null }catch{}\n" +
+"    }\n" +
+"  }catch{\n" +
+"    try{ $reg=Dao-Rpc '/api/connect' @{sysinfo=$sys}; $aid=$reg.agent_id; $tok=$reg.token }catch{ Start-Sleep 3 }\n" +
+"  }\n" +
+"}\n";
+}
 async function copyHubPs1(){
-  try{
-    var r=await _hubRpc("/api/bootstrap.ps1");
-    if(!r||!r.script){ _result('hub',false,'脚本未就绪(等公网入口连通后再试)'); return; }
-    try{N.clip&&N.clip(r.script);}catch(e){}
-    _result('hub',true,'已复制 一键接入指令 · 任意电脑 PowerShell 粘贴运行即接入手机中枢');
-  }catch(e){ _result('hub',false,String(e&&e.message||e)); }
+  var script="", src="";
+  try{ var r=await _hubRpc("/api/bootstrap.ps1"); if(r&&r.script){ script=r.script; src="本机"; } }catch(e){}
+  if(!script){ script=_hubPs1Local(); if(script) src="设备身份兜底"; }
+  if(!script){ _result('hub',false,'接入指令无法生成: 设备身份未就绪 (需先连通公网入口/中继后重试)'); return; }
+  var ok=_doClip(script);
+  if(ok){ _result('hub',true,'已复制 一行接入指令('+src+') · 任意电脑 PowerShell 粘贴运行即接入手机中枢'); }
+  else { _result('hub',false,'脚本已生成但写入剪贴板失败(系统限制) → 已摊在下方, 请长按全选手动复制'); _showForManualCopy(script); }
 }
 async function hubRevokeUi(id){
   if(!confirm('吊销并断开「'+id+'」? 该电脑需重新运行接入指令才能再连。')) return;
   try{ var r=await _hubRpc("/api/revoke",{agent_id:id}); _result('hub',!!(r&&r.ok),(r&&r.ok)?('已吊销 '+id):((r&&r.error)||'吊销失败')); refreshHub(); }
   catch(e){ _result('hub',false,String(e&&e.message||e)); }
 }
+var _hubLastCheck=0, _hubLastErr="";
 async function refreshHub(){
   var el=document.getElementById('hubList'); if(!el) return;
-  var ag=null; try{ var r=await _hubRpc("/api/agents"); ag=(r&&r.agents)||null; }catch(e){}
-  if(!ag) return;   // 服务未就绪时保持现状, 不闪烁
+  var ag=null, errMsg="";
+  try{ var r=await _hubRpc("/api/agents"); ag=(r&&r.agents)||null; _hubLastCheck=Date.now(); _hubLastErr=""; }
+  catch(e){ errMsg=String(e&&e.message||e); _hubLastErr=errMsg; }
+  // 诚实状态: RPC 失败不再静默 —— 显示真实原因+最后检查时间, 不留过期的旧「暂无」伪正常
+  if(!ag){
+    var ts=_hubLastCheck?new Date(_hubLastCheck).toLocaleTimeString():'—';
+    el.innerHTML='<span class="muted" style="color:#f85149">⚠ 设备列表暂不可达'+(errMsg?(' · '+errMsg.slice(0,60)):'')+'</span>'
+      +'<br><span class="muted">最后成功获取: '+ts+'</span>';
+    return;
+  }
   try{ var ael=document.getElementById('agents'); if(ael) ael.textContent=String(ag.filter(function(a){return a.status==='online';}).length); }catch(e){}
-  if(!ag.length){ el.innerHTML='<span class="muted">（暂无 · 复制上方指令到电脑运行即出现）</span>'; return; }
+  if(!ag.length){ el.innerHTML='<span class="muted">（暂无接入设备 · 复制上方指令到电脑运行即出现）</span>'; return; }
   el.innerHTML=ag.map(function(a){
     var on=(a.status==='online');
     var name=String(a.hostname||a.id||'').replace(/[<>&"]/g,'');
+    var os=String(a.os||a.platform||'?').replace(/[<>&"]/g,'');
+    var caps=(a.capabilities||[]).join(',');
+    var ls=a.lastSeen?(new Date(a.lastSeen).toLocaleTimeString()):'';
     return '<div style="display:flex;align-items:center;gap:6px;margin:4px 0">'
-      +'<span class="dot '+(on?'ok':'pending')+'"></span>'
-      +'<span style="flex:1;font-size:12px;word-break:break-all">'+name+' · '+String(a.os||'?').replace(/[<>&"]/g,'')+' · '+(on?'在线':'离线')+(a.pending?(' · 待执行 '+a.pending):'')+'</span>'
+      +'<span class="dot '+(on?'ok':'bad')+'"></span>'
+      +'<span style="flex:1;font-size:12px;word-break:break-all">'
+        +name+' · '+os+' · '+(on?'<b style="color:#3fb950">在线</b>':'<span style="color:#f85149">离线</span>')
+        +(ls?(' · '+ls):'')
+        +(caps?(' · ['+caps+']'):'')
+        +(a.pending?(' · 待执行 '+a.pending):'')
+      +'</span>'
       +'<button style="width:auto;padding:3px 8px;font-size:11px;background:#a33" onclick="hubRevokeUi(\''+String(a.id||'').replace(/[\\'"<>&]/g,'')+'\')">吊销</button></div>';
   }).join('');
 }
