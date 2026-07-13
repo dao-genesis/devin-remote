@@ -120,6 +120,7 @@ public class MainActivity extends AppCompatActivity {
     private Uri cameraOutputUri;          // 网页上传时相机拍照的落地 Uri (FileProvider)
     private androidx.activity.result.ActivityResultLauncher<Intent> fileChooser;
     private androidx.activity.result.ActivityResultLauncher<Intent> shareImportPicker;  // 选「整机分享包」zip
+    private androidx.activity.result.ActivityResultLauncher<Intent> uploadPicker;       // 「上传到网页端」点击选文件 (拖拽之外的点击直传)
 
     private FrameLayout content;
     private FrameLayout autoHost;   // 常驻·满屏·INVISIBLE 容器: 停泊非活动标签 WebView, 使其保持挂载窗口+有尺寸
@@ -475,6 +476,15 @@ public class MainActivity extends AppCompatActivity {
             if (result.getResultCode() != RESULT_OK || result.getData() == null || result.getData().getData() == null) return;
             importShareBundle(result.getData().getData());
         });
+        uploadPicker = registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), result -> {
+            if (result.getResultCode() != RESULT_OK || result.getData() == null) return;
+            java.util.List<Uri> us = new java.util.ArrayList<>();
+            Intent d = result.getData();
+            if (d.getClipData() != null) { for (int i = 0; i < d.getClipData().getItemCount(); i++) { Uri u = d.getClipData().getItemAt(i).getUri(); if (u != null) us.add(u); } }
+            else if (d.getData() != null) us.add(d.getData());
+            if (us.isEmpty()) { toast("未选择文件"); return; }
+            uploadUrisToPage(us);
+        });
         HttpBridge.appCtx = getApplicationContext();   // 原生 HTTP 的 VPN 自然回退(死 VPN → 底层直连)需要网络服务
         ensureRelayIdentity();   // 去中心化: 设备唯一 session(防卸载) + 每冷启动轮换 token → relay-config.json
         startRelay();
@@ -769,6 +779,7 @@ public class MainActivity extends AppCompatActivity {
         mu.add(0, 13, 5, "无痕标签");
         mu.add(0, 9, 7, "浏览历史");
         mu.add(0, 12, 8, "书签收藏");
+        mu.add(0, 17, 6, "上传文件到网页端");
         mu.add(0, 14, 9, "用户脚本 (油猴)");
         mu.add(0, 15, 10, "Shizuku 权限 (自我 ADB)");
         android.view.SubMenu page = mu.addSubMenu(0, 100, 9, "页面工具");
@@ -799,6 +810,7 @@ public class MainActivity extends AppCompatActivity {
                 case 9: showHistory(); return true;
                 case 12: showBookmarks(); return true;
                 case 14: newTab(SCRIPTS, null); return true;
+                case 17: pickUploadToPage(); return true;
                 case 16: showUserscriptMenu(); return true;
                 case 15: newTab(SHIZUKU, null); return true;
                 case 40: { Tab t = cur(); if (t != null && t.web.canGoBack()) t.web.goBack(); else toast("无法后退"); return true; }
@@ -5359,6 +5371,83 @@ public class MainActivity extends AppCompatActivity {
                 });
             }).start();
         }
+        /** PDF 面板内直看: 原生 PdfRenderer 逐页渲成图回推 (本地 file/content 直开; 网络鉴权代取落临时文件)。 */
+        @android.webkit.JavascriptInterface public void renderPdf(final String url, final int reqId) {
+            final Tab t = cur();
+            final String a1 = (t != null && t.auth1 != null) ? t.auth1 : "";
+            final String org = (t != null && t.orgId != null) ? t.orgId : "";
+            new Thread(() -> {
+                android.os.ParcelFileDescriptor pfd = null; File tmp = null;
+                try {
+                    Uri u = Uri.parse(url);
+                    String sch = u.getScheme() == null ? "" : u.getScheme();
+                    if ("file".equals(sch)) pfd = android.os.ParcelFileDescriptor.open(new File(u.getPath()), android.os.ParcelFileDescriptor.MODE_READ_ONLY);
+                    else if ("content".equals(sch)) pfd = getContentResolver().openFileDescriptor(u, "r");
+                    else {
+                        java.net.HttpURLConnection c = fetchAttachment(a1, org, url, null, false);
+                        int code = (c != null) ? c.getResponseCode() : -1;
+                        if ((code == 401 || code == 403) && !a1.isEmpty()) {
+                            try { c.disconnect(); } catch (Exception ignored) {}
+                            mintAttachmentCookie(a1, org);
+                            c = fetchAttachment(a1, org, url, null, false);
+                            code = (c != null) ? c.getResponseCode() : -1;
+                        }
+                        if (c == null || code < 200 || code >= 300) throw new Exception("HTTP " + code);
+                        tmp = new File(getCacheDir(), "pdfview_" + reqId + ".pdf");
+                        try (java.io.InputStream is = c.getInputStream(); java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp)) {
+                            byte[] buf = new byte[65536]; int n; long got = 0, cap = 32L * 1024 * 1024;
+                            while ((n = is.read(buf)) > 0) { fo.write(buf, 0, n); got += n; if (got > cap) throw new Exception("PDF 过大(>32MB), 请下载后查看"); }
+                        }
+                        c.disconnect();
+                        pfd = android.os.ParcelFileDescriptor.open(tmp, android.os.ParcelFileDescriptor.MODE_READ_ONLY);
+                    }
+                    android.graphics.pdf.PdfRenderer r = new android.graphics.pdf.PdfRenderer(pfd); pfd = null;
+                    try {
+                        int total = Math.min(r.getPageCount(), 80);
+                        for (int i = 0; i < total; i++) {
+                            android.graphics.pdf.PdfRenderer.Page pg = r.openPage(i);
+                            int wpx = 1080;
+                            int hpx = Math.max(1, (int) ((long) wpx * pg.getHeight() / Math.max(1, pg.getWidth())));
+                            android.graphics.Bitmap bm = android.graphics.Bitmap.createBitmap(wpx, hpx, android.graphics.Bitmap.Config.ARGB_8888);
+                            bm.eraseColor(0xFFFFFFFF);
+                            pg.render(bm, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                            pg.close();
+                            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                            bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, bo);
+                            bm.recycle();
+                            final String b64 = android.util.Base64.encodeToString(bo.toByteArray(), android.util.Base64.NO_WRAP);
+                            final int fi = i, ft = total;
+                            main.post(() -> {
+                                if (mediaWeb == null) return;
+                                try { mediaWeb.evaluateJavascript("pdfPage(" + reqId + "," + fi + "," + ft + "," + JSONObject.quote(b64) + ")", null); } catch (Exception ignored) {}
+                            });
+                        }
+                    } finally { r.close(); }
+                } catch (Exception e) {
+                    final String msg = String.valueOf(e.getMessage());
+                    main.post(() -> {
+                        if (mediaWeb == null) return;
+                        try { mediaWeb.evaluateJavascript("pdfFailed(" + reqId + "," + JSONObject.quote(msg) + ")", null); } catch (Exception ignored) {}
+                    });
+                } finally {
+                    if (pfd != null) try { pfd.close(); } catch (Exception ignored) {}
+                    if (tmp != null) try { tmp.delete(); } catch (Exception ignored) {}
+                }
+            }).start();
+        }
+        /** Office 等无法面板内渲染的本地文件: 转系统选择器用其它应用打开。 */
+        @android.webkit.JavascriptInterface public void openWith(final String url, final String name) {
+            main.post(() -> {
+                try {
+                    Uri u = Uri.parse(url);
+                    if ("file".equals(u.getScheme())) u = fileUri(u.getPath());
+                    Intent i = new Intent(Intent.ACTION_VIEW);
+                    i.setDataAndType(u, guessMime((name == null || name.isEmpty()) ? url : name));
+                    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(Intent.createChooser(i, "用其它应用打开").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                } catch (Exception e) { toast("无法打开此文件"); }
+            });
+        }
     }
     /** 全服通近期对话长按拖拽: 起一个全局拖拽并临时隐藏面板, 使下方网页可接收放手注入。 */
     private void beginConvDrag(String accJson, String sid) {
@@ -5447,13 +5536,16 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL); head.setGravity(Gravity.CENTER_VERTICAL);
         head.setBackgroundColor(0xFF1F6FEB); head.setPadding(dp(10), dp(8), dp(8), dp(8));
-        TextView ttl = new TextView(this); ttl.setText("下载 · 长按文件拖到页面");
+        TextView ttl = new TextView(this); ttl.setText("下载 · 点击查看 · 长按/⋮上传");
         ttl.setTextColor(0xFFFFFFFF); ttl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         ttl.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView up = new TextView(this); up.setText("⬆ 上传");
+        up.setTextColor(0xFFFFFFFF); up.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12); up.setPadding(dp(8), 0, dp(6), 0);
+        up.setOnClickListener(v -> pickUploadToPage());
         TextView close = new TextView(this); close.setText("✕");
         close.setTextColor(0xFFFFFFFF); close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16); close.setPadding(dp(8), 0, dp(4), 0);
         close.setOnClickListener(v -> closeDownloadPanel());
-        head.addView(ttl); head.addView(close);
+        head.addView(ttl); head.addView(up); head.addView(close);
         head.setOnTouchListener(new View.OnTouchListener() {
             float dx, dy;
             @Override public boolean onTouch(View v, MotionEvent ev) {
@@ -5619,15 +5711,17 @@ public class MainActivity extends AppCompatActivity {
         if (uri != null && !uri.isEmpty()) { try { return Uri.parse(uri); } catch (Exception ignored) {} }
         try { return fileUri(path); } catch (Exception e) { return null; }
     }
-    /** 下载项动作: 分享 / 用其它应用打开 / 重命名 / 删除。 */
+    /** 下载项动作: 上传到网页端 / 分享 / 用其它应用打开 / 重命名 / 删除。 */
     private void showDownloadActions(View anchor, int recIdx, String path, String uri, String name, String mime) {
         PopupMenu pm = new PopupMenu(this, anchor);
-        pm.getMenu().add(0, 0, 0, "分享");
-        pm.getMenu().add(0, 1, 1, "用其它应用打开");
-        pm.getMenu().add(0, 2, 2, "重命名");
-        pm.getMenu().add(0, 3, 3, "删除");
+        pm.getMenu().add(0, 4, 0, "⬆ 上传到网页端");
+        pm.getMenu().add(0, 0, 1, "分享");
+        pm.getMenu().add(0, 1, 2, "用其它应用打开");
+        pm.getMenu().add(0, 2, 3, "重命名");
+        pm.getMenu().add(0, 3, 4, "删除");
         pm.setOnMenuItemClickListener(it -> {
             switch (it.getItemId()) {
+                case 4: uploadDownloadedToPage(path, uri, name, mime); return true;
                 case 0: shareDownloaded(path, uri, mime); return true;
                 case 1: openWithChooser(path, uri, mime); return true;
                 case 2: renameDownload(recIdx, path, name); return true;
@@ -5636,6 +5730,84 @@ public class MainActivity extends AppCompatActivity {
             return false;
         });
         pm.show();
+    }
+    /** 下载项「上传到网页端」: 点击即注入当前活动网页的上传框 (与长按拖拽同一注入链, 不依赖拖拽)。 */
+    private void uploadDownloadedToPage(String path, String uri, String name, String mime) {
+        WebView web = activePageWeb();
+        if (web == null) { toast("无打开的网页, 无法上传"); return; }
+        File f = (path == null || path.isEmpty()) ? null : new File(path);
+        if (f != null && f.exists()) { dropFileIntoPage(web, web.getWidth() / 2f, web.getHeight() / 2f, path, mime); return; }
+        if (uri == null || uri.isEmpty()) { toast("文件已不存在"); return; }
+        final Uri u; try { u = Uri.parse(uri); } catch (Exception e) { toast("文件已不存在"); return; }
+        final WebView fw = web;
+        final String fn = (name == null || name.isEmpty()) ? "file" : name;
+        new Thread(() -> {
+            byte[] data = readUriBytes(u, 48L * 1024 * 1024);
+            if (data == null || data.length == 0) { main.post(() -> toast("文件读取失败 (过大或已删)")); return; }
+            final java.util.List<String[]> files = new java.util.ArrayList<>();
+            files.add(new String[]{ fn, android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP), guessMime(fn) });
+            main.post(() -> { dropB64FilesIntoPage(fw, fw.getWidth() / 2f, fw.getHeight() / 2f, files); toast("已上传到当前页: " + fn); });
+        }).start();
+    }
+    /** 「上传到网页端」点击选文件: 系统选择器(可多选) → 注入当前活动页上传框。 */
+    private void pickUploadToPage() {
+        if (activePageWeb() == null) { toast("先打开一个网页再上传"); return; }
+        try {
+            Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+            i.setType("*/*"); i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            uploadPicker.launch(Intent.createChooser(i, "选择要上传到网页端的文件"));
+        } catch (Exception e) { toast("无法打开文件选择器"); }
+    }
+    private void uploadUrisToPage(final java.util.List<Uri> uris) {
+        final WebView web = activePageWeb();
+        if (web == null) { toast("无打开的网页, 无法上传"); return; }
+        new Thread(() -> {
+            java.util.List<String[]> files = new java.util.ArrayList<>();
+            int skipped = 0;
+            for (Uri u : uris) {
+                byte[] data = readUriBytes(u, 48L * 1024 * 1024);
+                if (data == null || data.length == 0) { skipped++; continue; }
+                String nm = queryDisplayName(u);
+                files.add(new String[]{ nm, android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP), guessMime(nm) });
+            }
+            final int fSkipped = skipped;
+            if (files.isEmpty()) { main.post(() -> toast("所选文件读取失败")); return; }
+            final java.util.List<String[]> ff = files;
+            main.post(() -> {
+                dropB64FilesIntoPage(web, web.getWidth() / 2f, web.getHeight() / 2f, ff);
+                toast("已上传 " + ff.size() + " 件到当前页" + (fSkipped > 0 ? (" (" + fSkipped + " 件读取失败)") : ""));
+            });
+        }).start();
+    }
+    /** 当前可投递的网页 WebView: 活动标签优先, 回退首个非内部页标签; 无则 null。 */
+    private WebView activePageWeb() {
+        if (active >= 0 && active < tabs.size()) {
+            Tab t = tabs.get(active);
+            if (t != null && t.web != null && !t.internal) return t.web;
+        }
+        for (Tab t : tabs) if (t != null && t.web != null && !t.internal) return t.web;
+        return null;
+    }
+    /** 读 content://或 file:// Uri 全部字节; 超 cap/失败 返 null。 */
+    private byte[] readUriBytes(Uri u, long cap) {
+        try (java.io.InputStream is = getContentResolver().openInputStream(u)) {
+            if (is == null) return null;
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[65536]; int n;
+            while ((n = is.read(buf)) > 0) { bos.write(buf, 0, n); if (bos.size() > cap) return null; }
+            return bos.toByteArray();
+        } catch (Exception e) { return null; }
+    }
+    private String queryDisplayName(Uri u) {
+        try (android.database.Cursor c = getContentResolver().query(u, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                if (i >= 0) { String n = c.getString(i); if (n != null && !n.isEmpty()) return n; }
+            }
+        } catch (Exception ignored) {}
+        String p = u.getLastPathSegment();
+        return (p == null || p.isEmpty()) ? "file" : p;
     }
     private void shareDownloaded(String path, String uri, String mime) {
         try {
@@ -5782,12 +5954,13 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
         openDownloaded(path, uri, mime);
     }
-    /** 可在悬浮窗内直看的类型: doc(文本/MD) / img / video / audio; 否则 null。 */
+    /** 可在悬浮窗内直看的类型: doc(文本/MD) / img / video / audio / pdf / office; 否则 null。 */
     static String inlineViewType(String name, String mime) {
         String m = mime == null ? "" : mime.toLowerCase(java.util.Locale.US);
         if (m.startsWith("image/")) return "img";
         if (m.startsWith("video/")) return "video";
         if (m.startsWith("audio/")) return "audio";
+        if (m.equals("application/pdf")) return "pdf";
         if (m.startsWith("text/") || m.equals("application/json")) return "doc";
         if (isTextDocName(name)) return "doc";
         String n = name == null ? "" : name.toLowerCase(java.util.Locale.US);
@@ -5796,6 +5969,8 @@ public class MainActivity extends AppCompatActivity {
         if (ext.matches("png|jpe?g|gif|webp|bmp|svg")) return "img";
         if (ext.matches("mp4|webm|mov|mkv|3gp")) return "video";
         if (ext.matches("mp3|wav|ogg|m4a|flac|aac")) return "audio";
+        if (ext.equals("pdf")) return "pdf";
+        if (ext.matches("pptx?|docx?|xlsx?")) return "office";
         return null;
     }
     private void openDownloaded(String path, String uri, String mime) {
@@ -6033,12 +6208,7 @@ public class MainActivity extends AppCompatActivity {
         deliverFilesToActivePage(files);
     }
     private void deliverFilesToActivePage(java.util.List<String[]> files) {
-        WebView web = null;
-        if (active >= 0 && active < tabs.size()) {
-            Tab t = tabs.get(active);
-            if (t != null && t.web != null && !t.internal) web = t.web;
-        }
-        if (web == null) { for (Tab t : tabs) { if (t != null && t.web != null && !t.internal) { web = t.web; break; } } }
+        WebView web = activePageWeb();
         if (web == null) { toast("无打开的 Devin 页面, 无法投递"); return; }
         dropB64FilesIntoPage(web, web.getWidth() / 2f, web.getHeight() / 2f, files);
         toast("已投递 " + files.size() + " 件到当前页上传框");
@@ -6228,18 +6398,20 @@ public class MainActivity extends AppCompatActivity {
     private static String b64Utf8(String s) {
         try { return android.util.Base64.encodeToString((s == null ? "" : s).getBytes("UTF-8"), android.util.Base64.NO_WRAP); } catch (Exception e) { return ""; }
     }
-    /** 把内存中的多份文件(name + 已 base64 的字节)注入页面: 文本(md)与二进制(zip)统一走此路。 */
+    /** 把内存中的多份文件(name + 已 base64 的字节 [+ 可选 mime])注入页面: 文本(md)与二进制统一走此路。 */
     private void dropB64FilesIntoPage(final WebView web, float x, float y, java.util.List<String[]> files) {
         if (web == null || files == null || files.isEmpty()) return;
         StringBuilder arr = new StringBuilder("[");
         for (int i = 0; i < files.size(); i++) {
             String name = files.get(i)[0]; String b64 = files.get(i)[1]; if (b64 == null) b64 = "";
+            String fmime = files.get(i).length > 2 && files.get(i)[2] != null ? files.get(i)[2] : "";
             if (i > 0) arr.append(",");
-            arr.append("{n:'").append(name.replace("\\", "\\\\").replace("'", "\\'")).append("',b:'").append(b64).append("'}");
+            arr.append("{n:'").append(name.replace("\\", "\\\\").replace("'", "\\'")).append("',b:'").append(b64)
+               .append("',m:'").append(fmime.replace("\\", "\\\\").replace("'", "\\'")).append("'}");
         }
         arr.append("]");
         final String js = "(function(){try{var specs=" + arr + ";"
-            + "function mk(s){var bin=atob(s.b);var u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);var mime=/\\.zip$/i.test(s.n)?'application/zip':'text/markdown';return new File([u],s.n,{type:mime});}"
+            + "function mk(s){var bin=atob(s.b);var u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);var mime=s.m||(/\\.zip$/i.test(s.n)?'application/zip':'text/markdown');return new File([u],s.n,{type:mime});}"
             + "var files=specs.map(mk);var dt=new DataTransfer();files.forEach(function(f){dt.items.add(f);});"
             + "var dpr=window.devicePixelRatio||1;var cx=" + x + "/dpr, cy=" + y + "/dpr;"
             + "var el=document.elementFromPoint(cx,cy)||document.body;"
