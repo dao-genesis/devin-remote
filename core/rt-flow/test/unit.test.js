@@ -467,6 +467,13 @@ function test(name, fn) {
       test(tag + " WS 升级直连失败亦走本机代理兜底", () => {
         assert.ok(/const viaProxy = \(\) => \{\s*\n\s*_probeProxyPort\(host,/.test(src), "WS 缺代理兜底");
       });
+      test(tag + " 软编码·env 代理口优先于内置常见口清单 (适配 SakuraCat 等非标端口·零硬编码)", () => {
+        assert.ok(/function _envProxyPort\(\)/.test(src), "缺 _envProxyPort (读 HTTP(S)_PROXY/ALL_PROXY)");
+        assert.ok(/HTTPS_PROXY[\s\S]{0,120}ALL_PROXY/.test(src), "_envProxyPort 未覆盖 HTTPS_PROXY/ALL_PROXY");
+        assert.ok(/function _effProxyPorts\(base\)/.test(src), "缺 _effProxyPorts (env 口 ++ 内置口·去重)");
+        assert.ok(/_effProxyPorts\(_NET_PROXY_PORTS\)/.test(src), "_probeProxyPort 未用 env-first 有效口");
+        assert.ok(/_effProxyPorts\(_ATT_PROXY_PORTS\)/.test(src), "附件代取未用 env-first 有效口");
+      });
       test(tag + " 页级失败回自动重试页 (非裸 proxy error 文本)", () => {
         assert.ok(src.indexOf('http-equiv="refresh"') >= 0, "缺自动重试页");
         assert.ok(src.indexOf("upstream unreachable") >= 0, "缺失败标识");

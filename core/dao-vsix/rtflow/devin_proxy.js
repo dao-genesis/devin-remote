@@ -42,15 +42,34 @@ const _httpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 15000, ma
 const _NET_PROXY_PORTS = [7890, 10809, 7891, 1080, 10808, 8080, 8118];
 let _fbProxy = { port: 0, ts: 0 }; // port>0=探到可用代理; -1=探明无; 0=未探测 (60s 缓存)
 let _lastGoodProxy = 0; // 上次经该本机代理成功 → 后续请求先走代理; 直连一成功即清零
+// 软编码·适配一切: 用户显式设的 HTTP(S)_PROXY/ALL_PROXY 本机端口优先于内置常见口清单
+//   (与 dao-vsix detectProxyPort 同源) → SakuraCat 等非标端口也可命中, 不硬编码任何口。
+function _envProxyPort() {
+  const p = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.ALL_PROXY
+    || process.env.http_proxy || process.env.https_proxy || process.env.all_proxy || "";
+  const m = String(p).match(/(?:127\.0\.0\.1|localhost):(\d+)/i);
+  return m ? (parseInt(m[1], 10) || 0) : 0;
+}
+// 有效探测口 = [env 显式口(若有)] ++ 内置常见口, 去重; env 口排最前先试。
+function _effProxyPorts(base) {
+  const ep = _envProxyPort();
+  const seen = new Set();
+  const out = [];
+  for (const p of (ep ? [ep] : []).concat(base)) {
+    if (p > 0 && !seen.has(p)) { seen.add(p); out.push(p); }
+  }
+  return out;
+}
 function _isTransientNetErr(e) {
   return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|disconnected|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND|handshake|TLS/i.test(String((e && e.message) || e || ""));
 }
 function _probeProxyPort(host, cb) {
   if (_fbProxy.ts && Date.now() - _fbProxy.ts < 60000) return cb(_fbProxy.port > 0 ? _fbProxy.port : 0);
+  const ports = _effProxyPorts(_NET_PROXY_PORTS);
   let i = 0;
   const tryNext = () => {
-    if (i >= _NET_PROXY_PORTS.length) { _fbProxy = { port: -1, ts: Date.now() }; return cb(0); }
-    const port = _NET_PROXY_PORTS[i++];
+    if (i >= ports.length) { _fbProxy = { port: -1, ts: Date.now() }; return cb(0); }
+    const port = ports[i++];
     let done = false;
     const s = net.connect({ host: "127.0.0.1", port, timeout: 800 });
     const fin = (ok) => { if (done) return; done = true; try { s.destroy(); } catch {} if (ok) { _fbProxy = { port, ts: Date.now() }; cb(port); } else tryNext(); };
@@ -218,7 +237,8 @@ function _streamAttachment(rawUrl, res, cacheKey, hops) {
   try { su = new URL(fixS3DualstackUrl(rawUrl)); } catch { try { res.writeHead(502); res.end(); } catch {} return; }
   let won = false, failCount = 0;
   const cancels = [];
-  const tracks = 1 + _ATT_PROXY_PORTS.length;
+  const _attPorts = _effProxyPorts(_ATT_PROXY_PORTS);
+  const tracks = 1 + _attPorts.length;
   const onFail = () => { if (won) return; if (++failCount >= tracks) { try { res.writeHead(502); res.end(); } catch {} } };
   const onRes = (rs, destroy) => {
     if (won) { try { rs.destroy(); } catch {} return; }
@@ -277,7 +297,7 @@ function _streamAttachment(rawUrl, res, cacheKey, hops) {
     wire(rs, destroy);
   };
   cancels.push(_attRequest(su, 0, onRes, onFail));
-  for (const p of _ATT_PROXY_PORTS) cancels.push(_attRequest(su, p, onRes, onFail));
+  for (const p of _attPorts) cancels.push(_attRequest(su, p, onRes, onFail));
 }
 
 const _attachCookie = new Map();      // key → { cookie, mintAt }
