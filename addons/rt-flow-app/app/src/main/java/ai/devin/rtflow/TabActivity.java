@@ -119,7 +119,7 @@ public class TabActivity extends AppCompatActivity {
         final String script = buildInjection(token, uid, org, orgName);
         final boolean docStart = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT);
         if (docStart) WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton("https://app.devin.ai"));
-        final String fToken = token, fOrg = org;
+        final String fToken = token, fOrg = org, fEmail = label;
         web.setWebViewClient(new WebViewClient() {
             // 顶层导航落在附件/S3 预签名直链 → 拦下转真下载, 留在会话页 (不再整页跳空白)
             @Override public boolean shouldOverrideUrlLoading(WebView v, android.webkit.WebResourceRequest req) {
@@ -133,25 +133,37 @@ public class TabActivity extends AppCompatActivity {
             }
             @Override public void onPageFinished(WebView v, String u) {
                 MainActivity.warmAttachmentCookie(fToken, fOrg, u);   // 预铸附件 Cookie → 图片/视频首次即授权
+                MainActivity.installDomWatch(v);                      // 页面侧单观察者+输入让行 (与主壳一致)
                 MainActivity.installDownloadHook(v);                  // <a download>/blob:/data: 下载捕获
                 MainActivity.installKbHelper(v);                      // 键盘弹出滚动补偿
                 MainActivity.installBackspaceGuard(v);                // IME 退格护栏 (与主壳一致)
                 MainActivity.installVideoFit(v);                      // 录像播放器窄屏适配 (与主壳一致)
                 MainActivity.installMediaRetry(v);                    // 媒体加载自愈 (与主壳一致)
+                MainActivity.installAttachmentPrefetch(v);            // 附件预热 (与主壳一致: 首次点开即秒开)
+                MainActivity.installComposerUpload(v);                // 「新创作/＋」菜单上传入口 (与主壳一致)
+                MainActivity.installEnvModeBadge(v, fEmail);          // 官方页「新对话虚拟机环境」徽章 (与主壳一致)
             }
             // SPA 客户端路由不触发 onPageFinished, 挂载点可能被替换 → 幂等重装钩子 (与主壳 doUpdateVisitedHistory 一致)
             @Override public void doUpdateVisitedHistory(WebView v, String u, boolean isReload) {
                 if (u != null && u.startsWith("http")) {
+                    MainActivity.installDomWatch(v);
                     MainActivity.installDownloadHook(v);
                     MainActivity.installKbHelper(v);
                     MainActivity.installBackspaceGuard(v);
                     MainActivity.installVideoFit(v);
                     MainActivity.installMediaRetry(v);
+                    MainActivity.installAttachmentPrefetch(v);
+                    MainActivity.installComposerUpload(v);
+                    MainActivity.installEnvModeBadge(v, fEmail);
                     MainActivity.warmAttachmentCookie(fToken, fOrg, u);
                 }
             }
             // 媒体鉴权代取: /attachments/ 图片视频与主壳同源同一套 (Cookie 转发 + 401 铸造自愈)
             @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView v, android.webkit.WebResourceRequest req) {
+                if (req != null && req.getUrl() != null && MainActivity.isAdHost(req.getUrl().getHost()))
+                    return new android.webkit.WebResourceResponse("text/plain", "utf-8", new java.io.ByteArrayInputStream(new byte[0]));
+                android.webkit.WebResourceResponse ac = MainActivity.assetCacheResponse(req);
+                if (ac != null) return ac;
                 android.webkit.WebResourceResponse am = MainActivity.authMediaResponseFor(fToken, fOrg, req);
                 if (am != null) return am;
                 return super.shouldInterceptRequest(v, req);
@@ -283,7 +295,7 @@ public class TabActivity extends AppCompatActivity {
                 if (accAuth1 != null && !accAuth1.isEmpty()
                         && fUrl != null && fUrl.contains("app.devin.ai/attachments/"))
                     MainActivity.ensureAttachmentCookie(accAuth1, accOrgId, fUrl);
-                String name = android.webkit.URLUtil.guessFileName(fUrl, fCd, fMime);
+                String name = MainActivity.attachmentFileName(fUrl, fCd, fMime);
                 DownloadManager.Request req = new DownloadManager.Request(Uri.parse(fUrl));
                 if (fMime != null) req.setMimeType(fMime);
                 if (fUa != null) req.addRequestHeader("User-Agent", fUa);
@@ -306,6 +318,11 @@ public class TabActivity extends AppCompatActivity {
                 saveToDownloads(name, mime, data);
             } catch (Exception e) { runOnUiThread(() -> toast("下载捕获失败")); }
         }
+        /** 每账号「新对话虚拟机环境」读/写 (与主壳徽章/面板同一 SharedPreferences 真源)。 */
+        @android.webkit.JavascriptInterface
+        public String envModeGet(String email) { return MainActivity.envModePrefGet(TabActivity.this, email); }
+        @android.webkit.JavascriptInterface
+        public void envModeSet(String email, String mode) { MainActivity.envModePrefSet(TabActivity.this, email, mode); }
     }
 
     private void saveToDownloads(String name, String mime, byte[] data) {

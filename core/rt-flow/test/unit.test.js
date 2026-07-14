@@ -467,6 +467,13 @@ function test(name, fn) {
       test(tag + " WS 升级直连失败亦走本机代理兜底", () => {
         assert.ok(/const viaProxy = \(\) => \{\s*\n\s*_probeProxyPort\(host,/.test(src), "WS 缺代理兜底");
       });
+      test(tag + " 软编码·env 代理口优先于内置常见口清单 (适配 SakuraCat 等非标端口·零硬编码)", () => {
+        assert.ok(/function _envProxyPort\(\)/.test(src), "缺 _envProxyPort (读 HTTP(S)_PROXY/ALL_PROXY)");
+        assert.ok(/HTTPS_PROXY[\s\S]{0,120}ALL_PROXY/.test(src), "_envProxyPort 未覆盖 HTTPS_PROXY/ALL_PROXY");
+        assert.ok(/function _effProxyPorts\(base\)/.test(src), "缺 _effProxyPorts (env 口 ++ 内置口·去重)");
+        assert.ok(/_effProxyPorts\(_NET_PROXY_PORTS\)/.test(src), "_probeProxyPort 未用 env-first 有效口");
+        assert.ok(/_effProxyPorts\(_ATT_PROXY_PORTS\)/.test(src), "附件代取未用 env-first 有效口");
+      });
       test(tag + " 页级失败回自动重试页 (非裸 proxy error 文本)", () => {
         assert.ok(src.indexOf('http-equiv="refresh"') >= 0, "缺自动重试页");
         assert.ok(src.indexOf("upstream unreachable") >= 0, "缺失败标识");
@@ -500,6 +507,57 @@ function test(name, fn) {
       });
       test(tag + " IDE webview ready 亦还原板块/外站标签 (非仅账号页)", () => {
         assert.ok(/dao\.shellTabs"\)\) \|\| \[\]\)\.filter\(\(s\) => s && \(s\.kind !== "acc" \|\| s\.act\)\)/.test(src), "webview ready 未还原 shellTabs");
+      });
+    }
+  }
+
+  // ── 11a4. 切号板块 · 每账号环境模式(Linux/Windows/macOS) 三态循环按钮 (源级·双副本·vendor 同步) ──
+  console.log("\n[切号 · 每账号 Linux/Windows/macOS 三态环境模式按钮]");
+  {
+    const _fs = require("fs"), _p = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = _fs.readFileSync(_p.join(__dirname, ...rel), "utf8");
+      const tag = rel.join("/");
+      test(tag + " 账号行含 em 三态环境模式按钮 (与 ⚡/🖥/🌐 并列·图标随模式变)", () => {
+        assert.ok(/class="b em em-\$\{a\.envMode === "windows" \? "win" : a\.envMode === "macos" \? "mac" : "linux"\}"/.test(src), "缺 em 三态模式类");
+        assert.ok(/onclick="em\(\$\{i\}\)"/.test(src), "em 按钮缺 onclick");
+        assert.ok(/&#129695;/.test(src) && /&#128039;/.test(src) && /&#127822;/.test(src), "缺 🪟/🐧/🍎 三态图标 (状态可视)");
+      });
+      test(tag + " em 客户端三态循环步进 (linux→windows→macos→linux · post cycleEnvModeBatch)", () => {
+        assert.ok(/function em\(i\)\{/.test(src), "缺客户端 em(i)");
+        assert.ok(/type:'cycleEnvModeBatch'/.test(src), "em 未 post cycleEnvModeBatch");
+        assert.ok(/const ix=_selectedFor\(i\);vscode\.postMessage\(\{type:'cycleEnvModeBatch',indices:ix\.length\?ix:\[i\]\}\)/.test(src), "em 未按批量选区步进 (瞬移到下一位)");
+      });
+      test(tag + " 宿主 cycleEnvModeBatch 每号各自+1 步进 + 每号隔离 (不强制同态)", () => {
+        assert.ok(/case "cycleEnvModeBatch":/.test(src), "缺宿主 cycleEnvModeBatch");
+        assert.ok(/const next = _nextEnvMode\(acc\.envMode\);/.test(src), "未按各号自身当前态步进");
+        assert.ok(/_writeEnvModeStates\(items\)/.test(src), "未持久化 env-mode");
+      });
+      test(tag + " 宿主 setEnvModeBatch 显式设同态仍保留 (兼容批量置位)", () => {
+        assert.ok(/case "setEnvModeBatch":/.test(src), "缺宿主 setEnvModeBatch");
+        assert.ok(/acc\.envMode = mode;/.test(src), "未写 acc.envMode");
+      });
+      test(tag + " 三态归一化 + 步进循环 + 独立持久化文件 + 读盘还原", () => {
+        assert.ok(/_env_mode\.json/.test(src), "缺 _env_mode.json 持久化");
+        assert.ok(/function _normEnvMode\(m\)/.test(src), "缺 _normEnvMode");
+        assert.ok(/"macos" \|\| s === "mac"/.test(src), "_normEnvMode 未识别 macos");
+        assert.ok(/const ENV_MODE_CYCLE = \["linux", "windows", "macos"\]/.test(src), "缺三态循环序");
+        assert.ok(/function _nextEnvMode\(m\)/.test(src), "缺 _nextEnvMode 步进");
+        assert.ok(/a\.envMode = _normEnvMode\(em && em\.envMode\)/.test(src), "store 加载未还原 envMode");
+      });
+      test(tag + " devinCreateSession 注入该号环境模式 (官方 additional_args.platform·只新建对话)", () => {
+        assert.ok(/_readEnvModeState\(\)\[String\(r\.email \|\| ""\)\.toLowerCase\(\)\]/.test(src), "未按该号 email 读盘环境模式");
+        assert.ok(/createSession\(r\.auth, prompt, \{ title: msg\.title, platform: _envMode \}\)/.test(src), "createSession 未传 platform");
+      });
+    }
+    for (const rel of [["..", "devin_cloud.js"], ["..", "..", "dao-vsix", "rtflow", "devin_cloud.js"]]) {
+      const src = _fs.readFileSync(_p.join(__dirname, ...rel), "utf8");
+      const tag = rel.join("/");
+      test(tag + " createSession 官方环境字段 (逆向 app.devin.ai SPA·platform_explicitly_set + additional_args.platform)", () => {
+        assert.ok(/if \(opts\.platform\) \{/.test(src), "缺 opts.platform 注入门");
+        assert.ok(/payload\.additional_args\.platform = pf/.test(src), "缺 additional_args.platform");
+        assert.ok(/payload\.platform_explicitly_set = true/.test(src), "缺 platform_explicitly_set");
+        assert.ok(/s === "windows" \|\| s === "win"/.test(src) && /s === "macos" \|\| s === "mac"/.test(src), "缺三态归一化");
       });
     }
   }
@@ -1241,6 +1299,22 @@ function test(name, fn) {
     assert.ok(/'\/shell' \+ \(alt \? \('\?dao_alt=' \+ encodeURIComponent\(alt\)\) : ''\)/.test(ts), "src/extension.ts: copyBridgeShell 须携带 ?dao_alt= 快速通道兜底");
   });
 
+  // ── /shell 内联脚本「渲染后」语法护栏 (双副本) ──
+  // 病灶: 反引号模板里正则的单反斜杠(\/ \. \? \s)在模板求值时被吞 → 渲染出的整段
+  //   客户端脚本 SyntaxError, 全部按钮处理器未绑定(☰/译/⬇/🖼/📁 集体失灵)。
+  // 正法: 用 tools/render_check.js 对 _multiShellHtml 全部 <script> 做「模拟插值 + vm 解析」。
+  console.log("\n[/shell 渲染后语法护栏]");
+  test("/shell: _multiShellHtml 渲染后脚本可解析 (双副本源级护栏)", () => {
+    const cp = require("child_process"), path = require("path");
+    const tool = path.join(__dirname, "..", "..", "..", "tools", "render_check.js");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const target = path.join(__dirname, ...rel);
+      const r = cp.spawnSync(process.execPath, [tool, target], { encoding: "utf8" });
+      assert.ok(r.status === 0, rel.join("/") + ": render_check 须通过\n" + (r.stdout || "") + (r.stderr || ""));
+      assert.ok(/_multiShellHtml script#\d+ RENDERED \+ PARSED OK/.test(r.stdout || ""), rel.join("/") + ": 须实际校验到 _multiShellHtml 脚本块");
+    }
+  });
+
   // ── Worker 持久通道控制台「为学者日益·闻道者日损」按钮归一 (与快速通道同构) ──
   // 复制地址/复制Token/接入信息 三合一 → 复制接入信息; 重启/重建 二合一 → 重启 Worker(连不上自动升级重建)。
   console.log("\n[Worker 控制台按钮归一]");
@@ -1429,6 +1503,15 @@ function test(name, fn) {
     const html = '<video src="' + url.replace(/&/g, "&amp;") + '"></video>';
     assert.strictEqual(cloud.applyMediaMap(html, map, true), '<video src="media/12ab34cd_v.mp4"></video>');
   });
+  test("applyMediaMap: 短 URL 是长 URL 前缀时长者先替·不残损(降序替换护栏)", () => {
+    const a = "https://s3.y.com/img.png";
+    const b = "https://s3.y.com/img.png?sig=xyz"; // a 是 b 的前缀
+    const map = { [a]: "media/AA_img.png", [b]: "media/BB_img.png" };
+    // 正文同时含两者: 长的必须先替, 否则 b 里的 a 段会被换成 media/AA_… 残损
+    assert.strictEqual(
+      cloud.applyMediaMap("裸 " + a + " 签 " + b + " 尾", map, false),
+      "裸 media/AA_img.png 签 media/BB_img.png 尾");
+  });
   test("devin_cloud.js: 备份落盘前须本地化媒体并计入 _meta (双副本源级护栏)", () => {
     const fs = require("fs"), path = require("path");
     for (const rel of [["..", "devin_cloud.js"], ["..", "..", "dao-vsix", "rtflow", "devin_cloud.js"]]) {
@@ -1470,6 +1553,45 @@ function test(name, fn) {
       assert.ok(!/t\.__trRerouted=ru;daoToast\('🌐 经站内代理重载后自动翻译…'\)/.test(src), rel.join("/") + " 旧病灶(前端自拼 /__web 重载)须已移除");
       // Devin 站优先同源反代相对路径(ES module CORS 之避), 其余 http(s) 才走 /__web
       assert.ok(/_shellDevinSameOrigin\(ru\)/.test(src), rel.join("/") + " 宿主须先试 Devin 同源反代路径");
+    }
+  });
+
+  // ── 账号标签额度/状态保鲜: 耗尽后 $ 须能降到 0 · 疑似耗尽强刷真额度 ──
+  console.log("\n[标签额度保鲜 · 耗尽不再滞留旧 $]");
+  test("extension.js: 标签 $ 回填须允许降为 0 (h.checked 而非 overageDollars>0 门) (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      const n = (src.match(/if \(h && h\.checked\) dollars = Math\.max\(0, Math\.round\(h\.overageDollars \|\| 0\)\);/g) || []).length;
+      assert.ok(n >= 4, rel.join("/") + " 须有 ≥4 处 checked 门额度回填 (实得 " + n + ") — 旧病灶 overageDollars>0 只升不降·耗尽仍显旧 $");
+    }
+  });
+  test("extension.js: 疑似额度耗尽须 45s 限频强刷真额度后再判 exhausted (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/_refreshHealthForTick\(email, 45\)/.test(src), rel.join("/") + " 疑似耗尽须强刷 _refreshHealthForTick(email, 45)");
+      assert.ok(/function _refreshHealthForTick\(email, minGapSec\)/.test(src), rel.join("/") + " _refreshHealthForTick 须支持 minGapSec 覆写");
+      assert.ok(/_cfg\('statusHealthRefreshSec', 120\)/.test(src), rel.join("/") + " 默认保鲜间隔须降至 120s");
+    }
+  });
+
+  test("extension.js: 无缓存会话账号须走慢道真登录保鲜 (900s/号限频+限速窗+in-flight 去重) (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/_cfg\('statusHealthLoginRefreshSec', 900\)/.test(src), rel.join("/") + " 慢道须 900s/号限频 — 旧病灶: 无缓存会话直接 return → $ 永远陈旧");
+      assert.ok(/_devinLoginRateLimitedUntil\) return;/.test(src), rel.join("/") + " 慢道须尊重全局 devinLogin 限速窗");
+      assert.ok(/_healthInflight/.test(src), rel.join("/") + " 须有 in-flight 去重");
+    }
+  });
+
+  test("extension.js: 宿主 API httpsReq 须直连优先+瞬断换socket重试+本机代理兜底 (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      assert.ok(/_netpProbePort/.test(src) && /_netpTunnel/.test(src), rel.join("/") + " 须有本机代理探测/CONNECT 兜底 — 旧病灶: TLS 瞬断即 planStatus 拉空·额度长期陈旧");
+      assert.ok(/direct\(1, \{ agent: false, family: 4 \}\)/.test(src), rel.join("/") + " 瞬断须换新 socket + 钉 IPv4 直连重试(国内 IPv6 到 AWS 黑洞)");
     }
   });
 

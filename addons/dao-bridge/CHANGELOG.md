@@ -2,6 +2,49 @@
 
 本项目遵循语义化版本。日期格式 YYYY-MM-DD。
 
+## [3.13.0] - 2026-07-14
+
+标准版 dao-bridge 的**持久通道 `/api/relay/*` 通用接口** — 与二合一插件（`core/dao-vsix`）对齐，
+让 UI/脚本可驱动「用户只提供 Cloudflare 账号 → 后端全自动部署 Worker → 回传可复制的固定公网地址」全流程。
+
+### 新增
+- **`GET /api/relay/deep-link`**：预填全权限集（`workers_scripts:edit` / `workers_kv_storage:edit` /
+  `account_settings:read` / `zone:read` / `workers_routes:edit`）的 CF API Token 创建深链，用户点一次 Create 即得。
+- **`GET /api/relay/state`**：持久通道状态（`apiToken`/`relayToken` 脱敏），回 `{active,connected,publicUrl,state}`。
+- **`POST /api/relay/provision-token {token}`**：贴 CF API Token 后端全自动（取账号→保证 workers.dev 子域→
+  部署中继 Worker→落盘→出站接管），复用既有 `provisionWorkersRelay`。
+- **`POST /api/relay/set {url}`**：登记已部署的 workers.dev 中继地址（自动派生/复用 `session`/`relayToken`）并立即接管。
+- 四路由纳入 `DAEMON_ROUTES`（常驻桥自证），并写入自生成 API 文档表。
+- `test/relay-api.test.js`：深链权限集、状态脱敏、缺参 400、非法 url 400、合法 set 落盘派生、鉴权护栏，8/8 全绿。
+
+## [3.12.0] - 2026-07-14
+
+被控端**持久化后端接入**（不止临时 PowerShell 通道）。
+
+### 新增
+- **`/api/install.ps1`（Windows）/ `/api/install.sh`（Linux/macOS）：一行持久化接入**。把出站长轮询代理
+  base64 落盘到 `~/.dao/hub-agent.*`（避免转义腐蚀），Windows 注册计划任务 `DaoHubAgent`（登录+开机自启·
+  崩溃 1 分钟重启·无限次·隐藏窗口），Linux 优先 systemd `--user` 服务（`enable --now` + `enable-linger`
+  开机自启·自愈）、无则回退 cron `@reboot`，并**立即后台启动**。与 `bootstrap.*`（前台临时·关窗即断）互补：
+  机器重启/断线自动重连，用户无需每次手动跑命令——即用户所述「不仅是临时 PowerShell 通道，是持久化后端」。
+- `core.js` 新增 `buildInstall` / `buildInstallSh` 并导出；`handleRoute` 挂 `/api/install.ps1|sh`（`/install.*` 同）。
+- `test/hub-public.test.js` 增断言：install.ps1 注入公网 URL + `Register-ScheduledTask DaoHubAgent` + `RestartCount`；
+  install.sh systemd `--user` / cron `@reboot`。全绿 8/8。
+
+## [3.11.0] - 2026-07-14
+
+公网中枢形态（VPS/服务器）· hub.js。
+
+### 新增
+- **`hub.js`：公网中枢入口**。机器自带公网 IP 时直接 `0.0.0.0` 监听当集散点——被控端(用户台式机)
+  一行 `iwr <hub>/api/bootstrap.ps1|iex`（或 `curl <hub>/api/bootstrap.sh|sh`）出站接入，操作端经
+  同一中枢 `/api/exec-sync?agent_id=<host>` 桥接驱动。**纯 HTTP 长轮询**(connect→poll→result)，
+  比 WS 中继稳健，规避无公网 IP 家用机对 Worker DO 中继的抖连问题。
+- 复用 `core.js` 全部中枢逻辑（`DaoHub` 登记/队列/结果/唤醒 + `exec-sync` 跨平台路由 + bootstrap 脚本）；
+  与 `agent.js`（出站快速隧道/持久 Worker 的被控形态）互补：`hub.js` 是有公网 IP 的**中枢**形态。
+- 配置：`DAO_TOKEN`(操作端 master)/`DAO_PORT`(默认 9930)/`DAO_BIND`(默认 0.0.0.0)/`DAO_PUBLIC_URL`。
+- 新增 `test/hub-public.test.js`：真 HTTP 端到端（health/connect/agents 鉴权/SELF exec/三明治远程 exec/bootstrap 注入）6/6。
+
 ## [3.10.0] - 2026-06-19
 
 去 Worker 中继 · 默认快速隧道（去中心化）。

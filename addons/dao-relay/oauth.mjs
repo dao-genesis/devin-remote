@@ -22,7 +22,11 @@ export const REVOKE_URL = "https://dash.cloudflare.com/oauth2/revoke";
 export const CALLBACK_URL = "http://localhost:8976/oauth/callback"; // CF 仅接受此固定回调
 export const CALLBACK_PORT = 8976;
 // 部署持久通道所需最小 scope(读账号+子域、写 Worker); offline_access 换 refresh_token 自动追加。
-export const SCOPES = ["account:read", "user:read", "workers:write", "workers_scripts:write"];
+//   zone:read + workers_routes:write 用于 provision.tryCustomDomain 绑自定义域(workers.dev 被墙
+//   网络的可达入口) —— 与贴 Token 深链(provision.tokenDeepLink)的 zone:read + workers_routes:edit
+//   同源对齐; 缺则 OAuth 打通的 token 只能部署 workers.dev、绑不了自定义域, GFW 下拿不到可达通道。
+//   scope 名取自 wrangler 官方 OAuth 应用支持集, 授权页方可接受。
+export const SCOPES = ["account:read", "user:read", "workers:write", "workers_scripts:write", "workers_routes:write", "zone:read"];
 
 // ── PKCE 纯逻辑(与 workers-auth/pkce.ts 等价, 便于单测)──────────────────────────────
 const PKCE_CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";

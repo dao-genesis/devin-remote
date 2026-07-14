@@ -27,6 +27,27 @@ const EXT_VERSION: string = (() => {
     return '1.3.2';
 })();
 const DAO_DIR = path.join(os.homedir(), '.dao');
+// 凭据落盘守护 — 含令牌/凭证/Cookie 的文件一律 0600(仅属主可读写), 目录 0700,
+//   防同机其他用户窃读。Windows 无 POSIX 位则由 fs 忽略, 行为不变。
+function writeSecretFile(file: string, data: string): void {
+    try { fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); } catch { /* 已存在 */ }
+    fs.writeFileSync(file, data, { encoding: 'utf8', mode: 0o600 });
+    try { fs.chmodSync(file, 0o600); } catch { /* 非 POSIX 平台守柔 */ }
+}
+// 启动时对历史遗留的凭据文件做一次性收紧(旧版以 0644 落盘的存量文件)。
+function hardenSecretFilePerms(): void {
+    if (process.platform === 'win32') return;
+    const files = [
+        'api-token', 'dao-conn.json', 'dao-conn-current.json', 'dao-config.json',
+        'relay.json', 'dao-accounts-auth.json', 'web-cookies.json',
+        path.join('bridge', 'auth-token'), path.join('bridge', 'tunnel-token'),
+        path.join('bridge', 'named-tunnel.json'), path.join('bridge', 'cf-credentials.json'),
+        path.join('bridge', 'plugin-api.json'), path.join('bridge', 'conn.json'),
+        path.join('bridge', 'connection.json'), path.join('bridge', 'last-inject.json'),
+    ];
+    for (const f of files) { try { fs.chmodSync(path.join(DAO_DIR, f), 0o600); } catch { /* 不存在即过 */ } }
+    for (const d of [DAO_DIR, path.join(DAO_DIR, 'bridge')]) { try { fs.chmodSync(d, 0o700); } catch { /* 守柔 */ } }
+}
 // 软编码·归一 — 帛书「道生一」: 本机 API 单一权威默认端口。package.json `dao.port` 默认与此恒同;
 //   全部 `ws.port || <数字>` 回落统一引此常量, 杜绝 9910/9921 等散落魔数与清单(9920)漂移失配。
 const DEFAULT_PORT = 9920;
@@ -53,7 +74,7 @@ function daoPruneConnRegistry(): any[] {
         if (!prev || String(c.updated || '') >= String(prev.updated || '')) byPid.set(c.pid, c);
     }
     const live = Array.from(byPid.values());
-    try { if (live.length !== all.length) fs.writeFileSync(DAO_CONN_REGISTRY, JSON.stringify(live, null, 2), 'utf8'); } catch { /* 守柔 */ }
+    try { if (live.length !== all.length) writeSecretFile(DAO_CONN_REGISTRY, JSON.stringify(live, null, 2)); } catch { /* 守柔 */ }
     return live;
 }
 // 健康探活: 直连端口 /api/health 确认真有 dao-vsix 在听。帛书·「自知者明」: pid 可能被 OS 回收
@@ -97,7 +118,7 @@ async function daoRefreshCurrent(): Promise<any> {
         epoch, updated: new Date().toISOString(),
         alive: alive.map(a => ({ port: a.port, pid: a.pid, version: a.version, url: a.url, devinEmail: a.devinEmail }))
     };
-    try { fs.writeFileSync(DAO_CONN_CURRENT, JSON.stringify(cur, null, 2), 'utf8'); } catch { /* 守柔 */ }
+    try { writeSecretFile(DAO_CONN_CURRENT, JSON.stringify(cur, null, 2)); } catch { /* 守柔 */ }
     return cur;
 }
 const GLOBAL_CONFIG_FILE = path.join(DAO_DIR, 'dao-config.json');  // CF全局凭证
@@ -288,7 +309,7 @@ function webProxyPersistCookies(): void {
                 obj[origin] = kv;
             }
             fs.mkdirSync(DAO_DIR, { recursive: true });
-            fs.writeFileSync(WEB_COOKIE_FILE, JSON.stringify(obj), 'utf8');
+            writeSecretFile(WEB_COOKIE_FILE, JSON.stringify(obj));
         } catch { /* 守柔 */ }
     }, 1500);
 }
@@ -556,7 +577,7 @@ class WorkspaceState {
                 updatedAt: new Date().toISOString()
             };
             if (this.devinQuota) cfg.devinQuota = this.devinQuota;
-            fs.writeFileSync(this.configFile, JSON.stringify(cfg, null, 2), 'utf8');
+            writeSecretFile(this.configFile, JSON.stringify(cfg, null, 2));
         } catch {}
     }
 
@@ -584,14 +605,14 @@ class WorkspaceState {
         if (this.devinOrgName) info.devinOrgName = this.devinOrgName;
         try {
             // Per-workspace连接文件 — 窗口专属，永不互踩
-            fs.writeFileSync(this.connFile, JSON.stringify(info, null, 2), 'utf8');
+            writeSecretFile(this.connFile, JSON.stringify(info, null, 2));
             // 全局连接注册表 — 数组合集，按pid去重合并
             const globalConnFile = path.join(DAO_DIR, 'dao-conn.json');
             let allConns: any[] = [];
             try { allConns = JSON.parse(fs.readFileSync(globalConnFile, 'utf8')); if (!Array.isArray(allConns)) allConns = []; } catch {}
             allConns = allConns.filter((c: any) => c.pid !== process.pid);
             allConns.push(info);
-            fs.writeFileSync(globalConnFile, JSON.stringify(allConns, null, 2), 'utf8');
+            writeSecretFile(globalConnFile, JSON.stringify(allConns, null, 2));
             // 无缝接力: 裁剪死实例 + 刷新权威「当前接口」(epoch 单调) → 重启/切号后外部可解析活接口
             daoRefreshCurrent().catch(() => { /* 守柔 */ });
         } catch {}
@@ -612,14 +633,14 @@ class WorkspaceState {
             const g = fs.readFileSync(globalTokenFile, 'utf8').trim();
             if (g && g.length >= 16) {
                 this.token = g;
-                try { fs.writeFileSync(this.tokenFile, g, 'utf8'); } catch {}
+                try { writeSecretFile(this.tokenFile, g); } catch {}
                 this.saveState();
                 return g;
             }
         } catch {}
         this.token = 'dao-vsix-' + crypto.randomBytes(16).toString('hex');
-        try { fs.writeFileSync(this.tokenFile, this.token, 'utf8'); } catch {}
-        try { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(globalTokenFile, this.token, 'utf8'); } catch {}
+        try { writeSecretFile(this.tokenFile, this.token); } catch {}
+        try { writeSecretFile(globalTokenFile, this.token); } catch {}
         this.saveState();
         return this.token;
     }
@@ -638,7 +659,7 @@ class WorkspaceState {
         } catch {}
         // 每窗口专属session：workspaceKey + 32字符随机后缀（3.4×10^38种，不可暴力猜）
         this.relaySessionId = this.workspaceKey + '-' + crypto.randomBytes(16).toString('hex');
-        try { fs.writeFileSync(sf, this.relaySessionId, 'utf8'); } catch {}
+        try { writeSecretFile(sf, this.relaySessionId); } catch {}
         this.saveState();
         return this.relaySessionId;
     }
@@ -725,6 +746,7 @@ function ensureStartupWorkspace(): void {
 
 export async function activate(context: vscode.ExtensionContext) {
     // 初始化每窗口专属状态
+    hardenSecretFilePerms();
     ws = new WorkspaceState();
     ws.init();
 
@@ -1691,7 +1713,7 @@ function unregisterConnection() {
         let allConns: any[] = JSON.parse(fs.readFileSync(globalConnFile, 'utf8'));
         if (!Array.isArray(allConns)) allConns = [];
         allConns = allConns.filter((c: any) => c.pid !== process.pid);
-        fs.writeFileSync(globalConnFile, JSON.stringify(allConns, null, 2), 'utf8');
+        writeSecretFile(globalConnFile, JSON.stringify(allConns, null, 2));
     } catch {}
 }
 
@@ -1778,10 +1800,18 @@ function dedupeUrls(urls: string[]): string[] {
 // 顶层持久通道 · 预填 Token 创建深链: 打开即已勾好本通道所需最小权限, 用户点一次
 // Create 复制 token 即可, 免手搓权限、免读文档 (与 addons/dao-relay/provision.mjs 同源)。
 function daoRelayTokenDeepLink(name = 'dao-relay'): string {
+    // 权限集须与 addons/dao-relay/provision.mjs 的 tokenDeepLink 单一同源:
+    //   workers_scripts:edit  部署 Worker 脚本
+    //   workers_kv_storage:edit  KV/DO 相关
+    //   account_settings:read  读账号/子域
+    //   zone:read + workers_routes:edit  provision 的 tryCustomDomain 绑 dao-relay.<zone> 自定义域
+    //     (workers.dev 被墙网络的可达入口)所必需 — 缺则代填出的 Token 无权绑域, 兜底入口失效。
     const perms = [
         { key: 'workers_scripts', type: 'edit' },
         { key: 'workers_kv_storage', type: 'edit' },
         { key: 'account_settings', type: 'read' },
+        { key: 'zone', type: 'read' },
+        { key: 'workers_routes', type: 'edit' },
     ];
     const q = new URLSearchParams({ permissionGroupKeys: JSON.stringify(perms), name, accountId: '*', zoneId: 'all' });
     return 'https://dash.cloudflare.com/profile/api-tokens?' + q.toString();
@@ -1800,7 +1830,7 @@ async function daoRelaySetPersistent(rawUrl: string): Promise<{ ok: boolean; url
         let prev: any = {};
         try { prev = JSON.parse(fs.readFileSync(RELAY_STATE_FILE, 'utf8')); } catch { /* 首次 */ }
         fs.mkdirSync(DAO_DIR, { recursive: true });
-        fs.writeFileSync(RELAY_STATE_FILE, JSON.stringify({ ...prev, url, healthy, registeredAt: new Date().toISOString() }, null, 2), 'utf8');
+        writeSecretFile(RELAY_STATE_FILE, JSON.stringify({ ...prev, url, healthy, registeredAt: new Date().toISOString() }, null, 2));
     } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
     // 断开现连 → 下一轮 connectRelay 即把持久通道置顶接管。
     try { if (ws.relayWs) { ws.relayWs.close(); ws.relayWs = null; } } catch { /* 守柔 */ }
@@ -2158,6 +2188,34 @@ const SIG_BACKOFF_MIN = 1500;
 const SIG_BACKOFF_MAX = 20000;
 const SIG_HALFOPEN_MS = 90000;     // >90s 无任何入站(连 ntfy keepalive 都收不到) 即判半开死链 → 主动重连
 const SIG_WATCHDOG_MS = 20000;     // 看门狗巡检周期
+// 帛书·「软编码适配一切」: broker 清单软编码, 不写死 —— 分发给别人时, 若其网络把 4 家默认公共 ntfy
+//   全墙掉, 只需在环境变量 DAO_MESH_SERVERS(逗号/空白分隔) 或 ~/.dao/dao-config.json 的
+//   daoMeshServers 里补一个自托管/可达的 ntfy 实例即打通路线C, 无需改一行代码。与手机版
+//   signal.js normServers 同法: 去空白/去尾斜杠/仅收 http(s)/去重, 最终恒并默认集(用户自定优先在前)。
+//   任一 broker 可达即通 → 单点封锁不致命, 去中心化本源不变。
+function sigNormServers(raw: any): string[] {
+    const list: string[] = Array.isArray(raw) ? raw.slice()
+        : (typeof raw === 'string' && raw ? raw.split(/[\s,]+/) : []);
+    const out: string[] = []; const seen = new Set<string>();
+    for (const item of list) {
+        const u = String(item || '').trim().replace(/\/+$/, '');
+        if (u && /^https?:\/\//i.test(u) && !seen.has(u)) { seen.add(u); out.push(u); }
+    }
+    return out;
+}
+function sigResolveServers(): string[] {
+    let custom: string[] = [];
+    // ① 环境变量(分发/受限网络首选·零落盘)
+    try { custom = custom.concat(sigNormServers(process.env.DAO_MESH_SERVERS || process.env.DAO_NTFY_SERVERS || '')); } catch { /* 守柔 */ }
+    // ② 配置文件 ~/.dao/dao-config.json(与代理口等其它软编码项同源)
+    try {
+        const f = JSON.parse(fs.readFileSync(GLOBAL_CONFIG_FILE, 'utf8'));
+        custom = custom.concat(sigNormServers(f && (f.daoMeshServers || f.meshServers || f.ntfyServers)));
+    } catch { /* 守柔·无配置文件即跳过 */ }
+    // 用户自定在前(其网络已验可达者优先), 恒并默认公共集兜底; 全程去重。
+    const merged = sigNormServers(custom.concat(SIG_DEFAULT_SERVERS));
+    return merged.length ? merged : SIG_DEFAULT_SERVERS.slice();
+}
 
 interface SigState {
     enabled: boolean; session: string; topic: string; servers: string[];
@@ -2390,7 +2448,7 @@ async function sigStart(): Promise<void> {
         sigState.tokenUsed = tok;
         sigState.session = sigSessionIdFor(tok);
         sigState.topic = sigTopicFor(sigState.session);
-        sigState.servers = SIG_DEFAULT_SERVERS.slice();
+        sigState.servers = sigResolveServers();
         sigState.key = sigDeriveKey(sigState.session, tok);
         sigState.reasm = sigMakeReasm();
         sigState.handled = []; sigState.stopping = false;
@@ -3831,7 +3889,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     // ── 归一 · 拖拽上传桥数据源 (对齐手机 APK: 拖文件=上传该文件 / 拖会话=上传该会话 MD) ──
     //   网页内注入的 drop 桥与外壳同源, 落点后经此同源端点取字节 → 合成 File 喂入页面上传框。
     //   同一服务函数 daoServeBridgeRoute 亦注入 IDE 内多实例反代(devin_proxy)就地同源服务。
-    if (route === '/__dlfile' || route === '/__convmd' || route === '/__convguide' || route === '/__convinfo' || route === '/__convzip' || route === '/__daobridge.js') {
+    if (route === '/__dlfile' || route === '/__convmd' || route === '/__convguide' || route === '/__convinfo' || route === '/__convzip' || route === '/__daobridge.js' || route === '/__daotrans.js') {
         const br = await daoServeBridgeRoute(route, url);
         if (br) return br;
     }
@@ -4118,7 +4176,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         // 插件即经 getRelayConfig 置顶自动采纳; /set 供远端 UI/脚本直接登记 URL。
         // ═══════════════════════════════════════════════════════════
         case '/api/relay/deep-link': {
-            return { ok: true, url: daoRelayTokenDeepLink(), perms: ['workers_scripts:edit', 'workers_kv_storage:edit', 'account_settings:read'],
+            return { ok: true, url: daoRelayTokenDeepLink(), perms: ['workers_scripts:edit', 'workers_kv_storage:edit', 'account_settings:read', 'zone:read', 'workers_routes:edit'],
                 howto: '点开链接 → Continue to summary → Create Token → 复制 → 用 provision.mjs <token> 部署, 或把已部署的 workers.dev 地址 POST 到 /api/relay/set' };
         }
         case '/api/relay/state': {
@@ -4151,9 +4209,20 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             return { commands: cmds, count: cmds.length };
         }
         case '/api/tools': {
-            const body: any = JSON.parse(await readBody(req));
+            // 守柔·畸形入参不崩(旧: 空/非法 JSON 或缺 tool → JSON.parse/解构抛错 → 500)。
+            //   畸形请求应答 400 明因, 不污染 500(500 专供真·服务端异常)。
+            const _raw = await readBody(req);
+            let body: any;
+            try { body = _raw ? JSON.parse(_raw) : {}; }
+            catch { return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'invalid JSON body' }) }; }
+            if (!body || typeof body !== 'object' || Array.isArray(body))
+                return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'body must be a JSON object' }) };
             const { tool, args } = body;
-            return await executeTool(tool, args);
+            if (!tool || typeof tool !== 'string')
+                return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'tool (non-empty string) required' }) };
+            if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args)))
+                return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'args must be a JSON object when provided' }) };
+            return await executeTool(tool, args || {});
         }
         // ═══════════════════════════════════════════════════════════
         // Devin Cloud API · 帛书·四十二「三生万物」本地路由化
@@ -4400,7 +4469,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
                 const f = path.join(dir, 'antidetect.json');
                 const api = String(asb.api || '').trim();
                 if (!api) { try { fs.unlinkSync(f); } catch { /* 守柔 */ } return { ok: true, cleared: true }; }
-                fs.writeFileSync(f, JSON.stringify({ api, provider: String(asb.provider || '').trim(), token: String(asb.token || '').trim() }, null, 2), 'utf8');
+                writeSecretFile(f, JSON.stringify({ api, provider: String(asb.provider || '').trim(), token: String(asb.token || '').trim() }, null, 2));
             } catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
             const nc = daoAntidetectCfg();
             return { ok: true, api: nc.api, provider: nc.provider || null, tokenSet: !!nc.token };
@@ -4806,6 +4875,9 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                                     reply({ ok: true, data: aitems });
                                 }
                                 else if (tab === 'schedules') { result = await devinListSchedules(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
+                                else if (tab === 'profile') { result = await devinGetProfile(ws.devinOrgId, ws.devinUserId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
+                                else if (tab === 'customization') { result = await devinGetCustomization(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
+                                else if (tab === 'apikeys') { result = await devinGetApiKeyStatus(ws.devinOrgId, ws.devinUserId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
                                 else reply({ ok: false, error: 'unknown tab' });
                             } catch (e: any) { reply({ ok: false, error: e.message }); }
                         } else {
@@ -5117,7 +5189,7 @@ function bridgeStartUrlPoll(): void {
 
 function bridgeSaveNamedToken(token: string) {
     bridgeEnsureDir();
-    fs.writeFileSync(path.join(BRIDGE_DIR, 'tunnel-token'), token, 'utf8');
+    writeSecretFile(path.join(BRIDGE_DIR, 'tunnel-token'), token);
 }
 
 function bridgeReadNamedToken(): string {
@@ -5130,7 +5202,7 @@ function bridgeReadNamedToken(): string {
 // ═══════════════════════════════════════════════════════════
 function bridgeCfCredFile(): string { return path.join(BRIDGE_DIR, 'cf-credentials.json'); }
 function bridgeLoadCfCredentials(): any { try { return JSON.parse(fs.readFileSync(bridgeCfCredFile(), 'utf8')); } catch { return null; } }
-function bridgeSaveCfCredentials(creds: any) { bridgeEnsureDir(); fs.writeFileSync(bridgeCfCredFile(), JSON.stringify(creds, null, 2), 'utf8'); }
+function bridgeSaveCfCredentials(creds: any) { bridgeEnsureDir(); writeSecretFile(bridgeCfCredFile(), JSON.stringify(creds, null, 2)); }
 function bridgeCfState(): { cfLoggedIn: boolean; cfEmail: string; cfSource: string; named: boolean } {
     let cfEmail = '', cfSource = '', cfLoggedIn = false, named = false;
     const c = bridgeLoadCfCredentials();
@@ -5680,7 +5752,7 @@ function daoRelayWriteGhCfAssistExt(profileDir: string, cred: { user?: string; p
         };
         fs.writeFileSync(path.join(extDir, 'manifest.json'), JSON.stringify(manifest), 'utf8');
         const C = JSON.stringify({ user: cred.user || '', pass: cred.pass || '', otp: otpNow || '', name: tokenName || 'dao-relay' });
-        // CF dao-relay 部署所需权限(与 daoRelayTokenDeepLink / provision.mjs 同源): Workers 脚本编辑 + KV 编辑 + 账号读。
+        // CF dao-relay 部署所需权限(与 daoRelayTokenDeepLink / provision.mjs 同源): Workers 脚本编辑 + KV 编辑 + 账号读 + Zone 读 + Workers 路由编辑(绑自定义域兜底)。
         const js = 'try{(function(){var C=' + C + ';var H=location.hostname;' +
             'function setV(el,v){if(!el||!v)return;try{el.focus();el.value=v;el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}}' +
             'function bar(t){try{if(document.getElementById("__dao_cf_bar")){document.getElementById("__dao_cf_bar").textContent=t;return;}var b=document.createElement("div");b.id="__dao_cf_bar";b.textContent=t;b.style.cssText="position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#f38020;color:#fff;font:13px sans-serif;padding:6px 10px;text-align:center";document.documentElement.appendChild(b);}catch(e){}}' +
@@ -5689,7 +5761,7 @@ function daoRelayWriteGhCfAssistExt(profileDir: string, cred: { user?: string; p
             'if(/\\/login|\\/sign-?up/.test(location.pathname)){var g=findBtn(/github/i);if(g){bar("DAO 代登·检测到 Cloudflare 登录页 → 用 GitHub 账号登录(点击 Sign in with GitHub)");g.click();return;}bar("DAO 代登·请在 Cloudflare 登录页选择「Sign in with GitHub」");return;}' +
             'if(/api-tokens/.test(location.pathname+location.search)){' +
             'var nm=document.querySelector("input[name=name],input#token-name,input[placeholder*=name i]");if(nm&&C.name&&!nm.value)setV(nm,C.name);' +
-            'bar("DAO 代登·Cloudflare 建 API Token 页·请套用 dao-relay 所需权限(Workers 脚本编辑+KV 编辑+账号读)后手动 Create·勿改风控项");return;}' +
+            'bar("DAO 代登·Cloudflare 建 API Token 页·请套用 dao-relay 所需权限(Workers 脚本编辑+KV 编辑+账号读+Zone 读+Workers 路由编辑)后手动 Create·勿改风控项");return;}' +
             '}catch(e){}}' +
             'function onGh(){try{' +
             'var lf=document.querySelector("#login_field, input[name=login]");if(lf&&C.user)setV(lf,C.user);' +
@@ -5956,15 +6028,19 @@ async function daoGhInjectPats(logins: string[], primary: string, prune: boolean
 }
 // 一键拷贝(fork)仓库进组织: POST /repos/{o}/{r}/forks {organization} — 原仓库保留。
 async function daoGhForkRepos(pat: string, org: string, repos: string[]): Promise<{ ok: boolean; org: string; results: { repo: string; ok: boolean; error?: string }[] }> {
+    pat = String(pat || '').trim(); org = String(org || '').trim();
     const results: { repo: string; ok: boolean; error?: string }[] = [];
-    for (let i = 0; i < repos.length; i++) {
-        const full = repos[i];
+    // 与 daoOrgSyncRepos/daoGhListRepos 同源归一: 去 github.com 前缀 + .git 后缀 + 去重, 使
+    //   贴整链接(https://github.com/o/r)/o/r.git 与裸 o/r 一致可用(旧仅裸 o/r 匹配·体验割裂)。
+    const uniq = Array.from(new Set(repos.map(s => String(s || '').trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '')).filter(Boolean)));
+    for (let i = 0; i < uniq.length; i++) {
+        const full = uniq[i];
         const mm = /^([^\s/]+)\/([^\s/]+)$/.exec(full);
         if (!mm) { results.push({ repo: full, ok: false, error: '格式应为 owner/repo' }); continue; }
         const r = await ghApiRequest('POST', '/repos/' + encodeURIComponent(mm[1]) + '/' + encodeURIComponent(mm[2]) + '/forks', pat, { organization: org });
         if (r.status === 202 || r.status === 200) results.push({ repo: full, ok: true });
         else results.push({ repo: full, ok: false, error: (r.json && r.json.message) || r.error || ('HTTP ' + r.status) });
-        if (i < repos.length - 1) await _ghSleep(1200);
+        if (i < uniq.length - 1) await _ghSleep(1200);
     }
     return { ok: results.some(x => x.ok), org, results };
 }
@@ -6016,8 +6092,8 @@ async function bridgeProvisionNamedTunnel(apiToken: string, wantHostname?: strin
     else await bridgeCfApiRequest('POST', '/zones/' + zone.id + '/dns_records', apiToken, dnsBody);
     try {
         bridgeEnsureDir();
-        fs.writeFileSync(path.join(BRIDGE_DIR, 'named-tunnel.json'),
-            JSON.stringify({ cfTunnelToken: connToken, cfHostname: hostname, tunnelId, acctId, zoneId: zone.id, apiToken, savedAt: new Date().toISOString() }, null, 2), 'utf8');
+        writeSecretFile(path.join(BRIDGE_DIR, 'named-tunnel.json'),
+            JSON.stringify({ cfTunnelToken: connToken, cfHostname: hostname, tunnelId, acctId, zoneId: zone.id, apiToken, savedAt: new Date().toISOString() }, null, 2));
     } catch { /* 守柔 */ }
     bridgeSaveNamedToken(connToken);
     return { ok: true, hostname, tunnelId, token: connToken };
@@ -6052,7 +6128,7 @@ async function bridgeCfLogin(email: string, apiKeyOrToken: string): Promise<{ ok
     }
     if (token.length >= 100 && /^[A-Za-z0-9_\-=.]+$/.test(token)) {
         try {
-            fs.writeFileSync(path.join(BRIDGE_DIR, 'named-tunnel.json'), JSON.stringify({ cfTunnelToken: token, email, savedAt: new Date().toISOString() }, null, 2), 'utf8');
+            writeSecretFile(path.join(BRIDGE_DIR, 'named-tunnel.json'), JSON.stringify({ cfTunnelToken: token, email, savedAt: new Date().toISOString() }, null, 2));
             bridgeSaveNamedToken(token);
             return { ok: true, message: '已保存命名隧道令牌 — 点「重启隧道」即以固定域名启动' };
         } catch { /* 守柔 */ }
@@ -6465,7 +6541,7 @@ function bridgePublishPluginApi() {
             version: EXT_VERSION,
             updated: new Date().toISOString(),
         };
-        fs.writeFileSync(path.join(BRIDGE_DIR, 'plugin-api.json'), JSON.stringify(data, null, 2), 'utf8');
+        writeSecretFile(path.join(BRIDGE_DIR, 'plugin-api.json'), JSON.stringify(data, null, 2));
     } catch { /* 守柔 */ }
 }
 
@@ -6478,9 +6554,9 @@ function bridgeSaveConnJson() {
         port: ws.port || DEFAULT_PORT, workspace: wsInfo.name, root: wsInfo.root,
         host: os.hostname(), updated: new Date().toISOString(), version: EXT_VERSION,
     };
-    fs.writeFileSync(path.join(BRIDGE_DIR, 'conn.json'), JSON.stringify(data, null, 2), 'utf8');
+    writeSecretFile(path.join(BRIDGE_DIR, 'conn.json'), JSON.stringify(data, null, 2));
     // Also write to global location for other extensions
-    try { fs.writeFileSync(path.join(BRIDGE_DIR, 'connection.json'), JSON.stringify(data, null, 2), 'utf8'); } catch {}
+    try { writeSecretFile(path.join(BRIDGE_DIR, 'connection.json'), JSON.stringify(data, null, 2)); } catch {}
 }
 
 function bridgeWriteArtifacts() {
@@ -7176,11 +7252,11 @@ function bridgeLoadAuthToken(): string {
     return '';
 }
 function bridgeSaveAuthToken(t: string): void {
-    try { if (t) { bridgeEnsureDir(); fs.writeFileSync(bridgeAuthTokenFile(), t, 'utf8'); } } catch { /* 守柔 */ }
+    try { if (t) { bridgeEnsureDir(); writeSecretFile(bridgeAuthTokenFile(), t); } } catch { /* 守柔 */ }
 }
 function bridgeLastInjectFile(): string { return path.join(BRIDGE_DIR, 'last-inject.json'); }
 function bridgeSaveLastInject(url: string, token: string): void {
-    try { bridgeEnsureDir(); fs.writeFileSync(bridgeLastInjectFile(), JSON.stringify({ url, token, ts: new Date().toISOString() }), 'utf8'); } catch { /* 守柔 */ }
+    try { bridgeEnsureDir(); writeSecretFile(bridgeLastInjectFile(), JSON.stringify({ url, token, ts: new Date().toISOString() })); } catch { /* 守柔 */ }
 }
 function bridgeLoadLastInject(): void {
     try {
@@ -7611,6 +7687,11 @@ input[type=checkbox],input[type=radio],input[type=range]{background:transparent;
 .ft .dot.off{background:var(--danger)}
 .st{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin:16px 0 8px}
 .ovsec{margin-bottom:6px}
+/* 主页响应式多列: 宽屏左右分块(340px 一列·最多4列), 窄边栏(<340px)自动回落单列·观感不变 · 道法自然 */
+#v-overview.active{display:block;column-gap:16px;columns:340px 4}
+#v-overview .ovb{break-inside:avoid;-webkit-column-break-inside:avoid;page-break-inside:avoid;display:block;margin:0 0 6px}
+#v-overview .ovb>.st:first-child{margin-top:0}
+#v-overview .ovb>.br{margin-bottom:0}
 .toast{position:fixed;bottom:20px;right:20px;padding:8px 16px;border-radius:6px;font-size:12px;z-index:200;animation:fi .2s}
 .toast.hid{display:none}
 .toast.ok{background:var(--success);color:#000}
@@ -7749,6 +7830,18 @@ function reloadActiveDataTab(){
   var ic=({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'}[t])||'🌐';
   v.innerHTML='<div class="empty"><div class="ic">'+ic+'</div><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
   cmd('loadTabData',{tab:t});
+}
+
+// 帛书·「知止不殆」: autoAcquire 成功但仅得 Session Token(无 cog_ key) — 数据 tab 不再停在
+// 「获取凭证」占位无限转, 而是如实呈现受限态与可行出路(重试 / 手动登录其他账户)。
+function renderCredLimited(){
+  var t=S.tab;
+  if(t==='overview'||t==='bridge'||t==='inject'||t==='switch'||t==='backups'||t==='github')return;
+  var v=document.getElementById('v-'+t);
+  if(!v||v.dataset.loaded)return;
+  var tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时'};
+  var tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅'};
+  v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[t]||'🌐')+'</div><h3>'+(tabNames[t]||t)+'</h3><p style="margin:8px 0;color:var(--warn);font-size:13px">⚠ 当前账号仅取得 Session Token — 完整 API(cog_ key)不可用</p><p style="font-size:11px;color:var(--muted);max-width:380px;line-height:1.6;margin-bottom:12px">该板块数据需完整 Devin API 权限。可能原因: 组织未开通对应能力, 或账号池缺少此邮箱密码无法换取 cog_ key。可重试, 或手动登录持有完整权限的账户。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 再次尝试</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
 }
 
 // 切号模块 (移植自 RT Flow · 全功能面板第2模块) — 账号池列表 + 切换/刷新/清理/出库。
@@ -8058,18 +8151,28 @@ function bkConvRow(c,i,ci,showAcct){
   h+='<div id="'+cid+'" style="display:none;margin-top:4px"></div></div>';
   return h;
 }
-// 非本人「自动化对话」判定 — 与手机 APK cloud.html _isAutoConv 同源(保守·宁漏勿误):
-//   含中文一律判本人; 样板仓库名(blog-drafts-123 等)/超短名/英文动词起头的机器任务名 → 非本人自动化。
-//   仅用于「下沉/可隐藏」, 绝不删数据。
-var BK_AUTO_VERB=/^(review|improve|add|fix|update|refactor|implement|create|investigate|analy[sz]e|debug|optimi[sz]e|test|write|build|set ?up|configure|migrate|remove|delete|clean|security|enhance|document|resolve|merge|deploy|integrate|verify|check|explore|research|design|develop|generate|handle|support|enable|disable|rename|move|extract|inspect|audit|scan|repair|patch|port|sync|convert|validate|ensure|prepare|establish|continue|complete|finish|start|begin)\b/i;
-function bkIsAuto(title){
-  var t=String(title==null?'':title).trim();
-  if(!t)return false;
-  if(/[\u4e00-\u9fff]/.test(t))return false;
-  if(/(blog-drafts|notes|dotfiles|code-snippets|utils-py|learn-cs)-\d+/i.test(t))return true;
-  if(t.length<=3)return true;
-  if(BK_AUTO_VERB.test(t))return true;
-  return false;
+// 非本人「自动化对话」判定 — 与手机 APK devin-cloud.js isAutoConv 同源(唯一真源):
+//   只认可靠结构化信号(onboarding/自动化标签·playbook·automation 字段·样板仓名), 绝不用
+//   「动词起头/超短名」等标题启发式 —— 否则本人正常英文对话("Fix …"/"Integrate …")会被误判。
+//   接会话对象或标题字符串; 仅用于「下沉/可隐藏」, 绝不删数据。
+var BK_AUTO_REPO=/\b(blog-drafts|notes|dotfiles|code-snippets|utils-py|learn-cs)-\d+/i;
+var BK_AUTO_TAG=/^(auto|automation|automated|batch|scheduled|schedule|cron|bot|onboarding)\b|自动/i;
+function bkIsAuto(x){
+  try{
+    var s=(x&&typeof x==='object')?x:null;
+    var title=s?String(s.title||s.name||s.prompt||s.devinId||s.devin_id||s.session_id||s.id||''):String(x==null?'':x);
+    if(s){
+      var tags=s.tags||s.session_tags||(s.session&&s.session.tags)||[];
+      if(Array.isArray(tags))for(var i=0;i<tags.length;i++)
+        if(BK_AUTO_TAG.test(String(tags[i]&&tags[i].name||tags[i])))return true;
+      if(s.playbook_id||s.playbookId)return true;
+      if(s.is_automated===true||s.created_by_automation===true||s.origin==='automation'||s.trigger_type==='scheduled'||s.source==='automation')return true;
+    }
+    var t=title.trim();
+    if(!t)return false;
+    if(BK_AUTO_REPO.test(t))return true;
+    return false;
+  }catch(e){return false;}
 }
 // 实时条目行(尚无本地备份) — 与悬浮窗同源 dlRecent 数据; 可直接多实例进入官网对话。
 function bkLiveRow(li){
@@ -8177,7 +8280,23 @@ function rO(){
   // 主页专注单账号信息/操作/注入。
   // ② 去芜存菁: 把「当前账号·手动内容」(Knowledge/Playbooks/Secrets/Git) 直接合进主页
   v.innerHTML+=daoOverviewManualHtml();
+  _ovGroup(v);
   daoLoadOverviewManual();
+}
+// 帛书·「大制无割」: 把主页扁平的 (.st + 其后卡片) 序列按标题切分, 每段裹入一个 .ovb 原子块,
+//   使 CSS 多列(columns)分栏时「标题永不与其卡片分离」——纯 DOM 重parent, 保留全部 id, 异步内容照常回填。
+function _ovGroup(v){
+  try{
+    var kids=[].slice.call(v.children);
+    if(!kids.length)return;
+    var frag=document.createDocumentFragment(),cur=null;
+    kids.forEach(function(el){
+      if(el.classList&&el.classList.contains('st')){cur=document.createElement('div');cur.className='ovb';frag.appendChild(cur);}
+      else if(!cur){cur=document.createElement('div');cur.className='ovb';frag.appendChild(cur);}
+      cur.appendChild(el);
+    });
+    v.appendChild(frag);
+  }catch(e){}
 }
 // ② 帛书·「为腹不为目」: 手动·对应当前账号的 K/P/S/Git 不再各占侧栏标签, 统一落主页内查看/修改/修复。
 //   复用既有 loadTabData→rT 渲染(含新建/刷新/删除/🔒手锁), 数据走当前账号实时 API。
@@ -8187,7 +8306,10 @@ function daoOverviewManualHtml(){
     return '<div class="st">当前账号 · 手动内容</div><div class="card"><div class="cr"><span class="l" style="font-size:11px;color:var(--muted);line-height:1.6">凭证就绪(cog_ API Key)后自动加载 Knowledge / Playbooks / Secrets / Git。当前仅 Codeium API, 请先完成自动登录。</span></div></div>';
   }
   return '<div class="st">当前账号 · 手动内容 · 查看·修改·修复</div>'
-    +'<div class="st" style="margin-top:8px;font-size:11px;text-transform:none">📚 Knowledge 知识库</div><div id="ov-knowledge" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="margin-top:8px;font-size:11px;text-transform:none">👤 Profile 身份</div><div id="ov-profile" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">🎛️ Customization 偏好设置</div><div id="ov-customization" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">🔐 API Keys (cog_)</div><div id="ov-apikeys" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">📚 Knowledge 知识库</div><div id="ov-knowledge" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
     +'<div class="st" style="font-size:11px;text-transform:none">📋 Playbooks 剧本</div><div id="ov-playbooks" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
     +'<div class="st" style="font-size:11px;text-transform:none">🔑 Secrets 密钥</div><div id="ov-secrets" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
     +'<div class="st" style="font-size:11px;text-transform:none">🔗 Git / Security</div><div id="ov-git" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
@@ -8198,7 +8320,7 @@ function daoOverviewManualHtml(){
 }
 function daoLoadOverviewManual(){
   if(!S.auth.loggedIn||!S.auth.canUseApi)return;
-  ['knowledge','playbooks','secrets','integrations','automations','schedules'].forEach(function(t){
+  ['profile','customization','apikeys','knowledge','playbooks','secrets','integrations','automations','schedules'].forEach(function(t){
     var id=(t==='integrations')?'ov-git':'ov-'+t;
     if(!document.getElementById(id))return;
     cmd('loadTabData',{tab:t});
@@ -8224,7 +8346,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){if(d.command==='setCleanupCooldown'){var _m=document.getElementById('swCdMsg');if(_m){_m.textContent=d.ok?('✓ 已保存 '+(d.hours!=null?d.hours+'h':'')):('✗ '+(d.error||'保存失败'));_m.style.color=d.ok?'var(--success)':'var(--danger)'}if(d.ok&&typeof d.hours==='number')S.cooldownH=d.hours;}else if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){if(d.command==='setCleanupCooldown'){var _m=document.getElementById('swCdMsg');if(_m){_m.textContent=d.ok?('✓ 已保存 '+(d.hours!=null?d.hours+'h':'')):('✗ '+(d.error||'保存失败'));_m.style.color=d.ok?'var(--success)':'var(--danger)'}if(d.ok&&typeof d.hours==='number')S.cooldownH=d.hours;}else if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='devinAutoAcquire'&&d.ok&&d.canUseApi===false){toast('已获取 Session Token, 但完整 API(cog_ key)不可用',false);renderCredLimited()}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -8269,8 +8391,8 @@ function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab)||document.getElementById('ov-'+(tab==='integrations'?'git':tab));if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
   if(fallbackProxy||err){
-    const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时'};
-    const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅'};
+    const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时',profile:'Profile 身份',customization:'Customization 偏好',apikeys:'API Keys'};
+    const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅',profile:'👤',customization:'🎛️',apikeys:'🔐'};
     if(err==='需要 cog_ API Key'||fallbackProxy){
       // ★ 需要cog_ key — 显示创建引导
       v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6">账号凭证随 IDE 登录状态自动同步, 无需手动 API Key。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试自动获取</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
@@ -8280,7 +8402,7 @@ function rT(tab,items,err,fallbackProxy){
     }
     return;
   }
-  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅'}[tab]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时'}[tab]+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
+  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅',profile:'👤',customization:'🎛️',apikeys:'🔐'}[tab]||'🌐')+'</div><h3>'+({sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时',profile:'Profile 身份',customization:'Customization 偏好',apikeys:'API Keys'}[tab]||tab)+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
   // ★ v1.0.1 · 各tab添加新建按钮 · 帛书·「道生一·一生二」
   const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>',automations:'<button class="btn sm danger" onclick="if(confirm(&#39;确认清除本账号官网全部自动化?此操作不可撤销&#39;))cmd(&#39;clearAutomations&#39;)">🧹 清除全部</button>'};
   let h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' items</span><div class="br">'+(createBtns[tab]||'')+'<button class="btn sm" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;'+tab+'&#39;})">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐</button></div></div>';
@@ -8369,7 +8491,7 @@ function rT(tab,items,err,fallbackProxy){
     setTimeout(function(){try{mcpAutoInstallLocal()}catch(e){}},600);
     // 内化后台: 面板打开即静默自动 修复+实测 本机 MCP(无弹窗·无感自愈)
     setTimeout(function(){try{cmd('autoMaintainLocalMcp',{})}catch(e){}},900);
-  }else if(tab==='usage'||tab==='org'||tab==='automations'){
+  }else if(tab==='usage'||tab==='org'||tab==='automations'||tab==='profile'||tab==='customization'||tab==='apikeys'){
     items.forEach(it=>{
       const nm=it.name||it.title||'';const dt=it.detail||'';
       const st=it.connected!==undefined?(it.connected?'<span style="color:var(--success)">● on</span>':'<span style="color:var(--muted)">○ off</span>'):'';
@@ -8727,6 +8849,20 @@ function rGitHub(){
   h+='<div class="st">④ GitHub MCP (随本体 PAT 钉住)</div><div class="card">';
   h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 6px">仅同步 <b>GitHub MCP</b> 一条(非整个 MCP 板块): 设本体/注 PAT 后自动以官方 remote MCP(Bearer PAT)钉住, 与 MCP 板块的该条同源双向。</p>';
   h+='<div id="ghMcpOne"></div></div>';
+  // ⑤ 持久化 Worker 通道 (与内网穿透板块同一后端·同步显示) — 用户在此简单交互:
+  //   一键 OAuth 打通 / 用池内 GitHub 账号代登 Cloudflare 建 Token / 贴 Token 全自动。
+  //   普通中继零账号即可用(快速隧道/mesh 兜底), Cloudflare 仅为「永不漂固定地址」可选项。
+  h+='<div class="st" style="margin-top:10px">⑤ 持久化 Worker 通道 (Cloudflare · 与内网穿透板块同步)</div><div class="card" style="border-left:3px solid var(--accent2,#c586c0)">';
+  var _rl=(S.bridge&&S.bridge.relay)||{};
+  var _rlSt=(_rl.active&&_rl.url)?('<span style="color:'+(_rl.healthy?'var(--success)':'var(--warn)')+'">'+(_rl.healthy?'● 就绪·置顶接管':'⚠ 已部署·传播中')+'</span> <span style="font-size:10px;word-break:break-all;color:var(--muted)">'+esc(_rl.url)+'</span>'):'<span style="color:var(--warn)">○ 未打通(快速隧道/mesh 照常可用·零账号)</span>';
+  h+='<div class="cr"><span class="l">通道状态</span><span class="v">'+_rlSt+'</span></div>';
+  h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:4px 0 6px">想要<b style="color:var(--fg)">永不漂的固定公网地址</b>？三条路任选(状态同显于内网穿透板块): ① 一键 OAuth 全自动(推荐·免手搓 Token); ② 用本板块账号池的 GitHub 号<b>代登 Cloudflare</b> → 建 Token 页链式代填(守柔不代提交); ③ 已有 Cloudflare API Token 直接贴入(含 Workers 脚本编辑+账号读权限)。打通后自动部署你自己的 Worker、落盘置顶、与内网穿透板块同步。</p>';
+  h+='<div class="br" style="margin:2px 0"><button class="btn sm primary" onclick="toast(&#39;打开 Cloudflare 授权页…点一次授权即全自动打通&#39;,true);cmd(&#39;relayOAuthLogin&#39;)" title="浏览器打开 Cloudflare 登录授权 → 后端全自动注册 Token·部署 Worker·落盘置顶·自动续期">🔐 一键 OAuth 全自动打通</button>'+(_rl.active?'<button class="btn sm" onclick="cmd(&#39;relayRestart&#39;)" title="重启 Worker 通道; 连不上自动升级重建">🔄 重启 Worker</button><button class="btn sm" onclick="cmd(&#39;copyRelayInfo&#39;)" title="复制完整接入信息(地址+Token+兜底)">📋 复制接入信息</button>':'')+'</div>';
+  var _credAccts=_fleet.filter(function(a){return a.hasCred});
+  h+='<div style="display:flex;gap:4px;margin:6px 0 2px"><select id="ghCfGhLogin" style="flex:1">'+(_credAccts.length?_credAccts.map(function(a){return '<option value="'+esc(a.login)+'">'+esc(a.login)+' (有账密·可代登)</option>'}).join(''):'<option value="">— 账号池暂无「账密+2FA」账号(添号③模式) —</option>')+'</select><button class="btn sm" onclick="ghCfGhGo()" title="隔离档浏览器: GitHub 代登 Cloudflare → 建 Token 页按 dao-relay 所需权限预勾预填·守柔不代提交"'+(_credAccts.length?'':' disabled style="opacity:.5"')+'>🤖 用该号代登建 Token</button></div>';
+  h+='<div style="display:flex;gap:4px;margin:4px 0 2px"><input id="ghCfToken" type="password" placeholder="Cloudflare API Token(Workers 脚本编辑+账号读) · 贴入一键全自动" style="flex:1"><button class="btn sm primary" onclick="ghCfTokenGo()" title="token→取账号→部署 Worker→落盘置顶, 全后台自动(约1-2分钟)">🚀 Token 打通</button></div>';
+  h+='<div class="br" style="margin:4px 0 0"><a href="#" onclick="cmd(&#39;openCf&#39;);return false" style="font-size:10px;color:var(--accent2)">去 Cloudflare 手动创建 Token →</a><span style="font-size:10px;color:var(--muted)"> · 也可在内网穿透板块手动贴 Token 打通(同一后端)</span></div>';
+  h+='</div>';
   h+='</div>'; // /右栏
   h+='</div>'; // /grid
   v.innerHTML=h;
@@ -8734,6 +8870,9 @@ function rGitHub(){
 }
 // 添号模式切换
 function ghAddMode(m){var st=_ghState();st.addMode=m;rGitHub()}
+// ⑤ 持久化 Worker · GitHub 板块入口(复用穿透板块同一后端命令, 状态两板同步)
+function ghCfGhGo(){var el=document.getElementById('ghCfGhLogin');var login=el?el.value.trim():'';if(!login){toast('账号池暂无「账密+2FA」账号 — 先在「① 添加账号 → ③ 账密+2FA」添号',false);return}toast('🤖 代登 Cloudflare 中…隔离档浏览器将打开(GitHub 代登链→建 Token 页代填·守柔不代提交)',true);cmd('relayGhAutoLogin',{login:login})}
+function ghCfTokenGo(){var k=document.getElementById('ghCfToken');var token=k?k.value.trim():'';if(!token){toast('请先贴入 Cloudflare API Token',false);return}toast('全自动打通中…(取账号→部署 Worker→落盘置顶, 约 1-2 分钟)',true);cmd('relayProvisionToken',{token:token})}
 // 添加账号(三模式统一入口): PAT 模式与账密模式都走 daoGhAccountAdd(后端按格式识别)。
 function ghAcctAdd(){var t=(document.getElementById('ghAddInput')||{}).value||'';if(!t.trim()){toast('先填至少一行',false);return}var role=(document.getElementById('ghAddRole')||{}).value||'member';var mode=(_ghState().addMode||'pat');ghMsg('ghAddOut','⏳ 校验并加入账号池(限速)…');cmd('daoGhAccountAdd',{text:t,role:role,mode:mode})}
 // 逐账号操作
@@ -9245,6 +9384,18 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'schedules') {
                             result = await devinListSchedules(ws.devinOrgId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'profile') {
+                            result = await devinGetProfile(ws.devinOrgId, ws.devinUserId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'customization') {
+                            result = await devinGetCustomization(ws.devinOrgId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'apikeys') {
+                            result = await devinGetApiKeyStatus(ws.devinOrgId, ws.devinUserId, ws.devinAuth1);
                             if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else {
@@ -9924,7 +10075,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 }
                 if (ok) { vscode.window.showInformationMessage('Devin Cloud 凭证已自动获取'); await devinFullInject(); sidebarCloudPanel?.refresh(); }
                 else vscode.window.showWarningMessage('未能自动获取凭证 — 账号池可能缺少当前 IDE 登录邮箱的密码, 可手动登录');
-                refreshReply({ type: 'actionResult', command: 'devinAutoAcquire', ok });
+                refreshReply({ type: 'actionResult', command: 'devinAutoAcquire', ok, canUseApi: devinCanUseApi() });
                 break;
             }
             case 'devinManualLogin': {
@@ -10453,6 +10604,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     home: '', sessions: '/sessions',
                     knowledge: '/knowledge', playbooks: '/playbooks',
                     secrets: '/settings/secrets', integrations: '/settings/integrations',
+                    profile: '/settings/profile', customization: '/settings/customization',
+                    apikeys: '/settings/api-keys',
                 };
                 const targetUrl = daoRoutedWebUrl(pagePaths[page] || '');
                 try { vscode.commands.executeCommand('simpleBrowser.show', targetUrl); }
@@ -11797,7 +11950,7 @@ function saveAccountAuth(email?: string): void {
             apiServerUrl: ws.devinApiServerUrl, savedAt: new Date().toISOString(),
         };
         fs.mkdirSync(DAO_DIR, { recursive: true });
-        fs.writeFileSync(ACCOUNTS_AUTH_FILE, JSON.stringify(store, null, 2), 'utf8');
+        writeSecretFile(ACCOUNTS_AUTH_FILE, JSON.stringify(store, null, 2));
     } catch { /* 守柔 */ }
 }
 function loadAccountAuth(email: string): SavedAccountAuth | null {
@@ -11818,7 +11971,7 @@ function saveAccountAuthRecord(email: string, rec: { auth1: string; orgId?: stri
             apiKey: prev.apiKey || '', apiServerUrl: prev.apiServerUrl || '', savedAt: new Date().toISOString(),
         };
         fs.mkdirSync(DAO_DIR, { recursive: true });
-        fs.writeFileSync(ACCOUNTS_AUTH_FILE, JSON.stringify(store, null, 2), 'utf8');
+        writeSecretFile(ACCOUNTS_AUTH_FILE, JSON.stringify(store, null, 2));
     } catch { /* 守柔 */ }
 }
 // 道·多实例按需取号 — 帛书「既以为人己愈有」: 路由某账号(dao_acct)时若其真 auth1 未缓存,
@@ -13423,6 +13576,23 @@ async function devinCreateSession(orgId: string, userMessage: string, auth1: str
     if (opts.tags) payload.tags = opts.tags;
     if (opts.repos) payload.repos = opts.repos;
     if (opts.sessionSecrets) payload.session_secrets = opts.sessionSecrets;
+    // 官方环境模式(逆向自 app.devin.ai SPA): additional_args.platform ∈ {linux,windows,macos}
+    //   + 顶层 platform_explicitly_set; 只作用于新建对话, 不动运行中的对话。
+    //   opts.platform 未显式给时, 默认取当前号(与 auth1 同号)的每号环境模式 — 不跨号。
+    if (!opts.platform) {
+        try {
+            const int: any = _rtflowModule && _rtflowModule._internals;
+            if (int && typeof int.getAccountEnvMode === 'function' && ws.devinEmail) opts.platform = int.getAccountEnvMode(ws.devinEmail);
+        } catch { /* 守柔 */ }
+    }
+    if (opts.platform) {
+        const s = String(opts.platform).toLowerCase();
+        const pf = (s === 'windows' || s === 'win') ? 'windows'
+            : (s === 'macos' || s === 'mac' || s === 'osx' || s === 'darwin') ? 'macos' : 'linux';
+        payload.additional_args = payload.additional_args || {};
+        payload.additional_args.platform = pf;
+        payload.platform_explicitly_set = true;
+    }
     // 帛书·「反者道之动也」— 两条候选路径, 依次回退:
     //   ① api.devin.ai/v1/org/<org>/sessions (cog_ API Key) — 企业/付费档可用
     //   ② app.devin.ai/api/org-<bare>/sessions (auth1 同源) — 自助账号 cog_ 被 v1 拒(404)时兜底,
@@ -13744,6 +13914,62 @@ async function devinGetUsage(orgId: string, auth1: string): Promise<{ ok: boolea
         { name: '周期 Cycle', detail: (s.cycle_start ? new Date(s.cycle_start).toLocaleDateString() : '—') + ' → ' + (s.cycle_end ? new Date(s.cycle_end).toLocaleDateString() : '—') },
     ];
     return { ok: stats.status === 200 || limits.status === 200, items };
+}
+
+// ═══ 单账号主页补全 · Profile / Customization / API Key — 端点均经真实登录抓包核实 (GET 只读) ═══
+async function devinGetProfile(orgId: string, userId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    const reqs: Promise<any>[] = [devinJsonGet(DEVIN_APP + '/api/users/info', H)];
+    if (userId) reqs.push(devinJsonGet(DEVIN_APP + '/api/users/' + userId + '/profile', H));
+    const [info, prof] = await Promise.all(reqs);
+    const iOk = info.status === 200 && info.json;
+    const pOk = prof && prof.status === 200 && prof.json;
+    if (!iOk && !pOk) return { ok: false, items: [] };
+    const i: any = iOk ? info.json : {};
+    const p: any = pOk ? prof.json : {};
+    const items = [
+        { name: '姓名 Name', detail: p.preferred_name || p.name || i.preferred_name || '—' },
+        { name: '邮箱 Email', detail: p.email || '—' },
+        { name: 'User ID', detail: p.user_id || i.user_id || userId || '—' },
+        { name: 'GitHub OAuth', detail: p.github_username ? ('@' + p.github_username) : '未连接', connected: !!p.is_github_oauth_connected },
+        { name: 'Commit Email', detail: p.commit_email || '(默认·账号邮箱)' },
+        { name: '注册时间 Created', detail: i.created_at ? new Date(i.created_at).toLocaleString() : '—' },
+    ];
+    return { ok: true, items };
+}
+
+async function devinGetCustomization(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const r = await devinJsonGet(DEVIN_APP + '/api/organizations/' + orgId + '/settings', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200 || !r.json) return { ok: false, items: [] };
+    const s = r.json;
+    const items = [
+        { name: 'Devin 版本 Default version', detail: s.default_devin_version_override || '(官方默认)' },
+        { name: '默认平台 Platform', detail: s.default_platform || '(官方默认 · Linux)' },
+        { name: '搜索模式 Search mode', detail: s.default_search_mode || '—' },
+        { name: 'PR 署名 Open as', detail: s.pr_open_as || '—' },
+        { name: 'PR 开草稿 Draft PRs', detail: s.pr_create_as_draft ? '开' : '关', connected: !!s.pr_create_as_draft },
+        { name: 'PR 仅提及 Mention only', detail: s.pr_mention_only ? '开' : '关', connected: !!s.pr_mention_only },
+        { name: '自动 Review Auto-reviewer', detail: s.pr_auto_reviewer ? '开' : '关', connected: !!s.pr_auto_reviewer },
+        { name: 'Secure Mode 安全模式', detail: s.secure_mode ? '开' : '关', connected: !!s.secure_mode },
+        { name: 'Computer Use 桌面操控', detail: s.computer_use ? '开' : '关', connected: !!s.computer_use },
+        { name: '批量会话上限 Max batch', detail: String(s.max_batch_sessions != null ? s.max_batch_sessions : '—') },
+        { name: '快照自动构建 Snapshot auto-build', detail: s.snapshot_auto_build ? '开' : '关', connected: !!s.snapshot_auto_build },
+        { name: 'Wiki 自动刷新', detail: (s.wiki_auto_refresh || '—') + ' · effort ' + (s.wiki_effort_level || '—') },
+    ];
+    return { ok: true, items };
+}
+
+async function devinGetApiKeyStatus(orgId: string, userId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    if (!userId) return { ok: false, items: [] };
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/' + userId + '/api-key/exists', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200) return { ok: false, items: [] };
+    const exists = !!(r.json && r.json.exists);
+    const items = [
+        { name: '官网 API Key (cog_)', detail: exists ? '已创建 · 可在官网 Settings → Devin API 管理/吊销' : '未创建', connected: exists },
+        { name: '插件本地凭证', detail: devinCanUseApi() ? '✓ 完整 API 访问 (cog_ key 就绪)' : '仅 Codeium API · 待自动获取', connected: devinCanUseApi() },
+    ];
+    return { ok: true, items };
 }
 
 async function devinListMembers(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
@@ -16182,11 +16408,47 @@ function daoSaveDownload(name: string, buf: Buffer, ct: string, src: string): an
     fs.writeFileSync(fp, buf);
     let idx: any[] = [];
     try { idx = JSON.parse(fs.readFileSync(daoDownloadsIndex(), 'utf8')) || []; } catch { idx = []; }
+    // 该 URL 的「下载中」占位条目让位于完成条目(浏览器语义: 同一次下载 活跃→完成)。
+    idx = idx.filter((e: any) => !(e && e.state === 'active' && e.url === (src || '')));
     const meta = { name: safe, path: fp, size: buf.length, contentType: ct || '', url: src || '', time: Date.now() };
     idx.unshift(meta);
     if (idx.length > 500) idx = idx.slice(0, 500);
     try { fs.writeFileSync(daoDownloadsIndex(), JSON.stringify(idx)); } catch { /* 守柔 */ }
     return meta;
+}
+// ── 下载「进行中/失败」状态登记(对齐手机 APK 下载悬浮窗·浏览器级状态) ──
+//   活跃条目形如 { id, name, state:'active'|'failed', size(已收), total(预期), url, time };
+//   完成后由 daoSaveDownload 以完成条目取而代之。写盘按 800ms 节流, 陈旧活跃条目(>10min)自清。
+let _dlSeq = 0;
+let _dlLastWrite = 0;
+function _dlReadIdx(): any[] { try { return JSON.parse(fs.readFileSync(daoDownloadsIndex(), 'utf8')) || []; } catch { return []; } }
+function _dlWriteIdx(idx: any[]): void { try { fs.writeFileSync(daoDownloadsIndex(), JSON.stringify(idx.slice(0, 500))); } catch { /* 守柔 */ } }
+function daoDlBegin(name: string, total: number, src: string): string {
+    const id = 'dl' + Date.now().toString(36) + (++_dlSeq);
+    const now = Date.now();
+    let idx = _dlReadIdx();
+    idx = idx.filter((e: any) => !(e && e.state === 'active' && (now - (e.time || 0) > 600000 || e.url === (src || ''))));
+    idx.unshift({ id, name: String(name || 'download'), state: 'active', size: 0, total: total > 0 ? total : 0, url: src || '', time: now });
+    _dlWriteIdx(idx);
+    _dlLastWrite = now;
+    return id;
+}
+function daoDlTick(id: string, got: number): void {
+    const now = Date.now();
+    if (now - _dlLastWrite < 800) return;
+    _dlLastWrite = now;
+    const idx = _dlReadIdx();
+    const e = idx.find((x: any) => x && x.id === id && x.state === 'active');
+    if (!e) return;
+    e.size = got;
+    _dlWriteIdx(idx);
+}
+function daoDlFail(id: string): void {
+    const idx = _dlReadIdx();
+    const e = idx.find((x: any) => x && x.id === id && x.state === 'active');
+    if (!e) return;
+    e.state = 'failed';
+    _dlWriteIdx(idx);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -16278,10 +16540,29 @@ function fetchViaTunnel(u, headers, timeoutMs) {
 // 拖拽上传桥路由服务 (单一来源): 既供 dao-vsix out 层主服务器路由, 又经 rt-flow 注入 IDE 内
 //   多实例反代 devin_proxy 就地同源服务 (各账号端口) → 落点页 location.origin fetch 即达。
 //   全部带 CORS, 故同源/跨域两用皆可。
-async function daoServeBridgeRoute(routePath: string, urlObj: URL): Promise<any> {
+async function daoServeBridgeRoute(routePath: string, urlObj: URL, req?: any): Promise<any> {
     const CORS = { 'Access-Control-Allow-Origin': '*' };
     if (routePath === '/__daobridge.js') {
         return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoDropBridgeJs(), headers: { 'Cache-Control': 'no-store', ...CORS } };
+    }
+    // 整页翻译桥/引擎/文本代调 — 供 IDE 内多实例反代(devin_proxy)就地同源服务各账号端口,
+    //   与主口 /__translate(.js) 同源同构 — 跨源 iframe 页内桥自此可达(根治「本页不可翻译(跨源)」)。
+    if (routePath === '/__daotrans.js') {
+        return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoTransBridgeInlineJs(), headers: { 'Cache-Control': 'no-store', ...CORS } };
+    }
+    if (routePath === '/__translate.js') {
+        return { _proxy: true, status: 200, contentType: 'application/javascript; charset=utf-8', body: daoTransEngineJs(), headers: { 'Cache-Control': 'no-store', ...CORS } };
+    }
+    if (routePath === '/__translate') {
+        const _tm = String((req && req.method) || 'GET').toUpperCase();
+        const _tCORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', ...CORS };
+        if (_tm === 'OPTIONS') return { _proxy: true, status: 204, contentType: 'text/plain', body: '', headers: _tCORS };
+        let _tp: any = null;
+        try { _tp = req ? JSON.parse((await readBodyBuffer(req)).toString('utf8')) : null; } catch (e) { _tp = null; }
+        const _texts = (_tp && Array.isArray(_tp.texts)) ? _tp.texts.map((t: any) => String(t == null ? '' : t)).slice(0, 128) : null;
+        if (!_texts || !_texts.length) return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: '缺少 texts 数组' }), headers: _tCORS };
+        const _out = await daoTranslateTexts(_texts, String((_tp && _tp.to) || 'zh-Hans'));
+        return { _proxy: true, status: 200, contentType: 'application/json; charset=utf-8', body: JSON.stringify(_out ? { ok: true, translations: _out } : { ok: false, translations: [], error: '翻译服务不可达' }), headers: _tCORS };
     }
     // 防 HTTP 头非法字符: Content-Disposition 的 filename= 仅许 ASCII; 非 ASCII(如中文标题)直塞 →
     //   Node 抛 "Invalid character in header content" → 500。故 ASCII 回退名 + RFC5987 filename*(UTF-8)。
@@ -16381,12 +16662,15 @@ function daoDropBridgeJs() {
         "function mkFile(buf,ct,nm){try{return new File([buf],nm,{type:ct||'application/octet-stream'});}catch(e){var b=new Blob([buf],{type:ct||'application/octet-stream'});try{b.name=nm;}catch(e2){}return b;}}",
         "async function fetchFile(u,nm){var r=await fetch(u,{credentials:'same-origin'});if(!r.ok)throw new Error('HTTP '+r.status);var ct=r.headers.get('content-type')||'application/octet-stream';var buf=await r.arrayBuffer();return mkFile(buf,ct,nm);}",
         "function deepCollect(sel){var out=[];function w(root){var es;try{es=root.querySelectorAll(sel);}catch(e){return;}for(var i=0;i<es.length;i++)out.push(es[i]);var all;try{all=root.querySelectorAll('*');}catch(e2){return;}for(var j=0;j<all.length;j++){if(all[j].shadowRoot)w(all[j].shadowRoot);}}w(document);return out;}",
-        // 对话拖拽择路(对照手机 APK): 进行中=两份 MD(对话+取数指引) / 已结束=整包 ZIP(增量覆盖最新)。
-        "async function convFiles(c){var em=encodeURIComponent(c.email||''),si=encodeURIComponent(c.sid||''),base=String(c.title||c.sid||'conversation');var act=false;try{var r=await fetch(ORIGIN+'/__convinfo?email='+em+'&sid='+si,{credentials:'same-origin'});var j=await r.json();act=!!(j&&j.active);}catch(e){}var out=[];if(act){out.push(await fetchFile(ORIGIN+'/__convmd?email='+em+'&sid='+si,base+'.md'));try{out.push(await fetchFile(ORIGIN+'/__convguide?email='+em+'&sid='+si,base+'_\u53d6\u6570\u6307\u5f15.md'));}catch(e2){}}else{try{out.push(await fetchFile(ORIGIN+'/__convzip?email='+em+'&sid='+si,base+'.zip'));}catch(e3){out.push(await fetchFile(ORIGIN+'/__convmd?email='+em+'&sid='+si,base+'.md'));}}return out;}",
+        // 对话拖拽双文件(对齐手机 APK uploadConv): 恒为两份 MD(对话完整记录+取数指引); 对话 MD 取不到时退 ZIP 兼得全量文件。
+        "async function convFiles(c){var em=encodeURIComponent(c.email||''),si=encodeURIComponent(c.sid||''),base=String(c.title||c.sid||'conversation');var out=[],mdOk=false;try{out.push(await fetchFile(ORIGIN+'/__convmd?email='+em+'&sid='+si,base+'.md'));mdOk=true;}catch(e){}try{out.push(await fetchFile(ORIGIN+'/__convguide?email='+em+'&sid='+si,base+'_\u53d6\u6570\u6307\u5f15.md'));}catch(e2){}if(!mdOk){try{out.unshift(await fetchFile(ORIGIN+'/__convzip?email='+em+'&sid='+si,base+'.zip'));}catch(e3){}}if(!out.length)throw new Error('\u5bf9\u8bdd\u63d0\u53d6\u5931\u8d25');return out;}",
         "function feed(target,file){try{var files=[].concat(file);var dt=new DataTransfer();for(var fi=0;fi<files.length;fi++)dt.items.add(files[fi]);var inps=deepCollect('input[type=file]');if(inps.length){for(var k=0;k<inps.length;k++){try{inps[k].files=dt.files;inps[k].dispatchEvent(new Event('input',{bubbles:true}));inps[k].dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}}return true;}var eds=deepCollect('textarea,[contenteditable=true]');var t=eds[0]||target||document.body;function mk(tp){var ev;try{ev=new DragEvent(tp,{bubbles:true,cancelable:true});Object.defineProperty(ev,'dataTransfer',{value:dt});}catch(e2){ev=new Event(tp,{bubbles:true,cancelable:true});ev.dataTransfer=dt;}return ev;}try{t.dispatchEvent(mk('dragenter'));t.dispatchEvent(mk('dragover'));var consumed=(t.dispatchEvent(mk('drop'))===false);return consumed;}catch(e3){return false;}}catch(e0){return false;}}",
         "document.addEventListener('dragover',function(e){try{var ts=(e.dataTransfer&&e.dataTransfer.types)||[];var has=false;for(var i=0;i<ts.length;i++){if(ts[i]==='application/x-dao-file'||ts[i]==='application/x-dao-conv')has=true;}if(has){e.preventDefault();try{e.dataTransfer.dropEffect='copy';}catch(x){}}}catch(x){}},true);",
         "document.addEventListener('drop',function(e){try{var dtt=e.dataTransfer;if(!dtt)return;var fp='',cv='';try{fp=dtt.getData('application/x-dao-file');}catch(x){}try{cv=dtt.getData('application/x-dao-conv');}catch(x){}if(!fp&&!cv)return;e.preventDefault();e.stopPropagation();var tgt=e.target||document.body;toast('\\u23f3 \\u6b63\\u5728\\u4e0a\\u4f20\\u2026');(async function(){try{var fs;if(fp){var o=JSON.parse(fp);fs=[await fetchFile(ORIGIN+'/__dlfile?p='+encodeURIComponent(o.path||''),(o.name||'file'))];}else{fs=await convFiles(JSON.parse(cv));}var nm=fs.map(function(x){return x.name;}).join(' + ');var ok=feed(tgt,fs);toast(ok?('\\u2705 \\u5df2\\u6295\\u9012\\u4e0a\\u4f20 '+nm):('\\u26a0 \\u672a\\u627e\\u5230\\u4e0a\\u4f20\\u6846 '+nm));}catch(err){toast('\\u2715 \\u4e0a\\u4f20\\u5931\\u8d25: '+((err&&err.message)||err));}})();}catch(x){}},true);",
         // 归一·根治拖拽上传: 外壳(父文档)同源可靠接住 drop → postMessage 命令本桥执行上传(不依赖跨源 iframe 原生 DnD)。
+        // 本页资源盘点(对齐手机 APK collectTabMedia): 外壳 postMessage {__daoMediaScan:1} → 回 {__daoMediaList,__daoPage}。
+        "function scanMedia(){var out=[],seen={};function push(u,tp,nm){try{if(!u)return;u=String(u);if(u.indexOf('data:')===0&&u.length>2048)return;if(u.indexOf('http')!==0&&u.indexOf('blob:')!==0&&u.indexOf('/')!==0)return;if(seen[u])return;seen[u]=1;out.push({u:u,t:tp,n:nm||decodeURIComponent((u.split('/').pop()||'').split('?')[0])||tp});}catch(e){}}try{deepCollect('img[src]').forEach(function(el){if((el.naturalWidth||0)>32||(el.width||0)>32)push(el.currentSrc||el.src,'img',el.alt);});deepCollect('video').forEach(function(el){push(el.currentSrc||el.src,'video');var ss=el.querySelectorAll('source[src]');for(var i=0;i<ss.length;i++)push(ss[i].src,'video');});deepCollect('audio[src],audio source[src]').forEach(function(el){push(el.src,'audio');});deepCollect('a[href]').forEach(function(a){var hh=a.href||'';if(/app\\.devin\\.ai\\/attachments\\//.test(hh)||/\\/attachments\\//.test(hh)||/\\.(md|pdf|zip|txt|json|csv|log|doc|docx|xls|xlsx|apk|mp4|webm|mov|mp3|wav|png|jpe?g|gif|webp|svg)(\\?|$)/i.test(hh)){var ext=(hh.split('?')[0].split('.').pop()||'').toLowerCase();var tp=/^(png|jpe?g|gif|webp|svg)$/.test(ext)?'img':(/^(mp4|webm|mov)$/.test(ext)?'video':(/^(mp3|wav)$/.test(ext)?'audio':(ext==='md'?'md':'file')));push(hh,tp,(a.getAttribute('download')||a.textContent||'').trim().slice(0,80));}});}catch(e){}return out.slice(0,300);}",
+        "window.addEventListener('message',function(e){try{var d=e&&e.data;if(!d||!d.__daoMediaScan)return;var lst=scanMedia();(e.source||parent).postMessage({__daoMediaList:lst,__daoPage:location.href},'*');}catch(x){}},false);",
         "window.addEventListener('message',function(e){try{var d=e&&e.data;if(!d||!d.__daoUpload)return;var u=d.__daoUpload;(async function(){try{var fs;if(u.kind==='file'){fs=[await fetchFile(ORIGIN+'/__dlfile?p='+encodeURIComponent(u.path||''),(u.name||'file'))];}else{fs=await convFiles(u);}toast('\\u23f3 \\u6b63\\u5728\\u4e0a\\u4f20\\u2026');var nm=fs.map(function(x){return x.name;}).join(' + ');var ok=feed(document.body,fs);toast(ok?('\\u2705 \\u5df2\\u6295\\u9012\\u4e0a\\u4f20 '+nm):('\\u26a0 \\u672a\\u627e\\u5230\\u4e0a\\u4f20\\u6846 '+nm));}catch(err){toast('\\u2715 \\u4e0a\\u4f20\\u5931\\u8d25: '+((err&&err.message)||err));}})();}catch(x){}},false);",
         "}catch(e){}})();"
     ].join("");
@@ -16881,8 +17165,13 @@ async function genericWebProxy(targetUrl, depth = 0, reqCtx: any = null, isSub =
         proxyReq = lib.request(options, (pr) => {
             const sc = pr.statusCode || 200;
             const chunks = [];
-            pr.on('error', () => directFail());
-            pr.on('data', (c) => chunks.push(c));
+            // 下载「进行中」登记(浏览器级状态·供 ⬇悬浮窗实时显示): 头到即登记, 收流更新进度, 失败落败, 完成由 daoSaveDownload 收编。
+            const _hcd = String(pr.headers['content-disposition'] || '');
+            const _hct = String(pr.headers['content-type'] || '');
+            const _dlId = (sc < 300 && _isDownloadable(_hcd, _hct)) ? daoDlBegin(_dlFilename(_hcd, u, _hct), parseInt(String(pr.headers['content-length'] || '0'), 10) || 0, u.href) : '';
+            let _dlGot = 0;
+            pr.on('error', () => { if (_dlId) daoDlFail(_dlId); directFail(); });
+            pr.on('data', (c) => { chunks.push(c); if (_dlId) { _dlGot += c.length; daoDlTick(_dlId, _dlGot); } });
             pr.on('end', () => handle(sc, pr.headers, Buffer.concat(chunks)));
         });
         proxyReq.on('error', () => directFail());

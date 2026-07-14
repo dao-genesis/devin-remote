@@ -120,6 +120,7 @@ public class MainActivity extends AppCompatActivity {
     private Uri cameraOutputUri;          // 网页上传时相机拍照的落地 Uri (FileProvider)
     private androidx.activity.result.ActivityResultLauncher<Intent> fileChooser;
     private androidx.activity.result.ActivityResultLauncher<Intent> shareImportPicker;  // 选「整机分享包」zip
+    private androidx.activity.result.ActivityResultLauncher<Intent> uploadPicker;       // 「上传到网页端」点击选文件 (拖拽之外的点击直传)
 
     private FrameLayout content;
     private FrameLayout autoHost;   // 常驻·满屏·INVISIBLE 容器: 停泊非活动标签 WebView, 使其保持挂载窗口+有尺寸
@@ -475,6 +476,15 @@ public class MainActivity extends AppCompatActivity {
             if (result.getResultCode() != RESULT_OK || result.getData() == null || result.getData().getData() == null) return;
             importShareBundle(result.getData().getData());
         });
+        uploadPicker = registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), result -> {
+            if (result.getResultCode() != RESULT_OK || result.getData() == null) return;
+            java.util.List<Uri> us = new java.util.ArrayList<>();
+            Intent d = result.getData();
+            if (d.getClipData() != null) { for (int i = 0; i < d.getClipData().getItemCount(); i++) { Uri u = d.getClipData().getItemAt(i).getUri(); if (u != null) us.add(u); } }
+            else if (d.getData() != null) us.add(d.getData());
+            if (us.isEmpty()) { toast("未选择文件"); return; }
+            uploadUrisToPage(us);
+        });
         HttpBridge.appCtx = getApplicationContext();   // 原生 HTTP 的 VPN 自然回退(死 VPN → 底层直连)需要网络服务
         ensureRelayIdentity();   // 去中心化: 设备唯一 session(防卸载) + 每冷启动轮换 token → relay-config.json
         startRelay();
@@ -769,6 +779,7 @@ public class MainActivity extends AppCompatActivity {
         mu.add(0, 13, 5, "无痕标签");
         mu.add(0, 9, 7, "浏览历史");
         mu.add(0, 12, 8, "书签收藏");
+        mu.add(0, 17, 6, "上传文件到网页端");
         mu.add(0, 14, 9, "用户脚本 (油猴)");
         mu.add(0, 15, 10, "Shizuku 权限 (自我 ADB)");
         android.view.SubMenu page = mu.addSubMenu(0, 100, 9, "页面工具");
@@ -799,6 +810,7 @@ public class MainActivity extends AppCompatActivity {
                 case 9: showHistory(); return true;
                 case 12: showBookmarks(); return true;
                 case 14: newTab(SCRIPTS, null); return true;
+                case 17: pickUploadToPage(); return true;
                 case 16: showUserscriptMenu(); return true;
                 case 15: newTab(SHIZUKU, null); return true;
                 case 40: { Tab t = cur(); if (t != null && t.web.canGoBack()) t.web.goBack(); else toast("无法后退"); return true; }
@@ -879,6 +891,10 @@ public class MainActivity extends AppCompatActivity {
         if (idx < 0 || idx >= tabs.size() || idx == active) return;
         Tab t = tabs.get(idx);
         if (t.internal || t.accountJson == null || t.pendingReloadUrl != null) return;
+        // 对齐浏览器 tab freezing 活跃保护: 有活跃对话 / 用户正在交互 / 远程自动化驱动 → 不卸载
+        if (isAccountConvActive(t)) return;                                  // 有新对话/正在运行 → 保活
+        if (userInteracting(t, EDIT_GUARD_MS)) return;                       // 用户打字/语音/滚动/触摸 → 不冻
+        if (remoteDriven(t)) return;                                          // 远程自动化中 → 不冻
         String u = (t.url != null && !t.url.isEmpty()) ? t.url : null;
         if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) return;
         java.util.concurrent.ConcurrentHashMap<String,Long> vw = tabViewers.get(t.vid);
@@ -1220,6 +1236,13 @@ public class MainActivity extends AppCompatActivity {
                 return handleExternalScheme(u);
             }
             @Override public void onPageStarted(WebView v, String u, android.graphics.Bitmap f) {
+                // 兜底: window.open/target=_blank 经 onCreateWindow 传输的首个导航常绕过
+                //   shouldOverrideUrlLoading → 附件下载直链会把新标签整帧导去 S3 落成空白/超时。
+                //   在此拦停并转下载/悬浮直看(文本类), interceptAttachmentNav 顺手关掉空标签。
+                if (u != null && u.startsWith("http") && isAttachmentDownloadUrl(u)) {
+                    try { v.stopLoading(); } catch (Exception ignored) {}
+                    if (interceptAttachmentNav(v, u)) return;
+                }
                 tab.url = u; if (tabOf(v) == active) setAddr(u);
                 if (u != null && u.startsWith("http")) tab.loadedAt = System.currentTimeMillis();   // 整页加载 → V8 堆归零, 重计堆龄
                 // 老 WebView 兜底: 无 DOCUMENT_START_SCRIPT 时, 此处尽早种入多实例鉴权(与 TabActivity 一致) → 旧机型账号可登。
@@ -1242,11 +1265,14 @@ public class MainActivity extends AppCompatActivity {
                 if (!tab.internal && u != null && u.startsWith("http")) {
                     autoFillLogin(v, u);        // 有保存的账密 → 自动填充 (无感)
                     installLoginCapture(v);     // 监听登录提交 → 自动弹「保存登录？」
+                    installDomWatch(v);         // 页面侧单观察者+输入让行: 三份全文档 MutationObserver 归一 (打字卡顿之根治)
                     installKbHelper(v);         // 键盘弹出时输入框上滚到可见区中部 (不被遮挡)
                     installBackspaceGuard(v);   // 退格护栏: 拦下输入法误发的左右两侧同删
                     installVideoFit(v);         // 录像播放器窄屏适配: 视频区与步骤栏纵向堆叠同屏
                     installMediaRetry(v);       // 媒体加载自愈: 附件/对象存储直链瞬断→退避自动重载
                     installAttachmentPrefetch(v); // 附件预热: DOM 一出现附件即后台整取落盘 → 首次点开即秒开
+                    installComposerUpload(v);   // 「新创作/＋」弹出菜单加「上传到网页端」点击直传入口
+                    installEnvModeBadge(v, tab.acctEmail); // 官方页「新对话虚拟机环境」徽章+新建请求平台注入
                     harvestPageAuth(v, tab, u); // 非账号标签从页面登录态采收 auth → 媒体代取可用
                     warmAttachmentCookie(tab.auth1, tab.orgId, u);   // 预铸附件 Cookie → 首次图片/视频即已授权
                     scheduleMediaPrecollect(tab);   // 本页媒体预采 → 开面板/切标签秒出
@@ -1262,12 +1288,14 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); scheduleMediaPrecollect(tab); }
+                    if (!tab.internal) { installDomWatch(v); installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); installComposerUpload(v); installEnvModeBadge(v, tab.acctEmail); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); scheduleMediaPrecollect(tab); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
                 if (adBlock && req != null && req.getUrl() != null && isAdHost(req.getUrl().getHost()))
                     return new WebResourceResponse("text/plain", "utf-8", new java.io.ByteArrayInputStream(new byte[0]));
+                WebResourceResponse ac = assetCacheResponse(req);
+                if (ac != null) return ac;
                 WebResourceResponse am = authMediaResponse(tab, req);
                 if (am != null) return am;
                 return super.shouldInterceptRequest(v, req);
@@ -2126,6 +2154,18 @@ public class MainActivity extends AppCompatActivity {
         catch (Exception e) { return ""; }
     }
 
+    /** 该账号标签是否有「活跃对话」(切号面板推送的 status 含 run/work/active) — 对齐浏览器 tab freezing:
+     *  有活跃对话的标签 = "playing audio" 级别保护, 不冻结/不卸载, 跟 Chrome 不冻有声音播放的标签一样。 */
+    private boolean isAccountConvActive(Tab t) {
+        String key = acctKeyOf(t);
+        if (key.isEmpty()) return false;
+        String[] sta = sTabStatus.get(key);
+        if (sta == null) sta = sTabStatus.get(key.toLowerCase(java.util.Locale.US));
+        if (sta == null || sta[1] == null) return false;
+        String s = sta[1].toLowerCase(java.util.Locale.US);
+        return s.contains("run") || s.contains("work") || s.contains("active");
+    }
+
     /** 用户点刷新 → 命令切号引擎: 当前账号优先即时刷(额度+状态), 再全量强制刷(绕过可见性门控)。 */
     private void triggerEngineRefresh(String accId) {
         WebView sw = switchWeb();
@@ -2304,6 +2344,9 @@ public class MainActivity extends AppCompatActivity {
     private final Runnable openAcctTick = new Runnable() {
         @Override public void run() {
             if (!appForeground) return;
+            // 输入让行: 与引擎心跳同则, 触摸/打字期间顺延, 不抢共享渲染进程。
+            long sinceInput = android.os.SystemClock.uptimeMillis() - lastUserInputTs;
+            if (sinceInput < INPUT_QUIET_MS) { main.postDelayed(this, INPUT_QUIET_MS - sinceInput + 250); return; }
             pushOpenAcctsToSwitch();
             main.postDelayed(this, OPEN_REFRESH_MS);
         }
@@ -2315,10 +2358,34 @@ public class MainActivity extends AppCompatActivity {
      *  evaluateJavascript 不受计时器节流/页面可见性影响, 故由原生侧可靠驱动。 */
     private static final long ENGINE_TICK_MS = 8000;
     private static final long ENGINE_TICK_BG_MS = 30000;   // 后台降频不停跳: 对话阻塞/耗尽推送无需回前台才发(evaluateJavascript 不受 onPause 影响)
+    private static final long INPUT_QUIET_MS = 3000;       // 输入让行窗口: 用户触摸/打字后 3s 内不驱动重型引擎扫描 (输入优先·消打字卡顿)
+    /** 最近一次用户输入(触摸/按键)时刻 —— 引擎心跳/开号推送对输入让行的依据。 */
+    private volatile long lastUserInputTs = 0;
+    @Override public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
+        lastUserInputTs = android.os.SystemClock.uptimeMillis();
+        return super.dispatchTouchEvent(ev);
+    }
+    @Override public boolean dispatchKeyEvent(android.view.KeyEvent ev) {
+        lastUserInputTs = android.os.SystemClock.uptimeMillis();
+        return super.dispatchKeyEvent(ev);
+    }
+    /** 切号板块当前是否真在前台可见 —— 可见走全量心跳(近实时), 不可见走 lite 心跳(引擎内部拉长重扫描间隔)。 */
+    private boolean switchBoardVisible() {
+        Tab t = cur();
+        return appForeground && t != null && t.url != null && t.url.endsWith("switch.html");
+    }
     private final Runnable engineTick = new Runnable() {
         @Override public void run() {
+            // 输入让行: 用户正在触摸/打字 → 心跳顺延, 绝不与前台输入抢共享渲染进程 (打字一卡一卡之根源)。
+            if (appForeground) {
+                long sinceInput = android.os.SystemClock.uptimeMillis() - lastUserInputTs;
+                if (sinceInput < INPUT_QUIET_MS) { main.postDelayed(this, INPUT_QUIET_MS - sinceInput + 250); return; }
+            }
             WebView sw = switchWeb();
-            if (sw != null) { try { sw.evaluateJavascript("try{engineHeartbeat()}catch(e){}", null); } catch (Exception ignored) {} }
+            if (sw != null) {
+                final String lite = switchBoardVisible() ? "" : "true";
+                try { sw.evaluateJavascript("try{engineHeartbeat(" + lite + ")}catch(e){}", null); } catch (Exception ignored) {}
+            }
             main.postDelayed(this, appForeground ? ENGINE_TICK_MS : ENGINE_TICK_BG_MS);
         }
     };
@@ -2460,6 +2527,9 @@ public class MainActivity extends AppCompatActivity {
                     if (lk.equals("authorization") || lk.equals("host") || lk.equals("accept-encoding") || lk.equals("cookie")) continue;
                     try { c.setRequestProperty(k, e.getValue()); } catch (Exception ignored) {}
                 }
+                // 无 WebView 头可转发(悬浮窗下载/末路代取)时默认 UA 是 Dalvik → Cloudflare 浏览器
+                // 完整性检查直接 403(错误码 1010) → 边缘通道永远不通 —— 补浏览器 UA 才能过门。
+                if (c.getRequestProperty("User-Agent") == null) c.setRequestProperty("User-Agent", BROWSER_UA);
                 if ("app.devin.ai".equalsIgnoreCase(host)) {
                     c.setRequestProperty("Authorization", "Bearer " + auth1);
                     if (orgId != null && !orgId.isEmpty()) c.setRequestProperty("x-cog-org-id", orgId);
@@ -2488,6 +2558,16 @@ public class MainActivity extends AppCompatActivity {
                 }
                 // 边缘中继答复但为中继层错误 (Cloudflare Worker 限额 1027 错误页/5xx):
                 //   记忆中继失效并回退直连一次, 否则错误页字节会被当媒体回灌 → 图片/视频全部空白。
+                // 中继应答但未穿透到 Worker 代码(无 x-dao-proxy 印记的 4xx/5xx = Cloudflare 区域层拦截:
+                //   浏览器完整性检查 1010/WAF/限额页, 含 text/plain 体) → 同样属中继层错误。
+                if (viaEdge && code >= 400 && c.getHeaderField("x-dao-proxy") == null) {
+                    markEdgeDead();
+                    try { c.disconnect(); } catch (Exception ignored2) {}
+                    c = null;
+                    if (hop == 0 && edgeUsable()) { viaEdge = true; openUrl = edgeWrap(url); continue; }   // 轮换后的下一个中继域名重试
+                    if (!directRetried) { directRetried = true; viaEdge = false; openUrl = url; continue; }
+                    return null;
+                }
                 if (viaEdge && edgeRelayLevelError(code, c.getContentType())) {
                     markEdgeDead();
                     try { c.disconnect(); } catch (Exception ignored2) {}
@@ -2517,6 +2597,10 @@ public class MainActivity extends AppCompatActivity {
     private static volatile long sMediaProbeAt;
     private static volatile long sEdgeDeadUntil;
     private static volatile String sEdgeBase;
+    private static volatile int sEdgeIdx;
+    /** 非浏览器 UA(Dalvik/HttpURLConnection 默认)会触发 Cloudflare 浏览器完整性检查(403 错误码 1010)
+     *  → 边缘中继永远拒连。原生代取无 WebView 头可转发时一律补浏览器 UA。 */
+    static final String BROWSER_UA = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
     static boolean blockedMediaHost(String h) {
         if (h == null) return false;
         h = h.toLowerCase(java.util.Locale.US);
@@ -2545,15 +2629,30 @@ public class MainActivity extends AppCompatActivity {
         sEdgeBase = b;
         return b;
     }
+    /** 边缘中继候选序列(去重): 配置域名 → 自有域名 → workers.dev 兑底; 单个中继层面失败即轮换下一个,
+     *  全部轮完才判边缘整体失效 —— 单域名被封/限额不再拖死整条边缘通道。 */
+    static String[] edgeBaseCandidates() {
+        java.util.LinkedHashSet<String> s = new java.util.LinkedHashSet<>();
+        s.add(edgeFetchBase());
+        s.add("https://dao-relay.aiotvr.cloud");
+        s.add("https://dao-relay-do.zhouyoukang.workers.dev");
+        return s.toArray(new String[0]);
+    }
     static String edgeWrap(String url) {
-        try { return edgeFetchBase() + "/fetch?u=" + java.net.URLEncoder.encode(url, "UTF-8"); }
-        catch (Exception e) { return url; }
+        try {
+            String[] bases = edgeBaseCandidates();
+            return bases[Math.floorMod(sEdgeIdx, bases.length)] + "/fetch?u=" + java.net.URLEncoder.encode(url, "UTF-8");
+        } catch (Exception e) { return url; }
     }
     static boolean edgePreferred() { return System.currentTimeMillis() < sMediaEdgeUntil && edgeUsable(); }
     static void markDirectMediaBlocked() { sMediaEdgeUntil = System.currentTimeMillis() + 10 * 60_000L; }
     /** 边缘中继自身健康门: 中继失效(Cloudflare Worker 限额 1027/5xx/错误页)时绝不再把媒体/下载引到死路。 */
     static boolean edgeUsable() { return System.currentTimeMillis() >= sEdgeDeadUntil; }
-    static void markEdgeDead() { sEdgeDeadUntil = System.currentTimeMillis() + 5 * 60_000L; }
+    static void markEdgeDead() {
+        int n = edgeBaseCandidates().length;
+        sEdgeIdx++;   // 先轮换到下一个中继域名
+        if (sEdgeIdx % n == 0) sEdgeDeadUntil = System.currentTimeMillis() + 5 * 60_000L;   // 全部轮完才判边缘整体失效
+    }
     /** 中继答复是否属于中继层错误 (源站错误是 XML/JSON 之外的判据: Worker 限额/错误页为 text/html, 网关级为 5xx)。 */
     static boolean edgeRelayLevelError(int code, String ctype) {
         if (code >= 500) return true;
@@ -2569,9 +2668,11 @@ public class MainActivity extends AppCompatActivity {
         Thread t = new Thread(() -> {
             java.net.HttpURLConnection c = null;
             try {
-                c = HttpBridge.openConn("https://s3.us-west-2.amazonaws.com/", false);
+                // 探真实附件桶宿主(app.devin.ai 附件 307 的落点), 而非泛化区域端点 —— 判据才与实际下载同路
+                c = HttpBridge.openConn("https://devin-public-attachments.s3.dualstack.us-west-2.amazonaws.com/", false);
                 c.setConnectTimeout(4000);
                 c.setReadTimeout(4000);
+                c.setRequestProperty("User-Agent", BROWSER_UA);
                 c.setRequestMethod("HEAD");
                 c.getResponseCode();   // 任何应答(含 4xx)=可达
             } catch (Exception e) { markDirectMediaBlocked(); }
@@ -2585,6 +2686,16 @@ public class MainActivity extends AppCompatActivity {
     //   键 = 附件路径 sha1 (内容按路径不变, 与鉴权 token 无关); LRU 限容 512MB。
     private static final long MEDIA_CACHE_MAX_TOTAL = 512L * 1024 * 1024;
     private static final long MEDIA_CACHE_MAX_ONE = 300L * 1024 * 1024;
+    /** 计费网络(蜂窝/热点)下投机性整取的单文件上限: 大视频/录屏不再后台全量双重下载(播放流+预取各一份)。 */
+    private static final long MEDIA_PF_METERED_MAX = 8L * 1024 * 1024;
+    /** 当前活动网络是否计费 (与系统「省流量」判定一致); 识别不到保守按不计费(放行)。 */
+    static boolean meteredNetwork() {
+        try {
+            android.content.Context ctx = HttpBridge.appCtx;
+            ConnectivityManager cm = ctx == null ? null : (ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            return cm != null && cm.isActiveNetworkMetered();
+        } catch (Exception e) { return false; }
+    }
     private static final java.util.Set<String> sMediaFetching =
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
     // 整取下载走固定 3 线程池: 预热一次可能同时看到几十个附件, 每个开一条裸线程会挤爆弱网带宽
@@ -2713,10 +2824,11 @@ public class MainActivity extends AppCompatActivity {
                 boolean resume = (code == 206 && have > 0);
                 if (code != 200 && !resume) return false;
                 if (!resume) have = 0;
+                long maxOne = meteredNetwork() ? MEDIA_PF_METERED_MAX : MEDIA_CACHE_MAX_ONE;
                 long clen = -1;
                 try { clen = c.getContentLengthLong(); } catch (Throwable ignored) {}
                 if (!resume) {
-                    if (clen > MEDIA_CACHE_MAX_ONE) return false;
+                    if (clen > maxOne) return false;
                     String ctype = c.getContentType();
                     String mime = "application/octet-stream";
                     if (ctype != null && !ctype.isEmpty()) { int sc = ctype.indexOf(';'); mime = (sc >= 0 ? ctype.substring(0, sc) : ctype).trim(); }
@@ -2735,7 +2847,7 @@ public class MainActivity extends AppCompatActivity {
                     byte[] buf = new byte[65536]; int n;
                     while ((n = in.read(buf)) > 0) {
                         out.write(buf, 0, n); w += n;
-                        if (w > MEDIA_CACHE_MAX_ONE) { try { out.close(); } catch (Exception ignored) {} tmp.delete(); lenf.delete(); return false; }
+                        if (w > maxOne) { try { out.close(); } catch (Exception ignored) {} tmp.delete(); lenf.delete(); return false; }
                     }
                 } catch (Exception brk) { /* 断流: 已写入字节留在 .part 供续传 */ }
                 finally { try { out.close(); } catch (Exception ignored) {} try { in.close(); } catch (Exception ignored) {} }
@@ -2764,6 +2876,125 @@ public class MainActivity extends AppCompatActivity {
                     total -= len;
                     new File(dir, n.substring(0, n.length() - 4) + ".mime").delete();
                 }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    // ── 静态资产磁盘缓存(体验不变·降流量): app.devin.ai 的 /assets/* 是内容哈希命名的不可变
+    //   bundle(JS/CSS/字体, 单次导航可达数十 MB)。WebView 自带 HTTP 缓存容量小且常被逐出 →
+    //   冷启/切号/多标签反复全量重下, 既慢又耗流量。按媒体缓存同一套路: 首见交还原生网络
+    //   (不占拦截线程做同步 IO)并后台整取落盘; 再见即本地供给(immutable) —— 同一版本 bundle
+    //   全机只下载一次, 切号/重进/多标签零重复流量。内容哈希改名即天然失效, 无陈旧风险。
+    private static final long ASSET_CACHE_MAX_TOTAL = 256L * 1024 * 1024;
+    private static final long ASSET_CACHE_MAX_ONE = 64L * 1024 * 1024;
+    private static final java.util.Set<String> sAssetFetching =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+    static File assetCacheDir() {
+        try {
+            android.content.Context ctx = HttpBridge.appCtx;
+            if (ctx == null) return null;
+            File d = new File(ctx.getExternalFilesDir(null), "asset-cache");
+            if (!d.exists() && !d.mkdirs()) return null;
+            return d;
+        } catch (Exception e) { return null; }
+    }
+    /** 只缓存内容哈希命名的不可变资产 (哈希改名即天然失效, 永不陈旧)。 */
+    static boolean cacheableAssetPath(String host, String path) {
+        if (host == null || path == null) return false;
+        if (!host.equalsIgnoreCase("app.devin.ai")) return false;
+        if (!path.startsWith("/assets/")) return false;
+        String n = path.substring(path.lastIndexOf('/') + 1);
+        return n.matches(".*[-.][A-Za-z0-9_]{8,}\\.[A-Za-z0-9]+");
+    }
+    static String assetMime(String path) {
+        String p = path.toLowerCase(java.util.Locale.US);
+        if (p.endsWith(".js") || p.endsWith(".mjs")) return "application/javascript";
+        if (p.endsWith(".css")) return "text/css";
+        if (p.endsWith(".woff2")) return "font/woff2";
+        if (p.endsWith(".woff")) return "font/woff";
+        if (p.endsWith(".ttf")) return "font/ttf";
+        if (p.endsWith(".svg")) return "image/svg+xml";
+        if (p.endsWith(".png")) return "image/png";
+        if (p.endsWith(".jpg") || p.endsWith(".jpeg")) return "image/jpeg";
+        if (p.endsWith(".gif")) return "image/gif";
+        if (p.endsWith(".webp")) return "image/webp";
+        if (p.endsWith(".json") || p.endsWith(".map")) return "application/json";
+        if (p.endsWith(".wasm")) return "application/wasm";
+        return "application/octet-stream";
+    }
+    /** 命中即本地供给(immutable); 未命中触发后台整取并交还原生网络。 */
+    static WebResourceResponse assetCacheResponse(WebResourceRequest req) {
+        try {
+            if (req == null || req.getUrl() == null || !"GET".equalsIgnoreCase(req.getMethod())) return null;
+            Uri u = req.getUrl();
+            if (!cacheableAssetPath(u.getHost(), u.getPath())) return null;
+            File dir = assetCacheDir(); if (dir == null) return null;
+            String key = mediaCacheKey("asset|" + u.getPath());
+            File f = new File(dir, key + ".bin");
+            if (f.exists() && f.length() > 0) {
+                f.setLastModified(System.currentTimeMillis());   // LRU 触碰
+                java.util.Map<String, String> hdrs = new java.util.HashMap<>();
+                hdrs.put("Cache-Control", "public, max-age=31536000, immutable");
+                hdrs.put("Content-Length", String.valueOf(f.length()));
+                hdrs.put("X-Dao-Asset-Cache", "hit");
+                WebResourceResponse r = new WebResourceResponse(assetMime(u.getPath()), null, new java.io.FileInputStream(f));
+                r.setStatusCodeAndReasonPhrase(200, "OK");
+                r.setResponseHeaders(hdrs);
+                return r;
+            }
+            assetCachePrefetch(u.toString(), u.getPath());
+            return null;
+        } catch (Exception e) { return null; }
+    }
+    /** 后台整取一份落盘 (单飞去重·identity 传输可校验 Content-Length·取不全不落盘免半截 JS 毒缓存)。 */
+    static void assetCachePrefetch(final String url, final String path) {
+        final File dir = assetCacheDir(); if (dir == null) return;
+        final String key = mediaCacheKey("asset|" + path);
+        final File dst = new File(dir, key + ".bin");
+        if (dst.exists()) return;
+        if (!sAssetFetching.add(key)) return;
+        sMediaPfPool.execute(() -> {
+            java.net.HttpURLConnection c = null;
+            File tmp = new File(dir, key + ".part");
+            try {
+                c = HttpBridge.openConn(url, false);
+                c.setConnectTimeout(15000);
+                c.setReadTimeout(30000);
+                c.setInstanceFollowRedirects(true);
+                c.setRequestProperty("Accept-Encoding", "identity");   // 保留 Content-Length 供完整性校验
+                if (c.getResponseCode() != 200) return;
+                long clen = -1;
+                try { clen = c.getContentLengthLong(); } catch (Throwable ignored) {}
+                if (clen > ASSET_CACHE_MAX_ONE) return;
+                java.io.InputStream in = c.getInputStream();
+                java.io.FileOutputStream out = new java.io.FileOutputStream(tmp);
+                long w = 0;
+                try {
+                    byte[] buf = new byte[65536]; int n;
+                    while ((n = in.read(buf)) > 0) {
+                        out.write(buf, 0, n); w += n;
+                        if (w > ASSET_CACHE_MAX_ONE) { try { out.close(); } catch (Exception ignored) {} tmp.delete(); return; }
+                    }
+                } finally { try { out.close(); } catch (Exception ignored) {} try { in.close(); } catch (Exception ignored) {} }
+                if (w == 0 || (clen > 0 && w != clen)) { tmp.delete(); return; }
+                if (tmp.renameTo(dst)) assetCacheTrim(dir);
+            } catch (Exception e) { try { tmp.delete(); } catch (Exception ignored) {} }
+            finally { if (c != null) try { c.disconnect(); } catch (Exception ignored) {} sAssetFetching.remove(key); }
+        });
+    }
+    /** LRU 限容: 超额时从最久未用的资产逐个剔除。 */
+    static void assetCacheTrim(File dir) {
+        try {
+            File[] fs = dir.listFiles((d, n) -> n.endsWith(".bin"));
+            if (fs == null) return;
+            long total = 0;
+            for (File f : fs) total += f.length();
+            if (total <= ASSET_CACHE_MAX_TOTAL) return;
+            java.util.Arrays.sort(fs, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+            for (File f : fs) {
+                if (total <= ASSET_CACHE_MAX_TOTAL) break;
+                long len = f.length();
+                if (f.delete()) total -= len;
             }
         } catch (Exception ignored) {}
     }
@@ -2840,17 +3071,35 @@ public class MainActivity extends AppCompatActivity {
         }
         return Math.max(sCookieMintAt, 0);
     }
-    /** 确保目标组织的 attachments_token 就绪 (单飞铸造·同组织 3s 防抖, 防并发媒体请求触发铸造风暴)。 */
+    private static java.util.concurrent.CountDownLatch sMintInFlight = null;
+    /** 确保目标组织的 attachments_token 就绪 (单飞铸造·同组织 3s 防抖, 防并发媒体请求触发铸造风暴)。
+     *  铸造的网络 IO 在锁外执行: 本方法可被 WebView 拦截线程并发调用, 锁内做网络请求会把
+     *  所有并发媒体请求串到一把全局锁上(整页图片/视频互相饿死); 后到者只对在飞铸造做有界等待。 */
     static boolean ensureAttachmentCookie(String auth1, String orgId, String url) {
         if (attachmentCookieFresh(url, orgId)) return true;
         if (auth1 == null || auth1.isEmpty()) return false;
+        java.util.concurrent.CountDownLatch mine = null, inFlight = null;
         synchronized (MINT_LOCK) {
             if (attachmentCookieFresh(url, orgId)) return true;
-            long now = System.currentTimeMillis();
-            boolean sameOrg = (orgId == null) ? (sLastMintOrg == null) : orgId.equals(sLastMintOrg);
-            if (sameOrg && now - sLastMintAt < 3000) return false;
-            sLastMintAt = now; sLastMintOrg = orgId;
+            if (sMintInFlight != null) inFlight = sMintInFlight;
+            else {
+                long now = System.currentTimeMillis();
+                boolean sameOrg = (orgId == null) ? (sLastMintOrg == null) : orgId.equals(sLastMintOrg);
+                if (sameOrg && now - sLastMintAt < 3000) return false;
+                sLastMintAt = now; sLastMintOrg = orgId;
+                mine = sMintInFlight = new java.util.concurrent.CountDownLatch(1);
+            }
+        }
+        if (inFlight != null) {
+            try { inFlight.await(5, java.util.concurrent.TimeUnit.SECONDS); }
+            catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+            return attachmentCookieFresh(url, orgId);
+        }
+        try {
             return mintAttachmentCookie(auth1, orgId) && attachmentCookieFresh(url, orgId);
+        } finally {
+            synchronized (MINT_LOCK) { if (sMintInFlight == mine) sMintInFlight = null; }
+            mine.countDown();
         }
     }
     /** 铸造 attachments_token Cookie: POST set-attachment-cookie(Bearer 有效) → Set-Cookie 落入 CookieManager。 */
@@ -2930,14 +3179,14 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
     }
     /** 广告/追踪域名命中 (内置精简黑名单)。 */
-    private boolean isAdHost(String host) {
+    private static final String[] AD_HOSTS = {"doubleclick.net","googlesyndication.com","googleadservices.com","google-analytics.com",
+            "googletagmanager.com","googletagservices.com","adservice.google.com","adnxs.com","adsystem.com",
+            "scorecardresearch.com","moatads.com","amazon-adsystem.com","facebook.net","analytics.","pagead2.",
+            "ads.","adservice.","track.","tracker.","pixel.","taboola.com","outbrain.com","criteo.com","pubmatic.com"};
+    static boolean isAdHost(String host) {
         if (host == null) return false;
         host = host.toLowerCase();
-        String[] ad = {"doubleclick.net","googlesyndication.com","googleadservices.com","google-analytics.com",
-                "googletagmanager.com","googletagservices.com","adservice.google.com","adnxs.com","adsystem.com",
-                "scorecardresearch.com","moatads.com","amazon-adsystem.com","facebook.net","analytics.","pagead2.",
-                "ads.","adservice.","track.","tracker.","pixel.","taboola.com","outbrain.com","criteo.com","pubmatic.com"};
-        for (String a : ad) { if (a.endsWith(".") ? host.contains(a) : (host.equals(a) || host.endsWith("." + a) || host.contains(a))) return true; }
+        for (String a : AD_HOSTS) { if (a.endsWith(".") ? host.contains(a) : (host.equals(a) || host.endsWith("." + a) || host.contains(a))) return true; }
         return false;
     }
     /** 夜间反色: 整页 invert 滤镜 (图片/视频再 invert 还原)。 */
@@ -3582,6 +3831,9 @@ public class MainActivity extends AppCompatActivity {
             RelayService r = RelayService.instance;
             return r != null ? r.readConn() : "{}";
         }
+        /** 每账号「新对话虚拟机环境」读/写 (与官方页徽章 RTDL 同一 SharedPreferences 真源)。 */
+        @JavascriptInterface public String envModeGet(String email) { return envModePrefGet(MainActivity.this, email); }
+        @JavascriptInterface public void envModeSet(String email, String mode) { envModePrefSet(MainActivity.this, email, mode); }
         // ── 用户脚本管理 (供 userscripts.html 内部页) ──
         @JavascriptInterface public String usList() {
             try {
@@ -3995,7 +4247,13 @@ public class MainActivity extends AppCompatActivity {
             String host = x.getHost() == null ? "" : x.getHost().toLowerCase(java.util.Locale.US);
             String path = x.getPath() == null ? "" : x.getPath();
             if (host.equals("app.devin.ai") && path.startsWith("/attachments/")) return true;
-            if (low.contains("x-amz-signature=") && low.contains("response-content-disposition=attachment")) return true;
+            // 预签名直链(处置明示 attachment): SigV4(x-amz-signature) / SigV2(awsaccesskeyid) /
+            //   STS 临时凭证(amz-security-token) 三种签名形态皆算 —— 只认 SigV4 会漏掉 Devin 现网
+            //   实际下发的 SigV2/STS 直链 → 顶层导航到它必空白/超时, 须转下载/悬浮直看而非导航。
+            if (low.contains("response-content-disposition=attachment")
+                    && (low.contains("x-amz-signature=")
+                        || low.contains("awsaccesskeyid=")
+                        || low.contains("amz-security-token="))) return true;
         } catch (Exception ignored) {}
         return false;
     }
@@ -4018,7 +4276,7 @@ public class MainActivity extends AppCompatActivity {
      *  onCreateWindow 刚开出的空标签顺手关闭。 */
     private boolean interceptAttachmentNav(WebView v, String u) {
         if (!isAttachmentDownloadUrl(u)) return false;
-        String gname = sanitizeFileName(android.webkit.URLUtil.guessFileName(u, dispositionFromUrl(u), null));
+        String gname = attachmentFileName(u, dispositionFromUrl(u), null);
         if (isTextDocName(gname)) {
             viewDocInPanel(u, gname);
         } else {
@@ -4051,7 +4309,7 @@ public class MainActivity extends AppCompatActivity {
                 if (!doomed && edgePreferred() && (blockedMediaHost(h) || isAttachmentDownloadUrl(url))) doomed = true;
             } catch (Exception ignored) {}
             if (doomed) {
-                String nm = sanitizeFileName(android.webkit.URLUtil.guessFileName(url, contentDisposition, mime));
+                String nm = attachmentFileName(url, contentDisposition, mime);
                 runOnUiThread(() -> toast("经代理通道下载: " + nm));
                 nativeFetchDownload(url, nm, mime);
                 return;
@@ -4066,21 +4324,79 @@ public class MainActivity extends AppCompatActivity {
                 if (dt != null && dt.auth1 != null && !dt.auth1.isEmpty()
                         && fUrl != null && fUrl.contains("app.devin.ai/attachments/"))
                     ensureAttachmentCookie(dt.auth1, dt.orgId, fUrl);
-                String name = sanitizeFileName(android.webkit.URLUtil.guessFileName(fUrl, fCd, fMime));
+                String name = attachmentFileName(fUrl, fCd, fMime);
                 DownloadManager.Request req = new DownloadManager.Request(Uri.parse(fUrl));
                 if (fMime != null) req.setMimeType(fMime);
-                if (fUa != null) req.addRequestHeader("User-Agent", fUa);
+                req.addRequestHeader("User-Agent", fUa != null ? fUa : BROWSER_UA);
                 String cookie = android.webkit.CookieManager.getInstance().getCookie(fUrl);
                 if (cookie != null) req.addRequestHeader("Cookie", cookie);
                 req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
                 // 落到应用专属外部目录 → 由应用内下载管理器统一展示/打开/拖拽
                 req.setDestinationInExternalFilesDir(this, android.os.Environment.DIRECTORY_DOWNLOADS, name);
                 DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-                if (dm != null) { long id = dm.enqueue(req); dlPending.put(id, new String[]{ name, fMime == null ? "" : fMime, fUrl, String.valueOf(attempt) }); runOnUiThread(() -> { toast(attempt > 0 ? ("重试下载: " + name) : ("开始下载: " + name)); if (dlListCol != null) renderDownloadList(dlListCol); }); }
+                if (dm != null) { long id = dm.enqueue(req); dlPending.put(id, new String[]{ name, fMime == null ? "" : fMime, fUrl, String.valueOf(attempt) }); watchDmStall(id, name, fUrl, fMime); runOnUiThread(() -> { toast(attempt > 0 ? ("重试下载: " + name) : ("开始下载: " + name)); if (dlListCol != null) renderDownloadList(dlListCol); }); }
             } catch (Exception e) { runOnUiThread(() -> toast("下载失败: " + (e.getMessage() == null ? "" : e.getMessage()))); }
         }).start();
     }
+    /** DownloadManager 黑洞看门人: 国内网络下 DM 自行跟 307 到被墙的 S3 后会永久停在
+     *  「已暂停·等待网络」(0 B)——既不失败也不完成, 完成广播永不触发 → 任何兑底都轮不到。
+     *  入队后定时回查: 附件/被墙宿主的下载若 25s 后仍 0 字节或处于暂停态, 则斩 DM 改走
+     *  原生代取(含边缘中继), 并标记直连被墙让后续下载首点即走代取。 */
+    private void watchDmStall(final long id, final String name, final String url, final String mime) {
+        boolean watch = false;
+        try {
+            String h = url == null ? null : Uri.parse(url).getHost();
+            watch = isAttachmentDownloadUrl(url) || blockedMediaHost(h);
+        } catch (Exception ignored) {}
+        if (!watch) return;
+        main.postDelayed(() -> {
+            if (!dlPending.containsKey(id)) return;   // 已完成/已取消
+            try {
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm == null) return;
+                android.database.Cursor cur = dm.query(new DownloadManager.Query().setFilterById(id));
+                if (cur == null) return;
+                long got = -1; int st = -1;
+                try {
+                    if (cur.moveToFirst()) {
+                        got = cur.getLong(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                        st = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                    }
+                } finally { cur.close(); }
+                if (st == DownloadManager.STATUS_SUCCESSFUL || st == DownloadManager.STATUS_FAILED) return;   // 正路广播会处理
+                if (st == DownloadManager.STATUS_PAUSED || got <= 0) {
+                    try { dm.remove(id); } catch (Exception ignored) {}
+                    dlPending.remove(id);
+                    markDirectMediaBlocked();
+                    toast("直连不通, 改走代理通道下载: " + name);
+                    nativeFetchDownload(url, name, mime);
+                    if (dlListCol != null) renderDownloadList(dlListCol);
+                } else {
+                    watchDmStall(id, name, url, mime);   // 有进度 → 继续看护(防中途断流卡死)
+                }
+            } catch (Exception ignored) {}
+        }, 25_000L);
+    }
 
+    /** 附件真名推导: URLUtil.guessFileName 遇路径内二次编码的 %3F('?') 会当作查询串截断 →
+     *  丢真名与扩展名(得 "xx.bin")→ MD 等文本附件误走下载而非悬浮直看。此时改用解码后的
+     *  URL 末段路径补救(保留扩展名), 正常 URL 仍走 guessFileName 原逻辑。 */
+    static String attachmentFileName(String u, String cd, String mime) {
+        String g = sanitizeFileName(android.webkit.URLUtil.guessFileName(u, cd, mime));
+        if (g.endsWith(".bin") || !g.contains(".")) {
+            try {
+                String seg = Uri.parse(u).getLastPathSegment();
+                if (seg != null && seg.contains("%")) {
+                    try { seg = java.net.URLDecoder.decode(seg, "UTF-8"); } catch (Exception ignored) {}
+                }
+                if (seg != null) {
+                    seg = sanitizeFileName(seg);
+                    if (seg.lastIndexOf('.') > 0) return seg;
+                }
+            } catch (Exception ignored) {}
+        }
+        return g;
+    }
     /** 文件名消毒: 附件名常含 '?'(中文被替换) 等非法字符 → DownloadManager 直接 enqueue 失败。 */
     static String sanitizeFileName(String n) {
         if (n == null || n.isEmpty()) return "download";
@@ -4113,13 +4429,6 @@ public class MainActivity extends AppCompatActivity {
                 long total = -1; try { total = c.getContentLength(); } catch (Exception ignored) {}
                 nativeDlProgress.put(pname, new long[]{ 0, total });
                 main.post(() -> { if (dlListCol != null) renderDownloadList(dlListCol); });
-                java.io.InputStream is = c.getInputStream();
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                byte[] buf = new byte[65536]; int n;
-                while ((n = is.read(buf)) > 0) { bos.write(buf, 0, n); long[] pr = nativeDlProgress.get(pname); if (pr != null) pr[0] = bos.size(); }
-                is.close();
-                byte[] data = bos.toByteArray();
-                if (data.length == 0) { runOnUiThread(() -> toast("代理下载失败: 空响应")); return; }
                 String name = sanitizeFileName(nameIn);
                 String ct = c.getContentType();
                 final String mime = (mimeIn != null && !mimeIn.isEmpty()) ? mimeIn
@@ -4127,12 +4436,27 @@ public class MainActivity extends AppCompatActivity {
                 File dir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
                 if (dir == null) dir = getCacheDir();
                 if (!dir.exists()) dir.mkdirs();
+                // 流式落盘(.part 临时名 → 成功后原子换名): 大视频不再整份压进内存, 半截流不污染成品名
                 File f = new File(dir, name);
-                java.io.FileOutputStream fo = new java.io.FileOutputStream(f);
-                try { fo.write(data); } finally { fo.close(); }
+                File tmp = new File(dir, name + ".part");
+                long written = 0;
+                java.io.InputStream is = c.getInputStream();
+                java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp);
+                try {
+                    byte[] buf = new byte[65536]; int n;
+                    while ((n = is.read(buf)) > 0) { fo.write(buf, 0, n); written += n; long[] pr = nativeDlProgress.get(pname); if (pr != null) pr[0] = written; }
+                } finally { try { is.close(); } catch (Exception ignored) {} fo.close(); }
+                if (written == 0) { try { tmp.delete(); } catch (Exception ignored) {} runOnUiThread(() -> toast("代理下载失败: 空响应")); return; }
+                if (f.exists()) f.delete();
+                if (!tmp.renameTo(f)) f = tmp;
                 File persisted = persistToVault(f, name);
                 String pu = "";
-                try { android.net.Uri pub = publishToDownloads(name, mime, data); if (pub != null) pu = pub.toString(); } catch (Exception ignored) {}
+                try {
+                    if (persisted.length() <= 64L * 1024 * 1024) {   // 超大文件不再整读回内存同步系统下载(保险箱+下载库已可用)
+                        android.net.Uri pub = publishToDownloads(name, mime, readAllBytes(persisted));
+                        if (pub != null) pu = pub.toString();
+                    }
+                } catch (Exception ignored) {}
                 final String puri = pu, path = persisted.getAbsolutePath(), fname = name;
                 final long size = persisted.length();
                 main.post(() -> { addDownloadRecord(fname, path, puri, mime, size); toast("已经代理通道下载完成: " + fname); });
@@ -4158,6 +4482,46 @@ public class MainActivity extends AppCompatActivity {
             + "if(href.indexOf('blob:')===0){ev.preventDefault();ev.stopPropagation();fetch(href).then(function(r){return r.blob();}).then(function(b){blobB64(b,name);}).catch(function(){});}"
             + "else if(href.indexOf('data:')===0){ev.preventDefault();ev.stopPropagation();var m=(href.match(/^data:([^;,]*)/)||[])[1]||'';var c=href.indexOf(',');var p=href.slice(c+1);var b64=/;base64/i.test(href.slice(0,c))?p:btoa(unescape(encodeURIComponent(decodeURIComponent(p))));send(name,m,b64);}"
             + "}catch(e){}} ,true);})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    // 页面侧「输入让行 · 单观察者」根治 (道法自然·由多归一 —— 打字/语音一卡一卡之本源):
+    //   旧疾: installVideoFit / installAttachmentPrefetch / installComposerUpload 各自在
+    //   document 全子树各挂一个 MutationObserver(含 attributes) → Devin 对话流式吐字时全文档
+    //   每帧海量 DOM 变更被三份观察者分别记账 + 回调, 主线程被反复打断, 恰与前台输入(打字/
+    //   语音上屏)争同一渲染线程 = 「一卡一卡·经常卡死」之根。
+    //   归一: 全页只留一个共享观察者, 经 window.__rtWatch(fn) 注册各扫描子; DOM 变更仅置脏,
+    //   由 requestIdleCallback 在空闲期单次冲刷所有子(合并三份重扫描为一次); 且检测到「用户
+    //   正在打字/组合输入」时顺延冲刷 —— page-side 输入让行, 对齐原生 INPUT_QUIET_MS 之则,
+    //   封顶顺延(ric timeout)保证 ＋菜单/附件预热等仍会跑。幂等(window.__rtWatch 守卫), 但每次
+    //   重装均经 __rtWatchArm 重校观察目标: document 被替换(document.open 类)时 window 仍存
+    //   而旧 documentElement 上的观察器已死 —— 重挂到当前 documentElement 才不成僵尸。
+    //   兜底: 若 __rtWatch 尚未就绪(注入乱序/极旧内核), 各子退回自建观察者, 功能不降级。
+    static void installDomWatch(WebView w) {
+        if (w == null) return;
+        String js = "(function(){try{"
+            + "if(window.__rtWatch){if(window.__rtWatchArm)window.__rtWatchArm();return;}"
+            + "var subs=[],dirty=false,sched=false,lastType=0,QUIET=900;"
+            + "function typing(){try{var a=document.activeElement;"
+            + "var e=a&&(a.isContentEditable||/^(INPUT|TEXTAREA)$/.test(a.tagName||''));"
+            + "return !!e&&(Date.now()-lastType)<QUIET;}catch(_){return false;}}"
+            + "['keydown','compositionstart','compositionupdate'].forEach(function(t){"
+            + "document.addEventListener(t,function(){lastType=Date.now();},true);});"
+            + "var ric=window.requestIdleCallback?function(f){window.requestIdleCallback(f,{timeout:500});}"
+            + ":function(f){setTimeout(function(){f();},32);};"
+            + "function flush(){sched=false;if(!dirty)return;"
+            + "if(typing()){schedule(200);return;}"
+            + "dirty=false;for(var i=0;i<subs.length;i++){try{subs[i]();}catch(e){}}}"
+            + "function schedule(d){if(sched)return;sched=true;"
+            + "if(d){setTimeout(function(){ric(flush);},d);}else{ric(flush);}}"
+            + "window.__rtWatch=function(fn){if(typeof fn==='function'){subs.push(fn);try{fn();}catch(e){}}};"
+            + "var obs=new MutationObserver(function(){dirty=true;schedule(120);}),seen=null;"
+            + "window.__rtWatchArm=function(){var de=document.documentElement;if(!de||de===seen)return;seen=de;"
+            + "try{obs.disconnect();}catch(_){}"
+            + "obs.observe(de,{childList:true,subtree:true,attributes:true,"
+            + "attributeFilter:['src','href','poster','role','data-radix-menu-content']});"
+            + "dirty=true;schedule(0);};"
+            + "window.__rtWatchArm();"
+            + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // 录像/视频播放器窄屏适配: 官网测试录像播放器为「视频区(flex-1) + 步骤侧栏(w-[26rem]·416px 固定宽)」
@@ -4242,7 +4606,8 @@ public class MainActivity extends AppCompatActivity {
             + "function fit(){try{sweep();document.querySelectorAll('video').forEach(fixOne);}catch(e){}}"
             + "var ts=[];function deb(){while(ts.length)clearTimeout(ts.pop());"
             + "[300,1000,2500].forEach(function(ms){ts.push(setTimeout(fit,ms));});}"
-            + "new MutationObserver(deb).observe(document.body,{childList:true,subtree:true});"
+            + "if(window.__rtWatch){window.__rtWatch(deb);}"
+            + "else{new MutationObserver(deb).observe(document.body,{childList:true,subtree:true});}"
             + "window.addEventListener('resize',deb);"
             + "document.addEventListener('transitionend',function(){setTimeout(fit,60);},true);"
             + "setInterval(function(){try{var need=false;document.querySelectorAll('video').forEach(function(v){"
@@ -4287,6 +4652,7 @@ public class MainActivity extends AppCompatActivity {
     //   用户真正点开时已命中磁盘缓存秒开。同源 fetch 零 CORS 问题; 限并发 2·每页去重·上限 300。
     static void installAttachmentPrefetch(WebView w) {
         if (w == null) return;
+        if (meteredNetwork()) return;   // 计费网络: 不装投机性批量预热(每页可达百件×整取落盘); 真点开的媒体仍正常加载+小件缓存
         String js = "(function(){try{if(window.__daoPf)return;"
             + "if(location.host!=='app.devin.ai')return;window.__daoPf=1;"
             + "var seen={},q=[],act=0,total=0;"
@@ -4300,8 +4666,98 @@ public class MainActivity extends AppCompatActivity {
             + "source[src*=\"/attachments/\"],a[href*=\"/attachments/\"]');"
             + "for(var i=0;i<els.length;i++){var el=els[i];add(el.src||'');add(el.href||'');add(el.poster||'');}}catch(e){}}"
             + "var T=null;function later(){clearTimeout(T);T=setTimeout(function(){scan(document);},800);}"
-            + "new MutationObserver(later).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['src','href','poster']});"
+            + "if(window.__rtWatch){window.__rtWatch(later);}"
+            + "else{new MutationObserver(later).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['src','href','poster']});}"
             + "scan(document);"
+            + "}catch(e){}})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    // 「新创作/＋」弹出菜单点击直传: Devin 对话页 composer 的 ＋ 弹出菜单(Radix menu)一出现,
+    //   若其项含 附件/上传/文件 等语义(即新创作/附件类弹窗), 就地追加一项「⬆ 上传到网页端」——
+    //   点击经 RTDL.pickUpload 原生桥拉系统文件选择器(可多选), 与下载悬浮窗同一注入链直传,
+    //   不再依赖拖拽。幂等(window.__rtNewUp 守卫), SPA 路由后可重装。
+    static void installComposerUpload(WebView w) {
+        if (w == null) return;
+        String js = "(function(){try{if(window.__rtNewUp)return;"
+            + "if(!/(^|\\.)devin\\.ai$/.test(location.hostname))return;window.__rtNewUp=1;"
+            + "var RX=/attach|upload|file|photo|screenshot|camera|附件|上传|文件|图片|截图|拍照/i;"
+            + "function enhance(menu){try{"
+            + "var items=[].filter.call(menu.querySelectorAll('[role=\"menuitem\"]'),function(x){return !x.hasAttribute('data-rtup')&&!x.hasAttribute('data-rtenv');});"
+            + "if(!items.length||!RX.test(menu.textContent||''))return;"
+            + "var ref=items[items.length-1];"
+            + "if(!menu.querySelector('[data-rtup]')){"
+            + "var it=ref.cloneNode(false);it.removeAttribute('id');it.setAttribute('data-rtup','1');"
+            + "it.textContent='\u2B06 \u4E0A\u4F20\u5230\u7F51\u9875\u7AEF';"
+            + "['click','pointerdown','pointerup','mousedown','mouseup'].forEach(function(ev){"
+            + "it.addEventListener(ev,function(e){e.preventDefault();e.stopPropagation();"
+            + "if(ev!=='click')return;"
+            + "try{document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));}catch(_){}"
+            + "try{window.RTDL&&RTDL.pickUpload&&RTDL.pickUpload();}catch(_){}"
+            + "},true);});"
+            + "ref.parentNode.appendChild(it);}"
+            + "if(window.__rtEnvEM&&!menu.querySelector('[data-rtenv]')){"
+            + "var elbl=function(){var m=window.__rtEnvCur;"
+            + "return (m==='windows'?'\uD83E\uDE9F Windows':m==='macos'?'\uD83C\uDF4E macOS':"
+            + "m==='linux'?'\uD83D\uDC27 Linux':'\uD83D\uDC27 Linux\u00B7\u9ED8\u8BA4')+' \u00B7 \u65B0\u5BF9\u8BDD\u73AF\u5883';};"
+            + "var ei=ref.cloneNode(false);ei.removeAttribute('id');ei.setAttribute('data-rtenv','1');"
+            + "ei.textContent=elbl();"
+            + "['click','pointerdown','pointerup','mousedown','mouseup'].forEach(function(ev){"
+            + "ei.addEventListener(ev,function(e){e.preventDefault();e.stopPropagation();"
+            + "if(ev!=='click')return;"
+            + "var seq=['linux','windows','macos'];var c=window.__rtEnvCur||'linux';"
+            + "var m=seq[(seq.indexOf(c)+1)%3];"
+            + "try{window.__rtEnvSet&&window.__rtEnvSet(m);}catch(_){}"
+            + "ei.textContent=elbl();},true);});"
+            + "ref.parentNode.appendChild(ei);}"
+            + "}catch(e){}}"
+            + "var T=0;function scan(){T=0;try{document.querySelectorAll('[role=\"menu\"],[data-radix-menu-content]').forEach(enhance);}catch(e){}}"
+            + "function kick(){if(T)return;T=setTimeout(scan,50);}"
+            + "if(window.__rtWatch){window.__rtWatch(scan);}"
+            + "else{new MutationObserver(kick)"
+            + ".observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['role','data-radix-menu-content']});}"
+            + "scan();"
+            + "}catch(e){}})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
+    // 官方 Devin 网页「新对话虚拟机环境」(用户所求·直改官方前端):
+    //   不再有常驻悬浮徽章 —— 环境切换项原生整合进 composer「＋」弹出菜单(与「上传到网页端」同级,
+    //   见 installComposerUpload), 点击三态循环 (🐧 Linux / 🪟 Windows / 🍎 macOS) 并经 RTDL 桥
+    //   持久化(与切号面板同一真源)。本函数只装数据层: window.__rtEnvEM/__rtEnvCur/__rtEnvSet +
+    //   fetch/XHR 钩子: 仅拦「POST /api/**/sessions 新建对话」请求, 注入官方真实字段
+    //   additional_args.platform + platform_explicitly_set; 未显式设置(空)时不注入(尊重官方默认),
+    //   已有平台字段的请求不覆盖, 既有会话的任何请求一概不动。幂等(window.__rtEnvMode 守卫)。
+    static void installEnvModeBadge(WebView w, String acctEmail) {
+        if (w == null) return;
+        String em = acctEmail == null ? "" : acctEmail.replace("\\", "\\\\").replace("'", "\\'");
+        String js = "(function(){try{if(window.__rtEnvMode)return;"
+            + "if(!/(^|\\.)devin\\.ai$/.test(location.hostname))return;window.__rtEnvMode=1;"
+            + "var EM='" + em + "'.toLowerCase();if(!EM)return;"
+            + "function norm(s){s=String(s||'').toLowerCase();"
+            + "if(s==='windows'||s==='win')return 'windows';"
+            + "if(s==='macos'||s==='mac'||s==='osx'||s==='darwin')return 'macos';"
+            + "if(s==='linux')return 'linux';return '';}"
+            + "var cur='';try{cur=norm(window.RTDL&&RTDL.envModeGet?RTDL.envModeGet(EM):'');}catch(e){}"
+            + "try{var ob=document.getElementById('__rtEnvBadge');if(ob)ob.remove();}catch(e){}"
+            + "window.__rtEnvEM=EM;window.__rtEnvCur=cur;"
+            + "window.__rtEnvSet=function(m){window.__rtEnvCur=norm(m);"
+            + "try{window.RTDL&&RTDL.envModeSet&&RTDL.envModeSet(EM,window.__rtEnvCur);}catch(_){}};"
+            + "function isCreate(u,m){if(String(m||'GET').toUpperCase()!=='POST')return false;"
+            + "try{var p=new URL(u,location.href);if(!/(^|\\.)devin\\.ai$/.test(p.hostname))return false;"
+            + "return /\\/api(\\/[^/]+)*\\/sessions\\/?$/.test(p.pathname);}catch(e){return false;}}"
+            + "function patch(body){try{var cur=window.__rtEnvCur;if(!cur||typeof body!=='string')return body;var j=JSON.parse(body);"
+            + "if(!j||typeof j!=='object'||j.platform_explicitly_set||(j.additional_args&&j.additional_args.platform))return body;"
+            + "j.additional_args=j.additional_args||{};j.additional_args.platform=cur;j.platform_explicitly_set=true;"
+            + "return JSON.stringify(j);}catch(e){return body;}}"
+            + "var of=window.fetch;window.fetch=function(input,init){try{"
+            + "var u=(typeof input==='string')?input:((input&&input.url)||'');"
+            + "var m=(init&&init.method)||(input&&input.method)||'GET';"
+            + "if(isCreate(u,m)&&init&&typeof init.body==='string'){init=Object.assign({},init,{body:patch(init.body)});}"
+            + "}catch(e){}return of.call(this,input,init);};"
+            + "var oo=XMLHttpRequest.prototype.open,os=XMLHttpRequest.prototype.send;"
+            + "XMLHttpRequest.prototype.open=function(m,u){this.__rtEnvC=isCreate(u,m);return oo.apply(this,arguments);};"
+            + "XMLHttpRequest.prototype.send=function(body){"
+            + "try{if(this.__rtEnvC&&typeof body==='string')body=patch(body);}catch(e){}"
+            + "return os.call(this,body);};"
             + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
@@ -4402,6 +4858,40 @@ public class MainActivity extends AppCompatActivity {
             try { byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); writeDownloadBytes(name, mime, data); }
             catch (Exception e) { main.post(() -> toast("下载捕获失败")); }
         }
+        /** 页面「新创作/＋」弹出菜单的「上传到网页端」→ 原生系统文件选择器(可多选)点击直传。 */
+        @android.webkit.JavascriptInterface
+        public void pickUpload() { main.post(() -> pickUploadToPage()); }
+        /** 每账号「新对话虚拟机环境」读/写 (官方页环境徽章 ↔ 切号面板同一存储)。 */
+        @android.webkit.JavascriptInterface
+        public String envModeGet(String email) { return envModePrefGet(MainActivity.this, email); }
+        @android.webkit.JavascriptInterface
+        public void envModeSet(String email, String mode) { envModePrefSet(MainActivity.this, email, mode); }
+    }
+    // ── 每账号环境模式(Linux/Windows/macOS) 单一真源: SharedPreferences["envmode"] ──
+    //   官方页徽章(RTDL)与引擎面板(Native/DaoCloud)共用, 键=email 小写; 空值=未显式设置(尊重官方默认)。
+    static String envModeNorm(String m) {
+        String s = m == null ? "" : m.toLowerCase();
+        if (s.equals("windows") || s.equals("win")) return "windows";
+        if (s.equals("macos") || s.equals("mac") || s.equals("osx") || s.equals("darwin")) return "macos";
+        if (s.equals("linux")) return "linux";
+        return "";
+    }
+    static String envModePrefGet(android.content.Context c, String email) {
+        if (email == null || email.isEmpty()) return "";
+        try {
+            org.json.JSONObject j = new org.json.JSONObject(c.getSharedPreferences(PREFS, MODE_PRIVATE).getString("envmode", "{}"));
+            return envModeNorm(j.optString(email.toLowerCase(), ""));
+        } catch (Exception e) { return ""; }
+    }
+    static void envModePrefSet(android.content.Context c, String email, String mode) {
+        if (email == null || email.isEmpty()) return;
+        String m = envModeNorm(mode); if (m.isEmpty()) return;
+        try {
+            SharedPreferences p = c.getSharedPreferences(PREFS, MODE_PRIVATE);
+            org.json.JSONObject j = new org.json.JSONObject(p.getString("envmode", "{}"));
+            j.put(email.toLowerCase(), m);
+            p.edit().putString("envmode", j.toString()).apply();
+        } catch (Exception ignored) {}
     }
     private void writeDownloadBytes(String name, String mime, byte[] data) {
         try {
@@ -5270,6 +5760,83 @@ public class MainActivity extends AppCompatActivity {
                 });
             }).start();
         }
+        /** PDF 面板内直看: 原生 PdfRenderer 逐页渲成图回推 (本地 file/content 直开; 网络鉴权代取落临时文件)。 */
+        @android.webkit.JavascriptInterface public void renderPdf(final String url, final int reqId) {
+            final Tab t = cur();
+            final String a1 = (t != null && t.auth1 != null) ? t.auth1 : "";
+            final String org = (t != null && t.orgId != null) ? t.orgId : "";
+            new Thread(() -> {
+                android.os.ParcelFileDescriptor pfd = null; File tmp = null;
+                try {
+                    Uri u = Uri.parse(url);
+                    String sch = u.getScheme() == null ? "" : u.getScheme();
+                    if ("file".equals(sch)) pfd = android.os.ParcelFileDescriptor.open(new File(u.getPath()), android.os.ParcelFileDescriptor.MODE_READ_ONLY);
+                    else if ("content".equals(sch)) pfd = getContentResolver().openFileDescriptor(u, "r");
+                    else {
+                        java.net.HttpURLConnection c = fetchAttachment(a1, org, url, null, false);
+                        int code = (c != null) ? c.getResponseCode() : -1;
+                        if ((code == 401 || code == 403) && !a1.isEmpty()) {
+                            try { c.disconnect(); } catch (Exception ignored) {}
+                            mintAttachmentCookie(a1, org);
+                            c = fetchAttachment(a1, org, url, null, false);
+                            code = (c != null) ? c.getResponseCode() : -1;
+                        }
+                        if (c == null || code < 200 || code >= 300) throw new Exception("HTTP " + code);
+                        tmp = new File(getCacheDir(), "pdfview_" + reqId + ".pdf");
+                        try (java.io.InputStream is = c.getInputStream(); java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp)) {
+                            byte[] buf = new byte[65536]; int n; long got = 0, cap = 32L * 1024 * 1024;
+                            while ((n = is.read(buf)) > 0) { fo.write(buf, 0, n); got += n; if (got > cap) throw new Exception("PDF 过大(>32MB), 请下载后查看"); }
+                        }
+                        c.disconnect();
+                        pfd = android.os.ParcelFileDescriptor.open(tmp, android.os.ParcelFileDescriptor.MODE_READ_ONLY);
+                    }
+                    android.graphics.pdf.PdfRenderer r = new android.graphics.pdf.PdfRenderer(pfd); pfd = null;
+                    try {
+                        int total = Math.min(r.getPageCount(), 80);
+                        for (int i = 0; i < total; i++) {
+                            android.graphics.pdf.PdfRenderer.Page pg = r.openPage(i);
+                            int wpx = 1080;
+                            int hpx = Math.max(1, (int) ((long) wpx * pg.getHeight() / Math.max(1, pg.getWidth())));
+                            android.graphics.Bitmap bm = android.graphics.Bitmap.createBitmap(wpx, hpx, android.graphics.Bitmap.Config.ARGB_8888);
+                            bm.eraseColor(0xFFFFFFFF);
+                            pg.render(bm, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                            pg.close();
+                            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                            bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, bo);
+                            bm.recycle();
+                            final String b64 = android.util.Base64.encodeToString(bo.toByteArray(), android.util.Base64.NO_WRAP);
+                            final int fi = i, ft = total;
+                            main.post(() -> {
+                                if (mediaWeb == null) return;
+                                try { mediaWeb.evaluateJavascript("pdfPage(" + reqId + "," + fi + "," + ft + "," + JSONObject.quote(b64) + ")", null); } catch (Exception ignored) {}
+                            });
+                        }
+                    } finally { r.close(); }
+                } catch (Exception e) {
+                    final String msg = String.valueOf(e.getMessage());
+                    main.post(() -> {
+                        if (mediaWeb == null) return;
+                        try { mediaWeb.evaluateJavascript("pdfFailed(" + reqId + "," + JSONObject.quote(msg) + ")", null); } catch (Exception ignored) {}
+                    });
+                } finally {
+                    if (pfd != null) try { pfd.close(); } catch (Exception ignored) {}
+                    if (tmp != null) try { tmp.delete(); } catch (Exception ignored) {}
+                }
+            }).start();
+        }
+        /** Office 等无法面板内渲染的本地文件: 转系统选择器用其它应用打开。 */
+        @android.webkit.JavascriptInterface public void openWith(final String url, final String name) {
+            main.post(() -> {
+                try {
+                    Uri u = Uri.parse(url);
+                    if ("file".equals(u.getScheme())) u = fileUri(u.getPath());
+                    Intent i = new Intent(Intent.ACTION_VIEW);
+                    i.setDataAndType(u, guessMime((name == null || name.isEmpty()) ? url : name));
+                    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(Intent.createChooser(i, "用其它应用打开").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                } catch (Exception e) { toast("无法打开此文件"); }
+            });
+        }
     }
     /** 全服通近期对话长按拖拽: 起一个全局拖拽并临时隐藏面板, 使下方网页可接收放手注入。 */
     private void beginConvDrag(String accJson, String sid) {
@@ -5358,13 +5925,16 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL); head.setGravity(Gravity.CENTER_VERTICAL);
         head.setBackgroundColor(0xFF1F6FEB); head.setPadding(dp(10), dp(8), dp(8), dp(8));
-        TextView ttl = new TextView(this); ttl.setText("下载 · 长按文件拖到页面");
+        TextView ttl = new TextView(this); ttl.setText("下载 · 点击查看 · 长按/⋮上传");
         ttl.setTextColor(0xFFFFFFFF); ttl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         ttl.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView up = new TextView(this); up.setText("⬆ 上传");
+        up.setTextColor(0xFFFFFFFF); up.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12); up.setPadding(dp(8), 0, dp(6), 0);
+        up.setOnClickListener(v -> pickUploadToPage());
         TextView close = new TextView(this); close.setText("✕");
         close.setTextColor(0xFFFFFFFF); close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16); close.setPadding(dp(8), 0, dp(4), 0);
         close.setOnClickListener(v -> closeDownloadPanel());
-        head.addView(ttl); head.addView(close);
+        head.addView(ttl); head.addView(up); head.addView(close);
         head.setOnTouchListener(new View.OnTouchListener() {
             float dx, dy;
             @Override public boolean onTouch(View v, MotionEvent ev) {
@@ -5530,15 +6100,17 @@ public class MainActivity extends AppCompatActivity {
         if (uri != null && !uri.isEmpty()) { try { return Uri.parse(uri); } catch (Exception ignored) {} }
         try { return fileUri(path); } catch (Exception e) { return null; }
     }
-    /** 下载项动作: 分享 / 用其它应用打开 / 重命名 / 删除。 */
+    /** 下载项动作: 上传到网页端 / 分享 / 用其它应用打开 / 重命名 / 删除。 */
     private void showDownloadActions(View anchor, int recIdx, String path, String uri, String name, String mime) {
         PopupMenu pm = new PopupMenu(this, anchor);
-        pm.getMenu().add(0, 0, 0, "分享");
-        pm.getMenu().add(0, 1, 1, "用其它应用打开");
-        pm.getMenu().add(0, 2, 2, "重命名");
-        pm.getMenu().add(0, 3, 3, "删除");
+        pm.getMenu().add(0, 4, 0, "⬆ 上传到网页端");
+        pm.getMenu().add(0, 0, 1, "分享");
+        pm.getMenu().add(0, 1, 2, "用其它应用打开");
+        pm.getMenu().add(0, 2, 3, "重命名");
+        pm.getMenu().add(0, 3, 4, "删除");
         pm.setOnMenuItemClickListener(it -> {
             switch (it.getItemId()) {
+                case 4: uploadDownloadedToPage(path, uri, name, mime); return true;
                 case 0: shareDownloaded(path, uri, mime); return true;
                 case 1: openWithChooser(path, uri, mime); return true;
                 case 2: renameDownload(recIdx, path, name); return true;
@@ -5547,6 +6119,84 @@ public class MainActivity extends AppCompatActivity {
             return false;
         });
         pm.show();
+    }
+    /** 下载项「上传到网页端」: 点击即注入当前活动网页的上传框 (与长按拖拽同一注入链, 不依赖拖拽)。 */
+    private void uploadDownloadedToPage(String path, String uri, String name, String mime) {
+        WebView web = activePageWeb();
+        if (web == null) { toast("无打开的网页, 无法上传"); return; }
+        File f = (path == null || path.isEmpty()) ? null : new File(path);
+        if (f != null && f.exists()) { dropFileIntoPage(web, web.getWidth() / 2f, web.getHeight() / 2f, path, mime); return; }
+        if (uri == null || uri.isEmpty()) { toast("文件已不存在"); return; }
+        final Uri u; try { u = Uri.parse(uri); } catch (Exception e) { toast("文件已不存在"); return; }
+        final WebView fw = web;
+        final String fn = (name == null || name.isEmpty()) ? "file" : name;
+        new Thread(() -> {
+            byte[] data = readUriBytes(u, 48L * 1024 * 1024);
+            if (data == null || data.length == 0) { main.post(() -> toast("文件读取失败 (过大或已删)")); return; }
+            final java.util.List<String[]> files = new java.util.ArrayList<>();
+            files.add(new String[]{ fn, android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP), guessMime(fn) });
+            main.post(() -> { dropB64FilesIntoPage(fw, fw.getWidth() / 2f, fw.getHeight() / 2f, files); toast("已上传到当前页: " + fn); });
+        }).start();
+    }
+    /** 「上传到网页端」点击选文件: 系统选择器(可多选) → 注入当前活动页上传框。 */
+    private void pickUploadToPage() {
+        if (activePageWeb() == null) { toast("先打开一个网页再上传"); return; }
+        try {
+            Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+            i.setType("*/*"); i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            uploadPicker.launch(Intent.createChooser(i, "选择要上传到网页端的文件"));
+        } catch (Exception e) { toast("无法打开文件选择器"); }
+    }
+    private void uploadUrisToPage(final java.util.List<Uri> uris) {
+        final WebView web = activePageWeb();
+        if (web == null) { toast("无打开的网页, 无法上传"); return; }
+        new Thread(() -> {
+            java.util.List<String[]> files = new java.util.ArrayList<>();
+            int skipped = 0;
+            for (Uri u : uris) {
+                byte[] data = readUriBytes(u, 48L * 1024 * 1024);
+                if (data == null || data.length == 0) { skipped++; continue; }
+                String nm = queryDisplayName(u);
+                files.add(new String[]{ nm, android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP), guessMime(nm) });
+            }
+            final int fSkipped = skipped;
+            if (files.isEmpty()) { main.post(() -> toast("所选文件读取失败")); return; }
+            final java.util.List<String[]> ff = files;
+            main.post(() -> {
+                dropB64FilesIntoPage(web, web.getWidth() / 2f, web.getHeight() / 2f, ff);
+                toast("已上传 " + ff.size() + " 件到当前页" + (fSkipped > 0 ? (" (" + fSkipped + " 件读取失败)") : ""));
+            });
+        }).start();
+    }
+    /** 当前可投递的网页 WebView: 活动标签优先, 回退首个非内部页标签; 无则 null。 */
+    private WebView activePageWeb() {
+        if (active >= 0 && active < tabs.size()) {
+            Tab t = tabs.get(active);
+            if (t != null && t.web != null && !t.internal) return t.web;
+        }
+        for (Tab t : tabs) if (t != null && t.web != null && !t.internal) return t.web;
+        return null;
+    }
+    /** 读 content://或 file:// Uri 全部字节; 超 cap/失败 返 null。 */
+    private byte[] readUriBytes(Uri u, long cap) {
+        try (java.io.InputStream is = getContentResolver().openInputStream(u)) {
+            if (is == null) return null;
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[65536]; int n;
+            while ((n = is.read(buf)) > 0) { bos.write(buf, 0, n); if (bos.size() > cap) return null; }
+            return bos.toByteArray();
+        } catch (Exception e) { return null; }
+    }
+    private String queryDisplayName(Uri u) {
+        try (android.database.Cursor c = getContentResolver().query(u, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                if (i >= 0) { String n = c.getString(i); if (n != null && !n.isEmpty()) return n; }
+            }
+        } catch (Exception ignored) {}
+        String p = u.getLastPathSegment();
+        return (p == null || p.isEmpty()) ? "file" : p;
     }
     private void shareDownloaded(String path, String uri, String mime) {
         try {
@@ -5693,12 +6343,13 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
         openDownloaded(path, uri, mime);
     }
-    /** 可在悬浮窗内直看的类型: doc(文本/MD) / img / video / audio; 否则 null。 */
+    /** 可在悬浮窗内直看的类型: doc(文本/MD) / img / video / audio / pdf / office; 否则 null。 */
     static String inlineViewType(String name, String mime) {
         String m = mime == null ? "" : mime.toLowerCase(java.util.Locale.US);
         if (m.startsWith("image/")) return "img";
         if (m.startsWith("video/")) return "video";
         if (m.startsWith("audio/")) return "audio";
+        if (m.equals("application/pdf")) return "pdf";
         if (m.startsWith("text/") || m.equals("application/json")) return "doc";
         if (isTextDocName(name)) return "doc";
         String n = name == null ? "" : name.toLowerCase(java.util.Locale.US);
@@ -5707,6 +6358,8 @@ public class MainActivity extends AppCompatActivity {
         if (ext.matches("png|jpe?g|gif|webp|bmp|svg")) return "img";
         if (ext.matches("mp4|webm|mov|mkv|3gp")) return "video";
         if (ext.matches("mp3|wav|ogg|m4a|flac|aac")) return "audio";
+        if (ext.equals("pdf")) return "pdf";
+        if (ext.matches("pptx?|docx?|xlsx?")) return "office";
         return null;
     }
     private void openDownloaded(String path, String uri, String mime) {
@@ -5944,12 +6597,7 @@ public class MainActivity extends AppCompatActivity {
         deliverFilesToActivePage(files);
     }
     private void deliverFilesToActivePage(java.util.List<String[]> files) {
-        WebView web = null;
-        if (active >= 0 && active < tabs.size()) {
-            Tab t = tabs.get(active);
-            if (t != null && t.web != null && !t.internal) web = t.web;
-        }
-        if (web == null) { for (Tab t : tabs) { if (t != null && t.web != null && !t.internal) { web = t.web; break; } } }
+        WebView web = activePageWeb();
         if (web == null) { toast("无打开的 Devin 页面, 无法投递"); return; }
         dropB64FilesIntoPage(web, web.getWidth() / 2f, web.getHeight() / 2f, files);
         toast("已投递 " + files.size() + " 件到当前页上传框");
@@ -6139,18 +6787,20 @@ public class MainActivity extends AppCompatActivity {
     private static String b64Utf8(String s) {
         try { return android.util.Base64.encodeToString((s == null ? "" : s).getBytes("UTF-8"), android.util.Base64.NO_WRAP); } catch (Exception e) { return ""; }
     }
-    /** 把内存中的多份文件(name + 已 base64 的字节)注入页面: 文本(md)与二进制(zip)统一走此路。 */
+    /** 把内存中的多份文件(name + 已 base64 的字节 [+ 可选 mime])注入页面: 文本(md)与二进制统一走此路。 */
     private void dropB64FilesIntoPage(final WebView web, float x, float y, java.util.List<String[]> files) {
         if (web == null || files == null || files.isEmpty()) return;
         StringBuilder arr = new StringBuilder("[");
         for (int i = 0; i < files.size(); i++) {
             String name = files.get(i)[0]; String b64 = files.get(i)[1]; if (b64 == null) b64 = "";
+            String fmime = files.get(i).length > 2 && files.get(i)[2] != null ? files.get(i)[2] : "";
             if (i > 0) arr.append(",");
-            arr.append("{n:'").append(name.replace("\\", "\\\\").replace("'", "\\'")).append("',b:'").append(b64).append("'}");
+            arr.append("{n:'").append(name.replace("\\", "\\\\").replace("'", "\\'")).append("',b:'").append(b64)
+               .append("',m:'").append(fmime.replace("\\", "\\\\").replace("'", "\\'")).append("'}");
         }
         arr.append("]");
         final String js = "(function(){try{var specs=" + arr + ";"
-            + "function mk(s){var bin=atob(s.b);var u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);var mime=/\\.zip$/i.test(s.n)?'application/zip':'text/markdown';return new File([u],s.n,{type:mime});}"
+            + "function mk(s){var bin=atob(s.b);var u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);var mime=s.m||(/\\.zip$/i.test(s.n)?'application/zip':'text/markdown');return new File([u],s.n,{type:mime});}"
             + "var files=specs.map(mk);var dt=new DataTransfer();files.forEach(function(f){dt.items.add(f);});"
             + "var dpr=window.devicePixelRatio||1;var cx=" + x + "/dpr, cy=" + y + "/dpr;"
             + "var el=document.elementFromPoint(cx,cy)||document.body;"
@@ -7216,7 +7866,7 @@ public class MainActivity extends AppCompatActivity {
         //   会话·document-start 重注鉴权), 长会话占用真有界。有联控/有输入焦点/人在交互 → 绝不重载, 不丢草稿不打断。
         if (at != null && at.web != null && at.pendingReloadUrl == null && at.accountJson != null && appForeground
                 && at.loadedAt > 0 && (now - at.loadedAt) > HEAP_AGE_MS
-                && !userInteracting(at, ACTIVE_RELOAD_IDLE_MS)
+                && !userInteracting(at, ACTIVE_RELOAD_IDLE_MS) && !isAccountConvActive(at)
                 && (at.lastHeapReclaimAt == 0 || (now - at.lastHeapReclaimAt) > HEAP_RECLAIM_MIN_GAP)) {
             java.util.concurrent.ConcurrentHashMap<String,Long> vw = tabViewers.get(at.vid);
             if (vw == null || vw.isEmpty()) {   // 正被联控观看/驱动 → 不重载(不打断远程实时操作)
@@ -7249,6 +7899,8 @@ public class MainActivity extends AppCompatActivity {
             long idle = (t.lastShownAt > 0) ? (now - t.lastShownAt) : Long.MAX_VALUE;
             if (t.accountJson != null) {
                 if (idle < ACCT_LRU_MIN_IDLE_MS) continue;     // 刚用过的账号标签不动(防来回切抖动)
+                if (isAccountConvActive(t)) continue;          // 有活跃对话 → 对齐 Chrome 不冻有声音的标签
+                if (remoteDriven(t)) continue;                 // 远程自动化驱动中 → 不打断
                 java.util.concurrent.ConcurrentHashMap<String,Long> vw = tabViewers.get(t.vid);
                 if (vw != null && !vw.isEmpty()) continue;     // 正被联控观看/驱动 → 不打断
             } else {

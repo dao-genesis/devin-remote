@@ -300,8 +300,15 @@ var _lastListHtml = null, _lastOpenKey = "", _renderDirty = false, _renderDeferT
 //   使所有被可见性门控的心跳照常工作 —— 本 WebView 停泊后台时 Chromium 会节流/冻结其计时器且
 //   document.hidden 恒真, 若只靠自身计时器+门控, 自动刷新在原生壳里形同虚设(只能手动点刷新)。
 var _extDriveTs = 0;
-function _extDriven(){ return (Date.now() - _extDriveTs) < 30000; }
+// lite 外驱(板块不可见): 只允许心跳自身按 lite 间隔驱动, 不再把「外驱过」当作「板块可见」——
+//   否则本页自身 setInterval(8s/2.2s) 在停泊期间照样全量轰扫共享渲染进程(打字卡/上传慢之残根)。
+var _extLite = false;
+function _extDriven(){ return !_extLite && (Date.now() - _extDriveTs) < 30000; }
 function _notVisible(){ if(_extDriven()) return false; try{ return document.hidden || (document.documentElement && document.documentElement.clientWidth===0); }catch(e){ return false; } }
+// 输入让行(板块内): 用户正在本板块触摸/打字 → 重扫描/额度轮顺延, 输入永远优先。
+var _lastInputTs = 0;
+function _inputBusy(){ return (Date.now() - _lastInputTs) < 1500; }
+["touchstart","keydown"].forEach(function(ev){ document.addEventListener(ev, function(){ _lastInputTs = Date.now(); }, {passive:true, capture:true}); });
 function _vib(ms){ try{ if(N.vibrate){ N.vibrate(ms||30); return; } }catch(e){} try{ if(navigator.vibrate) navigator.vibrate(ms||30); }catch(e){} }
 function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
 function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
@@ -629,8 +636,14 @@ function quotaLive(q){
   if(typeof q.dPct==="number"||typeof q.wPct==="number") return null;
   return null;
 }
-// 账号级对账: sessStatus 判 exhausted 且账号此刻确有额度 → 归「完成(休眠)」, 不计耗尽、不发通知。
-function sessStatusA(s,acct){ var st=sessStatus(s); if(st[0]==="exhausted"&&quotaLive(acct&&acct.quota)===true) return ["finished","完成"]; return st; }
+// 账号级对账: ① sessStatus 判 exhausted 且账号此刻确有额度 → 归「完成(休眠)」, 不计耗尽、不发通知。
+//   ② 运行态陈旧门(与 devin-cloud.js 同源·正本清源): 被判「运行」却已久无活动(默认90min·可配
+//   rtflow.cfg.runStaleMin)必是早已休眠只是枚举停在旧值 → 降「完成(休眠)」, 让活跃/前台追踪只认真活跃者。
+function _runStaleMs(){ var m=90; try{ var v=localStorage.getItem("rtflow.cfg.runStaleMin"); if(v!=null){ var n=parseFloat(JSON.parse(v)); if(isFinite(n)&&n>0)m=n; } }catch(e){} return m*60*1000; }
+function sessStatusA(s,acct){ var st=sessStatus(s);
+  if(st[0]==="exhausted"&&quotaLive(acct&&acct.quota)===true) return ["finished","完成"];
+  if(st[0]==="running"){ var ts=_sessTs(s); if(ts&&Date.now()-ts>_runStaleMs()) return ["finished","完成(休眠)"]; }
+  return st; }
 function sessId(s){ return s.devin_id||s.session_id||s.id||""; }
 function dvOverviewHtml(a,i,sess,kn,pb,sc,git){
   var running=0,awaiting=0,blocked=0,exhausted=0;
@@ -677,8 +690,11 @@ function dvOverviewHtml(a,i,sess,kn,pb,sc,git){
   }
   if(sess.length>40) h+='<div style="color:#666">… 共 '+sess.length+' 个</div>';
   // 底部操作 (1:1 桌面 dv-acts)
+  var _em=(window.DaoCloud&&DaoCloud.getEnvMode)?DaoCloud.getEnvMode(a):"linux";
+  var _eml=(window.DaoCloud&&DaoCloud.envModeLabel)?DaoCloud.envModeLabel(_em):"🐧 Linux";
   h+='<div class="dv-acts">'+
      '<button class="conv-btn" onclick="dvBackup('+i+')" title="增量备份本账号全部对话(MD)">&#128190; 导出全部对话</button>'+
+     '<button class="conv-btn conv-btn-s" id="dvEnv'+i+'" onclick="dvEnvCycle('+i+')" title="新对话虚拟机环境(点击循环 Linux→Windows→macOS)·只对新建对话生效">'+_esc(_eml)+'</button>'+
      '<button class="conv-btn conv-btn-s" onclick="dvCreate('+i+')" title="在此账号发起一个新 Devin Cloud 对话">&#9729; 发起对话</button>'+
      '<button class="conv-btn conv-btn-s" onclick="wp('+i+')" title="水过无痕清理本账号">&#127754; 水过无痕</button>'+
      '</div>';
@@ -784,7 +800,9 @@ async function dvConvArch(i,did){
   var r=await DaoCloud.archiveSession(a,did); toast(r&&r.ok?"✓ 已归档":"归档失败",!(r&&r.ok));
   var d=document.getElementById("dvDetail"+i); if(d&&d.classList.contains("open")) dvFetch(a,i,d);
 }
-async function dvCreate(i){ var a=loadAcc()[i]; if(!a)return; var p=window.prompt("输入对话内容/指令:"); if(!p)return; toast("发起中…"); var r=await DaoCloud.createSession(a,p); toast(r&&r.ok?"✓ 已发起 "+_esc(r.devinId||""):"失败: "+((r&&r.error)||""),!(r&&r.ok)); var d=document.getElementById("dvDetail"+i); if(d&&d.classList.contains("open")) dvFetch(a,i,d); }
+// 三态循环切换新对话虚拟机环境(Linux→Windows→macOS)·每号各自持久·只对新建对话生效
+function dvEnvCycle(i){ var a=loadAcc()[i]; if(!a)return; var m=DaoCloud.nextEnvMode(a); var b=document.getElementById("dvEnv"+i); if(b)b.textContent=DaoCloud.envModeLabel(m); toast("新对话环境 → "+DaoCloud.envModeLabel(m)+"(仅对新建对话生效)"); }
+async function dvCreate(i){ var a=loadAcc()[i]; if(!a)return; var p=window.prompt("输入对话内容/指令:"); if(!p)return; var em=DaoCloud.getEnvMode(a); toast("发起中…("+DaoCloud.envModeLabel(em)+")"); var r=await DaoCloud.createSession(a,p,{platform:em}); toast(r&&r.ok?"✓ 已发起 "+_esc(r.devinId||"")+" · "+DaoCloud.envModeLabel(em):"失败: "+((r&&r.error)||""),!(r&&r.ok)); var d=document.getElementById("dvDetail"+i); if(d&&d.classList.contains("open")) dvFetch(a,i,d); }
 async function dvBackup(i){ var a=loadAcc()[i]; if(!a)return; toast("备份中…"); var r=await DaoCloud.backupAccount(a,"conversation"); toast(r&&r.ok?"✓ 备份 "+(r.count||0)+" 条":"备份失败: "+((r&&r.error)||""),!(r&&r.ok)); }
 
 // ── 对话多选 ──
@@ -965,6 +983,7 @@ var _sigMap = {};            // uuid → {sig,since,probeTs,wait,reason,probed,e
 var STUCK_MS = 60000;        // 运行中且 1 分钟"零进度"(列表+事件流双签名均无变化) → 真停滞卡住 (旧 180s 太慢·用户反馈~2min 才识别)
 var PROBE_MS = 20000;        // 单会话事件流探测节流 (旧 60s → 20s: 更快识别卡住/额度耗尽/报错)
 var _probeBudget = 0;        // 每轮 pollTrk 的事件探测配额 (控开销)
+var _sweepN = 0;             // 分层轮询相位: 空闲号按编号错峰慢轮 (省流)
 function _evMsgText(ev){ try{ var m=ev.message; if(m&&typeof m==="object") m=m.text||m.message||JSON.stringify(m); return String(m||ev.content||ev.text||ev.status||"").toLowerCase(); }catch(e){ return ""; } }
 // 零成本「活性签名」: 列表项任一时间戳/计数/状态变化即说明 working 有进度 → 不算停滞。
 //   working 通常 updated_at / acu / 消息数 持续变化, 据此可靠区分"真停滞"与"正在干活只是没发言"。
@@ -995,9 +1014,13 @@ async function refineStuck(a, item){
     if(rec.sig===null){ rec.sig=ls; rec.since=now; rec.probed=true; }
     else if(ls!==rec.sig){ rec.sig=ls; rec.since=now; if(rec.reason==="stall"){ rec.wait=false; rec.reason=""; } }
   }
-  // ② 事件流探测 (节流·限额): 既作活性来源(末事件变化→重置停滞), 又识别 待你回复/额度/报错(即时红)
-  var due=(now-rec.probeTs)>=PROBE_MS;
-  if(due && _probeBudget>0){
+  // ② 事件流探测 (节流·限额·停滞候选才探): 事件流是整段会话历史、活跃会话动辄数 MB ——
+  //   列表签名仍在变化 = 正在干活有进度, 无需拉全量事件流(24路×每20s全量重拉曾致移动流量巨耗之本源)。
+  //   需要事件流甄别的情形(说完等你/额度/报错/真停滞)全都伴随「列表签名停变」→ 签名静默 ≥ PROBE_MS 才探;
+  //   已判卡住(wait)的会话复核降频至 4×PROBE_MS(状态解除靠列表签名恢复变化即时清)。
+  var sigQuiet = rec.sig!=null && (now-rec.since)>=PROBE_MS;
+  var due=(now-rec.probeTs)>=(rec.wait?PROBE_MS*4:PROBE_MS);
+  if(due && sigQuiet && _probeBudget>0){
     _probeBudget--; rec.probeTs=now;
     try{ var ev=await DaoCloud.sessionEvents(a, uuid);
       if(ev&&ev.ok){
@@ -1116,7 +1139,32 @@ var _sweepGen=0, _trkProg=0, _quotaProg=0, _quotaLiveProg=0;
 //   看门狗只杀「60s 零回包」的真挂死, 不误杀单号耗时长(多URL重试/重登)的健康扫描。
 window.__daoNetProg=function(){ var n=Date.now(); if(_trkBusy)_trkProg=n; if(_quotaBusy)_quotaProg=n; if(_quotaLiveBusy)_quotaLiveProg=n; };
 // 单账号会话扫描 → 写入 _trk (从 pollTrk 串行循环抽出, 供并发池调用)。
+var _accScanTs = {};   // 账号 id → 最近一次会话扫描时刻 (pollTrk 与 refreshOpenAccts 去重, 不双份扫同一号)
+// 对话活跃判定(本源口径): 运行中/卡住/待输入/额度耗尽 一律算活跃(total 含四态) —— 正常开发就是
+//   等对话中断/卡住后才下一次交互发提示词, 面板此时必须高活性。另加「交互余温」:
+//   对话刚转终态(total→0)的号在 HOLD 窗内仍按活跃调度 —— 结束瞬间正是用户要发下一条
+//   提示词/新对话将起的时刻, 绝不能刚结束就降档致新对话识别慢半拍。
+var ACTIVE_HOLD_MS = 600000;   // 10min 交互余温窗
+var _accActiveTs = {};         // email → 最近一次观测到活跃对话的时刻
+function _convActive(a, now){
+  var em=(a.email||"").toLowerCase(); now=now||Date.now();
+  var t=_trk[em];
+  if(!t || t.total>0){ _accActiveTs[em]=now; return true; }   // 从未观测亦按活跃(先建基线); total 含 运行/卡住/待输入/耗尽
+  return (now-(_accActiveTs[em]||0))<ACTIVE_HOLD_MS;          // 刚结束 → 余温期内仍高活
+}
+// 四象限优先级判定 (前台已开页 × 对话活跃): 本轮该不该扫此号。独立函数以便单测。
+function _tierDue(a, no, force, now){
+  if(force) return true;
+  if(now-(_accScanTs[a.id||a.email||""]||0)<5000) return false;   // 专线刚扫过 → 去重
+  var active=_convActive(a, now);
+  var open=_isDvOpen(a);
+  if(open && active) return true;                   // ① 前台+活跃 → 每轮
+  if(active) return (no%2)===(_sweepN%2);           // ② 后台+活跃 → 每 2 轮
+  if(open) return (no%4)===(_sweepN%4);             // ③ 前台+空闲 → 每 4 轮
+  return (no%8)===_sweepN;                          // ④ 无页+空闲 → 每 8 轮
+}
 async function _pollOneAcc(a, realNo){
+  _accScanTs[a.id||a.email||""]=Date.now();
   var r=await DaoCloud.listSessions(a,50); if(!r||!r.ok)return;
   var running=0,awaiting=0,blocked=0,exhausted=0,items=[];
   // 该账号「最新对话名」(按近期活跃时间戳择取·与状态无关): 用户要求——只要账号有对话就显示其最新对话名, 无对话才回退账号名。
@@ -1148,15 +1196,26 @@ async function pollTrk(force){
   // 网页镜像端: 绝不自身慢轮陈旧账号宇宙(超量/空白/滞后之源), 一律改走设备端 recentConvAll 权威单RPC
   //   (手机一次并发聚合全部真实账号近期对话, 与 APK 同源) + 金库镜像兜底 → 登入即与手机完全同步。
   if(window.__rnReady){ _deviceRecentRefresh(force); return; }
-  if(!force && _notVisible()) return;     // 性能: 板块隐藏/后台 → 停轮询, 不再无谓轰网络(消除"刷新很忙"); force=用户点刷新, 不受门控
+  var liteRound = force==="lite"; if(liteRound) force=false;   // lite=心跳在板块不可见时的降档驱动: 放行但更省
+  if(!force && !liteRound && _notVisible()) return;     // 性能: 板块隐藏/后台 → 停轮询, 不再无谓轰网络(消除"刷新很忙"); force=用户点刷新, 不受门控
+  if(!force && _inputBusy()) return;      // 输入让行: 正在打字/触摸 → 本轮让路, 下轮自然补上
   if(_trkBusy)return; _trkBusy=true; _trkProg=Date.now(); var __g=_sweepGen;
-  _probeBudget=24; // 每轮事件流探测配额 (旧 12 → 24: 在跑对话多时也能每轮都探到)
+  _probeBudget=liteRound?8:24; // 每轮事件流探测配额; 板块不可见时降配额, 让出网络与渲染进程
   var dot=document.getElementById("monDot"), mstat=document.getElementById("monStat");
   try{
     var full=loadAcc();                       // 全量列表(编号基准): 真正编号=在全量列表中的位置, 不受"是否已登录"影响
-    var accs=full.filter(hasAuth);
     var _noOf={}; full.forEach(function(x,ix){ _noOf[x.id]=ix+1; });   // id → 真实编号(与账号行显示一致), 加号后动态跟随
-    if(dot)dot.className="mon-dot"; if(mstat)mstat.textContent="监测中 · "+accs.length+" 号";
+    // 性能×省流 · 四象限优先级调度 (前台已开页 × 对话活跃):
+    //   ① 前台+活跃 = 重中之重(≤7~8 个) → 每轮必扫 (另有 refreshOpenAccts ~6s 专线, 5s 内扫过则去重跳过)
+    //   ② 后台+活跃 → 中等: 每 2 轮错峰 (~16s; 板块不可见 lite 时 ~60s)
+    //   ③ 前台+空闲 → 低: 每 4 轮错峰 (放一放, 状态变化本就低频)
+    //   ④ 无页+空闲 → 最低: 每 8 轮错峰 (~64s; 百号池几乎不耗网络)
+    //   force(用户手动刷新/回前台) 不分层, 全量扫。
+    _sweepN=(_sweepN+1)%8;
+    var allAuth=full.filter(hasAuth);
+    var _scanNow=Date.now();
+    var accs=allAuth.filter(function(a){ return _tierDue(a, _noOf[a.id]||0, force, _scanNow); });
+    if(dot)dot.className="mon-dot"; if(mstat)mstat.textContent="监测中 · "+allAuth.length+" 号";
     // 以账号为中心并发扫描(6路), 每号返回即增量上色 → 跨设备运行近实时识别, 不再等满全列表才出结果。
     var _lastPaint=0;
     await _pool(accs, 6, async function(a){
@@ -1165,7 +1224,7 @@ async function pollTrk(force){
       _trkProg=Date.now();
       var now=Date.now(); if(now-_lastPaint>500){ _lastPaint=now; paintTrk(); paintRowRun(); }
     });
-    if(mstat)mstat.textContent="Devin Cloud 监测就绪 · "+accs.length+" 号在册";
+    if(mstat)mstat.textContent="Devin Cloud 监测就绪 · "+allAuth.length+" 号在册";
   }catch(e){ if(dot)dot.className="mon-dot off"; if(mstat)mstat.textContent="监测异常"; }
   _pruneSig();
   if(__g===_sweepGen) _trkBusy=false;
@@ -1370,7 +1429,7 @@ function _isDvOpen(a){ if(!a) return false; var now=Date.now();
   return (!!_dvOpenAccts[e] && now-_dvOpenAccts[e]<90000) || (!!i && !!_dvOpenAccts[i] && now-_dvOpenAccts[i]<90000); }
 function _hasLiveConv(a){ if(_isDvOpen(a)) return true; var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<TRK_HOLD_MS); }  // 道·守柔不失: 与显示同窗(后台冻结期沿用), 不因计时器到点而误判"非活跃"→顶置/急刷/清理候选皆稳
 // 有对话(不必正在跑): 追踪到该号有对话且近 25 分钟内见过 → 视为「活跃号」, 额度每轮必刷(不进慢速轮转), 用户最关心的有对话账号额度近实时。
-function _hasConv(a){ var st=_trk[(a.email||"").toLowerCase()]; return !!(st && (st.total|0)>0 && Date.now()-st.ts<1500000); }
+function _hasConv(a){ var st=_trk[(a.email||"").toLowerCase()]; if(st && (st.total|0)>0 && Date.now()-st.ts<1500000) return true; return Date.now()-(_accActiveTs[(a.email||"").toLowerCase()]||0)<ACTIVE_HOLD_MS; }   // 余温期内额度仍高频: 对话刚结束正是用户看余额/发下一条的时刻
 async function applyConvCapFor(a){
   if(!_cfg("convCap",true) || !hasAuth(a)) return;
   var q=a.quota; if(!q||typeof q.dPct!=="number"||typeof q.overageDollars!=="number") return;   // 未知余额不动(美金未取到时绝不据 0 限额)
@@ -1504,7 +1563,9 @@ async function _cleanDrain(){ if(_cleanRunning)return; _cleanRunning=true;
   try{ while(_cleanQ.length){ var id=_cleanQ.shift(); delete _cleanQIds[id]; var a=DaoCore.findAcc(id); if(a){ try{ await autoCleanFor(a); }catch(e){} } } }finally{ _cleanRunning=false; }
 }
 async function autoQuotaTick(force){
-  if(!force && _notVisible()) return;     // 性能: 板块隐藏/后台 → 暂停额度刷新心跳, 显示时再补; force=用户点刷新, 不受门控
+  var liteRound = force==="lite"; if(liteRound) force=false;   // 心跳 lite 驱动: 放行(60s 一轮), 不受隐藏门控
+  if(!force && !liteRound && _notVisible()) return;     // 性能: 板块隐藏/后台 → 暂停额度刷新心跳, 显示时再补; force=用户点刷新, 不受门控
+  if(!force && _inputBusy()) return;      // 输入让行
   if(_quotaBusy || _quotaLiveBusy) return; _quotaBusy=true; _quotaProg=Date.now(); var __g=_sweepGen;   // 与对话快轮互斥, 不叠加
   try{
     var accs=loadAcc().filter(hasAuth);
@@ -1529,10 +1590,17 @@ async function autoQuotaTick(force){
 // ── 对话使用中 · 金额近实时刷新 ──────────────────────────────────────────────
 //   只刷"有在跑对话"的号(数量少) → ~4s 一轮, 远快于 12s 全量轮, 对话过程中额度近实时可见。
 //   隐藏/后台即停; 与全量额度轮(autoQuotaTick)互斥, 不叠加轰网络、不抢主线程。
-async function autoQuotaLiveTick(){
-  if(_notVisible() || _quotaBusy || _quotaLiveBusy) return;
-  var live=loadAcc().filter(hasAuth).filter(_hasLiveConv);
-  if(!live.length) return;     // 无在跑对话 → 让全量轮负责, 本快轮不空转
+async function autoQuotaLiveTick(mode){
+  var liteRound = mode==="lite";
+  if(!liteRound && _notVisible()) return;
+  if(_quotaBusy || _quotaLiveBusy) return;
+  if(_inputBusy()) return;     // 输入让行: 金额跳动晚 2 秒无妨, 打字不许卡
+  // 近实时金额只服务「前台已开页」的号(用户正盯着的 ≤7~8 个); 后台在跑对话的金额由全量轮(~30s)负责。
+  //   无已开页信息(纯网页控制台等未广播场景)时回退旧口径(在跑对话号), 不失功能。
+  var auth=loadAcc().filter(hasAuth);
+  var live=auth.filter(_isDvOpen);
+  if(!live.length && !Object.keys(_dvOpenAccts).length) live=auth.filter(_hasLiveConv);
+  if(!live.length) return;     // 无在看/在跑对话 → 让全量轮负责, 本快轮不空转
   _quotaLiveBusy=true; _quotaLiveProg=Date.now(); var __g=_sweepGen;
   try{
     for(var i=0;i<live.length;i++){ var a=live[i];
@@ -1697,7 +1765,7 @@ setInterval(pollTrk, 8000);    // 30s→15s→12s→10s→8s: 更快侦测状态
 if(window.__rnReady){ _loop(function(){ try{ _restoreTrkFromVault(); }catch(e){} try{ _restoreUntrackedFromVault(); }catch(e){} try{ if(typeof restoreAccountsFromVault==="function") restoreAccountsFromVault(); }catch(e){} }, 2500, 1000); }   // 旧 4s+1.5s抖动 → 2.5s+1s: 更快镜像手机金库状态(减少满后感知延迟)
 // 美刀额度: 冷启动尽快全量刷一遍(消除死数据); 之后每 ~12s 一轮, 错开 pollTrk 半个周期 + 抖动, 避免与状态轮询同刻并发
 setTimeout(autoQuotaTick, 1200);
-setTimeout(function(){ _loop(autoQuotaTick, 8000, 2000); }, 6000);   // 11s→8s: 全量额度轮更快; 6s 相位偏移与 pollTrk 错峰
+setTimeout(function(){ _loop(autoQuotaTick, 30000, 5000); }, 6000);   // 全量额度轮 30s(额度变化慢·省流): 在跑对话的近实时金额由 autoQuotaLiveTick 专责, 不受此影响
 // 对话使用中 → 金额近实时: 只刷在跑对话的号, ~4s 一轮(带抖动); 无在跑对话时自动空转不耗网络
 setTimeout(function(){ _loop(autoQuotaLiveTick, 2200, 800); }, 2500);   // 3.5s→2.2s: 正在跑对话的号额度更接近实时
 // 自动备份心跳: 始终增量备份(每 ~90s 轮一个账号, 带抖动), 与额度/清理解耦; 且仅在交互空闲时启动
@@ -1722,6 +1790,7 @@ window.addEventListener("message", function(ev){ try{ var d=ev&&ev.data;
 var _openBusy=false;
 async function refreshOpenAccts(){
   if(_openBusy || _quotaBusy || _quotaLiveBusy) return;
+  if(_inputBusy()) return;   // 输入让行: 打字/触摸期间连「已开号专线」也顺延一轮, 输入绝对优先
   var accs=loadAcc().filter(hasAuth).filter(_isDvOpen);
   if(!accs.length) return;
   _openBusy=true; _probeBudget=8;
@@ -1760,7 +1829,11 @@ async function forceRefreshNow(accId){
 }
 // 原生引擎心跳(外驱): 原生外壳在 App 前台以 Handler 周期调用(evaluateJavascript 不受 Chromium
 //   后台计时器节流/页面 hidden 影响) → 状态轮询/额度心跳/对话提醒全部由此可靠驱动, 与网络环境无关。
-function engineHeartbeat(){
+//   lite=true: 切号板块不可见(用户正用别的标签) → 重扫描按更长的最小间隔节流,
+//   共享渲染进程让位给前台页面(全局卡顿/打字卡之源); 板块可见时 lite 缺省, 保持近实时。
+var _hbTrkTs=0,_hbQuotaTs=0,_hbLiveTs=0;
+function engineHeartbeat(lite){
+  _extLite = !!lite;
   _extDriveTs = Date.now();
   try{ DaoCore.pumpTimers(); }catch(e){}   // 冻结免疫计时外驱泵: 停泊页被冻的睡眠/超时由此唤醒
   // 扫描看门狗(外驱时钟): 页面自身 setTimeout 被冻时, 重试退避/超时兜底永不回来,
@@ -1770,9 +1843,10 @@ function engineHeartbeat(){
   if(_trkBusy && n-_trkProg>60000){ _sweepGen++; _trkBusy=false; }
   if(_quotaBusy && n-_quotaProg>60000){ _sweepGen++; _quotaBusy=false; }
   if(_quotaLiveBusy && n-_quotaLiveProg>60000){ _sweepGen++; _quotaLiveBusy=false; }
-  try{ pollTrk(); }catch(e){}
-  try{ autoQuotaTick(); }catch(e){}
-  try{ autoQuotaLiveTick(); }catch(e){}
+  var trkGap=lite?30000:0, quotaGap=lite?60000:0, liveGap=lite?15000:0;
+  if(n-_hbTrkTs>=trkGap){ _hbTrkTs=n; try{ pollTrk(lite?"lite":false); }catch(e){} }
+  if(n-_hbQuotaTs>=quotaGap){ _hbQuotaTs=n; try{ autoQuotaTick(lite?"lite":false); }catch(e){} }
+  if(n-_hbLiveTs>=liveGap){ _hbLiveTs=n; try{ autoQuotaLiveTick(lite?"lite":false); }catch(e){} }
   try{ autoUnlockTick(); }catch(e){}
 }
 setTimeout(function(){ try{ autoUnlockTick(); }catch(e){} }, 4000);

@@ -376,6 +376,16 @@
   }
 
   // ── 会话创建 / 中停 / 归档 (复刻桌面 createSession/stopSession, 端点经桌面实跑确证) ──
+  // 官方环境模式(逆向自 app.devin.ai SPA·2026-07): 新建对话请求里
+  //   additional_args.platform ∈ {linux,windows,macos} + 顶层 platform_explicitly_set=true。
+  //   只作用于「新建对话」, 正在运行的对话不改(与官方一致)。
+  var ENV_PLATFORMS = ["linux", "windows", "macos"];
+  function normPlatform(m) {
+    var s = String(m == null ? "" : m).toLowerCase();
+    if (s === "windows" || s === "win") return "windows";
+    if (s === "macos" || s === "mac" || s === "osx" || s === "darwin") return "macos";
+    return "linux";
+  }
   async function createSession(acc, prompt, opts) {
     opts = opts || {};
     if (!acc || !acc.auth1 || !acc.orgId) return { ok: false, error: "需先登录(auth1)" };
@@ -385,6 +395,12 @@
     if (opts.playbookId) payload.playbook_id = opts.playbookId;
     if (opts.repos) payload.repos = opts.repos;
     if (opts.sessionSecrets) payload.session_secrets = opts.sessionSecrets;
+    if (opts.platform) {
+      var pf = normPlatform(opts.platform);
+      payload.additional_args = payload.additional_args || {};
+      payload.additional_args.platform = pf;      // 官方: 新对话运行环境
+      payload.platform_explicitly_set = true;      // 官方: 显式指定标志
+    }
     var r = await jpost(APP + "/api/sessions", acc, payload);
     if (r.status === 200 || r.status === 201) { var j = r.json || {}; return { ok: true, devinId: j.devin_id || j.session_id || j.id, isNewSession: j.is_new_session, createdAt: j.created_at, raw: j }; }
     return { ok: false, status: r.status, error: errOf(r) };
@@ -772,6 +788,19 @@
     return 0;
   }
 
+  // 会话创建时间(ms) — 只认创建类字段(created_at/created/inserted_at), 绝不掺 updated_at:
+  //   创建时间是不可变真源(平台不会周期性触碰), 供自动清理判「对话是否真在窗口内新生」。
+  function sessCreatedTs(s) {
+    if (!s) return 0;
+    var cands = [s.created_at, s.created, s.inserted_at, s.created_at_ms, s.createdAt];
+    for (var i = 0; i < cands.length; i++) {
+      var v = cands[i]; if (v == null) continue;
+      if (typeof v === "number") return v > 1e12 ? v : v * 1000;   // 秒→毫秒
+      var t = Date.parse(v); if (!isNaN(t)) return t;
+    }
+    return 0;
+  }
+
   // ── 会话状态分类 (单一真源·正本清源) ──────────────────────────────────────
   //   切号面板 switch.html 与 全服通 daopan.html / 设备聚合 engine.recentConvAll 共用此判定,
   //   保证「公网单网页」显示的对话最终状态与手机 APK 完全一致 (问题: 网页端状态与 APK 有差距)。
@@ -823,19 +852,69 @@
     if (typeof q.dPct === "number" || typeof q.wPct === "number") return null; // 配额=0 但美金未取到 → 不确定
     return null;
   }
-  // 账号级对账: sessStatus 判为 exhausted 时, 若该账号此刻确有可用额度(quotaLive===true) → 归「完成(休眠)」,
-  //   不计额度耗尽; 真耗尽(false)或额度未知(null)则保留官方耗尽信号。其余分类不动。供 recentConvAll/切号面板/通知共用。
-  function sessStatusA(s, acct) {
+  // ── 运行态陈旧度门 (根治「古老对话恒显正在运行/有额度」) ──────────────────────
+  //   真·运行中的 Devin 会话会高频回写 updated_at(秒/分级); 一条被判「运行」却已长时间(默认
+  //   90min·可配 rtflow.cfg.runStaleMin)无任何活动的会话, 必是平台早已休眠/结束、只是官方枚举
+  //   停在旧值——绝非真在跑。据此把陈旧「运行」降为「完成(休眠)」, 使活跃/前台追踪只认真活跃者。
+  //   与创建时间保护(autoclean)正交: 那里判「是否近期新生·不可变 created_at」防误移出; 这里判
+  //   「是否此刻真活跃·可变 updated_at」防虚假运行, 两者各司其职、互不干扰。
+  function _runStaleMs() {
+    var m = 90;
+    try { var v = (root.localStorage && root.localStorage.getItem("rtflow.cfg.runStaleMin")); if (v != null) { var n = parseFloat(JSON.parse(v)); if (isFinite(n) && n > 0) m = n; } } catch (e) {}
+    return m * 60 * 1000;
+  }
+  // 账号级对账: ① sessStatus 判为 exhausted 时, 若该账号此刻确有可用额度(quotaLive===true) → 归「完成(休眠)」,
+  //   不计额度耗尽; 真耗尽(false)或额度未知(null)则保留官方耗尽信号。② 运行态陈旧门(见上)。其余分类不动。
+  //   供 recentConvAll/切号面板/通知共用。now 可注入(测试用), 缺省取当前时刻。
+  function sessStatusA(s, acct, now) {
     var st = sessStatus(s);
     if (st[0] === "exhausted" && quotaLive(acct && acct.quota) === true) return ["finished", "完成"];
+    if (st[0] === "running") {
+      var ts = sessTs(s);
+      var _now = (typeof now === "number" && now > 0) ? now : Date.now();
+      if (ts && _now - ts > _runStaleMs()) return ["finished", "完成(休眠)"];
+    }
     return st;
   }
 
+  // ── 每账号环境模式(Linux/Windows/macOS) 本地持久化 · 只作用于「新建对话」 ──
+  //   键 rtflow.envmode = { <email小写>: "linux"|"windows"|"macos" }; 缺省 linux。
+  //   三态循环步进: linux → windows → macos → linux (每号各自推进·互不相干)。
+  var ENVMODE_KEY = "rtflow.envmode";
+  function _emBridge() {
+    var N = root.Native; return (N && N.envModeGet && N.envModeSet) ? N : null;
+  }
+  function _emAll() {
+    try { var j = JSON.parse((root.localStorage && root.localStorage.getItem(ENVMODE_KEY)) || "{}"); return (j && typeof j === "object") ? j : {}; } catch (e) { return {}; }
+  }
+  function _emKey(acc) { return String((acc && (acc.email || acc.id)) || "").toLowerCase(); }
+  function getEnvMode(acc) {
+    var k = _emKey(acc); if (!k) return "linux";
+    var b = _emBridge();
+    if (b) { try { var v = b.envModeGet(k); if (v) return normPlatform(v); } catch (e) {} }
+    return normPlatform(_emAll()[k]);
+  }
+  function setEnvMode(acc, mode) {
+    var k = _emKey(acc); if (!k) return "linux";
+    var m = normPlatform(mode), all = _emAll(); all[k] = m;
+    var b = _emBridge();
+    if (b) { try { b.envModeSet(k, m); } catch (e) {} }
+    try { root.localStorage && root.localStorage.setItem(ENVMODE_KEY, JSON.stringify(all)); } catch (e) {}
+    return m;
+  }
+  function nextEnvMode(acc) {
+    var cur = getEnvMode(acc), i = ENV_PLATFORMS.indexOf(cur);
+    return setEnvMode(acc, ENV_PLATFORMS[(i + 1) % ENV_PLATFORMS.length]);
+  }
+  function envModeLabel(m) { var n = normPlatform(m); return n === "windows" ? "🪟 Windows" : n === "macos" ? "🍎 macOS" : "🐧 Linux"; }
+
   root.DaoCloud = {
+    ENV_PLATFORMS: ENV_PLATFORMS, normPlatform: normPlatform,
+    getEnvMode: getEnvMode, setEnvMode: setEnvMode, nextEnvMode: nextEnvMode, envModeLabel: envModeLabel,
     QUOTA_RE: QUOTA_RE, sessStatus: sessStatus, quotaLive: quotaLive, sessStatusA: sessStatusA,
     buildZip: buildZip, buildZipAsync: buildZipAsync, zipReadText: zipReadText, zipReadBin: zipReadBin, bytesToB64: bytesToB64, utf8Bytes: utf8Bytes, exportSessionZip: exportSessionZip,
     buildAccessGuide: buildAccessGuide,
-    purgeSession: purgeSession, sessTs: sessTs,
+    purgeSession: purgeSession, sessTs: sessTs, sessCreatedTs: sessCreatedTs,
     listSessions: listSessions, sessionDetail: sessionDetail, sessionMessages: sessionMessages,
     sessionEvents: sessionEvents, exportSession: exportSession, deleteSession: deleteSession,
     extractAllKeys: extractAllKeys, mapKeysToPaths: mapKeysToPaths,

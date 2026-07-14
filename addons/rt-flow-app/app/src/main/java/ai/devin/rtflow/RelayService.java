@@ -1072,7 +1072,9 @@ public class RelayService extends Service {
                         android.util.Log.w("RTFlowTunnel", "tunnel no URL after " + (TUNNEL_URL_TIMEOUT / 1000) + "s → restart");
                         tunnelRetries++;
                         try { t.stop(); } catch (Exception ignored) {}
-                        startCfTunnel();
+                        // 递增退避重启: 本网络若持续握手不通, 不再零间隔永动轮换(后台常驻 CPU/流量之源), 网络恢复即快速收敛。
+                        long backoff = Math.min(2000L * tunnelRetries, TUNNEL_RETRY_CAP);
+                        main.postDelayed(() -> { if (gen == tunnelGen && tunnelEnabledFlag()) startCfTunnel(); }, backoff);
                     }
                 }, TUNNEL_URL_TIMEOUT);
                 cfHealthFails = 0;
@@ -1146,9 +1148,11 @@ public class RelayService extends Service {
                     SshTunnelManager t = sshTunnel;
                     if (t != null && t.isAlive() && !t.hasUrl()) {
                         android.util.Log.w("RTFlowTunnel", "[ssh] no URL after " + (TUNNEL_URL_TIMEOUT / 1000) + "s → next edge");
-                        sshEdgeIdx++;
+                        sshEdgeIdx++; sshRetries++;
                         try { t.stop(); } catch (Exception ignored) {}
-                        startSshTunnel();
+                        // 递增退避换边缘: 所有公共边缘都拿不到 URL 时不再零间隔永动轮换, 网络恢复即快速收敛。
+                        long backoff = Math.min(2000L * sshRetries, TUNNEL_RETRY_CAP);
+                        main.postDelayed(() -> { if (gen == sshGen && tunnelEnabledFlag()) startSshTunnel(); }, backoff);
                     }
                 }, TUNNEL_URL_TIMEOUT);
                 sshHealthFails = 0;
@@ -1425,6 +1429,9 @@ public class RelayService extends Service {
         //  密钥 = PBKDF2(用户口令, 随机盐) → AES-256-GCM; 口令存于 relay-config.e2eKey,
         //  从不上送中继。授权驱动方(A群)经「取数指引 MD」获得同一口令即可解密。
         //  口令为空 = 关(明文, 向后兼容旧驱动)。
+        /** 每账号「新对话虚拟机环境」读/写 (与 MainActivity 官方页徽章/面板同一 SharedPreferences 真源)。 */
+        @JavascriptInterface public String envModeGet(String email) { return MainActivity.envModePrefGet(RelayService.this, email); }
+        @JavascriptInterface public void envModeSet(String email, String mode) { MainActivity.envModePrefSet(RelayService.this, email, mode); }
         @JavascriptInterface public boolean e2eEnabled() { return !e2eKeyVal().isEmpty(); }
         @JavascriptInterface public String e2eSeal(String plaintext) {
             try { String k = e2eKeyVal(); if (k.isEmpty() || plaintext == null) return ""; return E2E.seal(k, plaintext); }

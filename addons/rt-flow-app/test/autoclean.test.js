@@ -47,6 +47,7 @@ function makeEnv(opts) {
   };
   const DaoCloud = {
     sessTs: (s) => s.ts || 0,
+    sessCreatedTs: (s) => s.cts || 0,
     listSessions: async () => { calls.listSessions++; return opts.listFail ? { ok: false } : { ok: true, sessions: sessions }; },
     exportSessionZip: async (a, sid) => (opts.backupFail || (opts.failSids || []).indexOf(sid) >= 0) ? { ok: false } : { ok: true, b64: "eg==", events: 3, fileCount: 1 },
     exportSession: async (a, sid) => (opts.failSids || []).indexOf(sid) >= 0 ? { ok: false } : ({ ok: true, md: "# conv", events: 3 }),
@@ -179,6 +180,64 @@ function makeEnv(opts) {
     const envBig = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, cfg: { cleanStaleHours: 240 }, sessions: [{ devin_id: "s96", ts: now - 4 * DAY }] });
     const rBig = await envBig.inst.autoCleanFor(envBig.getAccs()[0]);
     ok(rBig.state === "cleaned" && envBig.calls.purged.length === 0, "调大 240h: 4 天前更新仍受保护 (" + rBig.state + ")");
+  }
+  // ── 场景 13: 创建时间不可变真源 —— 窗口内新建的对话即便已转终态也绝不被清理/移出 ──
+  //   (实测病灶·55号: 对话 <24h 即被移出 — 归零后会话数分钟内转 suspended 终态,
+  //    旧逻辑终态不计 fresh 且无 activeSeenAt 目击 → fresh=0 当轮即移出。created_at 为根治锚。)
+  {
+    // 10h 前创建·已 suspended·无本地目击 → 不清理不移出
+    const env13 = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [
+      { devin_id: "sNewDead", status: "suspended", ts: now - 10 * H, cts: now - 10 * H }] });
+    const r13 = await env13.inst.autoCleanFor(env13.getAccs()[0]);
+    ok(r13.state === "cleaned" && env13.calls.purged.length === 0 && env13.getAccs().length === 1,
+      "<24h 新建即便 suspended: 不清不移 (" + r13.state + ")");
+    // 71h 前创建·终态 → 仍在默认 72h 窗口内 → 保留
+    const env13b = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [
+      { devin_id: "s71", status: "suspended", ts: now - 71 * H, cts: now - 71 * H }] });
+    const r13b = await env13b.inst.autoCleanFor(env13b.getAccs()[0]);
+    ok(r13b.state === "cleaned" && env13b.calls.purged.length === 0 && env13b.getAccs().length === 1,
+      "71h 前新建终态对话: 72h 窗口内仍受保护 (" + r13b.state + ")");
+    // 创建已超窗口(4 天前生)·终态·仅 updated_at 被平台触碰到近期 → 不计 fresh(不阻移出) 但 ts 新仍 kept
+    //   (旧修复不回退: 老死号恒有一条假·新鲜会话不得永滞库中)
+    const env13c = makeEnv({ quota: { dPct: 0, overageDollars: 0 }, sessions: [
+      { devin_id: "sTouched", status: "suspended", ts: now - H, cts: now - 5 * DAY },
+      { devin_id: "sOld2", ts: now - 4 * DAY, cts: now - 5 * DAY }] });
+    const r13c = await env13c.inst.autoCleanFor(env13c.getAccs()[0]);
+    ok(r13c.state === "removed" && env13c.calls.purged.indexOf("sOld2") >= 0,
+      "老号终态会话仅 updated_at 被触碰: 不阻止归零移出 (" + r13c.state + ")");
+    // 移出时落中央总账 + 近期对话留底(sessionList·含账密快照) → 近期对话仍可见可登录
+    const ledgerKeys = Object.keys(env13c.files).filter((k) => k.indexOf("_移出总账/") === 0);
+    ok(ledgerKeys.length === 1, "移出落中央「_移出总账」(夹被覆盖也永可寻)");
+    const led = JSON.parse(env13c.files[ledgerKeys[0]]);
+    ok(led.account && led.account.email && typeof led.account.password === "string" && Array.isArray(led.sessionList) && led.sessionList.length === 2,
+      "总账含账密快照 + sessionList 对话留底 (近期对话可见·可登录)");
+    ok(led.sessionList[0].sid && typeof led.sessionList[0].ts === "number", "sessionList 每条含 sid/ts (近期对话排序可用)");
+  }
+  // ── 源级护栏: 移出号留影接入近期对话聊合 ──
+  {
+    const daopanSrc = fs.readFileSync(path.join(APP, "assets", "engine", "daopan.html"), "utf8");
+    ok(/function _mergeRemovedFromVault\(\)/.test(daopanSrc) && /_移出总账/.test(daopanSrc),
+      "daopan.html 本地路径合入「_移出总账」移出号对话(含账密快照·可登录)");
+    ok(/_移出总账/.test(engineSrc) && /removed:true/.test(engineSrc),
+      "engine.html recentConvAll 合入移出号留影(公网镜像同步可见)");
+    const cloudJs = fs.readFileSync(path.join(APP, "assets", "engine", "devin-cloud.js"), "utf8");
+    ok(/function sessCreatedTs\(s\)/.test(cloudJs) && /sessCreatedTs:\s*sessCreatedTs/.test(cloudJs),
+      "devin-cloud.js 导出 sessCreatedTs (只认创建字段·不掺 updated_at)");
+    ok(!/sessCreatedTs\(s\)\s*\{[\s\S]{0,400}updated_at/.test(cloudJs.slice(cloudJs.indexOf("function sessCreatedTs"))),
+      "sessCreatedTs 函数体不含 updated_at (不可变真源)");
+    // 留影窗口同源: daopan 与 engine 均读可配置 cleanStaleHours×3, 不再写死 3*72h (用户改配置两端一致)
+    ok(/rtflow\.cfg\.cleanStaleHours/.test(daopanSrc) && !/3\*72\*3600\*1000/.test(daopanSrc),
+      "daopan.html 留影窗口读可配置 cleanStaleHours×3 (写死 3*72h 已除)");
+    ok(/rtflow\.cfg\.cleanStaleHours/.test(engineSrc),
+      "engine.html 留影窗口同读可配置 cleanStaleHours");
+    // 移出号卡片动作恒用卡内快照账号(it.acc/t.acc), 绝不回退当前活跃号 (多号隔离·移出号可查可登可下载)
+    ok(/DaoCloud\.exportSession\(it\.acc, it\.sid/.test(daopanSrc) && /DaoCloud\.exportSession\(t\.acc, t\.sid/.test(daopanSrc),
+      "daopan.html 查看/下载/上传动作均传卡内快照账号 (不回退活跃号)");
+    ok(/if\(!it\.acc\.auth1\)\{ toast\("此号未解锁/.test(daopanSrc),
+      "daopan.html openAcc 无 auth1 快照时明确拒绝 (不冒名活跃号)");
+    const mainJava = fs.readFileSync(path.join(APP, "java", "ai", "devin", "rtflow", "MainActivity.java"), "utf8");
+    ok(/public void openAccountSession\(String accJson, String sid\)[\s\S]{0,400}newTab\(u, \(accJson == null \|\| accJson\.isEmpty\(\)\) \? null : accJson\)/.test(mainJava),
+      "原生 openAccountSession 用传入账号快照开标签 (不查活跃号)");
   }
   // ── 源级护栏: purgeSession 以 archive 为最强清除 (平台无硬删 REST 路由·DELETE 恒 404/405) ──
   {

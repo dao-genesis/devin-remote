@@ -378,7 +378,8 @@ async function rawRequest(method, targetUrl, headers, body, timeoutMs, agentOver
   let lastErr;
   for (let attempt = 0; attempt <= max; attempt++) {
     try {
-      const res = await _rawRequestOnce(method, targetUrl, headers, body, timeoutMs, agentOverride);
+      // 瞬断重试时钉 IPv4(国内 IPv6 到 AWS 黑洞/TLS 被掐) + 新 socket(不复用被污染连接)
+      const res = await _rawRequestOnce(method, targetUrl, headers, body, timeoutMs, attempt > 0 ? false : agentOverride, attempt > 0);
       // 429/5xx: 状态码层面的暂时性故障 — 退避后重试 (遵从 Retry-After), 而非当作
       // 「请求已失败」直接上抛。这正是多账号预载/普查时 login 误报 LOGIN_FAIL 的根因。
       if (_isRetryableStatus(res.status, method) && attempt < maxRl) {
@@ -394,7 +395,7 @@ async function rawRequest(method, targetUrl, headers, body, timeoutMs, agentOver
   }
   throw lastErr;
 }
-function _rawRequestOnce(method, targetUrl, headers, body, timeoutMs, agentOverride) {
+function _rawRequestOnce(method, targetUrl, headers, body, timeoutMs, agentOverride, forceV4) {
   return new Promise((resolve, reject) => {
     let u;
     try {
@@ -487,7 +488,8 @@ function _rawRequestOnce(method, targetUrl, headers, body, timeoutMs, agentOverr
         path: u.pathname + u.search,
         headers: hdrs,
         timeout: tout,
-        agent: agentOverride || (isHttps ? _httpsAgent : _httpAgent),
+        agent: agentOverride === false ? false : (agentOverride || (isHttps ? _httpsAgent : _httpAgent)),
+        family: forceV4 ? 4 : undefined,
         rejectUnauthorized: false,
       },
       isHttps ? https : http,
@@ -626,6 +628,16 @@ async function createSession(auth, prompt, opts) {
   if (opts.repos) payload.repos = opts.repos;
   if (opts.sessionSecrets) payload.session_secrets = opts.sessionSecrets;
   if (opts.idempotencyKey) payload.idempotency_key = opts.idempotencyKey;
+  // 官方环境模式(逆向自 app.devin.ai SPA): 新对话运行环境 additional_args.platform ∈
+  //   {linux,windows,macos} + 顶层 platform_explicitly_set; 只作用于新建对话, 不动运行中的对话。
+  if (opts.platform) {
+    const s = String(opts.platform).toLowerCase();
+    const pf = (s === "windows" || s === "win") ? "windows"
+      : (s === "macos" || s === "mac" || s === "osx" || s === "darwin") ? "macos" : "linux";
+    payload.additional_args = payload.additional_args || {};
+    payload.additional_args.platform = pf;
+    payload.platform_explicitly_set = true;
+  }
   const r = await jsonRequest("POST", CFG.apiBase + "/sessions", authHeaders(auth), payload);
   if (r.status === 200 || r.status === 201) {
     const j = r.json || {};
@@ -1757,6 +1769,29 @@ async function backupConversationsBundle(auth, sessList, outDir, opts) {
 }
 
 // 备份某账号全部对话 (增量) → <root>/<账号名>/
+// 非本人「自动化对话」判定 — 与手机 APK devin-cloud.js isAutoConv 同源(唯一真源):
+//   只认可靠结构化信号(onboarding/自动化标签·playbook·automation 字段·样板仓名),
+//   绝不用「动词起头/超短名」等标题启发式(否则本人英文对话被误判)。
+const DC_AUTO_REPO = /\b(blog-drafts|notes|dotfiles|code-snippets|utils-py|learn-cs)-\d+/i;
+const DC_AUTO_TAG = /^(auto|automation|automated|batch|scheduled|schedule|cron|bot|onboarding)\b|自动/i;
+function isAutoConv(x) {
+  try {
+    const s = (x && typeof x === "object") ? x : null;
+    const title = s ? String(s.title || s.name || s.prompt || s.devin_id || s.session_id || s.id || "") : String(x == null ? "" : x);
+    if (s) {
+      const tags = s.tags || s.session_tags || (s.session && s.session.tags) || [];
+      if (Array.isArray(tags)) for (let i = 0; i < tags.length; i++)
+        if (DC_AUTO_TAG.test(String(tags[i] && tags[i].name || tags[i]))) return true;
+      if (s.playbook_id || s.playbookId) return true;
+      if (s.is_automated === true || s.created_by_automation === true || s.origin === "automation" || s.trigger_type === "scheduled" || s.source === "automation") return true;
+    }
+    const t = title.trim();
+    if (!t) return false;
+    if (DC_AUTO_REPO.test(t)) return true;
+    return false;
+  } catch (e) { return false; }
+}
+
 async function backupAccount(auth, opts) {
   opts = opts || {};
   const root = opts.targetDir || DC_BACKUP_DEFAULT;
@@ -1764,10 +1799,12 @@ async function backupAccount(auth, opts) {
   const accountDir = resolveAccountDir(root, auth, opts);
   const r = await listSessions(auth, 1000);
   const sessions = r.sessions || [];
-  const result = { ok: true, account: auth.email, dir: accountDir, total: sessions.length, backedUp: 0, skipped: 0, failed: 0, items: [] };
+  const result = { ok: true, account: auth.email, dir: accountDir, total: sessions.length, backedUp: 0, skipped: 0, skippedAuto: 0, failed: 0, items: [] };
   for (let i = 0; i < sessions.length; i++) {
     prog("备份 " + (i + 1) + "/" + sessions.length + " ...");
     try {
+      // 自动化对话不进新备份, 只跳过不删 —— 历史备份数据一律不动(与手机 APK 同源)。
+      if (isAutoConv(sessions[i])) { result.skippedAuto++; result.skipped++; result.items.push({ devinId: sessions[i] && (sessions[i].session_id || sessions[i].id) || "", skipped: true, reason: "auto-conv" }); continue; }
       const one = await backupOneConversation(auth, sessions[i], accountDir, opts);
       result.items.push(one);
       one.skipped ? result.skipped++ : result.backedUp++;
@@ -2266,7 +2303,10 @@ async function localizeConvMedia(auth, convDir, md) {
 // 把 URL→本地相对路径映射应用到正文; escaped=true 时按 HTML 转义形态(& → &amp;)替换。
 function applyMediaMap(text, map, escaped) {
   let s = String(text || "");
-  for (const url of Object.keys(map)) {
+  // 按 URL 长度降序替换: 防「短 URL 是长 URL 前缀」(如 .../a.png 与 .../a.png?sig=…) 时,
+  //   先替短的会把长 URL 里的前缀段也换掉 → 长 URL 残损。长的先替即互不干扰。
+  const urls = Object.keys(map).sort((a, b) => b.length - a.length);
+  for (const url of urls) {
     const from = escaped ? url.replace(/&/g, "&amp;") : url;
     s = s.split(from).join(map[url]);
   }
@@ -2935,6 +2975,7 @@ module.exports = {
   authHeaders,
   // reads
   listSessions,
+  isAutoConv,
   getSessionDetail,
   getEventStream,
   fetchEventStreamDetailed,

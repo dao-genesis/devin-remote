@@ -259,6 +259,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const https = require("node:https");
+const net = require("node:net");
+const tls = require("node:tls");
 const crypto = require("node:crypto");
 const { URL } = require("node:url");
 // 第五板块 · Devin Cloud 接入底层 (对话提取/备份/追踪/水过无痕清理)
@@ -383,8 +385,67 @@ function _daoDownloadsIndexPath() { return path.join(_daoDownloadsDir(), "_index
 function _listDaoDownloads() {
   try {
     const idx = JSON.parse(fs.readFileSync(_daoDownloadsIndexPath(), "utf8")) || [];
-    return idx.filter((d) => { try { return d && d.path && fs.existsSync(d.path); } catch (e) { return false; } });
+    const now = Date.now();
+    // 状态条目(下载中/失败·无 path)一并罗列(浏览器级下载状态); 陈旧的(active>10min / failed>24h)自清。
+    return idx.filter((d) => {
+      try {
+        if (d && d.state === "active") return now - (d.time || 0) < 600000;
+        if (d && d.state === "failed") return now - (d.time || 0) < 86400000;
+        return d && d.path && fs.existsSync(d.path);
+      } catch (e) { return false; }
+    });
   } catch (e) { return []; }
+}
+// 本页资源 ⬇下载: 把页内图片/视频/附件 URL 拉到下载库(同浏览器下载管理同源 _index.json · 对齐手机 APK 媒体悬浮窗保存)。
+function _daoDlSafeName(n, url) {
+  let s = String(n || "").trim();
+  if (!s) { try { s = decodeURIComponent(String(new URL(url).pathname).split("/").pop() || ""); } catch (e) {} }
+  s = s.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_").slice(0, 120);
+  return s || ("file_" + Date.now().toString(36));
+}
+function _daoDlIndexAdd(entry) {
+  const p = _daoDownloadsIndexPath();
+  let idx = []; try { idx = JSON.parse(fs.readFileSync(p, "utf8")) || []; } catch (e) {}
+  idx.unshift(entry); idx = idx.slice(0, 500);
+  try { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(idx)); } catch (e) {}
+}
+async function _daoDownloadUrl(url, name) {
+  url = String(url || "");
+  const dir = _daoDownloadsDir();
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+  let fname = _daoDlSafeName(name, url);
+  let dest = path.join(dir, fname);
+  for (let n = 1; fs.existsSync(dest) && n < 100; n++) { const ext = path.extname(fname); dest = path.join(dir, path.basename(fname, ext) + "(" + n + ")" + ext); }
+  try {
+    if (/^data:/i.test(url)) {
+      const mm = url.match(/^data:([^;,]*)(;base64)?,(.*)$/i);
+      if (!mm) return { ok: false, error: "data URL 不可解" };
+      const buf = mm[2] ? Buffer.from(mm[3], "base64") : Buffer.from(decodeURIComponent(mm[3]), "utf8");
+      fs.writeFileSync(dest, buf);
+      _daoDlIndexAdd({ name: path.basename(dest), path: dest, size: buf.length, url: "", time: Date.now() });
+      return { ok: true, name: path.basename(dest), path: dest, size: buf.length };
+    }
+    if (!/^https?:\/\//i.test(url)) return { ok: false, error: "仅支持 http(s)/data 链接" };
+    const buf = await new Promise((resolve, reject) => {
+      const get = (u, left) => {
+        const mod = /^https:/i.test(u) ? https : require("node:http");
+        const req = mod.get(u, { headers: { "user-agent": "Mozilla/5.0", accept: "*/*" } }, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && left > 0) { res.resume(); return get(new URL(res.headers.location, u).toString(), left - 1); }
+          if (res.statusCode !== 200) { res.resume(); return reject(new Error("HTTP " + res.statusCode)); }
+          const chunks = []; let total = 0;
+          res.on("data", (c) => { total += c.length; if (total > 512 * 1024 * 1024) { req.destroy(); return reject(new Error("文件超 512MB")); } chunks.push(c); });
+          res.on("end", () => resolve(Buffer.concat(chunks)));
+          res.on("error", reject);
+        });
+        req.on("error", reject);
+        req.setTimeout(120000, () => { req.destroy(); reject(new Error("下载超时")); });
+      };
+      get(url, 5);
+    });
+    fs.writeFileSync(dest, buf);
+    _daoDlIndexAdd({ name: path.basename(dest), path: dest, size: buf.length, url, time: Date.now() });
+    return { ok: true, name: path.basename(dest), path: dest, size: buf.length };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 }
 function _delDaoDownload(p) {
   try {
@@ -744,8 +805,28 @@ html.m #hint{font-size:14px;padding:18px}
 #dlwin .dwx{background:#21262d;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:5px 10px;font-size:12px;cursor:pointer;flex:0 0 auto}
 #dlwin .empty{color:#6e7681;text-align:center;padding:26px 12px;font-size:13px}
 #dlwin .tip{font-size:11px;color:#6e7681;padding:4px 4px 6px}
-/* 悬浮窗可缩放(对齐常规软件·拖边框/拖角) — daowin/dlwin 同 */
-#daowin,#dlwin{min-width:340px;min-height:240px}
+/* 本页资源悬浮窗(对齐手机 APK media.html) — 皮肤与 dlwin 同 */
+#mrwin{position:absolute;top:44px;right:10px;width:480px;height:66%;max-width:96vw;max-height:88%;background:#0e1116;border:1px solid #2a313c;border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.6);z-index:27;display:none;flex-direction:column;overflow:hidden}
+#mrwin.on{display:flex}
+#mrwin .dwh{display:flex;align-items:center;gap:8px;padding:8px 11px;background:#161b22;border-bottom:1px solid #21262d;cursor:move;flex:0 0 auto;user-select:none}
+#mrwin .dwh .t{flex:1;font-size:13px;font-weight:700;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mrwin .dwbar{display:flex;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
+#mrwin .dlbody{flex:1;overflow:auto;padding:6px 8px 30px}
+#mrwin .rc{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:8px 9px;margin-bottom:7px;display:flex;gap:9px;align-items:center}
+#mrwin .rc .th{width:44px;height:44px;object-fit:cover;border-radius:6px;background:#21262d;flex:0 0 auto}
+#mrwin .rc .bd{flex:1;min-width:0}
+#mrwin .rc .ti{font-size:13px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mrwin .rc .meta{font-size:11px;color:#8b949e;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mrwin .acts{display:flex;gap:6px;flex:0 0 auto}
+#mrwin .b{background:#21262d;border:1px solid #30363d;border-radius:6px;padding:6px 8px;font-size:12px;cursor:pointer;color:#cdd3de;white-space:nowrap}
+#mrwin .b:hover{background:#2d333b}
+#mrwin .mini{background:#21262d;color:#cdd3de;border:1px solid #30363d;border-radius:6px;padding:6px 9px;font-size:12px;cursor:pointer;white-space:nowrap}
+#mrwin .dwx{background:#21262d;border:1px solid #30363d;border-radius:6px;color:#cdd3de;padding:5px 10px;font-size:12px;cursor:pointer;flex:0 0 auto}
+#mrwin .empty{color:#6e7681;text-align:center;padding:26px 12px;font-size:13px}
+#mrwin .tip{font-size:11px;color:#6e7681;padding:4px 4px 6px}
+#mrwin .sec{font-size:12px;font-weight:700;color:#8b949e;margin:8px 2px 5px}
+/* 悬浮窗可缩放(对齐常规软件·拖边框/拖角) — daowin/dlwin/mrwin 同 */
+#daowin,#dlwin,#mrwin{min-width:340px;min-height:240px}
 .rzh{position:absolute;z-index:30;user-select:none;-webkit-user-select:none}
 .rzh.e{top:6px;bottom:14px;right:0;width:6px;cursor:ew-resize}
 .rzh.w{top:6px;bottom:14px;left:0;width:6px;cursor:ew-resize}
@@ -776,6 +857,7 @@ html.m #hint{font-size:14px;padding:18px}
     <button class="tbtn" id="bStar" title="收藏当前页">☆</button>
     <button class="tbtn" id="bTr" title="整页翻译(Edge 引擎·对照手机 APK)·再点恢复原文">译</button>
     <button class="tbtn" id="bDl" title="下载 · 网页内下载的文件(浏览器下载管理)">⬇</button>
+    <button class="tbtn" id="bMr" title="本页资源 · 图片/视频/文档/附件(对齐手机 APK)">🖼</button>
     <button class="tbtn" id="bBk" title="对话备份 · 近期对话 / 对话记录">📁</button>
     <button class="tbtn" id="bExt" title="用系统浏览器打开当前页">↗</button>
   </div>
@@ -809,6 +891,12 @@ html.m #hint{font-size:14px;padding:18px}
   <div class="dwh" id="dlHead"><span>⬇</span><span class="t" id="dlTitle">下载</span><button class="dwx" id="dlClose">✕ 关闭</button></div>
   <div class="dwbar"><button class="mini" id="dlRefresh">🔄 刷新</button><button class="mini" id="dlFolder">📁 下载文件夹</button></div>
   <div class="dlbody"><div class="tip">浏览器下载 · 在网页中下载的文件都会出现在这里 · <b>拖文件卡到网页</b>即上传到当前网页上传框(与对话备份无关 · 对齐手机 APK)</div><div id="dlList"><div class="empty">加载中…</div></div></div>
+  <div class="rzh e" data-rz="e"></div><div class="rzh w" data-rz="w"></div><div class="rzh n" data-rz="n"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
+</div>
+<div id="mrwin">
+  <div class="dwh" id="mrHead"><span>🖼</span><span class="t" id="mrTitle">本页资源</span><button class="dwx" id="mrClose">✕ 关闭</button></div>
+  <div class="dwbar"><button class="mini" id="mrRefresh">🔄 重采</button><span class="tip" id="mrSrc" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span></div>
+  <div class="dlbody"><div class="tip">汇集当前页全部图片 / 视频 / 音频 / 文档 / 附件 · 加载不出的资源也可在此直开(对齐手机 APK 本页媒体悬浮窗)</div><div id="mrList"><div class="empty">点「🔄 重采」扫描当前页</div></div></div>
   <div class="rzh e" data-rz="e"></div><div class="rzh w" data-rz="w"></div><div class="rzh n" data-rz="n"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
 </div>
 <div class="dtoast" id="daotoast"></div>
@@ -895,7 +983,7 @@ function mkTab(m){var id=m.id;if(tabs[id]){if(m.url&&tabs[id].url!==m.url){tabs[
   btn.title='双击复制账号密码';
   BAR.appendChild(btn);
   var fr=document.createElement('iframe');fr.setAttribute('allow','clipboard-read; clipboard-write; microphone; camera');fr.style.display='none';
-  fr.addEventListener('load',function(){setLoading(id,false);});fr.addEventListener('error',function(){setLoading(id,false);});
+  fr.addEventListener('load',function(){setLoading(id,false);try{_mrPrecollect(id);}catch(e){}});fr.addEventListener('error',function(){setLoading(id,false);});
   S.appendChild(fr);
   m.baseLabel=m.baseLabel||m.label||'';
   tabs[id]={btn:btn,frame:fr,url:m.url,email:m.email||'',zoom:1,meta:m,loading:false,_loaded:false,_dot:dot,_lbl:lb,_amt:am};order.push(id);applyZoom(tabs[id]);setActive(id);sync();schedPersist();try{schedStatusSoon();}catch(e){}
@@ -1124,6 +1212,9 @@ function renderDownloads(){if(!_bkTree){showOverlay('⬇ 下载','<div class="em
   showOverlay('⬇ 下载 ('+all.length+')',body);_bkBindActions();}
 // ── 归一 · 下载/备份悬浮窗(复刻手机端 APK daopan.html) · CSP 安全(事件委托·无内联 onclick) ──
 var DAO_REC=[],CV_TABS=[],CV_ACT=-1,_daoBkQ='',_convDrag=null,_convDragActive=false,_bkOpen={};
+// 自动化对话默认隐藏(对齐手机 daopan.html: 只隐不删·搜索时不隐免漏检)
+var _showAuto=false;try{_showAuto=localStorage.getItem('dao.showAutoConv')==='1';}catch(e){}
+function daoToggleAuto(){_showAuto=!_showAuto;try{localStorage.setItem('dao.showAutoConv',_showAuto?'1':'0');}catch(e){}daoRenderRecent();}
 var DAO_REC_VIEW_MAX=34; // 近期对话(☁)无搜索时只显示最近此条数(对齐手机 APK·精简);全量按号分层在「🗂 对话记录(备份)」
 function _dEl(id){return document.getElementById(id);}
 function daoToast(msg,bad){var t=_dEl('daotoast');if(!t)return;t.textContent=msg;t.className='dtoast show'+(bad?' fail':' ok');clearTimeout(t._tm);t._tm=setTimeout(function(){t.className='dtoast';},2200);}
@@ -1136,13 +1227,59 @@ function _fsize(n){n=+n||0;if(n<1024)return n+' B';if(n<1048576)return (n/1024).
 function dlOpen(){_dEl('dlwin').className='on';dlLoad();}
 function dlClose(){_dEl('dlwin').className='';}
 function dlLoad(){if(!DAO_DL.length)_dEl('dlList').innerHTML='<div class="empty">加载中…</div>';vscode.postMessage({type:'shellDownloads'});}
+var _dlAutoT=null;
 function dlRender(){var box=_dEl('dlList');if(!box)return;
   if(!DAO_DL.length){box.innerHTML='<div class="empty">暂无下载 · 在网页中下载文件后会自动出现在这里</div>';var t=_dEl('dlTitle');if(t)t.textContent='下载';return;}
-  var h='';for(var i=0;i<DAO_DL.length;i++){var d=DAO_DL[i];var host='';try{host=new URL(d.url||'').host;}catch(e){}
+  var h='',nAct=0;for(var i=0;i<DAO_DL.length;i++){var d=DAO_DL[i];var host='';try{host=new URL(d.url||'').host;}catch(e){}
+    // 浏览器级下载状态(对齐手机 APK): active=下载中(进度条), failed=失败, 无 state=已完成。
+    if(d.state==='active'){nAct++;var pct=(d.total>0)?Math.min(100,Math.round(d.size*100/d.total)):-1;
+      h+='<div class="rc"><div class="ti" title="'+esc(d.name||'')+'">⏳ '+esc(d.name||'(未命名)')+'</div>'+
+        '<div class="meta"><span style="color:var(--acc,#4ec9b0)">下载中'+(pct>=0?' '+pct+'%':'…')+'</span><span>'+_fsize(d.size)+(d.total>0?' / '+_fsize(d.total):'')+'</span>'+(host?'<span>'+esc(host)+'</span>':'')+'</div>'+
+        (pct>=0?'<div style="height:3px;border-radius:2px;background:rgba(128,128,128,.25);margin:4px 0"><div style="height:100%;border-radius:2px;width:'+pct+'%;background:var(--acc,#4ec9b0)"></div></div>':'')+'</div>';continue;}
+    if(d.state==='failed'){
+      h+='<div class="rc"><div class="ti" title="'+esc(d.name||'')+'">✖ '+esc(d.name||'(未命名)')+'</div>'+
+        '<div class="meta"><span style="color:#f48771">下载失败</span>'+(host?'<span>'+esc(host)+'</span>':'')+(d.time?'<span>'+daoAgo(d.time)+'</span>':'')+'</div></div>';continue;}
     h+='<div class="rc" draggable="false" data-dldrag="'+esc(d.path||'')+'" data-dlname="'+esc(d.name||'')+'" title="拖拽此文件可上传/发送"><div class="ti" title="'+esc(d.name||'')+'">'+esc(d.name||'(未命名)')+'</div>'+
       '<div class="meta"><span>'+_fsize(d.size)+'</span>'+(host?'<span>'+esc(host)+'</span>':'')+(d.time?'<span>'+daoAgo(d.time)+'</span>':'')+'</div>'+
       '<div class="acts"><span class="b pri" data-dlup="'+esc(d.path||'')+'" data-dlupname="'+esc(d.name||'')+'" title="上传此文件到当前打开的网页上传框(对齐手机 APK·免拖拽)">⬆ 传网页</span><span class="b" data-dlopen="'+esc(d.path||'')+'">打开</span><span class="b" data-dlrev="'+esc(d.path||'')+'">所在文件夹</span><span class="b" data-dldel="'+esc(d.path||'')+'">删除</span></div></div>';}
-  box.innerHTML=h;var tt=_dEl('dlTitle');if(tt)tt.textContent='下载 ('+DAO_DL.length+')';}
+  box.innerHTML=h;var tt=_dEl('dlTitle');if(tt)tt.textContent='下载 ('+DAO_DL.length+(nAct?' · '+nAct+'下载中':'')+')';
+  // 有活跃下载时自动轮刷(悬浮窗开着才轮), 完成即停 — 对齐浏览器下载面板实时性。
+  clearTimeout(_dlAutoT);if(nAct&&_dEl('dlwin')&&_dEl('dlwin').className==='on')_dlAutoT=setTimeout(dlLoad,1200);}
+// ── 本页资源悬浮窗(对齐手机 APK media.html): 扫当前标签页内全部图片/视频/音频/文档/附件 ──
+//   同源 iframe 直扫 DOM; 跨源(仍经代理但文档不可达)时用页内桥(__daoMediaScan → __daoMediaList)。
+var MR_ITEMS=[],MR_PAGE='',_mrWaitT=null,MR_CACHE={},_mrPreT={};
+var MR_META={img:['🖼','图片'],video:['🎬','视频'],audio:['🎵','音频'],md:['📄','Markdown 文档'],file:['📦','文件 / 附件']};
+function mrOpen(){_dEl('mrwin').className='on';var c=active&&MR_CACHE[active];if(c&&c.items&&c.items.length){MR_ITEMS=c.items;MR_PAGE=c.page||'';mrRender();}mrLoad();}
+// 页面加载后延迟预采集(对齐手机 APK scheduleMediaPrecollect): 同源可直扫则缓存, 开窗秒显。
+function _mrPrecollect(id){clearTimeout(_mrPreT[id]);_mrPreT[id]=setTimeout(function(){try{var t=tabs[id];if(!t||!t.frame)return;var doc=null;try{doc=t.frame.contentDocument||(t.frame.contentWindow&&t.frame.contentWindow.document);}catch(e){}
+  if(doc&&doc.documentElement){MR_CACHE[id]={items:_mrScanDoc(doc,(t.url||doc.baseURI||'')),page:t.url||doc.baseURI||'',ts:Date.now()};}}catch(e){}},1200);}
+function mrClose(){_dEl('mrwin').className='';}
+function _mrScanDoc(doc,base){var out=[],seen={};function push(u,tp,nm){try{if(!u)return;u=String(u);if(u.indexOf('data:')===0&&u.length>2048)return;try{u=new URL(u,base).href;}catch(e){}if(seen[u])return;seen[u]=1;out.push({u:u,t:tp,n:nm||decodeURIComponent((u.split('/').pop()||'').split('?')[0])||tp});}catch(e){}}
+  function walk(root){var i,es;try{es=root.querySelectorAll('img[src]');}catch(e){return;}for(i=0;i<es.length;i++){var el=es[i];if((el.naturalWidth||0)>32||(el.width||0)>32)push(el.currentSrc||el.src,'img',el.alt);}
+    try{es=root.querySelectorAll('video');}catch(e){es=[];}for(i=0;i<es.length;i++){push(es[i].currentSrc||es[i].src,'video');var ss=es[i].querySelectorAll('source[src]');for(var j=0;j<ss.length;j++)push(ss[j].src,'video');}
+    try{es=root.querySelectorAll('audio[src],audio source[src]');}catch(e){es=[];}for(i=0;i<es.length;i++)push(es[i].src,'audio');
+    try{es=root.querySelectorAll('a[href]');}catch(e){es=[];}for(i=0;i<es.length;i++){var hh=es[i].href||'';if(/\\/attachments\\//.test(hh)||/\\.(md|pdf|zip|txt|json|csv|log|doc|docx|xls|xlsx|apk|mp4|webm|mov|mp3|wav|png|jpe?g|gif|webp|svg)(\\?|$)/i.test(hh)){var ext=(hh.split('?')[0].split('.').pop()||'').toLowerCase();var tp=/^(png|jpe?g|gif|webp|svg)$/.test(ext)?'img':(/^(mp4|webm|mov)$/.test(ext)?'video':(/^(mp3|wav)$/.test(ext)?'audio':(ext==='md'?'md':'file')));push(hh,tp,(es[i].getAttribute('download')||es[i].textContent||'').trim().slice(0,80));}}
+    var all;try{all=root.querySelectorAll('*');}catch(e){return;}for(i=0;i<all.length;i++){if(all[i].shadowRoot)walk(all[i].shadowRoot);}}
+  walk(doc);return out.slice(0,300);}
+function mrLoad(){var t=active?tabs[active]:null;var box=_dEl('mrList');
+  if(!t||!t.frame){if(box)box.innerHTML='<div class="empty">没有活动标签页</div>';return;}
+  var doc=null;try{doc=t.frame.contentDocument||(t.frame.contentWindow&&t.frame.contentWindow.document);}catch(e){}
+  if(doc&&doc.documentElement){MR_ITEMS=_mrScanDoc(doc,(t.url||doc.baseURI||''));MR_PAGE=t.url||doc.baseURI||'';MR_CACHE[active]={items:MR_ITEMS,page:MR_PAGE,ts:Date.now()};mrRender();return;}
+  // 跨源 → 页内桥扫描(代理页已注入 /__daobridge.js 响应 __daoMediaScan)
+  if(box&&!MR_ITEMS.length)box.innerHTML='<div class="empty">扫描中…</div>';
+  try{t.frame.contentWindow.postMessage({__daoMediaScan:1},'*');}catch(e){}
+  clearTimeout(_mrWaitT);_mrWaitT=setTimeout(function(){if(box&&!MR_ITEMS.length)box.innerHTML='<div class="empty">本页不可扫描(跨源且页内桥未就绪) · 可先刷新页面</div>';},2500);}
+function _mrOnList(m){clearTimeout(_mrWaitT);MR_ITEMS=m.__daoMediaList||[];MR_PAGE=m.__daoPage||'';if(active)MR_CACHE[active]={items:MR_ITEMS,page:MR_PAGE,ts:Date.now()};mrRender();}
+function mrRender(){var box=_dEl('mrList');if(!box)return;var sr=_dEl('mrSrc');if(sr)sr.textContent=MR_PAGE?('来源: '+MR_PAGE):'';
+  if(!MR_ITEMS.length){box.innerHTML='<div class="empty">本页未发现媒体资源<br>(图片 / 视频 / 文档 / 附件)</div>';var tt0=_dEl('mrTitle');if(tt0)tt0.textContent='本页资源';return;}
+  var ord=['img','video','audio','md','file'],h='';
+  for(var oi=0;oi<ord.length;oi++){var tp=ord[oi];var grp=MR_ITEMS.filter(function(x){return (x.t||'file')===tp;});if(!grp.length)continue;
+    h+='<div class="sec">'+MR_META[tp][0]+' '+MR_META[tp][1]+' · '+grp.length+'</div>';
+    for(var i=0;i<grp.length;i++){var it=grp[i];var idx=MR_ITEMS.indexOf(it);
+      h+='<div class="rc">'+(tp==='img'?'<img class="th" loading="lazy" src="'+esc(it.u)+'" onerror="this.style.opacity=.25">':'<span class="th" style="display:flex;align-items:center;justify-content:center;font-size:20px">'+MR_META[tp][0]+'</span>')
+        +'<div class="bd"><div class="ti" title="'+esc(it.n||'')+'">'+esc(it.n||'(未命名)')+'</div><div class="meta" title="'+esc(it.u)+'">'+esc(it.u)+'</div></div>'
+        +'<div class="acts"><span class="b" data-mropen="'+idx+'">打开</span><span class="b pri" data-mrdl="'+idx+'" title="下载此资源到下载库(⬇悬浮窗可见·可拖上传)">⬇ 下载</span><span class="b" data-mrcopy="'+idx+'">复制链接</span></div></div>';}}
+  box.innerHTML=h;var tt=_dEl('mrTitle');if(tt)tt.textContent='本页资源 ('+MR_ITEMS.length+')';}
 function daoTab(t){var rec=t==='recent';
   _dEl('dwTabR').classList.toggle('on',rec);_dEl('dwTabB').classList.toggle('on',!rec);
   _dEl('dwViewR').classList.toggle('on',rec);_dEl('dwViewB').classList.toggle('on',!rec);
@@ -1187,11 +1324,13 @@ function daoRenderRecent(){var q=(_dEl('dwQ').value||'').trim().toLowerCase(),bo
   // 无搜索时只渲染最近 DAO_REC_VIEW_MAX 条(DAO_REC 已按 updatedAt 降序;slice 自头取保留原 idx 映射);
   // 有搜索时跨全量匹配。全量历史在「🗂 对话记录(备份)」按号分层。
   var src=q?DAO_REC:DAO_REC.slice(0,DAO_REC_VIEW_MAX);
-  var html='';src.forEach(function(it,idx){
+  var html='',hidAuto=0;src.forEach(function(it,idx){
+    if(it.auto&&!_showAuto&&!q){hidAuto++;return;}
     if(q){var hay=((it.email||'')+' '+it.title+' '+it.sid+' '+it.accNo).toLowerCase();if(hay.indexOf(q)<0)return;}
     html+='<div class="rc" draggable="false" data-cdrag="1" data-email="'+esc(it.email||'')+'" data-sid="'+esc(it.sid||'')+'" data-title="'+esc(it.title||'')+'"><div class="r1"><span class="acc-no">#'+esc(String(it.accNo))+'</span><span class="st '+esc(it.statusClass||'')+'" title="'+esc(it.status||'')+'"></span><span class="ti" title="'+esc(it.title)+'">'+esc(String(it.title).slice(0,70))+'</span></div>'+
       '<div class="meta"><span>'+esc(String(it.email||'').split('@')[0])+'</span>'+(it.status?'<span>'+esc(it.status)+'</span>':'')+(it.updatedAt?'<span>'+daoAgo(it.updatedAt)+'</span>':'')+'</div>'+
       '<div class="acts"><span class="b" data-act="view" data-idx="'+idx+'">👁 查看</span><span class="b" data-act="enter" data-idx="'+idx+'" title="切到该账号并在网页端打开此对话">🌐 进入</span><span class="b" data-act="md" data-idx="'+idx+'">⬇ MD</span><span class="b pri" data-act="zip" data-idx="'+idx+'">📦 全部文件</span><span class="b" data-act="up" data-idx="'+idx+'" title="上传此对话内容(MD)到当前打开的网页上传框(对齐手机 APK·免拖拽)">⬆ 传网页</span></div></div>';});
+  if(!q&&(hidAuto>0||_showAuto)){html='<div class="empty" style="padding:8px 0;font-size:12px">'+(_showAuto?'自动化对话已展开':'已隐藏 '+hidAuto+' 个自动化对话')+' · <a href="javascript:void 0" data-autotoggle="1" style="color:#58a6ff;cursor:pointer">'+(_showAuto?'收起':'显示')+'</a></div>'+html;}
   if(!q&&DAO_REC.length>DAO_REC_VIEW_MAX){html+='<div class="empty" style="padding:8px 4px;line-height:1.5">仅显示最近 '+DAO_REC_VIEW_MAX+' 条 · 共 '+DAO_REC.length+' 条<br>搜索可跨全部 · 全量历史见 🗂 对话记录(备份)</div>';}
   box.innerHTML=html||'<div class="empty">无匹配 · 清空搜索查看全部</div>';try{box.scrollTop=_sc;}catch(e){}}
 function daoEnter(idx){var it=DAO_REC[idx];if(!it)return;vscode.postMessage({type:'openCloudPage',path:'sessions/'+String(it.sid||'').replace(/^devin-/,''),label:it.title});daoToast('已请求打开 · '+String(it.email||'').split('@')[0]);}
@@ -1247,7 +1386,8 @@ function daoRenderBackup(){var box=_dEl('dwBackup');if(!box)return;if(!_bkTree){
   box.innerHTML=body||'<div class="empty">无备份记录 · 先在「💬对话备份」板块备份或开启自动备份</div>';
   var ttl=_dEl('dwTitle');if(ttl)ttl.textContent='下载 / 备份库 ('+na+'账号·'+nc+'对话'+(q?'·已筛':'')+')';}
 // 事件委托(CSP 安全): 所有悬浮窗内点击统一在 #daowin 上处理
-_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal],[data-bkcopy],[data-bkacc]');if(!el)return;
+_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal],[data-bkcopy],[data-bkacc],[data-autotoggle]');if(!el)return;
+  if(el.hasAttribute('data-autotoggle')){daoToggleAuto();return;}
   var bcp=el.getAttribute('data-bkcopy');if(bcp!=null){e.stopPropagation();vscode.postMessage({type:'copyCredEmail',email:bcp});return;}
   var bk=el.getAttribute('data-bkacc');if(bk!=null){_bkOpen[bk]=!_bkOpen[bk];daoRenderBackup();return;}
   var a=el.getAttribute('data-act');if(a){var idx=+el.getAttribute('data-idx');if(a==='view')daoView(idx);else if(a==='enter')daoEnter(idx);else if(a==='md')daoMd(idx);else if(a==='zip')daoZip(idx);else if(a==='up'){var _it=DAO_REC[idx];if(_it){if(_daoUploadToActive({kind:'conv',email:_it.email,sid:_it.sid,title:_it.title})){daoToast('⏳ 上传此对话到当前网页 · '+String(_it.title||_it.sid||'').slice(0,24));try{daoClose();}catch(_e){}}}}return;}
@@ -1358,7 +1498,11 @@ _dEl('dlwin').addEventListener('click',function(e){var el=e.target.closest&&e.ta
       if(dir.indexOf('w')>=0){var nw2=Math.max(340,Math.min(window.innerWidth-8,sw-(e.clientX-sx)));w.style.left=(sl+sw-nw2)+'px';w.style.width=nw2+'px';}
       if(dir.indexOf('n')>=0){var nh2=Math.max(240,Math.min(window.innerHeight-8,sh-(e.clientY-sy)));w.style.top=Math.max(0,st+sh-nh2)+'px';w.style.height=nh2+'px';}});
     window.addEventListener('mouseup',function(){if(rz){rz=false;saveSz(w);}});}
-  mk(_dEl('daowin'));mk(_dEl('dlwin'));})();
+  mk(_dEl('daowin'));mk(_dEl('dlwin'));mk(_dEl('mrwin'));})();
+(function(){var w=_dEl('mrwin'),hd=_dEl('mrHead'),dx=0,dy=0,drag=false;if(!w||!hd)return;
+  hd.addEventListener('mousedown',function(e){if(e.target.closest('button'))return;drag=true;var r=w.getBoundingClientRect();dx=e.clientX-r.left;dy=e.clientY-r.top;e.preventDefault();});
+  document.addEventListener('mousemove',function(e){if(!drag)return;w.style.left=Math.max(0,e.clientX-dx)+'px';w.style.top=Math.max(0,e.clientY-dy)+'px';w.style.right='auto';});
+  document.addEventListener('mouseup',function(){drag=false;});})();
 // ── 整页翻译(对照手机 APK translate.js·Edge 免费引擎) ──────────────────────
 //   手机: 原生桥 __dcTr 做 HTTP; 桌面: 宿主做 HTTP(translate 消息), 外壳直改同源 iframe 文本节点。
 //   遍历可见文本节点(含开放 Shadow DOM) → 分批送译 → 回填(保留原文可一键恢复) + MutationObserver 增量。
@@ -1366,7 +1510,7 @@ var _trCbs={},_trSeq=0,_trCache={},_trCacheN=0;
 function _trNative(texts,to){return new Promise(function(res){var id='t'+(++_trSeq)+'_'+Date.now();_trCbs[id]=res;setTimeout(function(){if(_trCbs[id]){delete _trCbs[id];res(null);}},20000);vscode.postMessage({type:'translate',reqId:id,texts:texts,to:to||'zh-Hans'});});}
 var _TR_SKIP={SCRIPT:1,STYLE:1,NOSCRIPT:1,TEXTAREA:1,CODE:1,PRE:1,KBD:1,SAMP:1,SVG:1,CANVAS:1,MATH:1};
 var _TR_LETTER=/[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0370-\u03FF\u3040-\u30FF\uAC00-\uD7AF]/;
-function _trRejectByParent(n){var p=n.parentNode;while(p&&p.nodeType===1){if(_TR_SKIP[p.tagName])return true;if(p.isContentEditable)return true;var tr=p.getAttribute&&p.getAttribute('translate');if(tr==='no')return true;var cls=(p.className&&p.className.baseVal!==undefined)?p.className.baseVal:p.className;if(typeof cls==='string'&&/(^|\s)notranslate(\s|$)/.test(cls))return true;p=p.parentNode;}return false;}
+function _trRejectByParent(n){var p=n.parentNode;while(p&&p.nodeType===1){if(_TR_SKIP[p.tagName])return true;if(p.isContentEditable)return true;var tr=p.getAttribute&&p.getAttribute('translate');if(tr==='no')return true;var cls=(p.className&&p.className.baseVal!==undefined)?p.className.baseVal:p.className;if(typeof cls==='string'&&/(^|\\s)notranslate(\\s|$)/.test(cls))return true;p=p.parentNode;}return false;}
 function _trAllRoots(root){var roots=[root];try{var els=root.querySelectorAll?root.querySelectorAll('*'):[];for(var i=0;i<els.length;i++){var sr=els[i].shadowRoot;if(sr){var sub=_trAllRoots(sr);for(var j=0;j<sub.length;j++)roots.push(sub[j]);}}}catch(e){}return roots;}
 function _trCollect(S,doc,root){var out=[];var filter={acceptNode:function(n){if(n.__dcOrig!==undefined)return NodeFilter.FILTER_REJECT;var t=n.nodeValue;if(!t)return NodeFilter.FILTER_REJECT;var s=t.trim();if(s.length<2||!_TR_LETTER.test(s))return NodeFilter.FILTER_REJECT;if(_trRejectByParent(n))return NodeFilter.FILTER_REJECT;return NodeFilter.FILTER_ACCEPT;}};
   var roots=_trAllRoots(root);for(var r=0;r<roots.length;r++){try{var w=doc.createTreeWalker(roots[r],NodeFilter.SHOW_TEXT,filter);var n;while((n=w.nextNode()))out.push(n);_trObserveRoot(S,roots[r]);}catch(e){}}return out;}
@@ -1411,6 +1555,14 @@ function toggleTranslate(){var t=tabs[active];var fr=t?t.frame:(isBoard()&&BOARD
   daoToast('🌐 翻译中…');
   _trRunOnce(S,doc).then(function(c){if(!S.active)return;daoToast(c>0?('✓ 已翻译 '+c+' 段'):'本页无可翻译内容');});}
 document.getElementById('bDl').onclick=function(){dlOpen();};
+document.getElementById('bMr').onclick=function(){mrOpen();};
+_dEl('mrClose').onclick=function(){mrClose();};
+_dEl('mrRefresh').onclick=function(){MR_ITEMS=[];mrLoad();};
+_dEl('mrList').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-mropen],[data-mrcopy],[data-mrdl]');if(!el)return;
+  var i=+((el.getAttribute('data-mropen')||el.getAttribute('data-mrcopy')||el.getAttribute('data-mrdl'))||0);var it=MR_ITEMS[i];if(!it)return;
+  if(el.hasAttribute('data-mrdl')){daoToast('⬇ 下载中… '+String(it.n||it.u||'').slice(0,40));vscode.postMessage({type:'mrDownload',url:it.u,name:it.n||''});return;}
+  if(el.hasAttribute('data-mropen')){openWebTab(it.u,it.n||it.u);}
+  else{try{navigator.clipboard.writeText(it.u);daoToast('✓ 已复制链接');}catch(e2){daoToast('复制失败',true);}}});
 document.getElementById('bBk').onclick=function(){daoOpen('recent');};
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
 // 浏览器细节·点菜单外任意处一键自动收起(对齐桌面浏览器下拉菜单): 捕获阶段判定点击落点不在 #menu/#bMenu 即收起;
@@ -1521,9 +1673,11 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='cloudHost'){_boardHostAll(m.msg||{});}
   else if(m.type==='shellBackupsData'){_bkTree=m.tree||{root:'',accounts:[]};if(OV.className){if(_bkMode==='dl')renderDownloads();else if(_bkMode==='bk')renderBkLib();}try{daoRenderBackup();}catch(e){}}
   else if(m.type==='shellDownloadsData'){DAO_DL=m.list||[];dlRender();}
+  else if(m.__daoMediaList){try{_mrOnList(m);}catch(e){}}
   else if(m.type==='dlRecentData'){try{daoOnRecent(m);}catch(e){}}
   else if(m.type==='dlExportData'){try{daoOnExport(m);}catch(e){}}
-  else if(m.type==='dlZipDone'){try{daoToast(m.ok?('✓ 已打包: '+(m.name||'')):('打包失败: '+(m.error||'')),!m.ok);}catch(e){}}
+  else if(m.type==='dlZipDone'){try{daoToast(m.ok?('✓ 已打包: '+(m.name||'')+' · 存入备份库 🗂(可打开文件夹)'):('打包失败: '+(m.error||'')),!m.ok);if(m.ok&&_dEl('dwViewB').classList.contains('on'))daoLoadBackup();}catch(e){}}
+  else if(m.type==='mrDlDone'){try{daoToast(m.ok?('✓ 已下载: '+(m.name||'')+' · 见 ⬇下载悬浮窗'):('下载失败: '+(m.error||'')),!m.ok);if(m.ok&&_dEl('dlwin').className==='on')dlLoad();}catch(e){}}
   else if(m.type==='migBundle'){try{migDownload(m);}catch(e){}}
   else if(m.type==='migDone'){try{daoToast(m.ok?('✓ 导入完成 · '+(m.summary||'')):('导入失败: '+(m.error||'')),!m.ok);}catch(e){}}
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}
@@ -1732,10 +1886,19 @@ function _shellCloudDispatch(mm) {
   if (_shellCloudActiveSid) _shellSend(_shellCloudActiveSid, { type: 'cloudHost', msg: mm });
   else _shellBroadcast({ type: 'cloudHost', msg: mm });
 }
+// 宿主回推「扇出」: IDE webview 与 /shell HTTP 页是并存的两类消费者。
+// setHostPost 是单指针 — 若各自直接注册, 后写者覆盖前者, 另一方的回包(如 proxyPanel)
+// 就永久丢失(板块卡在加载态)。故注册唯一的稳定扇出器: webview 在场则送 webview,
+// 同时按 sid 送 /shell(无活跃 sid 时为号主共享广播·幂等无害)。
+let _cloudWebviewPost = null; // 多实例 webview 的回推口 (open 时立·dispose 时清)
+function _cloudHostFanout(mm) {
+  if (_cloudWebviewPost) { try { _cloudWebviewPost(mm); } catch (e) {} }
+  try { _shellCloudDispatch(mm); } catch (e) {}
+}
 function _shellCloudRun(sid, fn) {
   _shellCloudQueue = _shellCloudQueue.then(async () => {
     _shellCloudActiveSid = sid || '';
-    try { if (_cloudProvider && _cloudProvider.setHostPost) _cloudProvider.setHostPost(_shellCloudDispatch); } catch (e) {}
+    try { if (_cloudProvider && _cloudProvider.setHostPost) _cloudProvider.setHostPost(_cloudHostFanout); } catch (e) {}
     try { await fn(); } catch (e) { try { log('[shell] cloud task err: ' + (e && e.message)); } catch (x) {} }
     finally { _shellCloudActiveSid = ''; }
   });
@@ -1782,6 +1945,8 @@ async function shellAccountProxy(accKey, restPath, req, res) {
       try { const inj = _buildUserScriptInject(_csUrl); if (inj) { s = /<\/body>/i.test(s) ? s.replace(/<\/body>/i, inj + '</body>') : (s + inj); } } catch (e) {}
       // 拖拽上传桥(同源 /__daobridge.js): 拖文件/会话到该页 → 投递上传框 (对齐手机 APK)。
       try { const dbg = '<script src="/__daobridge.js"></script>'; s = /<\/body>/i.test(s) ? s.replace(/<\/body>/i, dbg + '</body>') : (s + dbg); } catch (e) {}
+      // 整页翻译桥(同源 /__daotrans.js): 悬浮球「译」+ 父窗 {__daoTransToggle} 页内桥 (与反代页/外站页同构)。
+      try { const tbg = '<script src="/__daotrans.js"></script>'; s = /<\/body>/i.test(s) ? s.replace(/<\/body>/i, tbg + '</body>') : (s + tbg); } catch (e) {}
     }
     if (res && !res.headersSent) {
       res.writeHead(status, {
@@ -1968,7 +2133,7 @@ async function _shellResolveOpen(opts) {
     );
     if (idx >= 0) accNo = idx + 1;
     const h = _store && _store.getHealth ? _store.getHealth(email) : null;
-    if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars);
+    if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0));
   } catch (e) {}
   const title = String(opts.title || '').trim();
   const pageLabel = String(opts.label || '').trim();
@@ -2059,7 +2224,7 @@ async function shellHandleMessage(sid, m) {
       case 'getAccounts': {
         const list = (((_store && _store.accounts) || [])).map((a, i) => {
           let dollars = 0;
-          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
           return { accNo: i + 1, email: a.email, name: a.name || String(a.email || '').split('@')[0], dollars };
         });
         send({ type: 'accounts', list });
@@ -2096,9 +2261,24 @@ async function shellHandleMessage(sid, m) {
         return;
       }
       case 'openCloudPage': {
-        const email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || '');
+        // path 显式带 dao_acct=<email> → 钉该号(多实例指定号直开), 不回退活动号(串号病灶);
+        //   并从 path 剥除该参(下游 _shellResolveOpen 会按 email 重拼, 防双 dao_acct)。
+        let path = String(m.path || '');
+        let email = '';
+        try {
+          const mm = /[?&]dao_acct=([^&]+)/.exec(path);
+          if (mm) {
+            email = decodeURIComponent(mm[1]).trim().toLowerCase();
+            path = path.replace(/[?&]dao_acct=[^&]*/g, '');
+            if (path.indexOf('?') < 0) path = path.replace('&', '?');
+          }
+        } catch (e) {}
+        if (!email) email = (_store && _store.activeEmail) || ((_store && _store.accounts && _store.accounts[0] && _store.accounts[0].email) || '');
         if (!email) { _toast('无可用账号'); return; }
-        const open = await _shellResolveOpen({ email, path: m.path, label: m.label });
+        // 账号首页与手机同构: 每次点开都新开一张独立页(fresh), 不折叠到已开页(一号多页多实例);
+        //   指定对话/子路径仍按 id 折叠复用。
+        const fresh = !path || path === '/' || path === '/?';
+        const open = await _shellResolveOpen({ email, path, label: m.label, fresh });
         if (open) send(open);
         return;
       }
@@ -2178,7 +2358,14 @@ async function shellHandleMessage(sid, m) {
         return;
       }
       case 'dlRecent': case 'dlExportMd': case 'dlZip':
-        await _daoDownloadData(m, send); return;
+        // 外部浏览器 /shell 侧: 不触发 IDE 机器的 revealFileInOS(旧病灶: 弹空白页/无感定位), 结果以回推+toast 明示。
+        await _daoDownloadData(Object.assign({}, m, { noReveal: true }), send); return;
+      case 'mrDownload': {
+        const r = await _daoDownloadUrl(m.url, m.name);
+        send(Object.assign({ type: 'mrDlDone' }, r));
+        send({ type: 'shellDownloadsData', list: _listDaoDownloads() });
+        return;
+      }
       case 'shellBackups': {
         try {
           let root; try { root = vscode.workspace.getConfiguration('wam').get('devinCloudBackupDir'); } catch (e) {}
@@ -2287,7 +2474,7 @@ async function _daoDownloadData(m, reply) {
         if (!st || !Array.isArray(st.items)) continue;
         for (const it of st.items) {
           const sid = String((it && it.id) || ""); if (!sid) continue;
-          live.push({ email: em, accNo: noOf(em), sid, title: (it && it.title) || sid, status: (it && it.cls) || "", statusClass: (it && it.cls) || "", updatedAt: st.ts || Date.now(), live: true });
+          live.push({ email: em, accNo: noOf(em), sid, title: (it && it.title) || sid, status: (it && it.cls) || "", statusClass: (it && it.cls) || "", updatedAt: st.ts || Date.now(), live: true, auto: !!(devinCloud.isAutoConv && devinCloud.isAutoConv(it)) });
         }
       }
       if (live.length) reply({ type: "dlRecentData", list: live.slice(0, 80), accounts: emails.length, partial: true, done: 0, total: emails.length, covered: [] });
@@ -2304,7 +2491,7 @@ async function _daoDownloadData(m, reply) {
           if (ls && ls.ok) {
             (ls.sessions || []).forEach((s) => {
               const sid = s.devin_id || s.session_id || s.id; if (!sid) return;
-              out.push({ email, accNo: noOf(email), sid, title: s.title || s.name || s.prompt || sid, status: s.status || s.activity_status || "", statusClass: devinCloud.classifySession(s), updatedAt: _daoRecencyMs(s) });
+              out.push({ email, accNo: noOf(email), sid, title: s.title || s.name || s.prompt || sid, status: s.status || s.activity_status || "", statusClass: devinCloud.classifySession(s), updatedAt: _daoRecencyMs(s), auto: !!(devinCloud.isAutoConv && devinCloud.isAutoConv(s)) });
             });
           }
         }
@@ -2330,7 +2517,7 @@ async function _daoDownloadData(m, reply) {
         const dir = _dvFindOrMakeConvDir(email, sid, title);
         const outPath = path.join(dir, "对话.md");
         fs.writeFileSync(outPath, md, "utf8");
-        try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(outPath)); } catch (e) {}
+        if (!m.noReveal) { try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(outPath)); } catch (e) {} }
         reply({ type: "dlExportData", save: true, ok: true, sid, name: path.basename(outPath), path: outPath });
       } else {
         reply({ type: "dlExportData", save: false, ok: true, sid, title, md });
@@ -2345,7 +2532,7 @@ async function _daoDownloadData(m, reply) {
       if (!auth || !auth.auth1) { reply({ type: "dlZipDone", ok: false, sid, error: "账号未解锁(无 auth1)" }); return true; }
       const title = m.title || sid;
       const one = await devinCloud.backupOneConversation(auth, { devin_id: sid, title }, _dvAccountBackupDir(email), { incremental: false, turbo: true });
-      if (one && one.zip) { try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(one.zip)); } catch (e) {} reply({ type: "dlZipDone", ok: true, sid, name: path.basename(one.zip), path: one.zip }); }
+      if (one && one.zip) { if (!m.noReveal) { try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(one.zip)); } catch (e) {} } reply({ type: "dlZipDone", ok: true, sid, name: path.basename(one.zip), path: one.zip }); }
       else reply({ type: "dlZipDone", ok: false, sid, error: "打包失败" });
     } catch (e) { reply({ type: "dlZipDone", ok: false, sid, error: String((e && e.message) || e) }); }
     return true;
@@ -2464,6 +2651,12 @@ function _wireMultiPanel(panel) {
         await _daoDownloadData(m, (x) => { try { panel.webview.postMessage(x); } catch (e) {} });
         return;
       }
+      if (m.type === "mrDownload") {
+        const r = await _daoDownloadUrl(m.url, m.name);
+        try { panel.webview.postMessage(Object.assign({ type: "mrDlDone" }, r)); } catch (e) {}
+        try { panel.webview.postMessage({ type: "shellDownloadsData", list: _listDaoDownloads() }); } catch (e) {}
+        return;
+      }
       // 归一 · ⬇下载 / 📁备份库 悬浮窗数据源: 复用内联备份引擎 devinCloud.listBackups(同 dao-vsix 六大板块备份板块同源)。
       if (m.type === "shellBackups") {
         try {
@@ -2579,7 +2772,7 @@ function _wireMultiPanel(panel) {
       if (m.type === "getAccounts") {
         const list = (((_store && _store.accounts) || [])).map((a, i) => {
           let dollars = 0;
-          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+          try { const h = _store && _store.getHealth ? _store.getHealth(a.email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
           return { accNo: i + 1, email: a.email, name: a.name || String(a.email || "").split("@")[0], dollars: dollars };
         });
         try { panel.webview.postMessage({ type: "accounts", list: list }); } catch (e) {}
@@ -2620,7 +2813,8 @@ function _wireMultiPanel(panel) {
       // 归一 · 六大板块子网页: 外壳请求挂载全功能面板 HTML (blob-iframe + 中继)
       if (m.type === "cloudInit") {
         if (!_cloudProvider) { _toast("六大板块面板未就绪"); return; }
-        try { _cloudProvider.setHostPost((mm) => { try { panel.webview.postMessage({ type: "cloudHost", msg: mm }); } catch (e) {} }); } catch (e) {}
+        _cloudWebviewPost = (mm) => { try { panel.webview.postMessage({ type: "cloudHost", msg: mm }); } catch (e) {} };
+        try { _cloudProvider.setHostPost(_cloudHostFanout); } catch (e) {}
         // webview 框架层封禁 blob: 子帧 → 优先经本地 HTTP(127.0.0.1) 直出板块当 iframe 加载; 无 URL 时回退 blob。
         let url = ""; try { if (typeof _cloudProvider.boardUrl === "function") url = _cloudProvider.boardUrl(m.board) || ""; } catch (e) {}
         let html = ""; if (!url) { try { html = _cloudProvider.buildHtml(m.board) || ""; } catch (e) {} }
@@ -2634,7 +2828,7 @@ function _wireMultiPanel(panel) {
       if (m.type === "toast" && m.msg) { _toast(m.msg); return; }
     } catch (e) { try { log("[multi] msg err: " + (e && e.message)); } catch (x) {} }
   });
-  panel.onDidDispose(() => { _multiPanel = null; _multiReady = false; _multiQueue.length = 0; if (_multiStatusTimer) { clearInterval(_multiStatusTimer); _multiStatusTimer = null; } try { _cloudProvider && _cloudProvider.setHostPost(null); } catch (e) {} });
+  panel.onDidDispose(() => { _multiPanel = null; _multiReady = false; _multiQueue.length = 0; if (_multiStatusTimer) { clearInterval(_multiStatusTimer); _multiStatusTimer = null; } _cloudWebviewPost = null; });
   _multiPanel = panel;
 }
 function _ensureMultiPanel() {
@@ -2665,14 +2859,22 @@ async function _handleShellStatus(m, send) {
       // auth 未缓存(如 IDE 重启后还原的标签) → 节流自动登录取号(每号 10min 一试·不阻塞其他号),
       //   否则该号标签永无状态灯/对话名(旧病灶: 直接 continue 即静默死区)。
       if (!auth || !auth.auth1) auth = await _shellEnsureAuth(email);
-      if (!auth || !auth.auth1) continue;
+      if (!auth || !auth.auth1) {
+        // 取不到 auth(登录失败/负缓存) → 仍回填已知额度, 标签不留死区
+        try {
+          const h0 = _store && _store.getHealth ? _store.getHealth(email) : null;
+          if (h0 && h0.checked) { const d0 = Math.max(0, Math.round(h0.overageDollars || 0)); for (const t of tl) send({ type: 'tabUpdate', id: t.id, dollars: d0 }); }
+        } catch (e) {}
+        continue;
+      }
       let act = [];
       try { act = await devinCloud.listRunningSessions(auth); } catch (e) {}
       const amap = new Map();
       for (const s of (act || [])) { const id2 = String(s.devinId || '').replace(/^devin-/, ''); if (id2) amap.set(id2, s); }
       let h = null, dollars = null;
       try { await _refreshHealthForTick(email); } catch (e) {}
-      try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+      try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
+      let _qForcedFresh = false; // 疑似额度耗尽 → 每号本 tick 至多强刷一次真额度(45s 限频), 防陈旧缓存误标
       for (const t of tl) {
         const sid = String(t.devinId || '').replace(/^devin-/, '');
         // 账号首页标签(无具体对话·对齐手机 APK): 以该号最新活跃会话回填对话名+状态灯; 无活跃 → idle 灰。
@@ -2680,6 +2882,11 @@ async function _handleShellStatus(m, send) {
         let cls = hit ? (hit.statusClass || 'running') : (sid ? 'finished' : 'idle');
         try {
           if (hit && cls === 'blocked' && QRE.test(JSON.stringify(hit.latest_status_contents || '') + ' ' + String(hit.status || ''))) {
+            if (!_qForcedFresh && (!h || !h.checked || h.staleMin >= 1)) {
+              _qForcedFresh = true;
+              try { await _refreshHealthForTick(email, 45); } catch (e) {}
+              try { h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
+            }
             const live = !!(h && (((typeof h.dPct === 'number') && h.dPct > 0) || ((typeof h.wPct === 'number') && h.wPct > 0) || ((typeof h.overageDollars === 'number') && h.overageDollars > 0)));
             cls = live ? 'finished' : 'exhausted';
           }
@@ -2730,6 +2937,15 @@ async function _resolveAuthForEmail(email, password) {
       } catch (e) {}
     }
     if (pw) { const r = await devinCloud.getAuth(email, pw); if (r && r.ok) auth = r; }
+    // 无密码亦无 DC 缓存 → 回落 dao-vsix 多实例钉号已落盘的真 auth1 (~/.dao/dao-accounts-auth.json)。
+    //   标签页能登录渲染却拿不到 auth 刷额度的死区即此: 两套 auth 存储互不相见。
+    if (!auth || !auth.auth1) {
+      try {
+        const f = path.join(os.homedir(), '.dao', 'dao-accounts-auth.json');
+        const rec = JSON.parse(fs.readFileSync(f, 'utf8'))[String(email).toLowerCase()];
+        if (rec && rec.auth1) auth = { auth1: rec.auth1, userId: rec.userId || '', orgId: rec.orgId || '', orgBare: String(rec.orgId || '').replace(/^org-/, ''), orgName: rec.orgName || '', email };
+      } catch (e) {}
+    }
   }
   return auth;
 }
@@ -2740,20 +2956,51 @@ function _classStr(s){s=String(s==null?'':s).toLowerCase().trim();if(!s)return '
   if(/finished|completed|done|stopped|suspend|expired|exited|archived|deleted/.test(s))return 'finished';
   if(/running|working|in_progress|streaming|active|started|resumed|busy|thinking|executing|coding|planning|testing/.test(s))return 'running';
   return 'running';}
-// 归一 · 状态轮询中的额度保鲜(限频·仅 session-cache 快路·零 devinLogin·零限速风险):
-//   getHealth 只读缓存 → 标签 $ 额度可能长期陈旧; 此处每账号限频(默 300s)经 verifyOneAccount
-//   缓存快路真拉一次 planStatus 回写 setHealth, 让状态轮询回填的额度真正保鲜。
+// 归一 · 状态轮询中的额度保鲜(限频): getHealth 只读缓存 → 标签 $ 额度可能长期陈旧; 此处每账号限频
+//   (默 120s·疑似耗尽时 45s 强刷)经 verifyOneAccount 真拉一次 planStatus 回写 setHealth。
+//   有缓存会话走快路(零 devinLogin); 无缓存会话走慢道真登录(900s/号 + 全局限速窗 + in-flight 去重)。
 const _healthTickAt = new Map();
-async function _refreshHealthForTick(email) {
+const _healthLoginAt = new Map(); // 无缓存会话账号 → 慢道真登录限频(默 900s/号)
+const _healthInflight = new Set(); // in-flight 去重: 同号并发 tick 只跑一次
+async function _refreshHealthForTick(email, minGapSec) {
   try {
     const k = String(email || '').toLowerCase(); if (!k) return;
-    const iv = Math.max(60, +_cfg('statusHealthRefreshSec', 300) || 300) * 1000;
+    const iv = (minGapSec > 0 ? Math.max(30, minGapSec | 0) : Math.max(30, +_cfg('statusHealthRefreshSec', 120) || 120)) * 1000;
     const last = _healthTickAt.get(k) || 0; if (Date.now() - last < iv) return;
+    if (_healthInflight.has(k)) return;
+    const a = (_store.accounts || []).find((x) => String(x.email || '').toLowerCase() === k);
+    // 无密码账号(仅 auth 记录导入)或不在账号池的标签号 → verifyOneAccount 恒 "no creds" → 额度永远陈旧。
+    //   走 auth1 billing 直探: app.devin.ai/api/<org>/billing/status 无需 Windsurf 登录链。
+    if (!a || !a.password) {
+      _healthTickAt.set(k, Date.now());
+      _healthInflight.add(k);
+      try {
+        const au = await _shellEnsureAuth(k);
+        if (au && au.auth1) {
+          const q = await _tryDevinBillingFallback(au.auth1);
+          if (q) _store.setHealth(k, q);
+          try { log('health直探 ' + k + ' → ' + (q ? ('$' + q.overageDollars) : '拉空')); } catch (e) {}
+        } else { try { log('health直探 ' + k + ' → 无auth1'); } catch (e) {} }
+      } finally { _healthInflight.delete(k); }
+      return;
+    }
+    let slowLane = false, slow = 0;
+    if (!_getCachedSession(a.email)) {
+      // 无缓存会话 → 慢道: 打开中的标签值得一次真登录取额度(否则 $ 永远陈旧),
+      //   但须 900s/号限频 + 尊重全局 devinLogin 限速窗(防批量登录触限速)
+      if (Date.now() < _devinLoginRateLimitedUntil) return;
+      slow = Math.max(300, +_cfg('statusHealthLoginRefreshSec', 900) || 900) * 1000;
+      const lg = _healthLoginAt.get(k) || 0; if (Date.now() - lg < slow) return;
+      _healthLoginAt.set(k, Date.now());
+      slowLane = true;
+    }
     _healthTickAt.set(k, Date.now());
-    const a = (_store.accounts || []).find((x) => String(x.email || '').toLowerCase() === k); if (!a) return;
-    if (!_getCachedSession(a.email)) return; // 无缓存会话 → 不走全路(防批量 devinLogin 触限速)
-    const vr = await verifyOneAccount(a);
-    if (vr && vr.ok && vr.q) _store.setHealth(a.email, vr.q);
+    _healthInflight.add(k);
+    try {
+      const vr = await verifyOneAccount(a);
+      if (vr && vr.ok && vr.q) _store.setHealth(a.email, vr.q);
+      else if (slowLane) _healthLoginAt.set(k, Date.now() - slow + 180000); // 失败不烧满 900s 槽: 180s 后可再试(网络瞬断自愈)
+    } finally { _healthInflight.delete(k); }
   } catch (e) {}
 }
 // 归一 · 多实例标签状态实时轮询(对齐手机端·仅打开中的少量标签·每账号一次 listSessions):
@@ -2775,7 +3022,7 @@ async function _multiTabStatusTick() {
       for (const s of (active || [])) { const id = String(s.devinId || '').replace(/^devin-/, ''); if (id) amap.set(id, s); }
       let dollars = null;
       try { await _refreshHealthForTick(email); } catch (e) {}
-      try { const h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars); } catch (e) {}
+      try { const h = _store && _store.getHealth ? _store.getHealth(email) : null; if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0)); } catch (e) {}
       for (const t of tabsForEmail) {
         const sid = String(t.devinId || '').replace(/^devin-/, '');
         const hit = amap.get(sid);
@@ -2822,7 +3069,7 @@ async function openMultiInstance(opts) {
     );
     if (idx >= 0) accNo = idx + 1;
     const h = _store && _store.getHealth ? _store.getHealth(email) : null;
-    if (h && h.overageDollars > 0) dollars = Math.round(h.overageDollars);
+    if (h && h.checked) dollars = Math.max(0, Math.round(h.overageDollars || 0));
   } catch (e) {}
   const title = String(opts.title || '').trim();
   const pageLabel = String(opts.label || '').trim();
@@ -3626,6 +3873,9 @@ const STATE_FILE = path.join(WAM_DIR, "wam-state.json");
 //   独立🔒持久化 · 专司一事 · 不被 multi-window race 污染 wam-state.json 大对象
 //   只有 toggleSkip 读写 · save() 从此文件读 · multi-process 自宾不争
 const LOCK_FILE = path.join(WAM_DIR, "lock-state.json");
+// 每账号「环境模式」(Linux/Windows) 独立持久化 · 专司一事 · 与 lock-state 同治 (multi-window race-safe)
+//   默认 linux · 用户在切号面板逐号切换才落盘 · 供后端/会话创建按号选运行环境 (runs-on)。
+const ENVMODE_FILE = path.join(WAM_DIR, "_env_mode.json");
 // v3.7.6 · dismiss 跨窗口持久化 · 小邦寺民·各得其欲·大者宜为下
 const DISMISS_FILE = path.join(WAM_DIR, "_conv_dismiss.json"); // uuid→ts 共享持久文件·多窗口共守
 const CONV_DISMISS_TTL = 600000; // 10min dismiss 自动过期时长
@@ -6787,6 +7037,68 @@ function _writeLockStates(items) {
     return { ok: false, changed: 0 };
   }
 }
+// ═══ 环境模式(Linux/Windows/macOS) 独立持久化 · 每账号 · multi-window race-safe ═══
+//   与 lock-state 同治法: _env_mode.json 专司此事 · 缺省 linux · 唯 env-mode 消息写。
+//   三态循环: linux → windows → macos → linux (点击 +1 步进·每号各自推进)。
+const ENV_MODE_CYCLE = ["linux", "windows", "macos"];
+function _normEnvMode(m) {
+  const s = String(m == null ? "" : m).toLowerCase();
+  if (s === "windows" || s === "win") return "windows";
+  if (s === "macos" || s === "mac" || s === "osx" || s === "darwin")
+    return "macos";
+  return "linux";
+}
+// 三态步进: 从当前态推进到循环下一态 (linux→windows→macos→linux)
+function _nextEnvMode(m) {
+  const i = ENV_MODE_CYCLE.indexOf(_normEnvMode(m));
+  return ENV_MODE_CYCLE[(i + 1) % ENV_MODE_CYCLE.length];
+}
+// UI 提示文案 (图标+名) · 三态
+function _envModeLabel(m) {
+  const n = _normEnvMode(m);
+  return n === "windows"
+    ? "🪟 已切 Windows"
+    : n === "macos"
+      ? "🍎 已切 macOS"
+      : "🐧 已切 Linux";
+}
+function _readEnvModeState() {
+  try {
+    if (!fs.existsSync(ENVMODE_FILE)) return {};
+    const j = JSON.parse(fs.readFileSync(ENVMODE_FILE, "utf8"));
+    return j && typeof j === "object" && j.modes ? j.modes : {};
+  } catch (e) {
+    log("_readEnvModeState fail: " + e.message);
+    return {};
+  }
+}
+// 写: read-modify-write · 单进程内 atomic · multi-process last-writer-wins (唯切号面板写)
+function _writeEnvModeStates(items) {
+  try {
+    const cur = _readEnvModeState();
+    let n = 0;
+    for (const it of items || []) {
+      const k = String((it && it.email) || "").toLowerCase();
+      if (!k) continue;
+      const mode = _normEnvMode(it && it.mode);
+      const before = _normEnvMode(cur[k] && cur[k].envMode);
+      cur[k] = { envMode: mode, ts: Date.now() };
+      if (before !== mode) n++;
+    }
+    atomicWrite(
+      ENVMODE_FILE,
+      JSON.stringify(
+        { version: VERSION, savedAt: Date.now(), modes: cur },
+        null,
+        2,
+      ),
+    );
+    return { ok: true, changed: n };
+  } catch (e) {
+    log("_writeEnvModeStates fail: " + e.message);
+    return { ok: false, changed: 0 };
+  }
+}
 function _esc(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;")
@@ -7120,6 +7432,73 @@ function _isValidAutoTarget(i) {
   return false;
 }
 
+// 道·网络软编码(直连优先·代理兜底) — 与 devin_proxy.upstreamRequest 同策, 覆盖所有
+//   rt-flow 宿主侧 API 调用(planStatus/devinLogin/listSessions 等):
+//   ① 直连(keep-alive 池) → ② 瞬断(TLS 半握手被掐/ECONNRESET)换新 socket 直连重试
+//   → ③ 仍不通才探测本机常见代理端口(Clash/v2ray 等·60s 缓存)经 CONNECT 兜底。
+//   任一路成功即记忆偏好(直连恢复自动回归), 国内直连/挂代理/无代理三态皆自愈。
+const _NETP_PORTS = [7890, 10809, 7891, 1080, 10808, 8080, 8118];
+let _netpProbe = { port: 0, ts: 0 }; // port>0=探到可用; -1=探明无; 0=未探测 (60s 缓存)
+let _netpGood = 0; // 上次经该本机代理成功 → 后续先走代理; 直连一成功即清零
+// 软编码·适配一切: 用户显式设的 HTTP(S)_PROXY/ALL_PROXY 本机端口优先于内置常见口清单
+//   (与 dao-vsix detectProxyPort/devin_proxy 同源) → 非标端口(如 SakuraCat)亦可命中, 零硬编码。
+function _netpEnvPort() {
+  const p = process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.ALL_PROXY
+    || process.env.http_proxy || process.env.https_proxy || process.env.all_proxy || "";
+  const m = String(p).match(/(?:127\.0\.0\.1|localhost):(\d+)/i);
+  return m ? (parseInt(m[1], 10) || 0) : 0;
+}
+function _netpEffPorts() {
+  const ep = _netpEnvPort();
+  const seen = new Set();
+  const out = [];
+  for (const p of (ep ? [ep] : []).concat(_NETP_PORTS)) {
+    if (p > 0 && !seen.has(p)) { seen.add(p); out.push(p); }
+  }
+  return out;
+}
+function _netTransient(e) {
+  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|disconnected|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND|handshake|TLS/i.test(String((e && e.message) || e || ""));
+}
+function _netpProbePort(host, cb) {
+  if (_netpProbe.ts && Date.now() - _netpProbe.ts < 60000) return cb(_netpProbe.port > 0 ? _netpProbe.port : 0);
+  const ports = _netpEffPorts();
+  let i = 0;
+  const tryNext = () => {
+    if (i >= ports.length) { _netpProbe = { port: -1, ts: Date.now() }; return cb(0); }
+    const port = ports[i++];
+    let done = false;
+    const s = net.connect({ host: "127.0.0.1", port, timeout: 800 });
+    const fin = (ok) => { if (done) return; done = true; try { s.destroy(); } catch (e) {} if (ok) { _netpProbe = { port, ts: Date.now() }; cb(port); } else tryNext(); };
+    s.once("connect", () => {
+      s.write("CONNECT " + host + ":443 HTTP/1.1\r\nHost: " + host + ":443\r\n\r\n");
+      s.once("data", (d) => fin(/^HTTP\/1\.[01] 200/.test(String(d))));
+      setTimeout(() => fin(false), 4000);
+    });
+    s.once("error", () => fin(false));
+    s.once("timeout", () => fin(false));
+  };
+  tryNext();
+}
+function _netpTunnel(proxyPort, host, cb) {
+  let done = false;
+  const s = net.connect({ host: "127.0.0.1", port: proxyPort, timeout: 5000 });
+  const fail = (m) => { if (done) return; done = true; try { s.destroy(); } catch (e) {} cb(new Error(m || "tunnel failed")); };
+  s.once("connect", () => {
+    s.write("CONNECT " + host + ":443 HTTP/1.1\r\nHost: " + host + ":443\r\n\r\n");
+    let buf = "";
+    const onData = (d) => {
+      buf += String(d);
+      if (buf.indexOf("\r\n\r\n") < 0) return;
+      s.removeListener("data", onData);
+      if (!/^HTTP\/1\.[01] 200/.test(buf)) return fail("proxy CONNECT " + buf.split("\r\n")[0]);
+      done = true; s.setTimeout(0); cb(null, s);
+    };
+    s.on("data", onData);
+  });
+  s.once("error", (e) => fail(e && e.message));
+  s.once("timeout", () => fail("proxy connect timeout"));
+}
 function httpsReq(method, urlStr, headers, body, timeoutMs) {
   return new Promise((resolve, reject) => {
     let u;
@@ -7128,28 +7507,57 @@ function httpsReq(method, urlStr, headers, body, timeoutMs) {
     } catch (e) {
       return reject(e);
     }
-    const req = https.request(
-      {
-        method,
-        hostname: u.hostname,
-        port: u.port || 443,
-        path: u.pathname + u.search,
-        headers: Object.assign({ "User-Agent": UA }, headers || {}),
-        timeout: timeoutMs || HTTP_TIMEOUT_MS,
-        agent: _httpsAgent, // 有界复用池 · 防 globalAgent 无限新建 socket 打满 conntrack
-      },
-      (res) => {
-        const chunks = [];
-        res.on("data", (c) => chunks.push(c));
-        res.on("end", () =>
-          resolve({ status: res.statusCode, body: Buffer.concat(chunks) }),
-        );
-      },
-    );
-    req.on("error", reject);
-    req.on("timeout", () => req.destroy(new Error("timeout")));
-    if (body) req.write(body);
-    req.end();
+    const baseOpts = {
+      method,
+      hostname: u.hostname,
+      port: u.port || 443,
+      path: u.pathname + u.search,
+      headers: Object.assign({ "User-Agent": UA }, headers || {}),
+      timeout: timeoutMs || HTTP_TIMEOUT_MS,
+    };
+    let settled = false;
+    const done = (r) => { if (!settled) { settled = true; resolve(r); } };
+    const fail = (e) => { if (!settled) { settled = true; reject(e); } };
+    const collect = (res, onOkProxyPort) => {
+      if (onOkProxyPort) _netpGood = onOkProxyPort; else _netpGood = 0;
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => done({ status: res.statusCode, body: Buffer.concat(chunks) }));
+    };
+    const viaProxy = (port, origErr) => {
+      _netpTunnel(port, u.hostname, (te, sock) => {
+        if (te) return fail(origErr || te);
+        const pr = https.request(Object.assign({}, baseOpts, { agent: false, createConnection: () => tls.connect({ socket: sock, servername: u.hostname, rejectUnauthorized: false }) }), (r) => collect(r, port));
+        pr.on("timeout", () => pr.destroy(new Error("timeout(proxy)")));
+        pr.on("error", (e) => fail(origErr || e));
+        if (body) pr.write(body);
+        pr.end();
+      });
+    };
+    const direct = (n, extra) => {
+      const req = https.request(Object.assign({}, baseOpts, extra), (r) => collect(r, 0));
+      req.on("timeout", () => req.destroy(new Error("timeout")));
+      req.on("error", (e) => {
+        if (!_netTransient(e)) return fail(e);
+        if (n === 0) return direct(1, { agent: false, family: 4 }); // 瞬断 → 换新 socket + 钉 IPv4 直连重试(国内 IPv6 到 AWS 黑洞)
+        _netpProbePort(u.hostname, (pp) => { if (!pp) return fail(e); viaProxy(pp, e); });
+      });
+      if (body) req.write(body);
+      req.end();
+    };
+    if (_netpGood) {
+      // 偏好代理时仍带直连回归: 隧道失败/代理下线 → 清偏好走直连
+      _netpTunnel(_netpGood, u.hostname, (te, sock) => {
+        if (te) { _netpGood = 0; _netpProbe = { port: 0, ts: 0 }; return direct(0, { agent: _httpsAgent }); }
+        const pr = https.request(Object.assign({}, baseOpts, { agent: false, createConnection: () => tls.connect({ socket: sock, servername: u.hostname, rejectUnauthorized: false }) }), (r) => collect(r, _netpGood));
+        pr.on("timeout", () => pr.destroy(new Error("timeout(proxy)")));
+        pr.on("error", () => { _netpGood = 0; direct(0, { agent: _httpsAgent }); });
+        if (body) pr.write(body);
+        pr.end();
+      });
+      return;
+    }
+    direct(0, { agent: _httpsAgent }); // 有界复用池 · 防 globalAgent 无限新建 socket 打满 conntrack
   });
 }
 async function jsonPost(url, headers, body, timeoutMs) {
@@ -8016,6 +8424,8 @@ class Store {
     //   缺省锁定 ⇒ 自动切号被禁止; 用户主动🔓解锁某号(显式写 false)后, 该号才进入自动切号候选.
     //   兼容回退: wam.lockByDefault=false 复旧行为(缺省解锁).
     const lockByDefault = _cfg("lockByDefault", true);
+    // 环境模式恢复: 缺省 linux · 用户显式切过的号读盘还原 (每号独立·互不相干)
+    const envModes = _readEnvModeState();
     let restored = 0;
     let defaulted = 0;
     for (const a of this.accounts) {
@@ -8027,6 +8437,8 @@ class Store {
         a.skipAutoSwitch = !!lockByDefault; // 无记录 → 默认锁定(反转)
         if (a.skipAutoSwitch) defaulted++;
       }
+      const em = envModes[a.email.toLowerCase()];
+      a.envMode = _normEnvMode(em && em.envMode); // 缺省 linux · 显式记录优先
     }
     if (restored > 0 || defaulted > 0)
       log(
@@ -10105,6 +10517,7 @@ function _computePanelStructSig() {
         checked ? Math.round(h.overageDollars || 0) : 0,
         isClaudeAvailable(h) ? 1 : 0,
         a.skipAutoSwitch ? 1 : 0,
+        a.envMode === "windows" ? "W" : a.envMode === "macos" ? "M" : "L",
         h && h.hasSnap ? 1 : 0,
         devinCloud.getTag(a.email) || "",
         checked ? _parseTimeMs(h.planEnd) : 0,
@@ -10943,6 +11356,7 @@ function buildHtml() {
         <button class="b cp" onclick="cp(${i})" title="复制">&#128203;</button>
         <button class="b rt" onclick="rt(${i})" title="路由官网→IDE内置浏览器(自足反代注入该号登录·多实例标签·各登各号)">&#128421;</button>
         <button class="b sb" onclick="sb(${i})" title="系统默认浏览器打开官网(跳出IDE·多实例)">&#127760;</button>
+        <button class="b em em-${a.envMode === "windows" ? "win" : a.envMode === "macos" ? "mac" : "linux"}" onclick="em(${i})" data-mode="${a.envMode === "windows" ? "windows" : a.envMode === "macos" ? "macos" : "linux"}" title="${a.envMode === "windows" ? "环境模式: Windows · 点击切到 macOS" : a.envMode === "macos" ? "环境模式: macOS · 点击切回 Linux" : "环境模式: Linux(默认) · 点击切到 Windows"}" style="color:${a.envMode === "windows" ? "#4aa3ff" : a.envMode === "macos" ? "#d08bff" : "#7ec699"}">${a.envMode === "windows" ? "&#129695;" : a.envMode === "macos" ? "&#127822;" : "&#128039;"}</button>
         <button class="b wp" onclick="wp(${i})" title="水过无痕·一键清理本账号 Devin Cloud 全部痕迹(对话/知识库/剧本/密钥/Git)">&#127754;</button>
         <button class="b rm" onclick="rm(${i})" title="删除">&times;</button>
       </span>
@@ -11281,6 +11695,7 @@ function vf(i){_clickFb(event);send('verify',i);}
 function cp(i){_clickFb(event);const ix=_selectedFor(i);vscode.postMessage({type:ix.length>1?'copyAccounts':'copyAccount',index:i,indices:ix});}
 function rt(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1){showToast('\u23F3 \u6279\u91cf\u8def\u7531\u5b98\u7f51\u2192IDE \u00b7 '+ix.length+' \u4e2a\u2026');vscode.postMessage({type:'routeToIdeBatch',indices:ix});}else{showToast('\u23F3 \u5207\u6b64\u53f7\u00b7\u8def\u7531\u5b98\u7f51\u2192IDE\u2026');vscode.postMessage({type:'routeToIde',index:i});}}
 function sb(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1){showToast('\u23F3 \u6279\u91cf\u7cfb\u7edf\u6d4f\u89c8\u5668 \u00b7 '+ix.length+' \u4e2a\u2026');vscode.postMessage({type:'openSysBrowserBatch',indices:ix});}else{vscode.postMessage({type:'openSysBrowser',index:i});}}
+function em(i){_clickFb(event);const ix=_selectedFor(i);vscode.postMessage({type:'cycleEnvModeBatch',indices:ix.length?ix:[i]});}
 function _emailAt(i){const r=document.querySelector('.row[data-i="'+i+'"]');return (r&&r.dataset.email)||'';}
 function rm(i){_clickFb(event);const ix=_selectedFor(i);if(ix.length>1)vscode.postMessage({type:'removeBatch',indices:ix,emails:ix.map(_emailAt)});else vscode.postMessage({type:'remove',index:i,email:_emailAt(i)});}
 function copyAll(){vscode.postMessage({type:'copyAllAccounts'});}
@@ -13654,6 +14069,83 @@ async function handleWebviewMessage(msg) {
         _broadcastUI();
         break;
       }
+      // 每账号环境模式(Linux/Windows/macOS) 显式设为同一态 · 独立持久化 (每号互不相干)
+      case "setEnvModeBatch": {
+        const mode = _normEnvMode(msg.mode);
+        const indices = [
+          ...new Set((msg.indices || []).map(Number).filter(Number.isInteger)),
+        ];
+        const items = [];
+        for (const i of indices) {
+          const acc = _store.accounts[i];
+          if (!acc) continue;
+          acc.envMode = mode; // 内存即时生效 (钉此号·不波及他号)
+          items.push({ email: acc.email, mode });
+        }
+        if (items.length === 0) {
+          _toast("环境模式: 0 个 (索引无效)");
+          break;
+        }
+        const wr = _writeEnvModeStates(items);
+        log(
+          "🖥 环境模式 → " +
+            mode +
+            " · " +
+            items.length +
+            " 个 · persistOk=" +
+            wr.ok,
+        );
+        _toast(
+          _envModeLabel(mode) +
+            " · " +
+            items.length +
+            " 个账号" +
+            (wr.ok ? "" : " · 持久化失败⚠️"),
+        );
+        _store.save();
+        _broadcastUI();
+        break;
+      }
+      // 每账号环境模式三态循环步进 · linux→windows→macos→linux · 每号从各自当前态各自+1 (批量多选同步步进·瞬移到下一位)
+      case "cycleEnvModeBatch": {
+        const indices = [
+          ...new Set((msg.indices || []).map(Number).filter(Number.isInteger)),
+        ];
+        const items = [];
+        for (const i of indices) {
+          const acc = _store.accounts[i];
+          if (!acc) continue;
+          const next = _nextEnvMode(acc.envMode); // 从该号自身当前态推进 (不强制同态)
+          acc.envMode = next; // 内存即时生效 (钉此号·不波及他号)
+          items.push({ email: acc.email, mode: next });
+        }
+        if (items.length === 0) {
+          _toast("环境模式: 0 个 (索引无效)");
+          break;
+        }
+        const wr = _writeEnvModeStates(items);
+        log(
+          "🖥 环境模式步进 · " +
+            items.length +
+            " 个 · " +
+            items.map((x) => x.mode[0].toUpperCase()).join("") +
+            " · persistOk=" +
+            wr.ok,
+        );
+        const uniq = [...new Set(items.map((x) => x.mode))];
+        _toast(
+          (uniq.length === 1
+            ? _envModeLabel(uniq[0])
+            : "🖥 环境模式已步进") +
+            " · " +
+            items.length +
+            " 个账号" +
+            (wr.ok ? "" : " · 持久化失败⚠️"),
+        );
+        _store.save();
+        _broadcastUI();
+        break;
+      }
       // ── 本源 v17.42.7 锁🔒 toggleSkip ──
       // v2.7.4 (补入v3.0.2) · 真本源持久化 · 写独立 lock-state.json (race-safe)
       case "toggleSkip": {
@@ -14072,9 +14564,15 @@ async function handleWebviewMessage(msg) {
           });
           if (prompt === undefined) break;
         }
-        _toast("\u23F3 发起对话…");
+        // 该号环境模式(Linux/Windows/macOS)注入新对话·只对新建对话生效·不动运行中的对话
+        //   读盘为准(每号独立持久·multi-window race-safe), 回退内存 envMode。
+        const _envMode = _normEnvMode(
+          (_readEnvModeState()[String(r.email || "").toLowerCase()] || {}).envMode ||
+            (_store.accounts[msg.index] || {}).envMode,
+        );
+        _toast("\u23F3 发起对话…(环境: " + _envMode + ")");
         try {
-          const res = await devinCloud.createSession(r.auth, prompt, { title: msg.title });
+          const res = await devinCloud.createSession(r.auth, prompt, { title: msg.title, platform: _envMode });
           if (res.ok) {
             _toast("\u2713 已发起: " + res.devinId);
             _notify("info", "[" + r.email + "] 已发起新对话 " + res.devinId);
@@ -16775,6 +17273,16 @@ module.exports = {
     },
     set _predictiveCandidate(v) {
       _predictiveCandidate = v;
+    },
+    // 每账号环境模式(Linux/Windows/macOS) · 后端契约: 供 dao-vsix/会话创建按号查运行环境, 及守门测试
+    _normEnvMode,
+    _nextEnvMode,
+    _readEnvModeState,
+    _writeEnvModeStates,
+    ENV_MODE_CYCLE,
+    getAccountEnvMode(email) {
+      const m = _readEnvModeState()[String(email || "").toLowerCase()];
+      return _normEnvMode(m && m.envMode);
     },
   },
 };

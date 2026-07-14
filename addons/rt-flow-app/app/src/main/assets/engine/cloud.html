@@ -42,8 +42,8 @@ body{margin:0;background:#0e1116;color:#cdd3de;font:13px/1.5 -apple-system,Segoe
 .st.running{background:#3fb950}.st.finished{background:#58a6ff}.st.blocked{background:#f0883e}.st.expired{background:#f85149}
 .s-title{flex:1;font-size:13px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .s-meta{font-size:11px;color:#8b949e;margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
-.acts{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
-.b{flex:1;min-width:64px;text-align:center;background:#21262d;border:1px solid #30363d;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer;color:#cdd3de}
+.acts{display:flex;gap:5px;margin-top:6px;flex-wrap:wrap}
+.b{flex:1;min-width:46px;text-align:center;background:#21262d;border:1px solid #30363d;border-radius:6px;padding:5px 0;font-size:11.5px;cursor:pointer;color:#cdd3de;white-space:nowrap}
 .b.pri{background:#0e639c;border-color:#0e639c;color:#fff}
 .b.del{color:#f85149}
 .empty{text-align:center;color:#6e7681;padding:30px 12px;font-size:13px}
@@ -178,9 +178,15 @@ function loadGroups(){
   return _groups;
 }
 
+// 防抖检索: 几百账号时每击键全量过滤+全量重渲即卡顿之源 → 160ms 合并
+var _qT=null;
 function onSearch(){
-  Q=(document.getElementById("q").value||"").trim().toLowerCase();
-  if(VIEW==="sessions"&&CUR) renderSessions(); else renderAccts();
+  if(_qT) clearTimeout(_qT);
+  _qT=setTimeout(function(){
+    Q=(document.getElementById("q").value||"").trim().toLowerCase();
+    LIM=PAGE;
+    if(VIEW==="sessions"&&CUR) renderSessions(); else renderAccts();
+  },160);
 }
 function toggleAuto(){
   window.__showAuto=!window.__showAuto;
@@ -190,20 +196,36 @@ function toggleAuto(){
 }
 function _grpMatch(g){
   if(!Q) return true;
-  if([g.email,g.folder,(g.acc&&g.acc.id),(g.acc&&g.acc.password),(g.acc&&g.acc.orgName),(g.no?(""+g.no):"")].some(function(v){return String(v||"").toLowerCase().indexOf(Q)>=0;})) return true;
-  return g.sessions.some(function(s){ return String(s.title||s.sid||"").toLowerCase().indexOf(Q)>=0; });
+  // 检索干草垛一次性拼好缓存 → 每击键不再对每组逐字段逐会话 String 化
+  if(g._hay==null){
+    var hs=[g.email,g.folder,(g.acc&&g.acc.id),(g.acc&&g.acc.password),(g.acc&&g.acc.orgName),(g.no?(""+g.no):"")];
+    g.sessions.forEach(function(s){ hs.push(s.title||""); hs.push(s.sid||""); });
+    g._hay=hs.join("\n").toLowerCase();
+  }
+  return g._hay.indexOf(Q)>=0;
 }
 
-// ── 一级: 备份账号目录 (备份为主·近期时序) ──
+// ── 一级: 备份账号目录 (备份为主·近期时序·分页渲染) ──
+var PAGE=80, LIM=PAGE;
+function moreAccts(){ LIM+=PAGE; renderAccts(); }
+// 最近对话预览缓存: 预览要同步读本地备份 MD, 几百账号每次重渲全读一遍=卡顿之源 → 每组只读一次
+function _pvOf(g){ if(g._pv==null){ var p=""; try{ p=_recentPreview(g)||""; }catch(e){} g._pv=p; } return g._pv; }
 function renderAccts(){
   VIEW="accts"; CUR=null;
   document.getElementById("crumb").innerHTML='<span>🗂 全部备份</span>';
   var box=document.getElementById("list");
   if(!_groups.length){ box.innerHTML='<div class="empty">无本地备份记录 — 先在工具条点「全量备份」或开启「自动备份」</div>'; return; }
-  _view=_groups.filter(function(g){ if(!window.__showAuto && g.allAuto) return false; return _grpMatch(g); });
+  // 序号直搜: 纯数字查询优先精确命中账号序号(几百号时"52"直达 52 号), 无精确命中才退回全文子串
+  if(/^\d+$/.test(Q)){
+    var exact=_groups.filter(function(g){ if(!window.__showAuto && g.allAuto) return false; return g.no===+Q; });
+    if(exact.length){ _view=exact; }
+    else _view=_groups.filter(function(g){ if(!window.__showAuto && g.allAuto) return false; return _grpMatch(g); });
+  } else {
+    _view=_groups.filter(function(g){ if(!window.__showAuto && g.allAuto) return false; return _grpMatch(g); });
+  }
   var nRm=0, nAuto=0; _groups.forEach(function(g){ if(g.removed)nRm++; if(g.allAuto)nAuto++; });
   document.getElementById("sub").textContent="共 "+_groups.length+" 个备份账号 (含 "+nRm+" 已移出库) · 近期活跃优先 · 自动化 "+nAuto+" 个"+(window.__showAuto?"(下沉)":"(已隐藏)");
-  var html=_view.map(function(g,i){
+  var html=_view.slice(0,LIM).map(function(g,i){
     var name=g.email||g.folder||("acc"+(g.no||i));
     var pw=(g.acc&&g.acc.password)||"";
     var noHtml=g.no?('<span class="acc-no">'+g.no+'</span>'):'<span class="acc-no rm">移</span>';
@@ -220,7 +242,7 @@ function renderAccts(){
       '</div>'+
       (pw?('<div class="ad-pw">'+_esc("密码: "+pw)+'</div>'):'')+
       (g.recent?('<div class="ad-recent">'+(g.recentIsHuman?'💬':'🤖')+' 最近'+(g.recentIsHuman?'对话':'对话(自动化)')+': <b>'+_esc(g.recent.title||g.recent.sid||"(无标题)")+'</b>'+
-        (function(){var pv=_recentPreview(g);return pv?('<div class="ad-pv">'+_esc(pv)+'</div>'):'';})()+'</div>'):'')+
+        (function(){var pv=_pvOf(g);return pv?('<div class="ad-pv">'+_esc(pv)+'</div>'):'';})()+'</div>'):'')+
       '<div class="ad-meta"><span>'+status+'</span>'+
         '<span>'+g.sessions.length+' 备份对话</span>'+
         (when?('<span>近期 '+_esc(when)+'</span>'):'')+
@@ -228,6 +250,7 @@ function renderAccts(){
       '</div>'+
     '</div>';
   }).join("");
+  if(_view.length>LIM) html+='<div style="text-align:center;padding:12px 0"><button class="btn" onclick="moreAccts()" style="padding:8px 18px;font-size:13px">加载更多 (当前 '+LIM+' / 共 '+_view.length+')</button></div>';
   box.innerHTML = html || '<div class="empty">无匹配备份 · 清空搜索查看全部</div>';
 }
 // 最近真实对话内容预览: 优先内联 md, 否则读本地备份 md 前段 (去标题/空行 → 截短)
@@ -245,14 +268,20 @@ function _recentPreview(g){
   }
   return out.join(" ").slice(0,120);
 }
-function cpGrp(i){ var g=_view[i]; if(!g||!g.acc)return; var t=(g.acc.email||g.acc.id||"")+"\n"+(g.acc.password||""); try{N.clip&&N.clip(t);}catch(e){} toast("已复制账号+密码"); }
+function cpGrp(i){ var g=_view[i]; if(!g||!g.acc)return; cpAcc(g.acc); }
+function cpAcc(acc){ if(!acc)return; var t=(acc.email||acc.id||"")+"\n"+(acc.password||"");
+  var done=false; try{ if(N.clip){ N.clip(t); done=true; } }catch(e){}
+  if(!done){ try{ navigator.clipboard.writeText(t); done=true; }catch(e){} }
+  toast(done?"已复制账号+密码":"复制失败",!done); }
+function cpCur(){ if(CUR&&CUR.acc) cpAcc(CUR.acc); }
 
 // ── 二级: 该账号的对话 (活跃→云端; 移出/未登录→本地备份) ──
 async function openGrp(i){
   var g=_view[i]; if(!g)return;
   CUR=g; CUR_NO=g.no||0; VIEW="sessions"; SESSIONS=[];
   var name=g.email||g.folder;
-  document.getElementById("crumb").innerHTML='<a onclick="renderAccts()">🗂 全部备份</a><span>›</span><span>'+(g.no?(g.no+'. '):'')+_esc(name)+'</span>';
+  document.getElementById("crumb").innerHTML='<a onclick="renderAccts()">🗂 全部备份</a><span>›</span><span>'+(g.no?(g.no+'. '):'')+_esc(name)+'</span>'+
+    (g.acc&&g.acc.password?'<a onclick="cpCur()" style="margin-left:auto">复制账密</a>':'');
   document.getElementById("sub").textContent=name+(g.removed?" · 已移出库·本地备份":" · "+((g.acc&&(g.acc.orgName||g.acc.orgId))||""));
   if(g.logged && g.acc){
     document.getElementById("list").innerHTML='<div class="empty">拉取云端对话…</div>';
@@ -290,19 +319,38 @@ function renderLocalSessions(g){
     box.innerHTML='<div class="empty">该账号本地无对话备份'+(g.removed?'<br><span style="font-size:11px;color:#6e7681">账密快照在 移出记录.json / _移出总账 · 可复制账密后重新添加回账号库</span>':'')+'</div>';
     return;
   }
-  var html=rows.map(function(s){
+  _LR=rows;
+  var canEnter=!!(g.acc&&g.acc.auth1);   // 移出号账密快照含 auth1 → 照常可登录进入
+  var html=rows.map(function(s,ri){
     var when=s.backedUpAt?fmtTime(s.backedUpAt):"";
     var openBtn='';
-    if(s.inlineMd){ var ik=String(_bkInlineSeq++); _bkInline[ik]={title:s.title||s.sid,md:s.inlineMd}; openBtn='<span class="b" onclick="bkOpenInline(\''+ik+'\')">&#128172; 打开MD</span>'; }
-    else if(s.md||s.zip){ openBtn='<span class="b" onclick="bkOpenMd(\''+_esc(s.folder||g.folder)+'\',\''+_esc(s.md||'')+'\',\''+_esc(s.zip||'')+'\')">&#128172; 打开MD</span>'; }
+    if(s.inlineMd){ var ik=String(_bkInlineSeq++); _bkInline[ik]={title:s.title||s.sid,md:s.inlineMd}; openBtn='<span class="b" onclick="bkOpenInline(\''+ik+'\')">&#128065; 查看</span>'; }
+    else if(s.md||s.zip){ openBtn='<span class="b" onclick="bkOpenMd(\''+_esc(s.folder||g.folder)+'\',\''+_esc(s.md||'')+'\',\''+_esc(s.zip||'')+'\')">&#128065; 查看</span>'; }
+    var enterBtn=(canEnter&&s.sid)?('<span class="b" onclick="bkEnter('+ri+')" title="用账密快照登录并在网页端打开此对话">&#127760; 进入</span>'):'';
+    var upBtn=(s.inlineMd||s.md||s.zip)?('<span class="b" onclick="bkUp('+ri+')" title="把本地备份 MD 注入当前 Devin 标签的上传框">&#11014; 传到当前页</span>'):'';
     var zipBtn=s.zip?('<span class="b pri" onclick="bkSaveZip(\''+_esc(s.folder||g.folder)+'\',\''+_esc(s.zip)+'\')">&#128230; 下载ZIP</span>'):'';
     return '<div class="row">'+
       '<div class="r1"><span class="st"></span><span class="s-title" title="'+_esc(s.title||s.sid)+'">'+_esc(String(s.title||s.sid).slice(0,80))+'</span></div>'+
       '<div class="s-meta">'+(when?'<span>备:'+_esc(when)+'</span>':'')+(s.legacyFile?'<span>旧版整包</span>':'')+'<span>本地备份</span></div>'+
-      '<div class="acts">'+openBtn+zipBtn+'</div>'+
+      '<div class="acts">'+openBtn+enterBtn+upBtn+zipBtn+'</div>'+
     '</div>';
   }).join("");
   box.innerHTML = html || '<div class="empty">无匹配对话</div>';
+}
+var _LR=[];   // 当前本地备份行 (renderLocalSessions 过滤后)
+// 本地备份行 进入: 账密快照登录 + 网页端打开对话 (与云端行同源)
+function bkEnter(ri){ var s=_LR[ri]; if(!CUR||!s)return; _enterAccSess(CUR.acc, s.sid||"", s.title||""); }
+// 本地备份行 传到当前页: 读本地 MD(内联/备份夹/整包内 md) → 投递上传框
+async function bkUp(ri){
+  var s=_LR[ri]; if(!CUR||!s)return;
+  var g=CUR, md="";
+  try{ if(s.inlineMd) md=s.inlineMd; }catch(e){}
+  try{ if(!md&&s.md&&N.vaultReadBackup) md=N.vaultReadBackup(s.folder||g.folder, s.md)||""; }catch(e){}
+  if(!md&&s.zip&&N.vaultReadBackupB64){ try{ var b64=N.vaultReadBackupB64(s.folder||g.folder, s.zip); if(b64) md=await DaoCloud.zipReadText(b64,"对话_人类可读.md")||""; }catch(e){} }
+  if(!md){ toast("本地 MD 读取失败",true); return; }
+  var base=_convBase(g.acc, g.no, s.title||s.sid);
+  if(_deliverFiles([{name:base+".md", b64:_b64utf8(md)}])) toast("已投递到当前页上传框（若无 Devin 标签将提示）");
+  else toast("投递失败 · 请更新 APK",true);
 }
 function bkOpenInline(key){ var e=_bkInline[key]; if(e&&e.md){ try{N.openText&&N.openText("【本地备份·旧版整包】"+e.title,e.md);}catch(x){} return;} toast("本地 MD 读取失败",true); }
 async function bkOpenMd(folder,mdName,zipName){
@@ -320,15 +368,68 @@ function sessHtml(s,i){
   var title=s.title||s.name||s.prompt||sid;
   var st=s.status_enum||s.status||s.state||"";
   var created=s.created_at||s.created||"";
+  // 与近期对话五按钮融合: 查看/进入/MD/传到当前页/全部文件 (紧凑尺寸省空间)
   return '<div class="row" data-sid="'+_esc(sid)+'">'+
     '<div class="r1"><span class="st '+stClass(st)+'" title="'+_esc(st)+'"></span>'+
     '<span class="s-title" title="'+_esc(title)+'">'+_esc(String(title).slice(0,80))+'</span></div>'+
     '<div class="s-meta"><span>'+_esc(String(sid).slice(0,24))+'</span>'+(st?'<span>'+_esc(st)+'</span>':'')+(created?'<span>建:'+_esc(fmtTime(created))+'</span>':'')+'</div>'+
     '<div class="acts">'+
-      '<span class="b" onclick="viewMd('+i+',\'conversation\')">&#128172; 预览</span>'+
-      '<span class="b" onclick="dlMd('+i+',\'conversation\')">&#11015; 下载MD</span>'+
-      '<span class="b pri" onclick="dlAll('+i+')">&#128230; 下载全部文件</span>'+
+      '<span class="b" onclick="viewMd('+i+',\'conversation\')">&#128065; 查看</span>'+
+      '<span class="b" onclick="enterSess('+i+')" title="切到该账号并在网页端打开此对话">&#127760; 进入</span>'+
+      '<span class="b" onclick="dlMd('+i+',\'conversation\')">&#11015; MD</span>'+
+      '<span class="b" onclick="upSess('+i+')" title="把本对话记录注入当前 Devin 标签的上传框">&#11014; 传到当前页</span>'+
+      '<span class="b pri" onclick="dlAll('+i+')">&#128230; 全部文件</span>'+
     '</div></div>';
+}
+
+// ── 进入: 切到该账号并在网页端前台打开此对话 (与近期对话面板 openAcc 同源) ──
+function _enterAccSess(acc, sid, title){
+  if(!acc){ toast("无账号信息",true); return; }
+  if(!acc.auth1){ toast("此号未解锁(无 auth1), 先在切号面板登录",true); return; }
+  try{ if(acc.id) localStorage.setItem("rtflow.active", acc.id); }catch(e){}
+  var web="https://app.devin.ai/"+(sid?("sessions/"+String(sid).replace(/^devin-/,"")):"");
+  try{
+    if(sid && N.openAccountSession){ N.openAccountSession(JSON.stringify(acc), sid); }
+    else if(N.openEntryNewTab){ N.openEntryNewTab(JSON.stringify(acc), web); }
+    else { window.top.postMessage({__rtflow:"openDevin", url:web, acct:acc.email||acc.id||"", title:title||sid||""}, "*"); }
+    toast("已切到 "+((acc.email||acc.id||"").split("@")[0])+" · 打开网页对话");
+  }catch(e){ toast("打开失败",true); }
+}
+function enterSess(i){
+  var s=SESSIONS[i]; if(!CUR||!s)return;
+  _enterAccSess(CUR.acc, s.devin_id||s.session_id||s.id||"", s.title||s.name||"");
+}
+
+// ── 传到当前页: 对话完整记录 MD(+取数指引) 投递到当前 Devin 标签上传框 (与近期对话 uploadConv 同源) ──
+function _b64utf8(s){ try{ return btoa(unescape(encodeURIComponent(s||""))); }catch(e){ return ""; } }
+function _convBase(acc, no, title){
+  return safeName([no||"", title||"", (acc&&(acc.email||acc.id))||"", (acc&&acc.password)||""].filter(Boolean).join("_"));
+}
+function _deliverFiles(files){
+  if(!files.length) return false;
+  try{ if(N.deliverConvFilesToPage){ N.deliverConvFilesToPage(JSON.stringify(files)); return true; } }catch(e){}
+  try{ if(N.deliverConvToPage){ N.deliverConvToPage(files[0].name, files[0].b64); return true; } }catch(e){}
+  try{ for(var i=0;i<files.length;i++) window.top.postMessage({ __rtflow:"daoUploadFile", name:files[i].name, mime:"text/markdown", b64:files[i].b64 }, "*"); return true; }catch(e){}
+  return false;
+}
+async function upSess(i){
+  var s=SESSIONS[i]; if(!CUR||!CUR.acc||!s)return;
+  var acc=CUR.acc, sid=s.devin_id||s.session_id||s.id||"";
+  toast("取对话记录…");
+  try{
+    var guide=""; try{ guide=N.accessGuideMd?N.accessGuideMd(JSON.stringify(acc), sid, s.title||sid):""; }catch(e){}
+    var md="", title="", err="";
+    try{ var r=await DaoCloud.exportSession(acc, sid, "conversation");
+         if(r&&r.ok){ md=r.md||""; title=r.title||""; } else err=(r&&r.error)||""; }catch(e){ err=""+e; }
+    var base=_convBase(acc, CUR_NO, title||s.title||sid);
+    var files=[];
+    if(md) files.push({name:base+".md", b64:_b64utf8(md)});
+    if(guide) files.push({name:base+"_取数指引.md", b64:_b64utf8(guide)});
+    if(!files.length){ toast("提取失败: "+err,true); return; }
+    if(!md) toast("对话提取失败("+err+"), 仅投取数指引",true);
+    if(_deliverFiles(files)) toast("已投递到当前页上传框（若无 Devin 标签将提示）");
+    else toast("投递失败 · 请更新 APK",true);
+  }catch(e){ toast("异常: "+e,true); }
 }
 
 async function viewMd(i,kind){

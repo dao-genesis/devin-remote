@@ -217,4 +217,15 @@ ok(/d\.kind==='validatePats'/.test(src),
     "ghRenderPatInject: 渲染 有效/失效 状态与过期余天(非密)");
 }
 
+// 13) 仓库整理三兄弟(列仓/迁移/fork)对 owner/repo 归一同源 — 贴整链接/o.git/裸 o/r 皆可用·去重
+{
+  const fb = src.split("async function daoGhForkRepos")[1].split("// 命名隧道固定域名")[0];
+  ok(/github\\\.com/.test(fb) && /replace\(/.test(fb),
+    "daoGhForkRepos: 去 github.com 前缀归一(与 daoOrgSyncRepos/daoGhListRepos 同源)");
+  ok(/replace\(\/\\\.git\$\/i, ''\)/.test(fb) && /Array\.from\(new Set\(/.test(fb),
+    "daoGhForkRepos: 去 .git 后缀 + 去重(贴整链接/裸 o/r 一致·不重复 fork)");
+  ok(/i < uniq\.length - 1/.test(fb),
+    "daoGhForkRepos: 遍历去重后的 uniq(退避判定用 uniq.length)");
+}
+
 console.log("[gh-fleet] " + pass + " assertion(s) passed\n");

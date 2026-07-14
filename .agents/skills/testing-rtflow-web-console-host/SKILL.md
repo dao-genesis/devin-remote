@@ -63,6 +63,24 @@ Annotate: host renders (not surge "Unavailable") → connect over route-C (worke
 live RPC round-trip. The static page's footer version (e.g. `v0.15.1`) is independent of the
 device/APK version returned by RPC (e.g. `0.37.74`) — not a discrepancy.
 
+## Driving the user's REAL phone over route-C (when the user asks for it)
+When the user explicitly shares a session/token card and asks to test their own phone, the same
+mesh reaches their real device. Lessons:
+- `addons/rt-flow-app/tools/dao-mesh-rpc.mjs` works from Node 20 with `npm i ws --no-save` (no
+  global WebSocket below Node 22). Connect may fail 1–2 times with `ice_failed` (relay ping race)
+  — retry before concluding the device is down. A batch client that reuses ONE connection for many
+  frames is far faster than one process per RPC (`h.rpc()` result may be a JSON *string* — parse it).
+- Big responses (e.g. `phoneListFiles` on a large dir) get `413 relay payload too large` over the
+  mesh — use `phoneShell` (Shizuku) with `ls … | wc -l` / `du -sh` instead.
+- Non-intrusive real-device assertions: all `browse*` commands drive *background* tabs, so you can
+  probe injected JS (`__rtWatch`/`__rtWatchArm`), performance timing, and even open the composer
+  Radix menu without disturbing the foreground. If you open a menu, CLOSE it after: Escape alone may
+  not close Radix — re-click the trigger or dispatch `pointerdown`+`pointerup` on `document.body`.
+- `appCheckUpdate` on the device tells you the *installed* versionCode vs latest release — use it to
+  confirm an auto-released fix actually reached the user's phone before re-testing old bugs.
+- `performance.memory` in a tab reports the shared renderer heap (all tabs) — a large value with many
+  open account tabs indicates memory pressure (a real jank source), not a per-page leak.
+
 ## Gotchas
 - `git push` as the Devin bot may 403 (App lacks write). The user may hand a PAT in chat — warn them
   to revoke it after; never persist it. Prefer asking them to grant the GitHub App write access.

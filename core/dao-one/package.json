@@ -2,7 +2,7 @@
   "name": "dao-one",
   "displayName": "道 · 归一 (Dao One)",
   "description": "归一超级插件本体: 单一驾驶舱按'意图'统御全功能面板(dao-vsix)+提示词隔离·外接模型路由(dao-proxy-pro)+Devin Cloud 多账号/备份/回归本源(rt-flow)。三引擎隐形协作,用户无感无为,系统无不为。大道至简,道法自然。",
-  "version": "2.20.0",
+  "version": "2.20.2",
   "publisher": "dao",
   "license": "Apache-2.0",
   "icon": "media/icon.png",
@@ -173,68 +173,83 @@
         "title": "Dao: Toggle Devin Cloud Panel"
       },
       {
-        "command": "wam.originInvert",
+        "command": "daopp.originInvert",
         "title": "道Agent Pro: 启 (invert · 道德经前置 · 彻删官方着相)",
         "category": "道Agent Pro"
       },
       {
-        "command": "wam.originPassthrough",
+        "command": "daopp.originPassthrough",
         "title": "官方Agent: 启 (passthrough · 锚归云 · 直连)",
         "category": "道Agent Pro"
       },
       {
-        "command": "dao.toggleMode",
+        "command": "daopp.toggleMode",
         "title": "道Agent Pro: 切换模式 (道 ⇄ 官方)",
         "category": "道Agent Pro"
       },
       {
-        "command": "dao.openPreview",
+        "command": "daopp.openPreview",
         "title": "道Agent Pro: 浏览器观真 SP (/origin/preview)",
         "category": "道Agent Pro"
       },
       {
-        "command": "wam.verifyEndToEnd",
+        "command": "daopp.verifyEndToEnd",
         "title": "全链路自检 (E2E)",
         "category": "道Agent Pro"
       },
       {
-        "command": "wam.selftest",
+        "command": "daopp.selftest",
         "title": "闭环自检 (L1 + L2)",
         "category": "道Agent Pro"
       },
       {
-        "command": "dao.外接api.toggle",
+        "command": "daopp.外接api.toggle",
         "title": "道Agent Pro: 外接 api 开关 (第三方API路由 · 默开)",
         "category": "道Agent Pro"
       },
       {
-        "command": "dao.eaConfig",
+        "command": "daopp.eaConfig",
         "title": "道Agent Pro: 外接API 热配置 (Provider+路由 · 不重启)",
         "category": "道Agent Pro"
       },
       {
-        "command": "dao.term.exec",
+        "command": "daopp.term.exec",
         "title": "道Agent Pro: 终端会话池 · exec (七层一招治 · 零第三方)",
         "category": "道Agent Pro"
       },
       {
-        "command": "dao.term.list",
+        "command": "daopp.term.list",
         "title": "道Agent Pro: 终端会话池 · list (列所有 sid · 终端池状)",
         "category": "道Agent Pro"
       },
       {
-        "command": "dao.term.close",
+        "command": "daopp.term.close",
         "title": "道Agent Pro: 终端会话池 · close (选 sid 关 · 释 shell 进程)",
         "category": "道Agent Pro"
       },
       {
-        "command": "dao.modelUnlock.toggle",
+        "command": "daopp.modelUnlock.toggle",
         "title": "道Agent Pro: 模型解锁 开关 (执大象天下往 · 全量109模型注入)",
         "category": "道Agent Pro"
       },
       {
-        "command": "dao.modelUnlock.status",
+        "command": "daopp.modelUnlock.status",
         "title": "道Agent Pro: 模型解锁 状态 (查看全量模型目录)",
+        "category": "道Agent Pro"
+      },
+      {
+        "command": "daopp.revproxy.toggle",
+        "title": "道Agent Pro: 模型反代 开关 (反者道之动 · 标准 OpenAI/Anthropic 本地端点)",
+        "category": "道Agent Pro"
+      },
+      {
+        "command": "daopp.revproxy.status",
+        "title": "道Agent Pro: 模型反代 状态 (端点/Key/可反代模型)",
+        "category": "道Agent Pro"
+      },
+      {
+        "command": "daopp.restoreOfficial",
+        "title": "道Agent Pro: 复原官方直连 (卸载善后/解锚 · 卡死自救)",
         "category": "道Agent Pro"
       },
       {

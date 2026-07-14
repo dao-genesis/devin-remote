@@ -105,9 +105,11 @@ function openDoc(it){
 }
 // 正页点开 MD/文本附件 → 原生直送悬浮窗直看 (查看为主, 不再跳下载)
 function openDocExt(url,name){ openDoc({u:url,n:name||""}); }
-// 下载中心点开已下载资源 → 同一面板直看 (图片/视频/音频 file:// 或 content:// 本地源)
+// 下载中心点开已下载资源 → 同一面板直看 (图片/视频/音频/PDF/Office, file:// 或 content:// 本地源)
 function openMediaExt(url,type,name){
   var it={u:url,t:type||"file",n:name||""};
+  if(it.t==="pdf"){ openPdf(it); return; }
+  if(it.t==="office"){ openOffice(it); return; }
   if(it.t==="img"||it.t==="video"||it.t==="audio"){
     var tag=it.t==="img"?('<img src="'+esc(it.u)+'">'):(it.t==="video"?('<video src="'+esc(it.u)+'" controls autoplay playsinline></video>'):('<audio src="'+esc(it.u)+'" controls autoplay></audio>'));
     var d=document.createElement("div"); d.className="big";
@@ -124,6 +126,42 @@ function docLoaded(id,text){
   var box=document.getElementById("db"+id), m=DOCS[id]; if(!box) return;
   if(m&&/^(md|markdown)$/.test(m.ext)){ box.className="db mdv"; box.innerHTML=mdRender(text); }
   else{ box.innerHTML='<pre class="raw"></pre>'; box.querySelector("pre").textContent=text; }
+}
+// PDF 面板内直看: 原生 PdfRenderer 逐页成图回推 (本地/鉴权网络皆可)
+function openPdf(it){
+  var id=++DOCSEQ;
+  var d=document.createElement("div"); d.className="doc";
+  d.innerHTML='<div class="dh"><div class="t">'+esc(dn(it.n||it.u))+'</div>'
+    +'<button class="dd">⬇ 下载</button><button class="x2">✕</button></div>'
+    +'<div class="db" id="db'+id+'"><div class="ld">⏳ 正在渲染 PDF…</div></div>';
+  d.querySelector(".dd").onclick=function(){ try{ MediaHost.download(it.u, it.n||""); }catch(e){} };
+  d.querySelector(".x2").onclick=function(){ d.remove(); };
+  document.body.appendChild(d);
+  try{ MediaHost.renderPdf(it.u, id); }
+  catch(e){ docFailed(id, "桌面桥不可用"); }
+}
+function pdfPage(id,idx,total,b64){
+  var box=document.getElementById("db"+id); if(!box) return;
+  if(idx===0) box.innerHTML='<div style="color:#8b949e;font-size:11px;margin-bottom:6px">共 '+total+' 页</div>';
+  var img=document.createElement("img");
+  img.style.cssText="width:100%;margin-bottom:8px;border-radius:6px;background:#fff";
+  img.src="data:image/jpeg;base64,"+b64;
+  box.appendChild(img);
+}
+function pdfFailed(id,err){ docFailed(id,err); }
+// Office(ppt/doc/xls): 公网 URL 用 Office 在线预览内嵌; 本地文件无法面板渲染 → 转其它应用打开
+function openOffice(it){
+  if(/^https?:/.test(it.u)){
+    var d=document.createElement("div"); d.className="doc";
+    d.innerHTML='<div class="dh"><div class="t">'+esc(dn(it.n||it.u))+'</div>'
+      +'<button class="dd">⬇ 下载</button><button class="x2">✕</button></div>'
+      +'<iframe src="https://view.officeapps.live.com/op/embed.aspx?src='+encodeURIComponent(it.u)+'" style="flex:1;border:none;background:#fff"></iframe>';
+    d.querySelector(".dd").onclick=function(){ try{ MediaHost.download(it.u, it.n||""); }catch(e){} };
+    d.querySelector(".x2").onclick=function(){ d.remove(); };
+    document.body.appendChild(d);
+    return;
+  }
+  try{ MediaHost.openWith(it.u, it.n||""); }catch(e){}
 }
 function docFailed(id,err){
   var box=document.getElementById("db"+id); if(!box) return;
@@ -143,17 +181,9 @@ function doView(i){
   }
   var ext=extOf(it.u,it.n);
   if(it.t==="md"||isTextExt(ext)){ openDoc(it); return; }   // MD/文本类 → 悬浮窗内直看正文
-  if(ext==="pdf"){   // PDF → 面板内嵌页尝试 (拦截层鉴权代取)
-    var p=document.createElement("div"); p.className="doc";
-    p.innerHTML='<div class="dh"><div class="t">'+esc(dn(it.n||it.u))+'</div>'
-      +'<button class="dd">⬇ 下载</button><button class="x2">✕</button></div>'
-      +'<iframe src="'+esc(it.u)+'" style="flex:1;border:none;background:#fff"></iframe>';
-    p.querySelector(".dd").onclick=function(){ try{ MediaHost.download(it.u, it.n||""); }catch(e){} };
-    p.querySelector(".x2").onclick=function(){ p.remove(); };
-    document.body.appendChild(p);
-    return;
-  }
-  doDl(i);   // 其余二进制类型(zip/apk/office): 无法面板内渲染 → 转下载
+  if(ext==="pdf"){ openPdf(it); return; }                   // PDF → 原生逐页渲染直看
+  if(/^(pptx?|docx?|xlsx?)$/.test(ext)){ openOffice(it); return; }  // Office → 在线预览/其它应用
+  doDl(i);   // 其余二进制类型(zip/apk等): 无法面板内渲染 → 转下载
 }
 function doDl(i){ var it=ITEMS[i]; if(!it) return; try{ MediaHost.download(it.u, it.n||""); }catch(e){} }
 try{ MediaHost.ready(); }catch(e){}

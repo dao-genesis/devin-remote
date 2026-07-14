@@ -42,6 +42,13 @@ test("授权 scope 含部署 Worker 最小权限且追加 offline_access(换 ref
   assert.ok(scope.includes("workers:write"), "须含 Worker 写权限(部署持久通道)");
 });
 
+test("授权 scope 含绑自定义域权限(zone:read + workers_routes:write)——与贴 Token 深链对齐", () => {
+  // provision.tryCustomDomain 读 /zones 并写 /accounts/*/workers/domains: OAuth token 也须具此权,
+  // 否则 workers.dev 被墙网络下 OAuth 一条龙只能部署 workers.dev、绑不了可达自定义域(与 #74 同源缺陷)。
+  assert.ok(SCOPES.includes("zone:read"), "SCOPES 须含 zone:read(读候选 zone)");
+  assert.ok(SCOPES.includes("workers_routes:write"), "SCOPES 须含 workers_routes:write(绑 Worker 自定义域)");
+});
+
 test("buildAuthUrl 缺 state/challenge 即报错(防生成不可用链接)", () => {
   assert.throws(() => buildAuthUrl({ codeChallenge: "c" }), /state/);
   assert.throws(() => buildAuthUrl({ state: "s" }), /codeChallenge/);
