@@ -1404,6 +1404,17 @@ _dEl('daowin').addEventListener('dblclick',function(e){var el=e.target.closest&&
 var _uploadDrag=null;
 function _activeFrameWin(){try{var t=tabs[active];return (t&&t.frame&&t.frame.contentWindow)||null;}catch(e){return null;}}
 function _daoUploadToActive(p){if(!p)return false;var w=_activeFrameWin();if(!w){daoToast('请先打开一个账号网页标签再拖入上传',true);return false;}try{w.postMessage({__daoUpload:p},'*');return true;}catch(e){return false;}}
+// 借鉴手机版 upSess/bkUp · 板块「一键传到当前页」: 备份板块(独立子网页 iframe)发来的投递请求 →
+//   定位当前(或最近)账号页标签(排除板块/通用网页标签), 置前并经 __daoUpload 契约投递, 与拖拽同源。
+function _isAccTab(id){return !!id&&id.indexOf('board:')!==0&&id.indexOf('web:')!==0;}
+function _daoDeliverBoard(p){if(!p)return;
+  var tid=_isAccTab(active)?active:null;
+  if(!tid){for(var j=order.length-1;j>=0;j--){if(_isAccTab(order[j])){tid=order[j];break;}}}
+  if(!tid){daoToast('请先在归一网页打开一个账号/对话标签, 再传到当前页',true);return;}
+  var t=tabs[tid];if(!t||!t.frame){daoToast('当前页不可用',true);return;}
+  setActive(tid);try{_ensureLoaded(tid);}catch(e){}
+  setTimeout(function(){try{if(t.frame.contentWindow)t.frame.contentWindow.postMessage({__daoUpload:p},'*');}catch(e){}},160);
+  daoToast('⏳ 正在上传到当前网页 · '+String(p.title||p.sid||'').slice(0,24));}
 function _showUploadDrop(txt){var cd=_dEl('convdrop');if(cd){cd.textContent=txt||'⬆ 松开 · 上传到当前网页';cd.className='on';}}
 function _hideUploadDrop(){var cd=_dEl('convdrop');if(cd)cd.className='';}
 // ═══ 道并行 · 指针拖拽引擎(取代 webview 跨源 iframe 不可靠的原生 HTML5 DnD) ═══
@@ -1658,6 +1669,7 @@ window.addEventListener('drop',function(e){if(_dragId||_convDragActive){DROP.cla
 window.addEventListener('message',function(ev){var m=ev.data||{};
   if(m.__cwRelay){vscode.postMessage({type:'cloudRelay',msg:m.__cwRelay,board:m.__board||''});return;}
   if(m.__daoConvNav){try{_onConvNav(ev.source,m.__daoConvNav);}catch(e){}return;}
+  if(m.__daoDeliverToCurrent){try{_daoDeliverBoard(m.__daoDeliverToCurrent);}catch(e){}return;}
   if(m.type==='open'){mkTab(m);}
   else if(m.type==='tabUpdate'){try{updateTab(m);}catch(e){}}
   else if(m.type==='closeAll'){var ks=order.slice();for(var i=0;i<ks.length;i++)closeTab(ks[i]);vscode.postMessage({type:'closeAllAck'});}
