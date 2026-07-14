@@ -793,7 +793,7 @@ html.m #hint{font-size:14px;padding:18px}
 #dlwin.on{display:flex}
 #dlwin .dwh{display:flex;align-items:center;gap:8px;padding:8px 11px;background:#161b22;border-bottom:1px solid #21262d;cursor:move;flex:0 0 auto;user-select:none}
 #dlwin .dwh .t{flex:1;font-size:13px;font-weight:700;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#dlwin .dwbar{display:flex;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
+#dlwin .dwbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:6px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
 #dlwin .dlbody{flex:1;overflow:auto;padding:6px 8px 30px}
 #dlwin .rc{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:8px 9px;margin-bottom:7px}
 #dlwin .rc .ti{font-size:13px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -810,7 +810,7 @@ html.m #hint{font-size:14px;padding:18px}
 #mrwin.on{display:flex}
 #mrwin .dwh{display:flex;align-items:center;gap:8px;padding:8px 11px;background:#161b22;border-bottom:1px solid #21262d;cursor:move;flex:0 0 auto;user-select:none}
 #mrwin .dwh .t{flex:1;font-size:13px;font-weight:700;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#mrwin .dwbar{display:flex;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
+#mrwin .dwbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:6px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
 #mrwin .dlbody{flex:1;overflow:auto;padding:6px 8px 30px}
 #mrwin .rc{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:8px 9px;margin-bottom:7px;display:flex;gap:9px;align-items:center}
 #mrwin .rc .th{width:44px;height:44px;object-fit:cover;border-radius:6px;background:#21262d;flex:0 0 auto}
@@ -825,6 +825,13 @@ html.m #hint{font-size:14px;padding:18px}
 #mrwin .empty{color:#6e7681;text-align:center;padding:26px 12px;font-size:13px}
 #mrwin .tip{font-size:11px;color:#6e7681;padding:4px 4px 6px}
 #mrwin .sec{font-size:12px;font-weight:700;color:#8b949e;margin:8px 2px 5px}
+/* 多选模式(对齐手机 APK 下载悬浮窗多选): 勾选框 + 选中高亮 + 批量操作条 */
+#dlwin .rc.sel,#mrwin .rc.sel{border-color:#1f6feb;background:#0d1f33}
+#dlwin .rc[data-dlck],#mrwin .rc[data-mrck]{cursor:pointer}
+#dlwin .ck,#mrwin .ck{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border:1.5px solid #4a5261;border-radius:4px;font-size:12px;line-height:1;color:#fff;margin-right:7px;vertical-align:-3px;user-select:none}
+#dlwin .rc.sel .ck,#mrwin .rc.sel .ck{background:#1f6feb;border-color:#1f6feb}
+#dlwin .mini.on,#mrwin .mini.on{background:#0e639c;border-color:#0e639c;color:#fff}
+#dlwin .mini.warn,#mrwin .mini.warn{background:#6e2b2b;border-color:#a63a3a;color:#ffd7d5}
 /* 悬浮窗可缩放(对齐常规软件·拖边框/拖角) — daowin/dlwin/mrwin 同 */
 #daowin,#dlwin,#mrwin{min-width:340px;min-height:240px}
 .rzh{position:absolute;z-index:30;user-select:none;-webkit-user-select:none}
@@ -889,13 +896,13 @@ html.m #hint{font-size:14px;padding:18px}
 </div>
 <div id="dlwin">
   <div class="dwh" id="dlHead"><span>⬇</span><span class="t" id="dlTitle">下载</span><button class="dwx" id="dlClose">✕ 关闭</button></div>
-  <div class="dwbar"><button class="mini" id="dlRefresh">🔄 刷新</button><button class="mini" id="dlFolder">📁 下载文件夹</button></div>
+  <div class="dwbar"><button class="mini" id="dlRefresh">🔄 刷新</button><button class="mini" id="dlFolder">📁 下载文件夹</button><button class="mini" id="dlMulti" title="多选 · 批量删除/批量传网页(对齐手机 APK)">☑ 多选</button><span id="dlMBar" style="display:none;gap:6px;align-items:center;flex-wrap:wrap"><span class="tip" id="dlMCnt" style="padding:0">已选 0</span><button class="mini" id="dlMAll">全选</button><button class="mini" id="dlMClr">清空</button><button class="mini" id="dlMUp" title="把选中文件依次上传到当前打开的网页上传框">⬆ 批量传网页</button><button class="mini warn" id="dlMDel" title="删除选中的下载记录与本地文件(再点一次确认)">🗑 批量删除</button></span></div>
   <div class="dlbody"><div class="tip">浏览器下载 · 在网页中下载的文件都会出现在这里 · <b>拖文件卡到网页</b>即上传到当前网页上传框(与对话备份无关 · 对齐手机 APK)</div><div id="dlList"><div class="empty">加载中…</div></div></div>
   <div class="rzh e" data-rz="e"></div><div class="rzh w" data-rz="w"></div><div class="rzh n" data-rz="n"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
 </div>
 <div id="mrwin">
   <div class="dwh" id="mrHead"><span>🖼</span><span class="t" id="mrTitle">本页资源</span><button class="dwx" id="mrClose">✕ 关闭</button></div>
-  <div class="dwbar"><button class="mini" id="mrRefresh">🔄 重采</button><span class="tip" id="mrSrc" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span></div>
+  <div class="dwbar"><button class="mini" id="mrRefresh">🔄 重采</button><button class="mini" id="mrMulti" title="多选 · 批量下载/批量复制链接(对齐手机 APK)">☑ 多选</button><span id="mrMBar" style="display:none;gap:6px;align-items:center;flex-wrap:wrap"><span class="tip" id="mrMCnt" style="padding:0">已选 0</span><button class="mini" id="mrMAll">全选</button><button class="mini" id="mrMClr">清空</button><button class="mini" id="mrMDl" title="把选中资源批量下载到下载库(⬇悬浮窗可见)">⬇ 批量下载</button><button class="mini" id="mrMCopy" title="批量复制选中资源链接(每行一个)">复制链接</button></span><span class="tip" id="mrSrc" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span></div>
   <div class="dlbody"><div class="tip">汇集当前页全部图片 / 视频 / 音频 / 文档 / 附件 · 加载不出的资源也可在此直开(对齐手机 APK 本页媒体悬浮窗)</div><div id="mrList"><div class="empty">点「🔄 重采」扫描当前页</div></div></div>
   <div class="rzh e" data-rz="e"></div><div class="rzh w" data-rz="w"></div><div class="rzh n" data-rz="n"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
 </div>
@@ -1225,7 +1232,13 @@ function daoClose(){_dEl('daowin').className='';}
 var DAO_DL=[];
 function _fsize(n){n=+n||0;if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';if(n<1073741824)return (n/1048576).toFixed(1)+' MB';return (n/1073741824).toFixed(2)+' GB';}
 function dlOpen(){_dEl('dlwin').className='on';dlLoad();}
-function dlClose(){_dEl('dlwin').className='';}
+function dlClose(){_dEl('dlwin').className='';if(_dlMulti){_dlMulti=false;_dlSel={};_dlSyncBar();}}
+// 多选模式(移植手机 APK 下载悬浮窗多选 #123): 勾选/行点选 → 全选/清空 → 批量删除(二次确认)/批量传网页
+var _dlMulti=false,_dlSel={},_dlDelArm=0;
+function _dlDone(){return DAO_DL.filter(function(d){return !d.state&&d.path;});}
+function _dlUpdCnt(){var c=_dEl('dlMCnt');if(c)c.textContent='已选 '+Object.keys(_dlSel).length+'/'+_dlDone().length;}
+function _dlSyncBar(){var b=_dEl('dlMulti');if(b)b.classList.toggle('on',_dlMulti);var m=_dEl('dlMBar');if(m)m.style.display=_dlMulti?'inline-flex':'none';_dlDelArm=0;var d=_dEl('dlMDel');if(d)d.textContent='🗑 批量删除';_dlUpdCnt();}
+function dlMultiToggle(){_dlMulti=!_dlMulti;_dlSel={};_dlSyncBar();dlRender();}
 function dlLoad(){if(!DAO_DL.length)_dEl('dlList').innerHTML='<div class="empty">加载中…</div>';vscode.postMessage({type:'shellDownloads'});}
 var _dlAutoT=null;
 function dlRender(){var box=_dEl('dlList');if(!box)return;
@@ -1239,10 +1252,11 @@ function dlRender(){var box=_dEl('dlList');if(!box)return;
     if(d.state==='failed'){
       h+='<div class="rc"><div class="ti" title="'+esc(d.name||'')+'">✖ '+esc(d.name||'(未命名)')+'</div>'+
         '<div class="meta"><span style="color:#f48771">下载失败</span>'+(host?'<span>'+esc(host)+'</span>':'')+(d.time?'<span>'+daoAgo(d.time)+'</span>':'')+'</div></div>';continue;}
-    h+='<div class="rc" draggable="false" data-dldrag="'+esc(d.path||'')+'" data-dlname="'+esc(d.name||'')+'" title="拖拽此文件可上传/发送"><div class="ti" title="'+esc(d.name||'')+'">'+esc(d.name||'(未命名)')+'</div>'+
+    var _ckOn=_dlMulti&&_dlSel[d.path];
+    h+='<div class="rc'+(_ckOn?' sel':'')+'" draggable="false" data-dldrag="'+esc(d.path||'')+'" data-dlname="'+esc(d.name||'')+'"'+(_dlMulti?' data-dlck="'+esc(d.path||'')+'"':'')+' title="'+(_dlMulti?'点击勾选/取消':'拖拽此文件可上传/发送')+'"><div class="ti" title="'+esc(d.name||'')+'">'+(_dlMulti?'<span class="ck">'+(_ckOn?'✓':'')+'</span>':'')+esc(d.name||'(未命名)')+'</div>'+
       '<div class="meta"><span>'+_fsize(d.size)+'</span>'+(host?'<span>'+esc(host)+'</span>':'')+(d.time?'<span>'+daoAgo(d.time)+'</span>':'')+'</div>'+
       '<div class="acts"><span class="b pri" data-dlup="'+esc(d.path||'')+'" data-dlupname="'+esc(d.name||'')+'" title="上传此文件到当前打开的网页上传框(对齐手机 APK·免拖拽)">⬆ 传网页</span><span class="b" data-dlopen="'+esc(d.path||'')+'">打开</span><span class="b" data-dlrev="'+esc(d.path||'')+'">所在文件夹</span><span class="b" data-dldel="'+esc(d.path||'')+'">删除</span></div></div>';}
-  box.innerHTML=h;var tt=_dEl('dlTitle');if(tt)tt.textContent='下载 ('+DAO_DL.length+(nAct?' · '+nAct+'下载中':'')+')';
+  box.innerHTML=h;var tt=_dEl('dlTitle');if(tt)tt.textContent='下载 ('+DAO_DL.length+(nAct?' · '+nAct+'下载中':'')+')';if(_dlMulti)_dlUpdCnt();
   // 有活跃下载时自动轮刷(悬浮窗开着才轮), 完成即停 — 对齐浏览器下载面板实时性。
   clearTimeout(_dlAutoT);if(nAct&&_dEl('dlwin')&&_dEl('dlwin').className==='on')_dlAutoT=setTimeout(dlLoad,1200);}
 // ── 本页资源悬浮窗(对齐手机 APK media.html): 扫当前标签页内全部图片/视频/音频/文档/附件 ──
@@ -1253,7 +1267,12 @@ function mrOpen(){_dEl('mrwin').className='on';var c=active&&MR_CACHE[active];if
 // 页面加载后延迟预采集(对齐手机 APK scheduleMediaPrecollect): 同源可直扫则缓存, 开窗秒显。
 function _mrPrecollect(id){clearTimeout(_mrPreT[id]);_mrPreT[id]=setTimeout(function(){try{var t=tabs[id];if(!t||!t.frame)return;var doc=null;try{doc=t.frame.contentDocument||(t.frame.contentWindow&&t.frame.contentWindow.document);}catch(e){}
   if(doc&&doc.documentElement){MR_CACHE[id]={items:_mrScanDoc(doc,(t.url||doc.baseURI||'')),page:t.url||doc.baseURI||'',ts:Date.now()};}}catch(e){}},1200);}
-function mrClose(){_dEl('mrwin').className='';}
+function mrClose(){_dEl('mrwin').className='';if(_mrMulti){_mrMulti=false;_mrSel={};_mrSyncBar();}}
+// 本页资源多选(对齐手机 APK 网页资源下载多选): 勾选 → 全选/清空 → 批量下载到下载库/批量复制链接
+var _mrMulti=false,_mrSel={};
+function _mrUpdCnt(){var c=_dEl('mrMCnt');if(c)c.textContent='已选 '+Object.keys(_mrSel).length+'/'+MR_ITEMS.length;}
+function _mrSyncBar(){var b=_dEl('mrMulti');if(b)b.classList.toggle('on',_mrMulti);var m=_dEl('mrMBar');if(m)m.style.display=_mrMulti?'inline-flex':'none';_mrUpdCnt();}
+function mrMultiToggle(){_mrMulti=!_mrMulti;_mrSel={};_mrSyncBar();mrRender();}
 function _mrScanDoc(doc,base){var out=[],seen={};function push(u,tp,nm){try{if(!u)return;u=String(u);if(u.indexOf('data:')===0&&u.length>2048)return;try{u=new URL(u,base).href;}catch(e){}if(seen[u])return;seen[u]=1;out.push({u:u,t:tp,n:nm||decodeURIComponent((u.split('/').pop()||'').split('?')[0])||tp});}catch(e){}}
   function walk(root){var i,es;try{es=root.querySelectorAll('img[src]');}catch(e){return;}for(i=0;i<es.length;i++){var el=es[i];if((el.naturalWidth||0)>32||(el.width||0)>32)push(el.currentSrc||el.src,'img',el.alt);}
     try{es=root.querySelectorAll('video');}catch(e){es=[];}for(i=0;i<es.length;i++){push(es[i].currentSrc||es[i].src,'video');var ss=es[i].querySelectorAll('source[src]');for(var j=0;j<ss.length;j++)push(ss[j].src,'video');}
@@ -1276,10 +1295,11 @@ function mrRender(){var box=_dEl('mrList');if(!box)return;var sr=_dEl('mrSrc');i
   for(var oi=0;oi<ord.length;oi++){var tp=ord[oi];var grp=MR_ITEMS.filter(function(x){return (x.t||'file')===tp;});if(!grp.length)continue;
     h+='<div class="sec">'+MR_META[tp][0]+' '+MR_META[tp][1]+' · '+grp.length+'</div>';
     for(var i=0;i<grp.length;i++){var it=grp[i];var idx=MR_ITEMS.indexOf(it);
-      h+='<div class="rc">'+(tp==='img'?'<img class="th" loading="lazy" src="'+esc(it.u)+'" onerror="this.style.opacity=.25">':'<span class="th" style="display:flex;align-items:center;justify-content:center;font-size:20px">'+MR_META[tp][0]+'</span>')
+      var _mOn=_mrMulti&&_mrSel[idx];
+      h+='<div class="rc'+(_mOn?' sel':'')+'"'+(_mrMulti?' data-mrck="'+idx+'" title="点击勾选/取消"':'')+'>'+(_mrMulti?'<span class="ck">'+(_mOn?'✓':'')+'</span>':'')+(tp==='img'?'<img class="th" loading="lazy" src="'+esc(it.u)+'" onerror="this.style.opacity=.25">':'<span class="th" style="display:flex;align-items:center;justify-content:center;font-size:20px">'+MR_META[tp][0]+'</span>')
         +'<div class="bd"><div class="ti" title="'+esc(it.n||'')+'">'+esc(it.n||'(未命名)')+'</div><div class="meta" title="'+esc(it.u)+'">'+esc(it.u)+'</div></div>'
         +'<div class="acts"><span class="b" data-mropen="'+idx+'">打开</span><span class="b pri" data-mrdl="'+idx+'" title="下载此资源到下载库(⬇悬浮窗可见·可拖上传)">⬇ 下载</span><span class="b" data-mrcopy="'+idx+'">复制链接</span></div></div>';}}
-  box.innerHTML=h;var tt=_dEl('mrTitle');if(tt)tt.textContent='本页资源 ('+MR_ITEMS.length+')';}
+  box.innerHTML=h;var tt=_dEl('mrTitle');if(tt)tt.textContent='本页资源 ('+MR_ITEMS.length+')';if(_mrMulti)_mrUpdCnt();}
 function daoTab(t){var rec=t==='recent';
   _dEl('dwTabR').classList.toggle('on',rec);_dEl('dwTabB').classList.toggle('on',!rec);
   _dEl('dwViewR').classList.toggle('on',rec);_dEl('dwViewB').classList.toggle('on',!rec);
@@ -1478,12 +1498,16 @@ var _dlDrag=null;
 _dEl('dlwin').addEventListener('dragstart',function(e){var el=e.target.closest&&e.target.closest('.rc[data-dldrag]');if(!el)return;var p=el.getAttribute('data-dldrag')||'',nm=el.getAttribute('data-dlname')||'';if(!p){try{e.preventDefault();}catch(x){}daoToast('该文件无本地路径, 无法拖拽',true);return;}_dlDrag={path:p,name:nm};_uploadDrag={kind:'file',path:p,name:nm};_convDragActive=true;el.classList.add('cdragging');try{var uri='file:///'+String(p).replace(/\\\\/g,'/').replace(/^\\/+/,'');e.dataTransfer.effectAllowed='copyLink';e.dataTransfer.setData('text/uri-list',uri);e.dataTransfer.setData('text/plain',p);try{e.dataTransfer.setData('DownloadURL','application/octet-stream:'+nm+':'+uri);}catch(x2){}try{e.dataTransfer.setData('application/x-dao-file',JSON.stringify({path:p,name:nm}));}catch(x3){}}catch(x){}_showUploadDrop('⬆ 松开 · 上传此文件到当前网页');});
 _dEl('dlwin').addEventListener('dragend',function(){_dlDrag=null;_uploadDrag=null;_convDragActive=false;_hideUploadDrop();var dg=_dEl('dlwin').querySelector('.rc.cdragging');if(dg)dg.classList.remove('cdragging');});
 // 下载文件卡片 → 指针拖拽上传(点按钮不触发拖拽; 原生 dragstart 在 draggable=false 后不再触发)
-_dEl('dlwin').addEventListener('mousedown',function(e){if(e.button!==0)return;var el=e.target.closest&&e.target.closest('.rc[data-dldrag]');if(!el)return;
+_dEl('dlwin').addEventListener('mousedown',function(e){if(e.button!==0)return;if(_dlMulti)return;var el=e.target.closest&&e.target.closest('.rc[data-dldrag]');if(!el)return;
   if(e.target.closest&&e.target.closest('.b,.acts,[data-dlup],[data-dlopen],[data-dlrev],[data-dldel]'))return;
   var p=el.getAttribute('data-dldrag')||'',nm=el.getAttribute('data-dlname')||'';
   if(!p)return;
   startPDrag(e,{srcEl:el,label:'📄 '+String(nm||p).slice(0,28),payload:{kind:'file',path:p,name:nm},dropHint:'⬆ 松开到网页 = 上传此文件到当前网页'});});
-_dEl('dlwin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-dlopen],[data-dlrev],[data-dldel],[data-dlup]');if(!el)return;
+_dEl('dlwin').addEventListener('click',function(e){
+  if(_dlMulti){var rw=e.target.closest&&e.target.closest('.rc[data-dlck]');
+    if(rw&&!(e.target.closest&&e.target.closest('[data-dlopen],[data-dlrev],[data-dldel],[data-dlup]'))){
+      var pk=rw.getAttribute('data-dlck')||'';if(_dlSel[pk])delete _dlSel[pk];else _dlSel[pk]=1;_dlDelArm=0;var db0=_dEl('dlMDel');if(db0)db0.textContent='🗑 批量删除';dlRender();return;}}
+  var el=e.target.closest&&e.target.closest('[data-dlopen],[data-dlrev],[data-dldel],[data-dlup]');if(!el)return;
   var op=el.getAttribute('data-dlopen');if(op){vscode.postMessage({type:'shellOpenFile',path:op});return;}
   var rv=el.getAttribute('data-dlrev');if(rv){vscode.postMessage({type:'shellRevealFile',path:rv});return;}
   var dl=el.getAttribute('data-dldel');if(dl){vscode.postMessage({type:'shellDownloadDel',path:dl});daoToast('已删除');return;}
@@ -1569,7 +1593,34 @@ document.getElementById('bDl').onclick=function(){dlOpen();};
 document.getElementById('bMr').onclick=function(){mrOpen();};
 _dEl('mrClose').onclick=function(){mrClose();};
 _dEl('mrRefresh').onclick=function(){MR_ITEMS=[];mrLoad();};
-_dEl('mrList').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-mropen],[data-mrcopy],[data-mrdl]');if(!el)return;
+// 多选批量操作(对齐手机 APK 下载悬浮窗多选): ⬇下载悬浮窗 + 🖼本页资源悬浮窗
+_dEl('dlMulti').onclick=dlMultiToggle;
+_dEl('dlMAll').onclick=function(){_dlDone().forEach(function(d){_dlSel[d.path]=1;});_dlDelArm=0;dlRender();};
+_dEl('dlMClr').onclick=function(){_dlSel={};_dlDelArm=0;var b=_dEl('dlMDel');if(b)b.textContent='🗑 批量删除';dlRender();};
+_dEl('dlMUp').onclick=function(){var ps=Object.keys(_dlSel);if(!ps.length){daoToast('未选择文件',true);return;}
+  var byPath={};DAO_DL.forEach(function(d){if(d.path)byPath[d.path]=d;});var n=0;
+  ps.forEach(function(p){var d=byPath[p];if(_daoUploadToActive({kind:'file',path:p,name:(d&&d.name)||''}))n++;});
+  if(n){daoToast('⏳ 批量上传 '+n+' 个文件到当前网页');try{dlClose();}catch(_e){}}else daoToast('没有可上传的目标网页',true);};
+_dEl('dlMDel').onclick=function(){var ps=Object.keys(_dlSel);if(!ps.length){daoToast('未选择文件',true);return;}
+  var b=_dEl('dlMDel');
+  if(!_dlDelArm||Date.now()-_dlDelArm>4000){_dlDelArm=Date.now();b.textContent='⚠ 确认删除 '+ps.length+' 项?';
+    setTimeout(function(){if(_dlDelArm&&Date.now()-_dlDelArm>=3900){_dlDelArm=0;b.textContent='🗑 批量删除';}},4200);return;}
+  ps.forEach(function(p){vscode.postMessage({type:'shellDownloadDel',path:p});});
+  _dlSel={};_dlDelArm=0;b.textContent='🗑 批量删除';daoToast('🗑 已删除 '+ps.length+' 项');setTimeout(dlLoad,300);};
+_dEl('mrMulti').onclick=mrMultiToggle;
+_dEl('mrMAll').onclick=function(){for(var i=0;i<MR_ITEMS.length;i++)_mrSel[i]=1;mrRender();};
+_dEl('mrMClr').onclick=function(){_mrSel={};mrRender();};
+_dEl('mrMDl').onclick=function(){var ks=Object.keys(_mrSel);if(!ks.length){daoToast('未选择资源',true);return;}
+  var n=0;ks.forEach(function(k){var it=MR_ITEMS[+k];if(it&&it.u){vscode.postMessage({type:'mrDownload',url:it.u,name:it.n||''});n++;}});
+  daoToast('⬇ 批量下载 '+n+' 个资源到下载库(⬇悬浮窗可见)');};
+_dEl('mrMCopy').onclick=function(){var ks=Object.keys(_mrSel);if(!ks.length){daoToast('未选择资源',true);return;}
+  var us=[];ks.forEach(function(k){var it=MR_ITEMS[+k];if(it&&it.u)us.push(it.u);});
+  try{navigator.clipboard.writeText(us.join('\\n'));daoToast('✓ 已复制 '+us.length+' 个链接');}catch(e2){daoToast('复制失败',true);}};
+_dEl('mrList').addEventListener('click',function(e){
+  if(_mrMulti){var rw=e.target.closest&&e.target.closest('.rc[data-mrck]');
+    if(rw&&!(e.target.closest&&e.target.closest('[data-mropen],[data-mrcopy],[data-mrdl]'))){
+      var k=rw.getAttribute('data-mrck')||'';if(_mrSel[k])delete _mrSel[k];else _mrSel[k]=1;mrRender();return;}}
+  var el=e.target.closest&&e.target.closest('[data-mropen],[data-mrcopy],[data-mrdl]');if(!el)return;
   var i=+((el.getAttribute('data-mropen')||el.getAttribute('data-mrcopy')||el.getAttribute('data-mrdl'))||0);var it=MR_ITEMS[i];if(!it)return;
   if(el.hasAttribute('data-mrdl')){daoToast('⬇ 下载中… '+String(it.n||it.u||'').slice(0,40));vscode.postMessage({type:'mrDownload',url:it.u,name:it.n||''});return;}
   if(el.hasAttribute('data-mropen')){openWebTab(it.u,it.n||it.u);}
