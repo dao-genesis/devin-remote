@@ -645,14 +645,7 @@ body{margin:0;font:13px/1.5 var(--vscode-font-family,system-ui);color:var(--vsco
 .nav button{display:block;width:100%;text-align:left;background:none;border:none;color:inherit;padding:8px 12px;cursor:pointer;font:inherit;opacity:.75}
 .nav button:hover{background:var(--vscode-list-hoverBackground,#8881)}
 .nav button.on{opacity:1;background:var(--vscode-list-activeSelectionBackground,#0a5);color:var(--vscode-list-activeSelectionForeground,#fff);border-radius:0 6px 6px 0}
-.main{flex:1;min-width:0;overflow:auto;padding:14px 16px}
-@media (max-width:420px){
-  .wrap{flex-direction:column}
-  .nav{width:auto;flex:0 0 auto;display:flex;flex-wrap:wrap;gap:2px;border-right:none;border-bottom:1px solid var(--vscode-panel-border,#3334);padding:4px 6px}
-  .nav button{display:inline-block;width:auto;padding:4px 9px;border-radius:10px}
-  .nav button.on{border-radius:10px}
-  .main{padding:10px 10px}
-}
+.main{flex:1;overflow:auto;padding:14px 16px}
 .st{font-size:11px;text-transform:uppercase;letter-spacing:.06em;opacity:.6;margin:14px 0 6px}
 .st:first-child{margin-top:0}
 .card{border:1px solid var(--vscode-panel-border,#3334);border-radius:8px;padding:10px 12px;margin-bottom:10px}
@@ -666,9 +659,10 @@ body{margin:0;font:13px/1.5 var(--vscode-font-family,system-ui);color:var(--vsco
 .conv:hover{background:var(--vscode-list-hoverBackground,#8881)}
 .conv .m{opacity:.5;font-size:11px;white-space:nowrap}
 .arch{opacity:.5}
-.btn{background:var(--vscode-button-background,#0a5);color:var(--vscode-button-foreground,#fff);border:none;border-radius:5px;padding:5px 12px;cursor:pointer;font:inherit}
+.btn{background:var(--vscode-button-background,#0a5);color:var(--vscode-button-foreground,#fff);border:none;border-radius:5px;padding:5px 12px;cursor:pointer;font:inherit;white-space:nowrap;flex:0 0 auto}
 .btn.sec{background:var(--vscode-button-secondaryBackground,#4443)}
-.row{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.row h2{min-width:120px}
 .muted{opacity:.55}
 pre{white-space:pre-wrap;word-break:break-word;background:var(--vscode-textCodeBlock-background,#0002);padding:10px;border-radius:6px;max-height:64vh;overflow:auto}
 .back{cursor:pointer;color:var(--vscode-textLink-foreground,#4af)}
