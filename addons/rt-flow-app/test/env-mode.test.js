@@ -66,4 +66,27 @@ ok(/var em=DaoCloud\.getEnvMode\(a\)/.test(switchSrc), "dvCreate 读该号(卡�
   ok(!/additional_args\.platform/.test(others.replace(/\/\/[^\n]*/g, "")), "additional_args.platform 只出现在 createSession");
 }
 
+// ── 6) 官方网页前端徽章 (installEnvModeBadge · 源级护栏) ──
+{
+  const JAVA = path.join(__dirname, "..", "app", "src", "main", "java", "ai", "devin", "rtflow");
+  const mainSrc = fs.readFileSync(path.join(JAVA, "MainActivity.java"), "utf8");
+  const tabSrc = fs.readFileSync(path.join(JAVA, "TabActivity.java"), "utf8");
+  const relaySrc = fs.readFileSync(path.join(JAVA, "RelayService.java"), "utf8");
+  ok(/static void installEnvModeBadge\(WebView w, String acctEmail\)/.test(mainSrc), "MainActivity 含 installEnvModeBadge(官方页徽章)");
+  ok(/window\.__rtEnvMode/.test(mainSrc), "徽章注入幂等守卫 __rtEnvMode");
+  ok(/devin\\\\\.ai/.test(mainSrc.match(/static void installEnvModeBadge[\s\S]*?\n    \}/)[0]), "徽章只在 devin.ai 域注入");
+  const badge = mainSrc.match(/static void installEnvModeBadge[\s\S]*?\n    \}/)[0];
+  ok(/if\(!EM\)return/.test(badge), "无账号 email 不注入 (不用全局活动号兜底)");
+  ok(/j\.platform_explicitly_set\|\|\(j\.additional_args&&j\.additional_args\.platform\)/.test(badge), "已带平台字段的请求不覆盖");
+  ok(/if\(!cur\|\|/.test(badge), "未显式设置(空)不注入 · 尊重官方默认");
+  ok(badge.indexOf("api(\\\\/[^/]+)*\\\\/sessions") >= 0, "只拦 POST /api/**/sessions 新建请求");
+  ok(/POST/.test(badge) && /isCreate\(u,m\)/.test(badge), "fetch/XHR 钩子仅限新建 POST · 既有会话请求不动");
+  ok(/installEnvModeBadge\(v, tab\.acctEmail\)/.test(mainSrc), "主壳 onPageFinished/doUpdateVisitedHistory 挂徽章");
+  ok(/installEnvModeBadge\(v, fEmail\)/.test(tabSrc), "TabActivity 全屏号页同样挂徽章");
+  ok(/envModePrefGet/.test(mainSrc) && /envModePrefSet/.test(mainSrc), "SharedPreferences 单一真源读写");
+  ok(/envModeGet/.test(relaySrc) && /envModeSet/.test(relaySrc), "RelayService 引擎桥同一真源");
+  ok(/String envModeGet\(String email\)/.test(mainSrc), "RTDL/Native 桥暴露 envModeGet");
+  ok(/_emBridge/.test(cloudSrc), "devin-cloud.js getEnvMode/setEnvMode 优先原生桥 (与徽章同一真源)");
+}
+
 process.exit(failures ? 1 : 0);

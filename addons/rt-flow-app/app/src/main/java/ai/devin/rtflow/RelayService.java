@@ -1429,6 +1429,9 @@ public class RelayService extends Service {
         //  密钥 = PBKDF2(用户口令, 随机盐) → AES-256-GCM; 口令存于 relay-config.e2eKey,
         //  从不上送中继。授权驱动方(A群)经「取数指引 MD」获得同一口令即可解密。
         //  口令为空 = 关(明文, 向后兼容旧驱动)。
+        /** 每账号「新对话虚拟机环境」读/写 (与 MainActivity 官方页徽章/面板同一 SharedPreferences 真源)。 */
+        @JavascriptInterface public String envModeGet(String email) { return MainActivity.envModePrefGet(RelayService.this, email); }
+        @JavascriptInterface public void envModeSet(String email, String mode) { MainActivity.envModePrefSet(RelayService.this, email, mode); }
         @JavascriptInterface public boolean e2eEnabled() { return !e2eKeyVal().isEmpty(); }
         @JavascriptInterface public String e2eSeal(String plaintext) {
             try { String k = e2eKeyVal(); if (k.isEmpty() || plaintext == null) return ""; return E2E.seal(k, plaintext); }

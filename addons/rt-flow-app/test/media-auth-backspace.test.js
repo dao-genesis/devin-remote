@@ -128,7 +128,7 @@ ok(/Native\.accessGuideMd\(JSON\.stringify\(it\.acc\), it\.sid/.test(daopan), "�
 // ②d 媒体鉴权本源补齐: 非账号标签从页面登录态采收 auth
 ok(/private void harvestPageAuth\(WebView v, Tab tab, String pageUrl\)/.test(main), "harvestPageAuth 存在");
 ok(/harvestPageAuth\(v, tab, u\); \/\/[^\n]*\n\s*warmAttachmentCookie/.test(main) || /harvestPageAuth\(v, tab, u\);/.test(main), "onPageFinished 采收页面登录态");
-ok(/installBackspaceGuard\(v\); installVideoFit\(v\); installMediaRetry\(v\); installAttachmentPrefetch\(v\); installComposerUpload\(v\); harvestPageAuth\(v, tab, u\); warmAttachmentCookie/.test(main), "SPA 路由后重采 (doUpdateVisitedHistory)");
+ok(/installBackspaceGuard\(v\); installVideoFit\(v\); installMediaRetry\(v\); installAttachmentPrefetch\(v\); installComposerUpload\(v\); installEnvModeBadge\(v, tab\.acctEmail\); harvestPageAuth\(v, tab, u\); warmAttachmentCookie/.test(main), "SPA 路由后重采 (doUpdateVisitedHistory)");
 ok(/auth1_session/.test(main), "采收源 = 页面 auth1_session 登录态");
 
 // ②e VPN 自然回退 (有则走、死则直连·不强依赖)

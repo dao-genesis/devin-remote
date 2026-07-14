@@ -119,7 +119,7 @@ public class TabActivity extends AppCompatActivity {
         final String script = buildInjection(token, uid, org, orgName);
         final boolean docStart = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT);
         if (docStart) WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton("https://app.devin.ai"));
-        final String fToken = token, fOrg = org;
+        final String fToken = token, fOrg = org, fEmail = label;
         web.setWebViewClient(new WebViewClient() {
             // 顶层导航落在附件/S3 预签名直链 → 拦下转真下载, 留在会话页 (不再整页跳空白)
             @Override public boolean shouldOverrideUrlLoading(WebView v, android.webkit.WebResourceRequest req) {
@@ -141,6 +141,7 @@ public class TabActivity extends AppCompatActivity {
                 MainActivity.installMediaRetry(v);                    // 媒体加载自愈 (与主壳一致)
                 MainActivity.installAttachmentPrefetch(v);            // 附件预热 (与主壳一致: 首次点开即秒开)
                 MainActivity.installComposerUpload(v);                // 「新创作/＋」菜单上传入口 (与主壳一致)
+                MainActivity.installEnvModeBadge(v, fEmail);          // 官方页「新对话虚拟机环境」徽章 (与主壳一致)
             }
             // SPA 客户端路由不触发 onPageFinished, 挂载点可能被替换 → 幂等重装钩子 (与主壳 doUpdateVisitedHistory 一致)
             @Override public void doUpdateVisitedHistory(WebView v, String u, boolean isReload) {
@@ -153,6 +154,7 @@ public class TabActivity extends AppCompatActivity {
                     MainActivity.installMediaRetry(v);
                     MainActivity.installAttachmentPrefetch(v);
                     MainActivity.installComposerUpload(v);
+                    MainActivity.installEnvModeBadge(v, fEmail);
                     MainActivity.warmAttachmentCookie(fToken, fOrg, u);
                 }
             }
@@ -316,6 +318,11 @@ public class TabActivity extends AppCompatActivity {
                 saveToDownloads(name, mime, data);
             } catch (Exception e) { runOnUiThread(() -> toast("下载捕获失败")); }
         }
+        /** 每账号「新对话虚拟机环境」读/写 (与主壳徽章/面板同一 SharedPreferences 真源)。 */
+        @android.webkit.JavascriptInterface
+        public String envModeGet(String email) { return MainActivity.envModePrefGet(TabActivity.this, email); }
+        @android.webkit.JavascriptInterface
+        public void envModeSet(String email, String mode) { MainActivity.envModePrefSet(TabActivity.this, email, mode); }
     }
 
     private void saveToDownloads(String name, String mime, byte[] data) {

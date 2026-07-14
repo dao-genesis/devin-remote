@@ -28,7 +28,7 @@ ok(/function scan\(\)\{T=0;try\{document\.querySelectorAll/.test(java), "全文�
 ok(/attributes:true,attributeFilter:\['role','data-radix-menu-content'\]/.test(java), "同时观察 role 属性变化");
 ok(/RTDL&&RTDL\.pickUpload&&RTDL\.pickUpload\(\)/.test(java), "菜单项点击 → RTDL.pickUpload");
 ok(/installAttachmentPrefetch\(v\); \/\/[^\n]*\n\s*installComposerUpload\(v\);/.test(java), "onPageFinished 装 installComposerUpload");
-ok(/installAttachmentPrefetch\(v\); installComposerUpload\(v\); harvestPageAuth/.test(java), "SPA 路由(doUpdateVisitedHistory)重装");
+ok(/installAttachmentPrefetch\(v\); installComposerUpload\(v\); installEnvModeBadge\(v, tab\.acctEmail\); harvestPageAuth/.test(java), "SPA 路由(doUpdateVisitedHistory)重装");
 
 // ② 静态资产磁盘缓存
 ok(/static WebResourceResponse assetCacheResponse\(WebResourceRequest req\)/.test(java), "存在 assetCacheResponse");

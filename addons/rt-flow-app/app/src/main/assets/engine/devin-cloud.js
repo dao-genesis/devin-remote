@@ -881,14 +881,24 @@
   //   键 rtflow.envmode = { <email小写>: "linux"|"windows"|"macos" }; 缺省 linux。
   //   三态循环步进: linux → windows → macos → linux (每号各自推进·互不相干)。
   var ENVMODE_KEY = "rtflow.envmode";
+  function _emBridge() {
+    var N = root.Native; return (N && N.envModeGet && N.envModeSet) ? N : null;
+  }
   function _emAll() {
     try { var j = JSON.parse((root.localStorage && root.localStorage.getItem(ENVMODE_KEY)) || "{}"); return (j && typeof j === "object") ? j : {}; } catch (e) { return {}; }
   }
   function _emKey(acc) { return String((acc && (acc.email || acc.id)) || "").toLowerCase(); }
-  function getEnvMode(acc) { var k = _emKey(acc); if (!k) return "linux"; return normPlatform(_emAll()[k]); }
+  function getEnvMode(acc) {
+    var k = _emKey(acc); if (!k) return "linux";
+    var b = _emBridge();
+    if (b) { try { var v = b.envModeGet(k); if (v) return normPlatform(v); } catch (e) {} }
+    return normPlatform(_emAll()[k]);
+  }
   function setEnvMode(acc, mode) {
     var k = _emKey(acc); if (!k) return "linux";
     var m = normPlatform(mode), all = _emAll(); all[k] = m;
+    var b = _emBridge();
+    if (b) { try { b.envModeSet(k, m); } catch (e) {} }
     try { root.localStorage && root.localStorage.setItem(ENVMODE_KEY, JSON.stringify(all)); } catch (e) {}
     return m;
   }
