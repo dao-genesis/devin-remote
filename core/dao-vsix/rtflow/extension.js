@@ -447,6 +447,36 @@ async function _daoDownloadUrl(url, name) {
     return { ok: true, name: path.basename(dest), path: dest, size: buf.length };
   } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 }
+// 窗内文档直读(对齐手机 APK MediaHost.fetchDoc): 拉取文本类资源正文(上限 4MB), 供本页资源悬浮窗内直接阅读。
+async function _daoFetchDocText(url) {
+  url = String(url || "");
+  try {
+    if (/^data:/i.test(url)) {
+      const mm = url.match(/^data:([^;,]*)(;base64)?,(.*)$/i);
+      if (!mm) return { ok: false, error: "data URL 不可解" };
+      const buf = mm[2] ? Buffer.from(mm[3], "base64") : Buffer.from(decodeURIComponent(mm[3]), "utf8");
+      return { ok: true, text: buf.slice(0, 4 * 1024 * 1024).toString("utf8") };
+    }
+    if (!/^https?:\/\//i.test(url)) return { ok: false, error: "仅支持 http(s)/data 链接" };
+    const buf = await new Promise((resolve, reject) => {
+      const get = (u, left) => {
+        const mod = /^https:/i.test(u) ? https : require("node:http");
+        const req = mod.get(u, { headers: { "user-agent": "Mozilla/5.0", accept: "*/*" } }, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && left > 0) { res.resume(); return get(new URL(res.headers.location, u).toString(), left - 1); }
+          if (res.statusCode !== 200) { res.resume(); return reject(new Error("HTTP " + res.statusCode)); }
+          const chunks = []; let total = 0;
+          res.on("data", (c) => { total += c.length; if (total > 4 * 1024 * 1024) { req.destroy(); return reject(new Error("文档超 4MB · 请用下载")); } chunks.push(c); });
+          res.on("end", () => resolve(Buffer.concat(chunks)));
+          res.on("error", reject);
+        });
+        req.on("error", reject);
+        req.setTimeout(60000, () => { req.destroy(); reject(new Error("拉取超时")); });
+      };
+      get(url, 5);
+    });
+    return { ok: true, text: buf.toString("utf8") };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
 function _delDaoDownload(p) {
   try {
     if (p) { try { fs.unlinkSync(p); } catch (e) {} }
@@ -751,6 +781,7 @@ html.m #hint{font-size:14px;padding:18px}
 #daowin .st.running{background:#3fb950}#daowin .st.finished{background:#58a6ff}#daowin .st.awaiting{background:#d29922}#daowin .st.blocked{background:#f0883e}#daowin .st.expired{background:#f85149}
 #daowin .ti{flex:1;font-size:13px;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #daowin .meta{font-size:11px;color:#8b949e;margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
+#daowin .pv{font-size:11px;color:#9aa4af;margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 #daowin .acts{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
 #daowin .b{flex:1;min-width:56px;text-align:center;background:#21262d;border:1px solid #30363d;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer;color:#cdd3de}
 #daowin .b:hover{background:#2d333b}
@@ -825,6 +856,14 @@ html.m #hint{font-size:14px;padding:18px}
 #mrwin .empty{color:#6e7681;text-align:center;padding:26px 12px;font-size:13px}
 #mrwin .tip{font-size:11px;color:#6e7681;padding:4px 4px 6px}
 #mrwin .sec{font-size:12px;font-weight:700;color:#8b949e;margin:8px 2px 5px}
+/* 窗内查看器(对齐手机 APK media.html 全屏预览): 图/视频/音频/文档在悬浮窗内直接查看 */
+#mrview{position:absolute;inset:0;background:#0e1116;display:none;flex-direction:column;z-index:5}
+#mrview.on{display:flex}
+#mrview .mvtop{display:flex;align-items:center;gap:8px;padding:8px 11px;background:#161b22;border-bottom:1px solid #21262d;flex:0 0 auto}
+#mrview .mvtop .t{flex:1;font-size:13px;font-weight:700;color:#e6edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mrview .mvbody{flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:10px}
+#mrview .mvbody img,#mrview .mvbody video{max-width:100%;max-height:100%;border-radius:8px}
+#mrview .mvbody.doc{display:block;white-space:pre-wrap;word-break:break-word;font:12.5px/1.65 ui-monospace,Consolas,monospace;color:#cdd3de;padding:12px 14px 40px}
 /* 多选模式(对齐手机 APK 下载悬浮窗多选): 勾选框 + 选中高亮 + 批量操作条 */
 #dlwin .rc.sel,#mrwin .rc.sel{border-color:#1f6feb;background:#0d1f33}
 #dlwin .rc[data-dlck],#mrwin .rc[data-mrck]{cursor:pointer}
@@ -904,6 +943,7 @@ html.m #hint{font-size:14px;padding:18px}
   <div class="dwh" id="mrHead"><span>🖼</span><span class="t" id="mrTitle">本页资源</span><button class="dwx" id="mrClose">✕ 关闭</button></div>
   <div class="dwbar"><button class="mini" id="mrRefresh">🔄 重采</button><button class="mini" id="mrMulti" title="多选 · 批量下载/批量复制链接(对齐手机 APK)">☑ 多选</button><span id="mrMBar" style="display:none;gap:6px;align-items:center;flex-wrap:wrap"><span class="tip" id="mrMCnt" style="padding:0">已选 0</span><button class="mini" id="mrMAll">全选</button><button class="mini" id="mrMClr">清空</button><button class="mini" id="mrMDl" title="把选中资源批量下载到下载库(⬇悬浮窗可见)">⬇ 批量下载</button><button class="mini" id="mrMCopy" title="批量复制选中资源链接(每行一个)">复制链接</button></span><span class="tip" id="mrSrc" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span></div>
   <div class="dlbody"><div class="tip">汇集当前页全部图片 / 视频 / 音频 / 文档 / 附件 · 加载不出的资源也可在此直开(对齐手机 APK 本页媒体悬浮窗)</div><div id="mrList"><div class="empty">点「🔄 重采」扫描当前页</div></div></div>
+  <div id="mrview"><div class="mvtop"><button class="dwx" id="mrvBack">‹ 返回</button><span class="t" id="mrvTitle"></span><button class="dwx" id="mrvDl" title="下载此资源到下载库(⬇悬浮窗可见)">⬇ 下载</button></div><div class="mvbody" id="mrvBody"></div></div>
   <div class="rzh e" data-rz="e"></div><div class="rzh w" data-rz="w"></div><div class="rzh n" data-rz="n"></div><div class="rzh s" data-rz="s"></div><div class="rzh se" data-rz="se"></div>
 </div>
 <div class="dtoast" id="daotoast"></div>
@@ -1267,13 +1307,15 @@ function mrOpen(){_dEl('mrwin').className='on';var c=active&&MR_CACHE[active];if
 // 页面加载后延迟预采集(对齐手机 APK scheduleMediaPrecollect): 同源可直扫则缓存, 开窗秒显。
 function _mrPrecollect(id){clearTimeout(_mrPreT[id]);_mrPreT[id]=setTimeout(function(){try{var t=tabs[id];if(!t||!t.frame)return;var doc=null;try{doc=t.frame.contentDocument||(t.frame.contentWindow&&t.frame.contentWindow.document);}catch(e){}
   if(doc&&doc.documentElement){MR_CACHE[id]={items:_mrScanDoc(doc,(t.url||doc.baseURI||'')),page:t.url||doc.baseURI||'',ts:Date.now()};}}catch(e){}},1200);}
-function mrClose(){_dEl('mrwin').className='';if(_mrMulti){_mrMulti=false;_mrSel={};_mrSyncBar();}}
+function mrClose(){_dEl('mrwin').className='';mrHideView();if(_mrMulti){_mrMulti=false;_mrSel={};_mrSyncBar();}}
 // 本页资源多选(对齐手机 APK 网页资源下载多选): 勾选 → 全选/清空 → 批量下载到下载库/批量复制链接
 var _mrMulti=false,_mrSel={};
 function _mrUpdCnt(){var c=_dEl('mrMCnt');if(c)c.textContent='已选 '+Object.keys(_mrSel).length+'/'+MR_ITEMS.length;}
 function _mrSyncBar(){var b=_dEl('mrMulti');if(b)b.classList.toggle('on',_mrMulti);var m=_dEl('mrMBar');if(m)m.style.display=_mrMulti?'inline-flex':'none';_mrUpdCnt();}
 function mrMultiToggle(){_mrMulti=!_mrMulti;_mrSel={};_mrSyncBar();mrRender();}
-function _mrScanDoc(doc,base){var out=[],seen={};function push(u,tp,nm){try{if(!u)return;u=String(u);if(u.indexOf('data:')===0&&u.length>2048)return;try{u=new URL(u,base).href;}catch(e){}if(seen[u])return;seen[u]=1;out.push({u:u,t:tp,n:nm||decodeURIComponent((u.split('/').pop()||'').split('?')[0])||tp});}catch(e){}}
+// 文件名多层解码(对齐手机 APK media.html dn): 反复 URL 编码的名字逐层解到可读
+function _mrDn(s){s=String(s||'');for(var i=0;i<3;i++){if(!/%[0-9a-fA-F]{2}/.test(s))break;try{var d=decodeURIComponent(s);if(d===s)break;s=d;}catch(e){break;}}return s;}
+function _mrScanDoc(doc,base){var out=[],seen={};function push(u,tp,nm){try{if(!u)return;u=String(u);if(u.indexOf('data:')===0&&u.length>2048)return;try{u=new URL(u,base).href;}catch(e){}if(seen[u])return;seen[u]=1;out.push({u:u,t:tp,n:nm||_mrDn((u.split('/').pop()||'').split('?')[0])||tp});}catch(e){}}
   function walk(root){var i,es;try{es=root.querySelectorAll('img[src]');}catch(e){return;}for(i=0;i<es.length;i++){var el=es[i];if((el.naturalWidth||0)>32||(el.width||0)>32)push(el.currentSrc||el.src,'img',el.alt);}
     try{es=root.querySelectorAll('video');}catch(e){es=[];}for(i=0;i<es.length;i++){push(es[i].currentSrc||es[i].src,'video');var ss=es[i].querySelectorAll('source[src]');for(var j=0;j<ss.length;j++)push(ss[j].src,'video');}
     try{es=root.querySelectorAll('audio[src],audio source[src]');}catch(e){es=[];}for(i=0;i<es.length;i++)push(es[i].src,'audio');
@@ -1298,7 +1340,7 @@ function mrRender(){var box=_dEl('mrList');if(!box)return;var sr=_dEl('mrSrc');i
       var _mOn=_mrMulti&&_mrSel[idx];
       h+='<div class="rc'+(_mOn?' sel':'')+'"'+(_mrMulti?' data-mrck="'+idx+'" title="点击勾选/取消"':'')+'>'+(_mrMulti?'<span class="ck">'+(_mOn?'✓':'')+'</span>':'')+(tp==='img'?'<img class="th" loading="lazy" src="'+esc(it.u)+'" onerror="this.style.opacity=.25">':'<span class="th" style="display:flex;align-items:center;justify-content:center;font-size:20px">'+MR_META[tp][0]+'</span>')
         +'<div class="bd"><div class="ti" title="'+esc(it.n||'')+'">'+esc(it.n||'(未命名)')+'</div><div class="meta" title="'+esc(it.u)+'">'+esc(it.u)+'</div></div>'
-        +'<div class="acts"><span class="b" data-mropen="'+idx+'">打开</span><span class="b pri" data-mrdl="'+idx+'" title="下载此资源到下载库(⬇悬浮窗可见·可拖上传)">⬇ 下载</span><span class="b" data-mrcopy="'+idx+'">复制链接</span></div></div>';}}
+        +'<div class="acts"><span class="b pri" data-mrview="'+idx+'" title="在悬浮窗内直接查看(对齐手机 APK)">👁 查看</span><span class="b" data-mropen="'+idx+'">打开</span><span class="b" data-mrdl="'+idx+'" title="下载此资源到下载库(⬇悬浮窗可见·可拖上传)">⬇ 下载</span><span class="b" data-mrcopy="'+idx+'">复制链接</span></div></div>';}}
   box.innerHTML=h;var tt=_dEl('mrTitle');if(tt)tt.textContent='本页资源 ('+MR_ITEMS.length+')';if(_mrMulti)_mrUpdCnt();}
 function daoTab(t){var rec=t==='recent';
   _dEl('dwTabR').classList.toggle('on',rec);_dEl('dwTabB').classList.toggle('on',!rec);
@@ -1348,10 +1390,11 @@ function daoRenderRecent(){var q=(_dEl('dwQ').value||'').trim().toLowerCase(),bo
     if(it.auto&&!_showAuto&&!q){hidAuto++;return;}
     if(q){var hay=((it.email||'')+' '+it.title+' '+it.sid+' '+it.accNo).toLowerCase();if(hay.indexOf(q)<0)return;}
     html+='<div class="rc" draggable="false" data-cdrag="1" data-email="'+esc(it.email||'')+'" data-sid="'+esc(it.sid||'')+'" data-title="'+esc(it.title||'')+'"><div class="r1"><span class="acc-no">#'+esc(String(it.accNo))+'</span><span class="st '+esc(it.statusClass||'')+'" title="'+esc(it.status||'')+'"></span><span class="ti" title="'+esc(it.title)+'">'+esc(String(it.title).slice(0,70))+'</span></div>'+
+      (it.pv?'<div class="pv">'+esc(it.pv)+'</div>':'')+
       '<div class="meta"><span>'+esc(String(it.email||'').split('@')[0])+'</span>'+(it.status?'<span>'+esc(it.status)+'</span>':'')+(it.updatedAt?'<span>'+daoAgo(it.updatedAt)+'</span>':'')+'</div>'+
       '<div class="acts"><span class="b" data-act="view" data-idx="'+idx+'">👁 查看</span><span class="b" data-act="enter" data-idx="'+idx+'" title="切到该账号并在网页端打开此对话">🌐 进入</span><span class="b" data-act="md" data-idx="'+idx+'">⬇ MD</span><span class="b pri" data-act="zip" data-idx="'+idx+'">📦 全部文件</span><span class="b" data-act="up" data-idx="'+idx+'" title="上传此对话内容(MD)到当前打开的网页上传框(对齐手机 APK·免拖拽)">⬆ 传网页</span></div></div>';});
   if(!q&&(hidAuto>0||_showAuto)){html='<div class="empty" style="padding:8px 0;font-size:12px">'+(_showAuto?'自动化对话已展开':'已隐藏 '+hidAuto+' 个自动化对话')+' · <a href="javascript:void 0" data-autotoggle="1" style="color:#58a6ff;cursor:pointer">'+(_showAuto?'收起':'显示')+'</a></div>'+html;}
-  if(!q&&DAO_REC.length>DAO_REC_VIEW_MAX){html+='<div class="empty" style="padding:8px 4px;line-height:1.5">仅显示最近 '+DAO_REC_VIEW_MAX+' 条 · 共 '+DAO_REC.length+' 条<br>搜索可跨全部 · 全量历史见 🗂 对话记录(备份)</div>';}
+  if(!q&&DAO_REC.length>DAO_REC_VIEW_MAX){html+='<div style="text-align:center;padding:12px 0 4px"><button class="mini" data-recmore="1">加载更多 (当前 '+Math.min(DAO_REC_VIEW_MAX,DAO_REC.length)+' / 共 '+DAO_REC.length+')</button></div><div class="empty" style="padding:2px 4px 8px;line-height:1.5">搜索可跨全部 · 全量历史见 🗂 对话记录(备份)</div>';}
   box.innerHTML=html||'<div class="empty">无匹配 · 清空搜索查看全部</div>';try{box.scrollTop=_sc;}catch(e){}}
 function daoEnter(idx){var it=DAO_REC[idx];if(!it)return;vscode.postMessage({type:'openCloudPage',path:'sessions/'+String(it.sid||'').replace(/^devin-/,''),label:it.title});daoToast('已请求打开 · '+String(it.email||'').split('@')[0]);}
 function daoMd(idx){var it=DAO_REC[idx];if(!it)return;daoToast('下载 MD…');vscode.postMessage({type:'dlExportMd',email:it.email,sid:it.sid,title:it.title,save:true});}
@@ -1406,8 +1449,9 @@ function daoRenderBackup(){var box=_dEl('dwBackup');if(!box)return;if(!_bkTree){
   box.innerHTML=body||'<div class="empty">无备份记录 · 先在「💬对话备份」板块备份或开启自动备份</div>';
   var ttl=_dEl('dwTitle');if(ttl)ttl.textContent='下载 / 备份库 ('+na+'账号·'+nc+'对话'+(q?'·已筛':'')+')';}
 // 事件委托(CSP 安全): 所有悬浮窗内点击统一在 #daowin 上处理
-_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal],[data-bkcopy],[data-bkacc],[data-autotoggle]');if(!el)return;
+_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal],[data-bkcopy],[data-bkacc],[data-autotoggle],[data-recmore]');if(!el)return;
   if(el.hasAttribute('data-autotoggle')){daoToggleAuto();return;}
+  if(el.hasAttribute('data-recmore')){DAO_REC_VIEW_MAX+=34;daoRenderRecent();return;} // 加载更多分页(对齐手机 daopan.html loadMore)
   var bcp=el.getAttribute('data-bkcopy');if(bcp!=null){e.stopPropagation();vscode.postMessage({type:'copyCredEmail',email:bcp});return;}
   var bk=el.getAttribute('data-bkacc');if(bk!=null){_bkOpen[bk]=!_bkOpen[bk];daoRenderBackup();return;}
   var a=el.getAttribute('data-act');if(a){var idx=+el.getAttribute('data-idx');if(a==='view')daoView(idx);else if(a==='enter')daoEnter(idx);else if(a==='md')daoMd(idx);else if(a==='zip')daoZip(idx);else if(a==='up'){var _it=DAO_REC[idx];if(_it){if(_daoUploadToActive({kind:'conv',email:_it.email,sid:_it.sid,title:_it.title})){daoToast('⏳ 上传此对话到当前网页 · '+String(_it.title||_it.sid||'').slice(0,24));try{daoClose();}catch(_e){}}}}return;}
@@ -1593,6 +1637,23 @@ document.getElementById('bDl').onclick=function(){dlOpen();};
 document.getElementById('bMr').onclick=function(){mrOpen();};
 _dEl('mrClose').onclick=function(){mrClose();};
 _dEl('mrRefresh').onclick=function(){MR_ITEMS=[];mrLoad();};
+// 窗内查看器(对齐手机 APK media.html doView/openDoc): 图/视频/音频/文本文档悬浮窗内直看, 其余仍开新标签
+var _mrvCur=null,_mrvReq=0;
+function mrView(i){var it=MR_ITEMS[i];if(!it)return;
+  var v=_dEl('mrview'),b=_dEl('mrvBody');if(!v||!b)return;
+  var ext=(String(it.u||'').split('#')[0].split('?')[0].split('.').pop()||'').toLowerCase();
+  var isDoc=(it.t==='md')||/^(md|markdown|txt|json|csv|log|xml|yml|yaml)$/.test(ext);
+  if(it.t!=='img'&&it.t!=='video'&&it.t!=='audio'&&!isDoc){openWebTab(it.u,it.n||it.u);return;}
+  _mrvCur=it;_dEl('mrvTitle').textContent=it.n||it.u;v.className='on';b.className='mvbody';
+  if(it.t==='img'){b.innerHTML='<img src="'+esc(it.u)+'" onerror="this.style.opacity=.25">';return;}
+  if(it.t==='video'){b.innerHTML='<video src="'+esc(it.u)+'" controls autoplay style="width:100%"></video>';return;}
+  if(it.t==='audio'){b.innerHTML='<audio src="'+esc(it.u)+'" controls autoplay style="width:90%"></audio>';return;}
+  b.className='mvbody doc';b.textContent='提取文档中…';var rid=++_mrvReq;vscode.postMessage({type:'mrFetchDoc',url:it.u,reqId:rid});}
+function mrHideView(){var v=_dEl('mrview');if(v)v.className='';var b=_dEl('mrvBody');if(b){b.innerHTML='';b.className='mvbody';}_mrvCur=null;}
+function _mrOnDoc(m){if(+(m.reqId||0)!==_mrvReq)return;var v=_dEl('mrview'),b=_dEl('mrvBody');if(!v||!b||v.className!=='on')return;
+  b.className='mvbody doc';b.textContent=m.ok?((m.text||'').trim()||'(空文档)'):('(提取失败: '+(m.error||'')+' · 可用「打开」在新标签查看)');}
+_dEl('mrvBack').onclick=mrHideView;
+_dEl('mrvDl').onclick=function(){if(!_mrvCur)return;daoToast('⬇ 下载中… '+String(_mrvCur.n||_mrvCur.u||'').slice(0,40));vscode.postMessage({type:'mrDownload',url:_mrvCur.u,name:_mrvCur.n||''});};
 // 多选批量操作(对齐手机 APK 下载悬浮窗多选): ⬇下载悬浮窗 + 🖼本页资源悬浮窗
 _dEl('dlMulti').onclick=dlMultiToggle;
 _dEl('dlMAll').onclick=function(){_dlDone().forEach(function(d){_dlSel[d.path]=1;});_dlDelArm=0;dlRender();};
@@ -1618,14 +1679,21 @@ _dEl('mrMCopy').onclick=function(){var ks=Object.keys(_mrSel);if(!ks.length){dao
   try{navigator.clipboard.writeText(us.join('\\n'));daoToast('✓ 已复制 '+us.length+' 个链接');}catch(e2){daoToast('复制失败',true);}};
 _dEl('mrList').addEventListener('click',function(e){
   if(_mrMulti){var rw=e.target.closest&&e.target.closest('.rc[data-mrck]');
-    if(rw&&!(e.target.closest&&e.target.closest('[data-mropen],[data-mrcopy],[data-mrdl]'))){
+    if(rw&&!(e.target.closest&&e.target.closest('[data-mrview],[data-mropen],[data-mrcopy],[data-mrdl]'))){
       var k=rw.getAttribute('data-mrck')||'';if(_mrSel[k])delete _mrSel[k];else _mrSel[k]=1;mrRender();return;}}
-  var el=e.target.closest&&e.target.closest('[data-mropen],[data-mrcopy],[data-mrdl]');if(!el)return;
-  var i=+((el.getAttribute('data-mropen')||el.getAttribute('data-mrcopy')||el.getAttribute('data-mrdl'))||0);var it=MR_ITEMS[i];if(!it)return;
+  var el=e.target.closest&&e.target.closest('[data-mrview],[data-mropen],[data-mrcopy],[data-mrdl]');if(!el)return;
+  var i=+((el.getAttribute('data-mrview')||el.getAttribute('data-mropen')||el.getAttribute('data-mrcopy')||el.getAttribute('data-mrdl'))||0);var it=MR_ITEMS[i];if(!it)return;
+  if(el.hasAttribute('data-mrview')){mrView(i);return;}
   if(el.hasAttribute('data-mrdl')){daoToast('⬇ 下载中… '+String(it.n||it.u||'').slice(0,40));vscode.postMessage({type:'mrDownload',url:it.u,name:it.n||''});return;}
   if(el.hasAttribute('data-mropen')){openWebTab(it.u,it.n||it.u);}
   else{try{navigator.clipboard.writeText(it.u);daoToast('✓ 已复制链接');}catch(e2){daoToast('复制失败',true);}}});
 document.getElementById('bBk').onclick=function(){daoOpen('recent');};
+// 近期对话实时自动刷新(对齐手机 daopan.html 25s 轮询+焦点刷新): 仅在悬浮窗开启·近期页·非阅读态时拉取
+function _daoRecAlive(){try{return _dEl('daowin').className==='on'&&_dEl('dwViewR').classList.contains('on')&&_dEl('cv').className!=='on';}catch(e){return false;}}
+var _daoRecLastAuto=0;
+function _daoRecAutoTick(){if(!_daoRecAlive())return;var now=Date.now();if(now-_daoRecLastAuto<20000)return;_daoRecLastAuto=now;try{daoLoadRecent();}catch(e){}}
+setInterval(_daoRecAutoTick,25000);
+window.addEventListener('focus',_daoRecAutoTick);
 document.getElementById('bMenu').onclick=function(e){e.stopPropagation();toggleMenu();};
 // 浏览器细节·点菜单外任意处一键自动收起(对齐桌面浏览器下拉菜单): 捕获阶段判定点击落点不在 #menu/#bMenu 即收起;
 // 点进子网页(iframe)会令父窗口失焦 → window blur 兜底收起(iframe 内点击不冒泡到父文档)。
@@ -1741,6 +1809,7 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='dlExportData'){try{daoOnExport(m);}catch(e){}}
   else if(m.type==='dlZipDone'){try{daoToast(m.ok?('✓ 已打包: '+(m.name||'')+' · 存入备份库 🗂(可打开文件夹)'):('打包失败: '+(m.error||'')),!m.ok);if(m.ok&&_dEl('dwViewB').classList.contains('on'))daoLoadBackup();}catch(e){}}
   else if(m.type==='mrDlDone'){try{daoToast(m.ok?('✓ 已下载: '+(m.name||'')+' · 见 ⬇下载悬浮窗'):('下载失败: '+(m.error||'')),!m.ok);if(m.ok&&_dEl('dlwin').className==='on')dlLoad();}catch(e){}}
+  else if(m.type==='mrDocData'){try{_mrOnDoc(m);}catch(e){}}
   else if(m.type==='migBundle'){try{migDownload(m);}catch(e){}}
   else if(m.type==='migDone'){try{daoToast(m.ok?('✓ 导入完成 · '+(m.summary||'')):('导入失败: '+(m.error||'')),!m.ok);}catch(e){}}
   else if(m.type==='focusTab'){if(tabs[m.id])setActive(m.id);}
@@ -2429,6 +2498,11 @@ async function shellHandleMessage(sid, m) {
         send({ type: 'shellDownloadsData', list: _listDaoDownloads() });
         return;
       }
+      case 'mrFetchDoc': {
+        const r = await _daoFetchDocText(m.url);
+        send(Object.assign({ type: 'mrDocData', reqId: m.reqId }, r));
+        return;
+      }
       case 'shellBackups': {
         try {
           let root; try { root = vscode.workspace.getConfiguration('wam').get('devinCloudBackupDir'); } catch (e) {}
@@ -2504,6 +2578,16 @@ function _daoRecencyMs(s) {
   if (typeof t === "number") return t > 1e12 ? t : t * 1000;
   const p = Date.parse(t); return isNaN(p) ? 0 : p;
 }
+// 内容预览(对齐手机 daopan.html previewOf): 取会话对象可得的正文/提示词片段, 与标题重复则不重显。
+function _daoPreviewOf(s) {
+  s = s || {};
+  let p = s.snippet || s.summary || s.last_message || s.latest_message || s.prompt || s.description || "";
+  p = String(p || "").replace(/\s+/g, " ").trim();
+  if (!p) return "";
+  const t = String(s.title || s.name || "").trim();
+  if (t && (p === t || t.indexOf(p) === 0)) return "";
+  return p.slice(0, 110);
+}
 async function _daoPool(items, conc, fn) {
   let idx = 0; const n = items.length; conc = Math.max(1, Math.min(conc, n || 1));
   async function w() { while (idx < n) { const i = idx++; try { await fn(items[i]); } catch (e) {} } }
@@ -2554,7 +2638,7 @@ async function _daoDownloadData(m, reply) {
           if (ls && ls.ok) {
             (ls.sessions || []).forEach((s) => {
               const sid = s.devin_id || s.session_id || s.id; if (!sid) return;
-              out.push({ email, accNo: noOf(email), sid, title: s.title || s.name || s.prompt || sid, status: s.status || s.activity_status || "", statusClass: devinCloud.classifySession(s), updatedAt: _daoRecencyMs(s), auto: !!(devinCloud.isAutoConv && devinCloud.isAutoConv(s)) });
+              out.push({ email, accNo: noOf(email), sid, title: s.title || s.name || s.prompt || sid, pv: _daoPreviewOf(s), status: s.status || s.activity_status || "", statusClass: devinCloud.classifySession(s), updatedAt: _daoRecencyMs(s), auto: !!(devinCloud.isAutoConv && devinCloud.isAutoConv(s)) });
             });
           }
         }
@@ -2718,6 +2802,11 @@ function _wireMultiPanel(panel) {
         const r = await _daoDownloadUrl(m.url, m.name);
         try { panel.webview.postMessage(Object.assign({ type: "mrDlDone" }, r)); } catch (e) {}
         try { panel.webview.postMessage({ type: "shellDownloadsData", list: _listDaoDownloads() }); } catch (e) {}
+        return;
+      }
+      if (m.type === "mrFetchDoc") {
+        const r = await _daoFetchDocText(m.url);
+        try { panel.webview.postMessage(Object.assign({ type: "mrDocData", reqId: m.reqId }, r)); } catch (e) {}
         return;
       }
       // 归一 · ⬇下载 / 📁备份库 悬浮窗数据源: 复用内联备份引擎 devinCloud.listBackups(同 dao-vsix 六大板块备份板块同源)。
