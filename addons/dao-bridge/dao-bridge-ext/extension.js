@@ -79,6 +79,7 @@ const DAEMON_ROUTES = new Set([
   "/api/exec", "/api/exec-sync", "/api/ls", "/api/read", "/api/write", "/api/agent/register",
   "/api/agent/heartbeat", "/api/broadcast", "/api/config", "/api/bridge/restart",
   "/api/account/logout", "/api/export/refresh", "/api/self/reload",
+  "/api/relay/deep-link", "/api/relay/state", "/api/relay/provision-token", "/api/relay/set",
 ]);
 
 function daoDir() {
@@ -583,6 +584,34 @@ const RELAY_SCRIPT_NAME = "dao-relay-do";
 function workersRelayPath() { return path.join(daoDir(), "workers-relay.json"); }
 function loadWorkersRelayConfig() {
   try { return JSON.parse(fs.readFileSync(workersRelayPath(), "utf8")); } catch (e) { return null; }
+}
+
+// 预填权限的 CF API Token 创建深链 — 与 core/dao-vsix 同权限集(逐项对齐), 用户点一次
+// Create 复制即得, 之后 POST /api/relay/provision-token 全自动部署。无回调、一次成型。
+function relayTokenDeepLink(name) {
+  const perms = [
+    { key: "workers_scripts", type: "edit" },
+    { key: "workers_kv_storage", type: "edit" },
+    { key: "account_settings", type: "read" },
+    { key: "zone", type: "read" },
+    { key: "workers_routes", type: "edit" },
+  ];
+  const q = new URLSearchParams({ permissionGroupKeys: JSON.stringify(perms), name: name || "dao-relay", accountId: "*", zoneId: "all" });
+  return "https://dash.cloudflare.com/profile/api-tokens?" + q.toString();
+}
+
+// 通用 GET → JSON(仅用于持久通道健康探针; 失败守柔返回 null, 由调用方自愈)。
+function relayGetJson(url, timeoutMs) {
+  return new Promise((resolve) => {
+    let u; try { u = new URL(url); } catch (e) { return resolve(null); }
+    const mod = u.protocol === "http:" ? http : https;
+    const req = mod.get({ hostname: u.hostname, port: u.port || (u.protocol === "http:" ? 80 : 443), path: u.pathname + u.search, headers: { "User-Agent": UA }, timeout: timeoutMs || 8000 }, (res) => {
+      let d = ""; res.on("data", (c) => (d += c));
+      res.on("end", () => { try { resolve(JSON.parse(d)); } catch (e) { resolve(null); } });
+    });
+    req.on("error", () => resolve(null));
+    req.setTimeout(timeoutMs || 8000, () => { try { req.destroy(); } catch (e) {} resolve(null); });
+  });
 }
 function saveWorkersRelayConfig(cfg) {
   fs.writeFileSync(workersRelayPath(), JSON.stringify(cfg, null, 2), "utf8");
@@ -1605,6 +1634,49 @@ class WorkspaceServer {
       setTimeout(() => { try { vscode.commands.executeCommand("workbench.action.reloadWindow"); } catch (e) {} }, 600);
       return { status: 200, body: { ok: true, note: "reloading window in 600ms; extension host restarts (disruptive to active UI)" } };
     }
+    // ── 持久通道 /api/relay/* · 与 core/dao-vsix 对齐的通用接口(UI/脚本可驱动全流程) ──
+    //   deep-link      GET  → 预填权限的 CF Token 创建深链(点一次 Create 即得)
+    //   state          GET  → 当前 workers.dev 持久通道状态(token 脱敏)
+    //   provision-token POST {token} → 贴 CF API Token 后端全自动: 取账号→保证子域→部署→落盘→出站接管
+    //   set            POST {url} → 登记已部署的 workers.dev 中继地址并立即接管(既有隧道作回退)
+    if (pathname === "/api/relay/deep-link" && method === "GET") {
+      return { status: 200, body: { ok: true, url: relayTokenDeepLink("dao-relay"),
+        perms: ["workers_scripts:edit", "workers_kv_storage:edit", "account_settings:read", "zone:read", "workers_routes:edit"],
+        howto: "点开链接 → Continue to summary → Create Token → 复制 → POST /api/relay/provision-token {token} 全自动部署, 或把已部署的 workers.dev 地址 POST 到 /api/relay/set" } };
+    }
+    if (pathname === "/api/relay/state" && method === "GET") {
+      const c = loadWorkersRelayConfig();
+      let masked = null;
+      if (c) masked = Object.assign({}, c, { apiToken: c.apiToken ? "***" : "", relayToken: c.relayToken ? "***" : "" });
+      const connected = !!(br && br.relay && br.relay.connected);
+      return { status: 200, body: { ok: true, active: !!(c && c.relayUrl && c.session), connected,
+        publicUrl: (c && c.relayUrl && c.session) ? c.relayUrl + "/relay/" + encodeURIComponent(c.session) : null,
+        lastErr: (br && br.relay && br.relay.lastErr) || "", state: masked } };
+    }
+    if (pathname === "/api/relay/provision-token" && method === "POST") {
+      const token = String((j && (j.token || j.apiToken)) || "").trim();
+      if (!token) return { status: 400, body: { ok: false, error: "token required" } };
+      let r;
+      try { r = await provisionWorkersRelay(token); }
+      catch (e) { return { status: 500, body: { ok: false, error: String(e && e.message || e) } }; }
+      if (!r || !r.ok) return { status: 400, body: r || { ok: false, error: "provision failed" } };
+      if (br) setTimeout(() => { try { br._startRelayIfConfigured(); } catch (e) {} }, 200);
+      return { status: 200, body: r };
+    }
+    if (pathname === "/api/relay/set" && method === "POST") {
+      const raw = String((j && j.url) || "").trim().replace(/\/+$/, "").replace(/\/relay\/[^/]*$/, "");
+      if (!/^https:\/\/[^\s]+/.test(raw)) return { status: 400, body: { ok: false, error: "need https workers.dev url" } };
+      const prev = loadWorkersRelayConfig() || {};
+      const hostSlug = (os.hostname() || "dao").toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "dao";
+      const session = prev.session || ("dao-" + hostSlug + "-" + crypto.randomBytes(3).toString("hex"));
+      const relayToken = prev.relayToken || ("dao-relay-" + crypto.randomBytes(24).toString("hex"));
+      const cfg = Object.assign({}, prev, { relayUrl: raw, scriptName: RELAY_SCRIPT_NAME, session, relayToken, savedAt: new Date().toISOString() });
+      let healthy = false;
+      try { const hr = await relayGetJson(raw + "/health", 8000); healthy = !!(hr && hr.status === "ok"); } catch (e) { /* 边缘传播中·先登记后自愈 */ }
+      try { saveWorkersRelayConfig(cfg); } catch (e) { return { status: 500, body: { ok: false, error: String(e && e.message || e) } }; }
+      if (br) setTimeout(() => { try { br._startRelayIfConfigured(); } catch (e) {} }, 200);
+      return { status: 200, body: { ok: true, relayUrl: raw, healthy, publicUrl: raw + "/relay/" + encodeURIComponent(session) } };
+    }
     return { status: 404, body: { error: "not found", route: pathname } };
   }
 
@@ -2171,6 +2243,10 @@ class Bridge {
       "| GET/POST | `/api/config` | `{tunnelToken,hostname,localPort,cloudflaredPath}` | 读/写插件配置 |",
       "| POST | `/api/account/bind-cf` | `{apiToken}` | **只给一个 CF Token→自动开通固定公网地址**(有域名→命名隧道; 无域名→自动部署 workers.dev 中继·零域名) |",
       "| GET | `/api/account/status` | - | 固定通道状态: `{mode,fixedUrl,relay:{url,connected}}` |",
+      "| GET | `/api/relay/deep-link` | - | 预填权限的 CF Token 创建深链(点一次 Create 即得)·与二合一对齐 |",
+      "| GET | `/api/relay/state` | - | 持久通道状态(apiToken/relayToken 脱敏): `{active,connected,publicUrl,state}` |",
+      "| POST | `/api/relay/provision-token` | `{token}` | 贴 CF API Token 后端全自动: 取账号→保证子域→部署 Worker→落盘→出站接管 |",
+      "| POST | `/api/relay/set` | `{url}` | 登记已部署的 workers.dev 中继地址(自动派生 session/token)并立即接管 |",
       "| POST | `/api/bridge/restart` | - | 重启隧道(URL会变,重读conn.json) |",
       "| POST | `/api/account/logout` | - | 退出账号→无账号快速隧道(彻底清残·可重绑) |",
       "| POST | `/api/export/refresh` | - | 重生成并落盘两个MD |",
@@ -2644,4 +2720,4 @@ function activate(context) {
   _bridge.start().then((url) => { if (url) vscode.window.setStatusBarMessage("DAO Bridge 已打通: " + url, 8000); });
 }
 function deactivate() { try { if (_bridge) { _bridge.stopWatchdog(); try { _bridge.relay && _bridge.relay.stop(); } catch (e) {} _bridge.stop(); } } catch (e) {} }
-module.exports = { activate, deactivate, Bridge, WorkspaceServer, detectProxy, downloadCloudflared, findCloudflared, isRealCloudflared, probeCloudflared, extractCfTgz, cfAssetName, buildExecCommand, buildBootstrap, buildBootstrapSh, platformOf, WsClient, RelayClient, provisionWorkersRelay, RELAY_WORKER_SOURCE, RELAY_SCRIPT_NAME, wsEncodeFrame, WsFrameParser, readLeaderPluginPort, resolvePluginPort };
+module.exports = { activate, deactivate, Bridge, WorkspaceServer, detectProxy, downloadCloudflared, findCloudflared, isRealCloudflared, probeCloudflared, extractCfTgz, cfAssetName, buildExecCommand, buildBootstrap, buildBootstrapSh, platformOf, WsClient, RelayClient, provisionWorkersRelay, relayTokenDeepLink, RELAY_WORKER_SOURCE, RELAY_SCRIPT_NAME, wsEncodeFrame, WsFrameParser, readLeaderPluginPort, resolvePluginPort };
