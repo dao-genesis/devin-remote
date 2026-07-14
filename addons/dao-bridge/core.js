@@ -40,6 +40,8 @@ exports.startServer = startServer;
 exports.buildExecCommand = buildExecCommand;
 exports.buildBootstrap = buildBootstrap;
 exports.buildBootstrapSh = buildBootstrapSh;
+exports.buildInstall = buildInstall;
+exports.buildInstallSh = buildInstallSh;
 exports.platformOf = platformOf;
 exports.psq = psq;
 // 道 · core — 纯 Node 核心：本地 HTTP server + 统一路由
@@ -232,6 +234,72 @@ while True:
 DAOEOF
 `;
 }
+// 被控端 · 持久化接入（Windows 计划任务）：一行 iwr <hub>/api/install.ps1 | iex
+// 把出站长轮询代理写入 %USERPROFILE%\.dao\hub-agent.ps1（base64 落盘·避免转义腐蚀），
+// 注册计划任务 DaoHubAgent（登录+开机自启·崩溃 1 分钟重启·无限次·隐藏窗口），并立即后台启动。
+// 与 bootstrap.ps1（前台临时·关窗即断）互补——install 是持久化后端，重启/掉线自愈。
+function buildInstall(hubUrl) {
+    hubUrl = (hubUrl || '').replace(/\/$/, '');
+    const loop = buildBootstrap(hubUrl);
+    const b64 = Buffer.from(loop, 'utf8').toString('base64');
+    return `# dao 被控端 · 持久化接入(计划任务·登录/开机自启·崩溃自愈) · 道法自然
+$ErrorActionPreference='Stop'
+$dir = Join-Path $env:USERPROFILE '.dao'
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+$agent = Join-Path $dir 'hub-agent.ps1'
+[IO.File]::WriteAllBytes($agent, [Convert]::FromBase64String('${b64}'))
+$TaskName = 'DaoHubAgent'
+$psExe = (Get-Command powershell.exe).Source
+$action = New-ScheduledTaskAction -Execute $psExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $agent + '"')
+$trig = @(New-ScheduledTaskTrigger -AtLogOn)
+try { $trig += New-ScheduledTaskTrigger -AtStartup } catch {}
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartInterval (New-TimeSpan -Minutes 1) -RestartCount 9999 -ExecutionTimeLimit ([TimeSpan]::Zero)
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trig -Settings $settings -Principal $principal -Force | Out-Null
+Start-ScheduledTask -TaskName $TaskName
+Write-Host "[dao] 已登记持久化中枢代理(计划任务 $TaskName)·登录/开机自启·崩溃自愈·已后台启动" -ForegroundColor Green
+Write-Host "[dao] 中枢: ${hubUrl}    卸载: Unregister-ScheduledTask -TaskName DaoHubAgent -Confirm:\$false" -ForegroundColor DarkGray
+`;
+}
+// 被控端 · 持久化接入（Linux/macOS）：一行 curl -fsSL <hub>/api/install.sh | sh
+// 写入 ~/.dao/hub-agent.sh，优先 systemd --user 服务（enable --now + enable-linger 开机自启·自愈），
+// 无 systemd --user 时回退 cron @reboot + 立即 nohup 后台启动。
+function buildInstallSh(hubUrl) {
+    hubUrl = (hubUrl || '').replace(/\/$/, '');
+    const loop = buildBootstrapSh(hubUrl);
+    const b64 = Buffer.from(loop, 'utf8').toString('base64');
+    return `#!/bin/sh
+# dao 被控端 · 持久化接入(systemd --user 或 cron @reboot·自愈) · 道法自然
+set -e
+DIR="$HOME/.dao"; mkdir -p "$DIR"
+AGENT="$DIR/hub-agent.sh"
+printf '%s' '${b64}' | base64 -d > "$AGENT"
+chmod +x "$AGENT"
+if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+  UD="$HOME/.config/systemd/user"; mkdir -p "$UD"
+  cat > "$UD/dao-hub-agent.service" <<UNIT
+[Unit]
+Description=dao hub agent (persistent outbound enrollment)
+After=network-online.target
+[Service]
+ExecStart=/bin/sh $AGENT
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=default.target
+UNIT
+  systemctl --user daemon-reload
+  systemctl --user enable --now dao-hub-agent.service
+  command -v loginctl >/dev/null 2>&1 && loginctl enable-linger "$(id -un)" >/dev/null 2>&1 || true
+  echo "[dao] 已登记 systemd --user 服务 dao-hub-agent(开机自启·自愈·已启动)"
+else
+  ( crontab -l 2>/dev/null | grep -v 'dao-hub-agent.sh' ; echo "@reboot /bin/sh $AGENT >/dev/null 2>&1 &" ) | crontab - 2>/dev/null || true
+  nohup /bin/sh "$AGENT" >/dev/null 2>&1 &
+  echo "[dao] 已登记 cron @reboot 自启并后台启动(无 systemd --user)"
+fi
+echo "[dao] 中枢: ${hubUrl}"
+`;
+}
 // 中枢分发：被控端登记 + 每 agent 命令队列/结果表/唤醒器（operator→hub→agent 三明治）
 class DaoHub {
     constructor() {
@@ -360,6 +428,14 @@ async function handleRoute(host, route, method, headers, bodyRaw, token) {
     if (route === '/api/bootstrap.sh' || route === '/bootstrap.sh') {
         const hubUrl = host.publicUrl ? host.publicUrl() : '';
         return { status: 200, contentType: 'text/plain; charset=utf-8', raw: buildBootstrapSh(hubUrl), body: buildBootstrapSh(hubUrl) };
+    }
+    if (route === '/api/install.ps1' || route === '/install.ps1') {
+        const hubUrl = host.publicUrl ? host.publicUrl() : '';
+        return { status: 200, contentType: 'text/plain; charset=utf-8', raw: buildInstall(hubUrl), body: buildInstall(hubUrl) };
+    }
+    if (route === '/api/install.sh' || route === '/install.sh') {
+        const hubUrl = host.publicUrl ? host.publicUrl() : '';
+        return { status: 200, contentType: 'text/plain; charset=utf-8', raw: buildInstallSh(hubUrl), body: buildInstallSh(hubUrl) };
     }
     if (route === '/api/connect' && method === 'POST') {
         const a = hub.registerAgent(body.sysinfo || body || {});
