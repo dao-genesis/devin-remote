@@ -53,3 +53,27 @@ jobs:
             exit 1
           fi
           echo "未发现泄露"
+
+      - name: 版本号护栏（改了模块代码必须同步提版本，否则发版 tag 不变 · 用户永远拿不到新版）
+        run: |
+          set -e
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          git fetch --no-tags origin "$BASE_SHA" >/dev/null 2>&1 || true
+          # 只看非文档改动（*.md 不要求提版本）
+          git diff --name-only "$BASE_SHA"...HEAD | grep -vE '\.md$' > changed.txt || true
+          [ -s changed.txt ] || { echo "无代码改动"; exit 0; }
+          MODS=$(node tools/detect-modules.js --files changed.txt)
+          echo "受影响模块: $MODS"
+          BAD=0
+          for KEY in $(node -e "for(const k of $MODS)console.log(k)"); do
+            DIR=$(node -p "require('./tools/modules.json').modules.find(m=>m.key==='$KEY').dir")
+            NEWV=$(node -p "require('./$DIR/package.json').version")
+            OLDV=$(git show "$BASE_SHA:$DIR/package.json" 2>/dev/null | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).version))" || echo "")
+            if [ "$NEWV" = "$OLDV" ]; then
+              echo "::error file=$DIR/package.json::模块 $KEY 有代码改动但版本号仍是 $OLDV — 请提升 version，发版工作流按版本打 tag，版本不动用户拿不到新版"
+              BAD=1
+            else
+              echo "$KEY: $OLDV -> $NEWV ✓"
+            fi
+          done
+          exit $BAD

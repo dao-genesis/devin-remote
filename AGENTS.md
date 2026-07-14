@@ -196,6 +196,12 @@ module CORS 约束无解。故桌面端「公网渲染只传核心」的**正解
    生死），另起 `windsurf.cmd --user-data-dir <独立目录> --disable-workspace-trust --new-window <ws>`
    加载新版（共享 `~/.dao` 账号态），切勿 reload 用户正在用的窗口。注：用户常驻实例已信任工作区，磁盘
    修好后其下次正常重启会自动干净加载，无需任何额外参数。
+10. **改了模块代码必须同步提升该模块 `package.json` 的 `version`（CI 硬门禁）。** 发版工作流
+    （`.github/workflows/release.yml`）按 `<key>-v<version>` 打 tag 发 VSIX——版本号不动就一直
+    复用旧 tag，**外部用户永远拿不到新版**（历史上桌面端源码狂奔一周、云端发布版本却纹丝不动，
+    即此因）。铁律：PR 命中某模块 trigger（见 `tools/modules.json`）就必须提该模块版本；改了
+    `core/rt-flow` 并 vendor 同步到 `core/dao-vsix/rtflow/` 时，rt-flow 与 dao-vsix **两个版本都要提**
+    （dao-one 由 CI 从最新源装配，也应一并提）。dao-ci 的「版本号护栏」会对未提版本的模块直接挂红。
 
 ---
 
