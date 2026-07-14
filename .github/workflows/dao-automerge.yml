@@ -127,16 +127,23 @@ jobs:
             async function kickRelease(prNumber) {
               try {
                 const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: prNumber, per_page: 100 });
-                if (!files.some(f => (f.filename || '').startsWith('addons/rt-flow-app/'))) return;
+                const names = files.map(f => f.filename || '');
                 const tok = process.env.DAO_MERGE_TOKEN;
-                if (!tok) { core.warning(`PR #${prNumber} 含 rt-flow-app 改动但无 DAO_MERGE_TOKEN, 无法触发 android-release 发版`); return; }
-                const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/workflows/android-release.yml/dispatches`, {
-                  method: 'POST',
-                  headers: { authorization: `token ${tok}`, accept: 'application/vnd.github+json' },
-                  body: JSON.stringify({ ref: 'main' })
-                });
-                core.info(`android-release dispatch (PR #${prNumber}): ${r.status}`);
-              } catch (e) { core.warning(`android-release dispatch 失败: ${e.message}`); }
+                async function dispatch(wf) {
+                  if (!tok) { core.warning(`PR #${prNumber} 命中 ${wf} 发版路径但无 DAO_MERGE_TOKEN, 无法触发发版`); return; }
+                  const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/workflows/${wf}/dispatches`, {
+                    method: 'POST',
+                    headers: { authorization: `token ${tok}`, accept: 'application/vnd.github+json' },
+                    body: JSON.stringify({ ref: 'main' })
+                  });
+                  core.info(`${wf} dispatch (PR #${prNumber}): ${r.status}`);
+                }
+                if (names.some(n => n.startsWith('addons/rt-flow-app/'))) await dispatch('android-release.yml');
+                // GITHUB_TOKEN 的 merge push 同样不触发 release.yml(VSIX 模块发版) → 命中其 paths 时显式 dispatch,
+                // 否则桌面模块改了代码+版本也永不发新版(历史病灶: 源码狂奔而云端发布纹丝不动)。
+                const relPaths = ['core/', 'addons/', 'tools/pack-vsix.js', 'tools/modules.json', 'tools/detect-modules.js', 'tools/release-notes.js', 'tools/gen-readme-index.js', '.github/workflows/release.yml'];
+                if (names.some(n => relPaths.some(p => n.startsWith(p)))) await dispatch('release.yml');
+              } catch (e) { core.warning(`发版 dispatch 失败: ${e.message}`); }
             }
 
             // ③ 合并：带标签 + 可信 + CI 全绿
