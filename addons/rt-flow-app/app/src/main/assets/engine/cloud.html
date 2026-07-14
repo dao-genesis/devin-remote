@@ -215,7 +215,14 @@ function renderAccts(){
   document.getElementById("crumb").innerHTML='<span>🗂 全部备份</span>';
   var box=document.getElementById("list");
   if(!_groups.length){ box.innerHTML='<div class="empty">无本地备份记录 — 先在工具条点「全量备份」或开启「自动备份」</div>'; return; }
-  _view=_groups.filter(function(g){ if(!window.__showAuto && g.allAuto) return false; return _grpMatch(g); });
+  // 序号直搜: 纯数字查询优先精确命中账号序号(几百号时"52"直达 52 号), 无精确命中才退回全文子串
+  if(/^\d+$/.test(Q)){
+    var exact=_groups.filter(function(g){ if(!window.__showAuto && g.allAuto) return false; return g.no===+Q; });
+    if(exact.length){ _view=exact; }
+    else _view=_groups.filter(function(g){ if(!window.__showAuto && g.allAuto) return false; return _grpMatch(g); });
+  } else {
+    _view=_groups.filter(function(g){ if(!window.__showAuto && g.allAuto) return false; return _grpMatch(g); });
+  }
   var nRm=0, nAuto=0; _groups.forEach(function(g){ if(g.removed)nRm++; if(g.allAuto)nAuto++; });
   document.getElementById("sub").textContent="共 "+_groups.length+" 个备份账号 (含 "+nRm+" 已移出库) · 近期活跃优先 · 自动化 "+nAuto+" 个"+(window.__showAuto?"(下沉)":"(已隐藏)");
   var html=_view.slice(0,LIM).map(function(g,i){

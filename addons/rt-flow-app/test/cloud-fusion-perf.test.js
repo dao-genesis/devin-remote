@@ -51,6 +51,11 @@ ok(/var PAGE=80, LIM=PAGE;/.test(cloud) && /function moreAccts\(\)\{ LIM\+=PAGE;
 ok(/_view\.slice\(0,LIM\)\.map/.test(cloud), "一级目录只渲当前页");
 ok(/加载更多 \(当前 '\+LIM\+' \/ 共 '\+_view\.length\+'\)/.test(cloud), "有「加载更多」按钮");
 
+// ⑤ 序号直搜: 纯数字查询优先精确命中账号序号, 无精确命中才回退子串
+ok(/if\(\/\^\\d\+\$\/\.test\(Q\)\)\{/.test(cloud), "纯数字查询走序号直搜分支");
+ok(/return g\.no===\+Q;/.test(cloud), "精确匹配账号序号 g.no");
+ok(/if\(exact\.length\)\{ _view=exact; \}/.test(cloud), "有精确命中即只显对应账号");
+
 // 紧凑按钮 (省空间)
 ok(/\.b\{flex:1;min-width:46px;[^}]*font-size:11\.5px/.test(cloud), "按钮紧凑尺寸 (min-width 46px · 11.5px)");
 
