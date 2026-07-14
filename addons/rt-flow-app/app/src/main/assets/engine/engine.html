@@ -207,10 +207,18 @@
     if(/block|stuck|fail|error|interrupt|abort|disconnect|timeout/.test(en)) return "blocked";
     // ⑤ 终态(完成/过期/挂起/停止/归档/取消…) → 非活跃, 交由 convTerminalOf 精确分流
     if(/finish|complet|expired|suspend|stopped|archiv|cancel|exited|deleted/.test(en+" "+top)) return "";
+    // ⑤b 运行态陈旧门(与 sessStatusA 同源·根治「古老对话恒显正在运行」): 真运行会话高频回写
+    //   updated_at(秒/分级); 久无活动(默认90min·可配 rtflow.cfg.runStaleMin)的「运行」枚举必是
+    //   平台早已休眠的残影 → 判非活跃, 让追踪只认真活跃/前台对话。
+    var _ts=s.updated_at_ms||s.last_updated_at||s.updated_at||s.last_message_at||s.last_event_at||s.modified_at||s.created_at||0;
+    if(typeof _ts==="string"){ var _p=Date.parse(_ts); _ts=isNaN(_p)?0:_p; }
+    _ts=(+_ts)||0; if(_ts&&_ts<1e12)_ts*=1000;
+    var _rsm=90*60*1000; try{ var _v=localStorage.getItem("rtflow.cfg.runStaleMin"); if(_v!=null){ var _n=parseFloat(JSON.parse(_v)); if(isFinite(_n)&&_n>0)_rsm=_n*60*1000; } }catch(e){}
+    var _staleRun=!!(_ts&&Date.now()-_ts>_rsm);
     // ⑥ 进行中: enum/活动字段命中(含 续跑/思考/流式/规划… → 根治「对话续跑却不亮绿灯」·与 sessStatus 同源)
-    if(/run|working|active|execut|in_progress|streaming|coding|planning|testing|thinking|busy|resumed|started/.test(en+" "+act+" "+cur)) return "running";
+    if(/run|working|active|execut|in_progress|streaming|coding|planning|testing|thinking|busy|resumed|started/.test(en+" "+act+" "+cur)) return _staleRun?"":"running";
     // ⑦ 有状态但未归类 → 视为运行(宁可实时亮灯·与 sessStatus 末行同源); 真空状态才不追踪
-    return (en||top) ? "running" : "";
+    return (en||top) ? (_staleRun?"":"running") : "";
   }
   function convTerminalOf(s, o){
     var en=String((o&&o.enum)||s.status_enum||s.status||"").toLowerCase();
