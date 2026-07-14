@@ -138,6 +138,9 @@ public class MainActivity extends AppCompatActivity {
     private boolean toolRowExpanded = true;
     private FrameLayout dlPanel;
     private LinearLayout dlListCol;
+    // 下载面板多选态 (对齐切号面板多选): 勾选 recIdx 集合 + 是否处于多选模式
+    private boolean dlMultiMode = false;
+    private final java.util.Set<Integer> dlSelected = new java.util.LinkedHashSet<>();
     private FrameLayout daoPanel;          // 全服通悬浮窗 (近期对话 / 备份网页端) — 建一次后保活, 开关只切显隐
     private WebView daoWeb;
     private boolean daoOpen = false;       // 全服通悬浮窗逻辑可见态 (面板/WebView 常驻, 故不能用 daoPanel!=null 判断)
@@ -5439,6 +5442,7 @@ public class MainActivity extends AppCompatActivity {
     private void closeDownloadPanel() {
         if (dlPanel != null && dlPanel.getParent() != null) ((ViewGroup) dlPanel.getParent()).removeView(dlPanel);
         dlPanel = null; dlListCol = null;
+        dlMultiMode = false; dlSelected.clear();
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -5928,13 +5932,16 @@ public class MainActivity extends AppCompatActivity {
         TextView ttl = new TextView(this); ttl.setText("下载 · 点击查看 · 长按/⋮上传");
         ttl.setTextColor(0xFFFFFFFF); ttl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         ttl.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView sel = new TextView(this); sel.setText("☑ 多选");
+        sel.setTextColor(0xFFFFFFFF); sel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12); sel.setPadding(dp(6), 0, dp(6), 0);
+        sel.setOnClickListener(v -> { dlMultiMode = !dlMultiMode; dlSelected.clear(); if (dlListCol != null) renderDownloadList(dlListCol); });
         TextView up = new TextView(this); up.setText("⬆ 上传");
         up.setTextColor(0xFFFFFFFF); up.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12); up.setPadding(dp(8), 0, dp(6), 0);
         up.setOnClickListener(v -> pickUploadToPage());
         TextView close = new TextView(this); close.setText("✕");
         close.setTextColor(0xFFFFFFFF); close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16); close.setPadding(dp(8), 0, dp(4), 0);
         close.setOnClickListener(v -> closeDownloadPanel());
-        head.addView(ttl); head.addView(up); head.addView(close);
+        head.addView(ttl); head.addView(sel); head.addView(up); head.addView(close);
         head.setOnTouchListener(new View.OnTouchListener() {
             float dx, dy;
             @Override public boolean onTouch(View v, MotionEvent ev) {
@@ -6062,6 +6069,7 @@ public class MainActivity extends AppCompatActivity {
                 listCol.addView(empty); return;
             }
             if (active > 0) listCol.addView(dlGrpHeader("🗂 已完成 (" + arr.length() + ")"));
+            if (dlMultiMode) addDlMultiBar(listCol, arr.length());
             for (int i = arr.length() - 1; i >= 0; i--) {
                 org.json.JSONObject e = arr.getJSONObject(i);
                 final String path = e.optString("file", "");
@@ -6072,9 +6080,17 @@ public class MainActivity extends AppCompatActivity {
                 LinearLayout row = new LinearLayout(this);
                 row.setOrientation(LinearLayout.HORIZONTAL); row.setGravity(Gravity.CENTER_VERTICAL);
                 row.setPadding(dp(8), dp(8), dp(4), dp(8));
-                row.setBackgroundColor(0xFF1B1F26);
+                row.setBackgroundColor(dlMultiMode && dlSelected.contains(recIdx) ? 0xFF243447 : 0xFF1B1F26);
                 LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
                 rlp.bottomMargin = dp(4); row.setLayoutParams(rlp);
+                android.widget.CheckBox cb = null;
+                if (dlMultiMode) {
+                    cb = new android.widget.CheckBox(this);
+                    cb.setChecked(dlSelected.contains(recIdx));
+                    final android.widget.CheckBox fcb = cb;
+                    cb.setOnClickListener(v -> { toggleDlSelect(recIdx, fcb.isChecked()); });
+                    row.addView(cb);
+                }
                 LinearLayout txt = new LinearLayout(this); txt.setOrientation(LinearLayout.VERTICAL);
                 txt.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
                 TextView nm = new TextView(this); nm.setText(name);
@@ -6083,17 +6099,94 @@ public class MainActivity extends AppCompatActivity {
                 File f = new File(path);
                 boolean avail = f.exists() || !uri.isEmpty();
                 TextView sub = new TextView(this);
-                sub.setText((avail ? (f.exists() ? humanSize(f.length()) : "已入系统下载") : "(文件已删)") + " · 点击查看 · 长按拖拽");
+                sub.setText((avail ? (f.exists() ? humanSize(f.length()) : "已入系统下载") : "(文件已删)") + (dlMultiMode ? " · 点击勾选" : " · 点击查看 · 长按拖拽"));
                 sub.setTextColor(0xFF8B949E); sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
                 txt.addView(nm); txt.addView(sub);
-                Button more = chipBtnSm("\u22EE");
-                more.setOnClickListener(v -> showDownloadActions(v, recIdx, path, uri, name, mime));
-                row.addView(txt); row.addView(more);
-                txt.setOnClickListener(v -> openDownloadedInline(path, uri, name, mime));
-                txt.setOnLongClickListener(v -> { dragDownloaded(v, path, uri, mime); return true; });
+                row.addView(txt);
+                if (dlMultiMode) {
+                    final android.widget.CheckBox fcb = cb;
+                    txt.setOnClickListener(v -> { boolean ns = !dlSelected.contains(recIdx); fcb.setChecked(ns); toggleDlSelect(recIdx, ns); });
+                } else {
+                    Button more = chipBtnSm("\u22EE");
+                    more.setOnClickListener(v -> showDownloadActions(v, recIdx, path, uri, name, mime));
+                    row.addView(more);
+                    txt.setOnClickListener(v -> openDownloadedInline(path, uri, name, mime));
+                    txt.setOnLongClickListener(v -> { dragDownloaded(v, path, uri, mime); return true; });
+                }
                 listCol.addView(row);
             }
         } catch (Exception ignored) {}
+    }
+    /** 勾选/取消一个下载项, 更新计数条 (重渲染小列表·数据量极小)。 */
+    private void toggleDlSelect(int recIdx, boolean on) {
+        if (on) dlSelected.add(recIdx); else dlSelected.remove(recIdx);
+        if (dlListCol != null) renderDownloadList(dlListCol);
+    }
+    /** 多选动作条 (对齐切号面板多选): 已选计数 + 全选/清空/批量上传/批量删除。 */
+    private void addDlMultiBar(LinearLayout listCol, int total) {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL); bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(6), dp(4), dp(4), dp(6));
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp.bottomMargin = dp(4); bar.setLayoutParams(blp);
+        TextView cnt = new TextView(this); cnt.setText("已选 " + dlSelected.size() + "/" + total);
+        cnt.setTextColor(0xFF58A6FF); cnt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        cnt.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button all = chipBtnSm("全选");
+        all.setOnClickListener(v -> { dlSelected.clear(); for (int i = 0; i < total; i++) dlSelected.add(i); if (dlListCol != null) renderDownloadList(dlListCol); });
+        Button none = chipBtnSm("清空");
+        none.setOnClickListener(v -> { dlSelected.clear(); if (dlListCol != null) renderDownloadList(dlListCol); });
+        Button upSel = chipBtnSm("⬆");
+        upSel.setOnClickListener(v -> batchUploadSelectedDownloads());
+        Button del = chipBtnSm("🗑");
+        del.setOnClickListener(v -> batchDeleteSelectedDownloads());
+        bar.addView(cnt); bar.addView(all); bar.addView(none); bar.addView(upSel); bar.addView(del);
+        listCol.addView(bar);
+    }
+    /** 批量删除选中下载项 (下标降序移除, 避免索引位移; 同步删本地文件+保险箱)。 */
+    private void batchDeleteSelectedDownloads() {
+        if (dlSelected.isEmpty()) { toast("未选择任何项"); return; }
+        final int n = dlSelected.size();
+        new android.app.AlertDialog.Builder(this).setTitle("批量删除")
+            .setMessage("确认删除选中的 " + n + " 项? (同时删除本地文件)")
+            .setPositiveButton("删除", (d, w) -> {
+                int del = 0;
+                try {
+                    org.json.JSONArray arr = new org.json.JSONArray(getSharedPreferences(PREFS, MODE_PRIVATE).getString("downloads", "[]"));
+                    org.json.JSONArray out = new org.json.JSONArray();
+                    for (int i = 0; i < arr.length(); i++) {
+                        if (dlSelected.contains(i)) {
+                            try { String p = arr.getJSONObject(i).optString("file", ""); File f = new File(p); if (f.exists()) f.delete(); } catch (Exception ignored) {}
+                            del++;
+                        } else out.put(arr.getJSONObject(i));
+                    }
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("downloads", out.toString()).apply();
+                    vaultWrite("downloads", out.toString());
+                    dlSelected.clear();
+                    toast("已删除 " + del + " 项");
+                    if (dlListCol != null) renderDownloadList(dlListCol);
+                } catch (Exception e) { toast("批量删除失败"); }
+            }).setNegativeButton("取消", null).show();
+    }
+    /** 批量上传选中下载项到当前活动网页 (复用 uploadUrisToPage 注入链)。 */
+    private void batchUploadSelectedDownloads() {
+        if (dlSelected.isEmpty()) { toast("未选择任何项"); return; }
+        if (activePageWeb() == null) { toast("先打开一个网页再上传"); return; }
+        java.util.List<Uri> uris = new java.util.ArrayList<>();
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(getSharedPreferences(PREFS, MODE_PRIVATE).getString("downloads", "[]"));
+            for (int i = 0; i < arr.length(); i++) {
+                if (dlSelected.contains(i)) {
+                    org.json.JSONObject e = arr.getJSONObject(i);
+                    Uri u = resolveOpenUri(e.optString("file", ""), e.optString("uri", ""));
+                    if (u != null) uris.add(u);
+                }
+            }
+        } catch (Exception ignored) {}
+        if (uris.isEmpty()) { toast("所选文件已不存在"); return; }
+        uploadUrisToPage(uris);
+        dlSelected.clear(); dlMultiMode = false;
+        if (dlListCol != null) renderDownloadList(dlListCol);
     }
     /** 列表项打开/拖拽用的 Uri: 优先系统下载内容 Uri (任意 App 可读), 回退保险箱副本的 FileProvider Uri。 */
     private Uri resolveOpenUri(String path, String uri) {
