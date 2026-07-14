@@ -4864,6 +4864,9 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                                     reply({ ok: true, data: aitems });
                                 }
                                 else if (tab === 'schedules') { result = await devinListSchedules(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
+                                else if (tab === 'profile') { result = await devinGetProfile(ws.devinOrgId, ws.devinUserId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
+                                else if (tab === 'customization') { result = await devinGetCustomization(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
+                                else if (tab === 'apikeys') { result = await devinGetApiKeyStatus(ws.devinOrgId, ws.devinUserId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
                                 else reply({ ok: false, error: 'unknown tab' });
                             } catch (e: any) { reply({ ok: false, error: e.message }); }
                         } else {
@@ -8292,7 +8295,10 @@ function daoOverviewManualHtml(){
     return '<div class="st">当前账号 · 手动内容</div><div class="card"><div class="cr"><span class="l" style="font-size:11px;color:var(--muted);line-height:1.6">凭证就绪(cog_ API Key)后自动加载 Knowledge / Playbooks / Secrets / Git。当前仅 Codeium API, 请先完成自动登录。</span></div></div>';
   }
   return '<div class="st">当前账号 · 手动内容 · 查看·修改·修复</div>'
-    +'<div class="st" style="margin-top:8px;font-size:11px;text-transform:none">📚 Knowledge 知识库</div><div id="ov-knowledge" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="margin-top:8px;font-size:11px;text-transform:none">👤 Profile 身份</div><div id="ov-profile" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">🎛️ Customization 偏好设置</div><div id="ov-customization" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">🔐 API Keys (cog_)</div><div id="ov-apikeys" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
+    +'<div class="st" style="font-size:11px;text-transform:none">📚 Knowledge 知识库</div><div id="ov-knowledge" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
     +'<div class="st" style="font-size:11px;text-transform:none">📋 Playbooks 剧本</div><div id="ov-playbooks" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
     +'<div class="st" style="font-size:11px;text-transform:none">🔑 Secrets 密钥</div><div id="ov-secrets" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
     +'<div class="st" style="font-size:11px;text-transform:none">🔗 Git / Security</div><div id="ov-git" class="ovsec"><div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">加载中…</p></div></div>'
@@ -8303,7 +8309,7 @@ function daoOverviewManualHtml(){
 }
 function daoLoadOverviewManual(){
   if(!S.auth.loggedIn||!S.auth.canUseApi)return;
-  ['knowledge','playbooks','secrets','integrations','automations','schedules'].forEach(function(t){
+  ['profile','customization','apikeys','knowledge','playbooks','secrets','integrations','automations','schedules'].forEach(function(t){
     var id=(t==='integrations')?'ov-git':'ov-'+t;
     if(!document.getElementById(id))return;
     cmd('loadTabData',{tab:t});
@@ -8374,8 +8380,8 @@ function rT(tab,items,err,fallbackProxy){
   const v=document.getElementById('v-'+tab)||document.getElementById('ov-'+(tab==='integrations'?'git':tab));if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
   if(fallbackProxy||err){
-    const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时'};
-    const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅'};
+    const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时',profile:'Profile 身份',customization:'Customization 偏好',apikeys:'API Keys'};
+    const tabIcons={sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅',profile:'👤',customization:'🎛️',apikeys:'🔐'};
     if(err==='需要 cog_ API Key'||fallbackProxy){
       // ★ 需要cog_ key — 显示创建引导
       v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6">账号凭证随 IDE 登录状态自动同步, 无需手动 API Key。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试自动获取</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
@@ -8385,7 +8391,7 @@ function rT(tab,items,err,fallbackProxy){
     }
     return;
   }
-  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅'}[tab]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时'}[tab]+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
+  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅',profile:'👤',customization:'🎛️',apikeys:'🔐'}[tab]||'🌐')+'</div><h3>'+({sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时',profile:'Profile 身份',customization:'Customization 偏好',apikeys:'API Keys'}[tab]||tab)+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
   // ★ v1.0.1 · 各tab添加新建按钮 · 帛书·「道生一·一生二」
   const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>',automations:'<button class="btn sm danger" onclick="if(confirm(&#39;确认清除本账号官网全部自动化?此操作不可撤销&#39;))cmd(&#39;clearAutomations&#39;)">🧹 清除全部</button>'};
   let h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' items</span><div class="br">'+(createBtns[tab]||'')+'<button class="btn sm" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;'+tab+'&#39;})">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐</button></div></div>';
@@ -8474,7 +8480,7 @@ function rT(tab,items,err,fallbackProxy){
     setTimeout(function(){try{mcpAutoInstallLocal()}catch(e){}},600);
     // 内化后台: 面板打开即静默自动 修复+实测 本机 MCP(无弹窗·无感自愈)
     setTimeout(function(){try{cmd('autoMaintainLocalMcp',{})}catch(e){}},900);
-  }else if(tab==='usage'||tab==='org'||tab==='automations'){
+  }else if(tab==='usage'||tab==='org'||tab==='automations'||tab==='profile'||tab==='customization'||tab==='apikeys'){
     items.forEach(it=>{
       const nm=it.name||it.title||'';const dt=it.detail||'';
       const st=it.connected!==undefined?(it.connected?'<span style="color:var(--success)">● on</span>':'<span style="color:var(--muted)">○ off</span>'):'';
@@ -9367,6 +9373,18 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else if (tab === 'schedules') {
                             result = await devinListSchedules(ws.devinOrgId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'profile') {
+                            result = await devinGetProfile(ws.devinOrgId, ws.devinUserId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'customization') {
+                            result = await devinGetCustomization(ws.devinOrgId, ws.devinAuth1);
+                            if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
+                            else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
+                        } else if (tab === 'apikeys') {
+                            result = await devinGetApiKeyStatus(ws.devinOrgId, ws.devinUserId, ws.devinAuth1);
                             if (result.ok) reply({ type: 'tabData', tab, items: result.items || [] });
                             else reply({ type: 'tabData', tab, items: [], error: 'API调用失败' });
                         } else {
@@ -10575,6 +10593,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     home: '', sessions: '/sessions',
                     knowledge: '/knowledge', playbooks: '/playbooks',
                     secrets: '/settings/secrets', integrations: '/settings/integrations',
+                    profile: '/settings/profile', customization: '/settings/customization',
+                    apikeys: '/settings/api-keys',
                 };
                 const targetUrl = daoRoutedWebUrl(pagePaths[page] || '');
                 try { vscode.commands.executeCommand('simpleBrowser.show', targetUrl); }
@@ -13866,6 +13886,62 @@ async function devinGetUsage(orgId: string, auth1: string): Promise<{ ok: boolea
         { name: '周期 Cycle', detail: (s.cycle_start ? new Date(s.cycle_start).toLocaleDateString() : '—') + ' → ' + (s.cycle_end ? new Date(s.cycle_end).toLocaleDateString() : '—') },
     ];
     return { ok: stats.status === 200 || limits.status === 200, items };
+}
+
+// ═══ 单账号主页补全 · Profile / Customization / API Key — 端点均经真实登录抓包核实 (GET 只读) ═══
+async function devinGetProfile(orgId: string, userId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const H = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    const reqs: Promise<any>[] = [devinJsonGet(DEVIN_APP + '/api/users/info', H)];
+    if (userId) reqs.push(devinJsonGet(DEVIN_APP + '/api/users/' + userId + '/profile', H));
+    const [info, prof] = await Promise.all(reqs);
+    const iOk = info.status === 200 && info.json;
+    const pOk = prof && prof.status === 200 && prof.json;
+    if (!iOk && !pOk) return { ok: false, items: [] };
+    const i: any = iOk ? info.json : {};
+    const p: any = pOk ? prof.json : {};
+    const items = [
+        { name: '姓名 Name', detail: p.preferred_name || p.name || i.preferred_name || '—' },
+        { name: '邮箱 Email', detail: p.email || '—' },
+        { name: 'User ID', detail: p.user_id || i.user_id || userId || '—' },
+        { name: 'GitHub OAuth', detail: p.github_username ? ('@' + p.github_username) : '未连接', connected: !!p.is_github_oauth_connected },
+        { name: 'Commit Email', detail: p.commit_email || '(默认·账号邮箱)' },
+        { name: '注册时间 Created', detail: i.created_at ? new Date(i.created_at).toLocaleString() : '—' },
+    ];
+    return { ok: true, items };
+}
+
+async function devinGetCustomization(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const r = await devinJsonGet(DEVIN_APP + '/api/organizations/' + orgId + '/settings', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200 || !r.json) return { ok: false, items: [] };
+    const s = r.json;
+    const items = [
+        { name: 'Devin 版本 Default version', detail: s.default_devin_version_override || '(官方默认)' },
+        { name: '默认平台 Platform', detail: s.default_platform || '(官方默认 · Linux)' },
+        { name: '搜索模式 Search mode', detail: s.default_search_mode || '—' },
+        { name: 'PR 署名 Open as', detail: s.pr_open_as || '—' },
+        { name: 'PR 开草稿 Draft PRs', detail: s.pr_create_as_draft ? '开' : '关', connected: !!s.pr_create_as_draft },
+        { name: 'PR 仅提及 Mention only', detail: s.pr_mention_only ? '开' : '关', connected: !!s.pr_mention_only },
+        { name: '自动 Review Auto-reviewer', detail: s.pr_auto_reviewer ? '开' : '关', connected: !!s.pr_auto_reviewer },
+        { name: 'Secure Mode 安全模式', detail: s.secure_mode ? '开' : '关', connected: !!s.secure_mode },
+        { name: 'Computer Use 桌面操控', detail: s.computer_use ? '开' : '关', connected: !!s.computer_use },
+        { name: '批量会话上限 Max batch', detail: String(s.max_batch_sessions != null ? s.max_batch_sessions : '—') },
+        { name: '快照自动构建 Snapshot auto-build', detail: s.snapshot_auto_build ? '开' : '关', connected: !!s.snapshot_auto_build },
+        { name: 'Wiki 自动刷新', detail: (s.wiki_auto_refresh || '—') + ' · effort ' + (s.wiki_effort_level || '—') },
+    ];
+    return { ok: true, items };
+}
+
+async function devinGetApiKeyStatus(orgId: string, userId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    if (!userId) return { ok: false, items: [] };
+    const bareOrgId = orgId.replace(/^org-/, '');
+    const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/' + userId + '/api-key/exists', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+    if (r.status !== 200) return { ok: false, items: [] };
+    const exists = !!(r.json && r.json.exists);
+    const items = [
+        { name: '官网 API Key (cog_)', detail: exists ? '已创建 · 可在官网 Settings → Devin API 管理/吊销' : '未创建', connected: exists },
+        { name: '插件本地凭证', detail: devinCanUseApi() ? '✓ 完整 API 访问 (cog_ key 就绪)' : '仅 Codeium API · 待自动获取', connected: devinCanUseApi() },
+    ];
+    return { ok: true, items };
 }
 
 async function devinListMembers(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
