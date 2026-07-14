@@ -4209,9 +4209,20 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             return { commands: cmds, count: cmds.length };
         }
         case '/api/tools': {
-            const body: any = JSON.parse(await readBody(req));
+            // 守柔·畸形入参不崩(旧: 空/非法 JSON 或缺 tool → JSON.parse/解构抛错 → 500)。
+            //   畸形请求应答 400 明因, 不污染 500(500 专供真·服务端异常)。
+            const _raw = await readBody(req);
+            let body: any;
+            try { body = _raw ? JSON.parse(_raw) : {}; }
+            catch { return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'invalid JSON body' }) }; }
+            if (!body || typeof body !== 'object' || Array.isArray(body))
+                return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'body must be a JSON object' }) };
             const { tool, args } = body;
-            return await executeTool(tool, args);
+            if (!tool || typeof tool !== 'string')
+                return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'tool (non-empty string) required' }) };
+            if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args)))
+                return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'args must be a JSON object when provided' }) };
+            return await executeTool(tool, args || {});
         }
         // ═══════════════════════════════════════════════════════════
         // Devin Cloud API · 帛书·四十二「三生万物」本地路由化
