@@ -185,8 +185,13 @@
         //   纯终态死号(从未被目击非终态)无 activeSeenAt → 不计新鲜, 「永滞库中」的旧修复不回退。
         var STALE = staleMs();
         var seenActive = !!(ent && ent.activeSeenAt && now - ent.activeSeenAt < STALE);
-        if ((now - ts < STALE && !_dormant(s)) || seenActive) { fresh++; }
-        if (now - ts < STALE || seenActive) { kept++; continue; }   // 窗口内有更新/被目击活跃 → 保留(只备份不清理)
+        // 创建时间是不可变真源(平台只触碰 updated_at, 不会触碰 created_at):
+        //   窗口内新建的对话即便已转终态(如归零即 suspended)也是「真·近期对话」→ 计 fresh 计 kept,
+        //   账号绝不因对话生得近却死得快而被提前移出(实测 55 号 <24h 即被移出之根)。
+        var born = (DaoCloud.sessCreatedTs ? DaoCloud.sessCreatedTs(s) : 0) || 0;
+        var recentBorn = !!(born && now - born < STALE);
+        if ((now - ts < STALE && !_dormant(s)) || seenActive || recentBorn) { fresh++; }
+        if (now - ts < STALE || seenActive || recentBorn) { kept++; continue; }   // 窗口内有更新/被目击活跃/窗口内新建 → 保留(只备份不清理)
         if (!ent || !ent.backedUpAt || (!ent.md && !ent.zip)) { kept++; continue; }
         try { var r = await DaoCloud.purgeSession(a, sid); if (r && r.deleted) { cleaned++; ent.deleted = true; ent.cleanedAt = now; } else kept++; } catch (e) { kept++; }
       }
@@ -206,7 +211,12 @@
         if (!allBacked) return { state: "cleaned", reason: "归零但备份未齐全·不移出", bal: bal, cleaned: cleaned, kept: kept, backup: bk.count || 0, fresh: fresh };
         if (a.addedAt && now - a.addedAt < staleMs()) return { state: "cleaned", reason: "新加号保护期内·不移出", bal: bal, cleaned: cleaned, kept: kept, backup: bk.count || 0, fresh: fresh };
         // 移出留底(可追溯可恢复): 金库落「移出记录」含完整账号快照 → 重加号直接从 account.json/此文件找回
-        try { if (N.vaultSaveBackup) N.vaultSaveBackup(_acctFolder(a), "移出记录.json", JSON.stringify({ removedAt: now, account: { id: a.id, email: a.email || "", password: a.password || "", auth1: a.auth1 || "", orgId: a.orgId || "" }, sessions: bk.sessions.length, cleaned: cleaned })); } catch (e) {}
+        var _snap = { removedAt: now, folder: _acctFolder(a), account: { id: a.id, email: a.email || "", password: a.password || "", auth1: a.auth1 || "", orgId: a.orgId || "" }, sessions: bk.sessions.length, cleaned: cleaned,
+          // 近期对话留底: 移出后「近期对话」仍能看到并凭账密快照登录 (账号库清空 ≠ 近期对话消失)
+          sessionList: bk.sessions.map(function (sx) { return { sid: sx.devin_id || sx.session_id || sx.id || "", title: sx.title || sx.name || sx.prompt || "", ts: DaoCloud.sessTs(sx) || 0, status: String(sx.status_enum || sx.status || "") }; }) };
+        try { if (N.vaultSaveBackup) N.vaultSaveBackup(_acctFolder(a), "移出记录.json", JSON.stringify(_snap)); } catch (e) {}
+        // 中央移出总账(夹可被同前缀号覆盖·总账永存): cloud.html/近期对话皆由此寻回移出号
+        try { if (N.vaultSaveBackup) N.vaultSaveBackup("_移出总账", String(a.email || a.id || "acct").replace(/[\\\/:*?"<>|]/g, "_") + ".json", JSON.stringify(_snap)); } catch (e) {}
         var accs = loadAcc(); var k = -1; for (var j = 0; j < accs.length; j++) { if (accs[j].id === a.id) { k = j; break; } }
         if (k >= 0) { accs.splice(k, 1); saveAcc(accs); }
         try { onRemoved(a); } catch (e) {}

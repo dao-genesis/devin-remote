@@ -772,6 +772,19 @@
     return 0;
   }
 
+  // 会话创建时间(ms) — 只认创建类字段(created_at/created/inserted_at), 绝不掺 updated_at:
+  //   创建时间是不可变真源(平台不会周期性触碰), 供自动清理判「对话是否真在窗口内新生」。
+  function sessCreatedTs(s) {
+    if (!s) return 0;
+    var cands = [s.created_at, s.created, s.inserted_at, s.created_at_ms, s.createdAt];
+    for (var i = 0; i < cands.length; i++) {
+      var v = cands[i]; if (v == null) continue;
+      if (typeof v === "number") return v > 1e12 ? v : v * 1000;   // 秒→毫秒
+      var t = Date.parse(v); if (!isNaN(t)) return t;
+    }
+    return 0;
+  }
+
   // ── 会话状态分类 (单一真源·正本清源) ──────────────────────────────────────
   //   切号面板 switch.html 与 全服通 daopan.html / 设备聚合 engine.recentConvAll 共用此判定,
   //   保证「公网单网页」显示的对话最终状态与手机 APK 完全一致 (问题: 网页端状态与 APK 有差距)。
@@ -835,7 +848,7 @@
     QUOTA_RE: QUOTA_RE, sessStatus: sessStatus, quotaLive: quotaLive, sessStatusA: sessStatusA,
     buildZip: buildZip, buildZipAsync: buildZipAsync, zipReadText: zipReadText, zipReadBin: zipReadBin, bytesToB64: bytesToB64, utf8Bytes: utf8Bytes, exportSessionZip: exportSessionZip,
     buildAccessGuide: buildAccessGuide,
-    purgeSession: purgeSession, sessTs: sessTs,
+    purgeSession: purgeSession, sessTs: sessTs, sessCreatedTs: sessCreatedTs,
     listSessions: listSessions, sessionDetail: sessionDetail, sessionMessages: sessionMessages,
     sessionEvents: sessionEvents, exportSession: exportSession, deleteSession: deleteSession,
     extractAllKeys: extractAllKeys, mapKeysToPaths: mapKeysToPaths,
