@@ -244,14 +244,19 @@ function buildInstall(hubUrl) {
     const b64 = Buffer.from(loop, 'utf8').toString('base64');
     return `# dao 被控端 · 持久化接入(计划任务·登录/开机自启·崩溃自愈) · 道法自然
 $ErrorActionPreference='Stop'
+$TaskName = 'DaoHubAgent'
 $dir = Join-Path $env:USERPROFILE '.dao'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $agent = Join-Path $dir 'hub-agent.ps1'
+try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue } catch {}
+Start-Sleep -Milliseconds 300
+Get-Process powershell -ErrorAction SilentlyContinue | Where-Object {
+  try { $_.CommandLine -match 'hub-agent\\.ps1' } catch { $false }
+} | ForEach-Object { try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch {} }
 # UTF-8 BOM 前置: PowerShell 5.1 以 -File 运行无 BOM 的 UTF-8 脚本时按系统 ANSI 代码页
 # (中文 Windows=GBK/936)误读, 致混排中文注释的行字节错位、其后代码解析被腐蚀
 # (曾致 poll 到的 cmd_id/payload.command 变 null·结果永不回传·操控端超时)。加 BOM 强制 UTF-8。
 [IO.File]::WriteAllBytes($agent, ([byte[]](0xEF,0xBB,0xBF)) + [Convert]::FromBase64String('${b64}'))
-$TaskName = 'DaoHubAgent'
 $psExe = (Get-Command powershell.exe).Source
 $action = New-ScheduledTaskAction -Execute $psExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $agent + '"')
 $trig = @(New-ScheduledTaskTrigger -AtLogOn)
@@ -309,6 +314,8 @@ class DaoHub {
         this.agents = new Map();
         this.HEARTBEAT_TIMEOUT = 120 * 1000;
         this.POLL_MAX = 25;
+        this.RESULT_TTL = 10 * 60 * 1000;
+        this.MAX_RESULTS_PER_AGENT = 200;
     }
     registerAgent(sysinfo) {
         sysinfo = sysinfo || {};
@@ -373,6 +380,17 @@ class DaoHub {
         a.results.set(cmdId, Object.assign({ completed_at: Date.now() }, result));
         const w = a.resultWaiters.get(cmdId);
         if (w) w(a.results.get(cmdId));
+        this._pruneResults(a);
+    }
+    _pruneResults(a) {
+        if (a.results.size <= this.MAX_RESULTS_PER_AGENT) return;
+        const now = Date.now();
+        for (const [k, v] of a.results) {
+            if (now - (v.completed_at || 0) > this.RESULT_TTL && !a.resultWaiters.has(k)) {
+                a.results.delete(k);
+            }
+            if (a.results.size <= this.MAX_RESULTS_PER_AGENT) break;
+        }
     }
     waitResult(a, cmdId, timeoutMs) {
         return new Promise((resolve) => {
@@ -391,10 +409,13 @@ class DaoHub {
             out.push({
                 id, hostname: a.hostname || id,
                 status: this.agentAlive(a) ? 'online' : 'offline',
+                platform: platformOf(a),
                 os: si.os_version || '?', user: si.username || '?',
                 capabilities: a.capabilities || ['shell'],
+                connected_at: new Date(a.connectedAt || 0).toISOString(),
                 last_seen: new Date(a.lastSeen || 0).toISOString(),
-                pending: a.queue.length,
+                last_seen_ago: Math.round((Date.now() - (a.lastSeen || 0)) / 1000),
+                pending: a.queue.length, results: a.results.size,
             });
         }
         return out;
@@ -511,16 +532,6 @@ async function handleRoute(host, route, method, headers, bodyRaw, token) {
         return { status: 200, body: { ok: true, delivered } };
     }
     switch (route) {
-        case '/api/exec':
-        case '/api/command': {
-            // 规范化：.bat/.cmd/.exe/.ps1/后台进程皆可（type: shell/cmd/run/detached），默认 shell 向后兼容。
-            const command = buildExecCommand(body);
-            if (!command)
-                return { status: 400, body: { error: 'cmd/file required' } };
-            const timeoutMs = ((body.timeout && Number(body.timeout)) || 30) * 1000;
-            const r = await runShell(command, body.cwd || root, timeoutMs);
-            return { status: 200, body: r };
-        }
         case '/api/file':
         case '/api/read': {
             const p = body.path || '';
