@@ -247,7 +247,10 @@ $ErrorActionPreference='Stop'
 $dir = Join-Path $env:USERPROFILE '.dao'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $agent = Join-Path $dir 'hub-agent.ps1'
-[IO.File]::WriteAllBytes($agent, [Convert]::FromBase64String('${b64}'))
+# UTF-8 BOM 前置: PowerShell 5.1 以 -File 运行无 BOM 的 UTF-8 脚本时按系统 ANSI 代码页
+# (中文 Windows=GBK/936)误读, 致混排中文注释的行字节错位、其后代码解析被腐蚀
+# (曾致 poll 到的 cmd_id/payload.command 变 null·结果永不回传·操控端超时)。加 BOM 强制 UTF-8。
+[IO.File]::WriteAllBytes($agent, ([byte[]](0xEF,0xBB,0xBF)) + [Convert]::FromBase64String('${b64}'))
 $TaskName = 'DaoHubAgent'
 $psExe = (Get-Command powershell.exe).Source
 $action = New-ScheduledTaskAction -Execute $psExe -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $agent + '"')
