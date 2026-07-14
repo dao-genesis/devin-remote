@@ -8107,6 +8107,18 @@ function bkMatch(c,a,q){if(!q)return true;q=String(q).toLowerCase();var hay=[(c&
 function bkOpenConv(i,ci){var a=S.backups.accounts[i];if(!a)return;var c=(a.conversations||[])[ci];if(!c)return;var did=c.devinId||'';if(!did){toast('该备份无对话ID, 无法打开官网',false);return}toast('多实例打开对话…',true);cmd('openConvMultiBrowser',{email:a.email||a.account||'',devinId:did})}
 // 拖拽: 像 IDE 文件夹一样把对话拖到右侧(编辑器/浏览器/路由面板) — 携带官网会话 URL(uri-list/plain/json)
 function bkConvDragStart(ev,i,ci){try{var a=S.backups.accounts[i]||{};var c=((a.conversations||[])[ci])||{};var did=String(c.devinId||'').replace(/^devin-/,'');if(!did)return;var url='https://app.devin.ai/sessions/'+did;var title=(c.title||c.name||'对话');if(ev.dataTransfer){ev.dataTransfer.setData('text/uri-list',url);ev.dataTransfer.setData('text/plain',url);ev.dataTransfer.setData('application/json',JSON.stringify({type:'dao-conv',email:a.email||a.account||'',devinId:did,title:title,url:url}));/* 拖拽上传桥契约: 落到代理网页(/__daobridge.js)即上传该会话MD到页面上传框, 与 /shell 一致 */ev.dataTransfer.setData('application/x-dao-conv',JSON.stringify({email:a.email||a.account||'',sid:did,title:title}));ev.dataTransfer.effectAllowed='copyLink'}}catch(e){}}
+// 借鉴手机版 upSess/bkUp · 一键「传到当前页」: 把此对话备份内容上传到归一网页(/shell)当前打开的账号页。
+//   本板块为独立子网页 iframe → 向外壳(parent)发 __daoDeliverToCurrent, 由外壳定位当前账号页并经
+//   __daoUpload 契约投递(落点页 /__daobridge.js 取字节喂入上传框), 与拖拽完全同源。纯本机主动触发。
+function bkDeliverConv(i,ci){var a=S.backups.accounts[i]||{};var c=((a.conversations||[])[ci])||{};
+  var did=String(c.devinId||'').replace(/^devin-/,'');
+  if(!did){toast('该对话无 devinId·无法传页',false);return}
+  var email=a.email||(String(a.account||'').indexOf('@')>=0?a.account:'');
+  var title=c.title||c.name||'对话';
+  try{
+    if(window.parent&&window.parent!==window){window.parent.postMessage({__daoDeliverToCurrent:{kind:'conv',email:email,sid:did,title:title}},'*');toast('已请求传到当前页',true)}
+    else{toast('请在归一网页(/shell)中打开对话页后再传',false)}
+  }catch(e){toast('传页失败',false)}}
 // 相对时间 (对齐手机版: 刚刚/分钟前/小时前/天前)
 function bkRel(ms){try{if(!ms)return'';var d=Date.now()-ms;if(d<0)d=0;var s=Math.floor(d/1000);if(s<60)return'刚刚';var m=Math.floor(s/60);if(m<60)return m+'分钟前';var hh=Math.floor(m/60);if(hh<24)return hh+'小时前';var dd=Math.floor(hh/24);if(dd<30)return dd+'天前';return new Date(ms).toLocaleDateString()}catch(e){return''}}
 // 对话状态 → 颜色 + 文案 (与 rt-flow 对话追踪同口径: running/awaiting/blocked/finished/failed)
@@ -8146,6 +8158,7 @@ function bkConvRow(c,i,ci,showAcct){
   h+='<div class="br" style="margin-top:5px">';
   h+='<button class="btn sm" onclick="bkConvToggle('+i+','+ci+')">👁 查看</button>';
   if(c.devinId)h+='<button class="btn sm primary" draggable="true" ondragstart="bkConvDragStart(event,'+i+','+ci+')" onclick="bkOpenConv('+i+','+ci+')" title="多实例浏览器打开此对话官网(可拖拽到右侧路由/编辑器)">🚀 进入</button>';
+  if(c.devinId)h+='<button class="btn sm ghost" onclick="bkDeliverConv('+i+','+ci+')" title="一键把此对话备份内容上传到归一网页(/shell)当前打开的对话页(与拖拽同契约)">📤 传当前页</button>';
   h+='<button class="btn sm ghost" onclick="bkDownload('+i+','+ci+')" title="导出对话 MD/备份">⬇ MD</button>';
   h+='<button class="btn sm ghost" onclick="bkReveal('+i+','+ci+')" title="在文件管理器中打开备份目录">📦 文件</button>';
   if(c.hasHtml)h+='<button class="btn sm ghost" onclick="bkView('+i+','+ci+')" title="在浏览器中打开本地 HTML 备份">📄HTML</button>';
