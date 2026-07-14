@@ -87,6 +87,17 @@ ok(/var em=DaoCloud\.getEnvMode\(a\)/.test(switchSrc), "dvCreate 读该号(卡�
   ok(/envModeGet/.test(relaySrc) && /envModeSet/.test(relaySrc), "RelayService 引擎桥同一真源");
   ok(/String envModeGet\(String email\)/.test(mainSrc), "RTDL/Native 桥暴露 envModeGet");
   ok(/_emBridge/.test(cloudSrc), "devin-cloud.js getEnvMode/setEnvMode 优先原生桥 (与徽章同一真源)");
+  // 环境切换原生整合进官方 ＋ 菜单 (不再常驻悬浮徽章)
+  ok(!/document\.createElement\('div'\);b\.id='__rtEnvBadge'/.test(badge), "无常驻悬浮徽章创建");
+  ok(/__rtEnvBadge'\);if\(ob\)ob\.remove\(\)/.test(badge), "旧悬浮徽章残留即移除");
+  ok(/window\.__rtEnvEM=EM;window\.__rtEnvCur=cur/.test(badge), "数据层暴露 __rtEnvEM/__rtEnvCur");
+  ok(/window\.__rtEnvSet=function\(m\)/.test(badge), "__rtEnvSet 写回原生 SharedPreferences");
+  const comp = mainSrc.match(/static void installComposerUpload[\s\S]*?\n    \}/)[0];
+  ok(/data-rtenv/.test(comp), "＋菜单注入环境模式菜单项 (与上传到网页端同级)");
+  ok(/\['linux','windows','macos'\]/.test(comp), "点击三态循环 linux→windows→macos");
+  ok(/window\.__rtEnvSet&&window\.__rtEnvSet\(m\)/.test(comp), "菜单项点击经 __rtEnvSet 持久化");
+  ok(/!menu\.querySelector\('\[data-rtup\]'\)/.test(comp) && /!menu\.querySelector\('\[data-rtenv\]'\)/.test(comp), "按存在性重注入 (React 重渲染删除节点后可复活)");
+  ok(!/menu\.__rtUp\)return/.test(comp), "旧一次性 __rtUp 守卫已移除 (重渲染即失效之根)");
 }
 
 process.exit(failures ? 1 : 0);
