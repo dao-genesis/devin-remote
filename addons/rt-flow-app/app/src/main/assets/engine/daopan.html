@@ -140,7 +140,7 @@ function _ingestDeviceList(list){
   _accSess=Object.create(null);
   list.forEach(function(r){
     var a=byId[r.accId]||byEmail[String(r.accEmail||"").toLowerCase()]||{id:r.accId,email:r.accEmail};
-    var k=_accId(a); (_accSess[k]=_accSess[k]||[]).push({acc:a,no:r.no,sid:r.sid,title:r.title,pv:r.pv||"",status:r.status,cls:r.cls||"",label:r.label||"",t:r.t,auto:(r.auto!=null?!!r.auto:_isAuto(r.title)),s:{}});
+    var k=_accId(a); (_accSess[k]=_accSess[k]||[]).push({acc:a,no:r.no,sid:r.sid,title:r.title,pv:r.pv||"",status:r.status,cls:r.cls||"",label:r.label||"",t:r.t,removed:!!r.removed,auto:(r.auto!=null?!!r.auto:_isAuto(r.title)),s:{}});
   });
   _rebuild();
 }
@@ -254,9 +254,31 @@ async function loadRecent(full){
       var now=Date.now(); if(now-lastPaint>300){ lastPaint=now; _rebuild(); renderRecent(); }
       if(cold){ var p=document.getElementById("ldp"); if(p) p.textContent="加载中… "+done+"/"+batch.length; }
     });
+    try{ _mergeRemovedFromVault(); }catch(e){}
     _seeded=true; _rebuild(); renderRecent(); _saveCache();
   }catch(e){}
   _busy=false;
+}
+
+// 移出号留影(账号库清空 ≠ 近期对话消失): 从中央「_移出总账」读移出号的对话留底,
+//   acc 用总账里的完整账密快照(email/password/auth1/orgId) → 查看/进入/MD 照常可用、可登录。
+ function _mergeRemovedFromVault(){
+  if(!N.vaultListBackups||!N.vaultReadBackup) return;
+  var inPool=Object.create(null); accList().forEach(function(a){ inPool[String(a.email||a.id||"").toLowerCase()]=1; });
+  var tl=[]; try{ tl=JSON.parse(N.vaultListBackups("_移出总账")||"[]")||[]; }catch(e){}
+  for(var i=0;i<tl.length;i++){ var nm=(tl[i]&&(tl[i].name||tl[i]))||""; if(!/\.json$/i.test(nm))continue;
+    var rec=null; try{ rec=JSON.parse(N.vaultReadBackup("_移出总账",nm)||""); }catch(e){}
+    if(!rec||!rec.account||!rec.sessionList||!rec.sessionList.length)continue;
+    var em=String(rec.account.email||rec.account.id||"").toLowerCase();
+    if(inPool[em])continue;                                              // 已重新加回账号库 → 以库内实时数据为准
+    if(!(rec.removedAt&&Date.now()-rec.removedAt<3*72*3600*1000))continue; // 留影窗口·陈年移出不回灌
+    var acc=rec.account; acc.removed=true;
+    var k=_accId(acc); var arr=_accSess[k]=_accSess[k]||[];
+    rec.sessionList.forEach(function(sx){ if(!sx||!sx.sid)return;
+      for(var z=0;z<arr.length;z++){ if(arr[z].sid===sx.sid)return; }
+      arr.push({acc:acc,no:0,sid:sx.sid,title:sx.title||sx.sid,pv:"",status:String(sx.status||""),cls:"finished",label:"已移出·可登录",t:sx.ts||rec.removedAt||0,removed:true,s:{}});
+    });
+  }
 }
 
 function renderRecent(){
@@ -274,7 +296,7 @@ function renderRecent(){
     html+='<div class="rc" data-idx="'+idx+'" draggable="true">'+
       '<div class="r1">'+
         '<span class="grip" title="拖拽此卡到网页 / 长按拖到上传框">&#10303;</span>'+
-        '<span class="acc-no">'+it.no+'</span>'+
+        '<span class="acc-no">'+(it.removed?'移':it.no)+'</span>'+
         '<span class="st '+(it.cls||stClass(it.status))+'" title="'+_esc(it.label||it.status)+'"></span>'+
         '<span class="ti" title="'+_esc(it.title)+'">'+_esc(String(it.title).slice(0,70))+'</span>'+
       '</div>'+

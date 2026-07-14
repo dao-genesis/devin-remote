@@ -411,6 +411,27 @@
         if(all.length >= max*2) _stop=true;
       } }
       var ws=[], cc=Math.min(conc, unlocked.length||1); for(var c=0;c<cc;c++) ws.push(worker()); await Promise.all(ws);
+      // 移出号留影(账号库清空 ≠ 近期对话消失): 从中央「_移出总账」读窗口内移出号的对话留底,
+      //   合入聚合并带 removed 标 + 账密快照邮箱 → 近期对话仍可见、可凭快照登录查看。
+      try{
+        var _sh=72; try{ var _shv=localStorage.getItem("rtflow.cfg.cleanStaleHours"); if(_shv!==null){ _sh=parseFloat(JSON.parse(_shv)); } }catch(e){}
+        if(!isFinite(_sh)||_sh<=0)_sh=72; var _stale=_sh*3600*1000;
+        var _inPool=Object.create(null); accs.forEach(function(x){ _inPool[String(x.email||x.id||"").toLowerCase()]=1; });
+        if(N.vaultListBackups){ var tl=JSON.parse(N.vaultListBackups("_移出总账")||"[]")||[];
+          for(var ti=0;ti<tl.length;ti++){ var nm=(tl[ti]&&(tl[ti].name||tl[ti]))||""; if(!/\.json$/i.test(nm))continue;
+            var rec=null; try{ rec=JSON.parse(N.vaultReadBackup("_移出总账",nm)||""); }catch(e){}
+            if(!rec||!rec.account)continue;
+            var em=String(rec.account.email||rec.account.id||"").toLowerCase();
+            if(_inPool[em])continue;                                  // 已重新加回账号库 → 以库内实时数据为准
+            if(!(rec.removedAt&&Date.now()-rec.removedAt<_stale*3))continue; // 留影窗口=3×无活跃窗口, 陈年移出不回灌
+            (rec.sessionList||[]).forEach(function(sx){ if(!sx||!sx.sid)return;
+              all.push({ accId:(rec.account.id||em), accEmail:(rec.account.email||em), no:0, removed:true,
+                sid:sx.sid, title:sx.title||sx.sid, cls:"finished", label:"已移出·可登录",
+                status:String(sx.status||""), t:sx.ts||rec.removedAt||0 });
+            });
+          }
+        }
+      }catch(e){}
       all.sort(function(x,y){ return y.t-x.t; });
       var seen=Object.create(null), out=[];
       for(var j=0;j<all.length;j++){ var id=all[j].sid; if(id&&seen[id])continue; if(id)seen[id]=1; out.push(all[j]); }
