@@ -2,6 +2,20 @@
 
 本项目遵循语义化版本。日期格式 YYYY-MM-DD。
 
+## [3.11.0] - 2026-07-14
+
+公网中枢形态（VPS/服务器）· hub.js。
+
+### 新增
+- **`hub.js`：公网中枢入口**。机器自带公网 IP 时直接 `0.0.0.0` 监听当集散点——被控端(用户台式机)
+  一行 `iwr <hub>/api/bootstrap.ps1|iex`（或 `curl <hub>/api/bootstrap.sh|sh`）出站接入，操作端经
+  同一中枢 `/api/exec-sync?agent_id=<host>` 桥接驱动。**纯 HTTP 长轮询**(connect→poll→result)，
+  比 WS 中继稳健，规避无公网 IP 家用机对 Worker DO 中继的抖连问题。
+- 复用 `core.js` 全部中枢逻辑（`DaoHub` 登记/队列/结果/唤醒 + `exec-sync` 跨平台路由 + bootstrap 脚本）；
+  与 `agent.js`（出站快速隧道/持久 Worker 的被控形态）互补：`hub.js` 是有公网 IP 的**中枢**形态。
+- 配置：`DAO_TOKEN`(操作端 master)/`DAO_PORT`(默认 9930)/`DAO_BIND`(默认 0.0.0.0)/`DAO_PUBLIC_URL`。
+- 新增 `test/hub-public.test.js`：真 HTTP 端到端（health/connect/agents 鉴权/SELF exec/三明治远程 exec/bootstrap 注入）6/6。
+
 ## [3.10.0] - 2026-06-19
 
 去 Worker 中继 · 默认快速隧道（去中心化）。
