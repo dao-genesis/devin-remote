@@ -836,11 +836,28 @@
     if (typeof q.dPct === "number" || typeof q.wPct === "number") return null; // 配额=0 但美金未取到 → 不确定
     return null;
   }
-  // 账号级对账: sessStatus 判为 exhausted 时, 若该账号此刻确有可用额度(quotaLive===true) → 归「完成(休眠)」,
-  //   不计额度耗尽; 真耗尽(false)或额度未知(null)则保留官方耗尽信号。其余分类不动。供 recentConvAll/切号面板/通知共用。
-  function sessStatusA(s, acct) {
+  // ── 运行态陈旧度门 (根治「古老对话恒显正在运行/有额度」) ──────────────────────
+  //   真·运行中的 Devin 会话会高频回写 updated_at(秒/分级); 一条被判「运行」却已长时间(默认
+  //   90min·可配 rtflow.cfg.runStaleMin)无任何活动的会话, 必是平台早已休眠/结束、只是官方枚举
+  //   停在旧值——绝非真在跑。据此把陈旧「运行」降为「完成(休眠)」, 使活跃/前台追踪只认真活跃者。
+  //   与创建时间保护(autoclean)正交: 那里判「是否近期新生·不可变 created_at」防误移出; 这里判
+  //   「是否此刻真活跃·可变 updated_at」防虚假运行, 两者各司其职、互不干扰。
+  function _runStaleMs() {
+    var m = 90;
+    try { var v = (root.localStorage && root.localStorage.getItem("rtflow.cfg.runStaleMin")); if (v != null) { var n = parseFloat(JSON.parse(v)); if (isFinite(n) && n > 0) m = n; } } catch (e) {}
+    return m * 60 * 1000;
+  }
+  // 账号级对账: ① sessStatus 判为 exhausted 时, 若该账号此刻确有可用额度(quotaLive===true) → 归「完成(休眠)」,
+  //   不计额度耗尽; 真耗尽(false)或额度未知(null)则保留官方耗尽信号。② 运行态陈旧门(见上)。其余分类不动。
+  //   供 recentConvAll/切号面板/通知共用。now 可注入(测试用), 缺省取当前时刻。
+  function sessStatusA(s, acct, now) {
     var st = sessStatus(s);
     if (st[0] === "exhausted" && quotaLive(acct && acct.quota) === true) return ["finished", "完成"];
+    if (st[0] === "running") {
+      var ts = sessTs(s);
+      var _now = (typeof now === "number" && now > 0) ? now : Date.now();
+      if (ts && _now - ts > _runStaleMs()) return ["finished", "完成(休眠)"];
+    }
     return st;
   }
 

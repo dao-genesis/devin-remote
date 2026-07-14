@@ -636,8 +636,14 @@ function quotaLive(q){
   if(typeof q.dPct==="number"||typeof q.wPct==="number") return null;
   return null;
 }
-// 账号级对账: sessStatus 判 exhausted 且账号此刻确有额度 → 归「完成(休眠)」, 不计耗尽、不发通知。
-function sessStatusA(s,acct){ var st=sessStatus(s); if(st[0]==="exhausted"&&quotaLive(acct&&acct.quota)===true) return ["finished","完成"]; return st; }
+// 账号级对账: ① sessStatus 判 exhausted 且账号此刻确有额度 → 归「完成(休眠)」, 不计耗尽、不发通知。
+//   ② 运行态陈旧门(与 devin-cloud.js 同源·正本清源): 被判「运行」却已久无活动(默认90min·可配
+//   rtflow.cfg.runStaleMin)必是早已休眠只是枚举停在旧值 → 降「完成(休眠)」, 让活跃/前台追踪只认真活跃者。
+function _runStaleMs(){ var m=90; try{ var v=localStorage.getItem("rtflow.cfg.runStaleMin"); if(v!=null){ var n=parseFloat(JSON.parse(v)); if(isFinite(n)&&n>0)m=n; } }catch(e){} return m*60*1000; }
+function sessStatusA(s,acct){ var st=sessStatus(s);
+  if(st[0]==="exhausted"&&quotaLive(acct&&acct.quota)===true) return ["finished","完成"];
+  if(st[0]==="running"){ var ts=_sessTs(s); if(ts&&Date.now()-ts>_runStaleMs()) return ["finished","完成(休眠)"]; }
+  return st; }
 function sessId(s){ return s.devin_id||s.session_id||s.id||""; }
 function dvOverviewHtml(a,i,sess,kn,pb,sc,git){
   var running=0,awaiting=0,blocked=0,exhausted=0;

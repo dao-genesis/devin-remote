@@ -23,7 +23,10 @@ if (!seg) { console.error("FAIL: 未找到 _lscOf/sessStatus 区段"); process.e
 const sessStatus = eval("(function(){\n" + seg[0] + "\nreturn sessStatus;})()");
 // 同段已含账号级额度对账 quotaLive + sessStatusA (插于 sessStatus 与 sessId 之间)
 const quotaLive  = eval("(function(){\n" + seg[0] + "\nreturn quotaLive;})()");
-const sessStatusA = eval("(function(){\n" + seg[0] + "\nreturn sessStatusA;})()");
+// sessStatusA 新依赖 _sessTs(运行态陈旧门) — 把真 _sessTs 函数体一并切入 eval 作用域 (仍是真代码)
+const tsSeg = switchSrc.match(/function _sessTs\(s\)\{[\s\S]*?\n\}/);
+if (!tsSeg) { console.error("FAIL: switch.html 未找到 _sessTs"); process.exit(1); }
+const sessStatusA = eval("(function(){\n" + tsSeg[0] + "\n" + seg[0] + "\nreturn sessStatusA;})()");
 
 // ── 问题② 核心: 额度耗尽必须单列 exhausted, 绝不当「完成」 ──
 {
@@ -141,6 +144,24 @@ const sessStatusA = eval("(function(){\n" + seg[0] + "\nreturn sessStatusA;})()"
   ok(sessStatusA({ latest_status_contents: { user_action_required: "respond" } }, { quota: { dPct: 100 } })[0] === "blocked",
      "blocked/待处理 不受额度对账影响");
 }
+// ── 运行态陈旧门 (本轮根因: 古老对话恒显「正在运行/有额度」) ──
+{
+  const FR2 = Date.now();
+  ok(sessStatusA({ latest_status_contents: { enum: "running" }, updated_at: FR2 - 5 * 60 * 1000 }, null)[0] === "running",
+     "5min 前有活动的 running → 仍 running (真活跃不误降)");
+  ok(sessStatusA({ latest_status_contents: { enum: "running" }, updated_at: FR2 - 3 * 3600 * 1000 }, null)[0] === "finished",
+     "3h 无活动的 running → 降级 finished 完成(休眠) (古老对话不再恒显运行)");
+  ok(sessStatusA({ latest_status_contents: { enum: "running" }, updated_at: new Date(FR2 - 7 * 24 * 3600 * 1000).toISOString() }, null)[0] === "finished",
+     "7天前(ISO 字符串时间戳)的 running → finished (字符串时间戳同判)");
+  ok(sessStatusA({ latest_status_contents: { enum: "running" } }, null)[0] === "running",
+     "无任何时间戳的 running → 保留 running (无据不降·宁可实时亮灯)");
+  ok(sessStatusA({ latest_status_contents: { enum: "awaiting_user_input" }, updated_at: FR2 - 3 * 3600 * 1000 }, null)[0] === "awaiting",
+     "awaiting 不受陈旧门影响 (待输入可合法久等)");
+  ok(sessStatusA({ status: "suspended", latest_status_contents: { reason: "out_of_quota" }, updated_at: FR2 - 3 * 3600 * 1000 }, null)[0] === "exhausted",
+     "exhausted 不受陈旧门影响 (耗尽信号保留)");
+}
+ok(/function _runStaleMs\(\)\{/.test(switchSrc) && /rtflow\.cfg\.runStaleMin/.test(switchSrc),
+   "源级: switch.html 内联 _runStaleMs 运行态陈旧门 (可配 rtflow.cfg.runStaleMin)");
 // 源级护栏: 各聚合站点确实走账号级对账 (满额号绝不误报)
 ok(/function quotaLive\(q\)\{/.test(switchSrc) && /function sessStatusA\(s,acct\)\{/.test(switchSrc),
    "源级: switch.html 内联 quotaLive + sessStatusA 账号级对账");
@@ -234,6 +255,20 @@ ok(/var _qLive=\(DaoCloud\.quotaLive\?DaoCloud\.quotaLive\(acc\.quota\)/.test(en
   ok(cloudQuotaLive({ dPct: 100, overageDollars: 68.57 }) === null, "devin-cloud.quotaLive: 满额但无鲜度戳 → null(不压官方信号)");
   ok(cloudQuotaLive({ qTs: Date.now(), dPct: 0, wPct: 0, overageDollars: 0 }) === false, "devin-cloud.quotaLive: 真耗尽 → false");
   ok(cloudQuotaLive({ dPct: 0 }) === null, "devin-cloud.quotaLive: 美金未知 → null (保守)");
+  // devin-cloud.sessStatusA 运行态陈旧门 (now 可注入·seg3 已含 _runStaleMs+sessStatusA; sessStatus/sessTs 从各自区段切入)
+  const tsSegC = cloudSrc.match(/function sessTs\(s\) \{[\s\S]*?\n  \}/);
+  const ssSegC = cloudSrc.match(/var QUOTA_RE\s*=[\s\S]*?(?=\n  \/\/ ── 账号实时额度判活)/);
+  if (!tsSegC || !ssSegC) { console.error("FAIL: devin-cloud.js 未找到 sessTs/sessStatus 区段"); process.exit(1); }
+  const cloudSessStatusA = eval("(function(){\n" + tsSegC[0] + "\n" + ssSegC[0] + "\n" + seg3[0] + "\nreturn sessStatusA;})()");
+  const NOW = Date.now();
+  ok(cloudSessStatusA({ latest_status_contents: { enum: "running" }, updated_at: NOW - 10 * 60 * 1000 }, null, NOW)[0] === "running",
+     "devin-cloud.sessStatusA: 10min 前活动的 running → 仍 running");
+  ok(cloudSessStatusA({ latest_status_contents: { enum: "running" }, updated_at: NOW - 4 * 3600 * 1000 }, null, NOW)[0] === "finished",
+     "devin-cloud.sessStatusA: 4h 无活动的 running → finished 完成(休眠)");
+  ok(cloudSessStatusA({ latest_status_contents: { enum: "running" } }, null, NOW)[0] === "running",
+     "devin-cloud.sessStatusA: 无时间戳 running → 保留 running");
+  ok(/function _runStaleMs\(\)/.test(cloudSrc) && /rtflow\.cfg\.runStaleMin/.test(cloudSrc),
+     "源级: devin-cloud.js 内联 _runStaleMs (可配 rtflow.cfg.runStaleMin)");
 }
 {
   const seg2 = cloudSrc.match(/var QUOTA_RE\s*=[\s\S]*?\n\s*(?=root\.DaoCloud)/);
@@ -343,6 +378,13 @@ ok(/if\(prev!=null && prev!==txt\) _hotReloadBoard\(name\)/.test(consoleSrc),
   ok(convReasonOf({ status:"expired" }, { enum:"expired" }, null) === "",
      "convReasonOf: expired → '' (转终态判定)");
   ok(convReasonOf({}, {}, null) === "", "convReasonOf: 空 → ''");
+  // —— 运行态陈旧门 (与 sessStatusA 同源: 古老「运行」残影不再被追踪为活跃) ——
+  ok(convReasonOf({ updated_at: Date.now() - 5 * 60 * 1000 }, { enum: "running" }, null) === "running",
+     "convReasonOf: 5min 前活动的 running → 仍追踪 running");
+  ok(convReasonOf({ updated_at: Date.now() - 3 * 3600 * 1000 }, { enum: "running" }, null) === "",
+     "convReasonOf: 3h 无活动的 running → ''(非活跃·古老残影不再追踪)");
+  ok(convReasonOf({ updated_at: Date.now() - 3 * 3600 * 1000 }, { enum: "awaiting_user_input" }, null) === "awaiting",
+     "convReasonOf: awaiting 不受陈旧门影响 (待输入可合法久等)");
 
   // —— 终态精确分流 (convReasonOf 返回 '' 后调用) ——
   ok(convTerminalOf({ status:"finished" }, { enum:"finished", reason:"crashed unexpectedly" }) === "interrupted",

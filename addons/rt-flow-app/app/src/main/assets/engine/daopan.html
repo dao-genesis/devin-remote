@@ -265,13 +265,16 @@ async function loadRecent(full){
  function _mergeRemovedFromVault(){
   if(!N.vaultListBackups||!N.vaultReadBackup) return;
   var inPool=Object.create(null); accList().forEach(function(a){ inPool[String(a.email||a.id||"").toLowerCase()]=1; });
+  // 留影窗口与 engine.html/autoclean 同源: 可配置无活跃窗口(cleanStaleHours·默认72h)×3, 用户改配置两端一致。
+  var _sh=72; try{ var _shv=localStorage.getItem("rtflow.cfg.cleanStaleHours"); if(_shv!==null){ _sh=parseFloat(JSON.parse(_shv)); } }catch(e){}
+  if(!isFinite(_sh)||_sh<=0)_sh=72; var _keepMs=_sh*3600*1000*3;
   var tl=[]; try{ tl=JSON.parse(N.vaultListBackups("_移出总账")||"[]")||[]; }catch(e){}
   for(var i=0;i<tl.length;i++){ var nm=(tl[i]&&(tl[i].name||tl[i]))||""; if(!/\.json$/i.test(nm))continue;
     var rec=null; try{ rec=JSON.parse(N.vaultReadBackup("_移出总账",nm)||""); }catch(e){}
     if(!rec||!rec.account||!rec.sessionList||!rec.sessionList.length)continue;
     var em=String(rec.account.email||rec.account.id||"").toLowerCase();
     if(inPool[em])continue;                                              // 已重新加回账号库 → 以库内实时数据为准
-    if(!(rec.removedAt&&Date.now()-rec.removedAt<3*72*3600*1000))continue; // 留影窗口·陈年移出不回灌
+    if(!(rec.removedAt&&Date.now()-rec.removedAt<_keepMs))continue; // 留影窗口·陈年移出不回灌
     var acc=rec.account; acc.removed=true;
     var k=_accId(acc); var arr=_accSess[k]=_accSess[k]||[];
     rec.sessionList.forEach(function(sx){ if(!sx||!sx.sid)return;

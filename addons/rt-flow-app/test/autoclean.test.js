@@ -225,6 +225,19 @@ function makeEnv(opts) {
       "devin-cloud.js 导出 sessCreatedTs (只认创建字段·不掺 updated_at)");
     ok(!/sessCreatedTs\(s\)\s*\{[\s\S]{0,400}updated_at/.test(cloudJs.slice(cloudJs.indexOf("function sessCreatedTs"))),
       "sessCreatedTs 函数体不含 updated_at (不可变真源)");
+    // 留影窗口同源: daopan 与 engine 均读可配置 cleanStaleHours×3, 不再写死 3*72h (用户改配置两端一致)
+    ok(/rtflow\.cfg\.cleanStaleHours/.test(daopanSrc) && !/3\*72\*3600\*1000/.test(daopanSrc),
+      "daopan.html 留影窗口读可配置 cleanStaleHours×3 (写死 3*72h 已除)");
+    ok(/rtflow\.cfg\.cleanStaleHours/.test(engineSrc),
+      "engine.html 留影窗口同读可配置 cleanStaleHours");
+    // 移出号卡片动作恒用卡内快照账号(it.acc/t.acc), 绝不回退当前活跃号 (多号隔离·移出号可查可登可下载)
+    ok(/DaoCloud\.exportSession\(it\.acc, it\.sid/.test(daopanSrc) && /DaoCloud\.exportSession\(t\.acc, t\.sid/.test(daopanSrc),
+      "daopan.html 查看/下载/上传动作均传卡内快照账号 (不回退活跃号)");
+    ok(/if\(!it\.acc\.auth1\)\{ toast\("此号未解锁/.test(daopanSrc),
+      "daopan.html openAcc 无 auth1 快照时明确拒绝 (不冒名活跃号)");
+    const mainJava = fs.readFileSync(path.join(APP, "java", "ai", "devin", "rtflow", "MainActivity.java"), "utf8");
+    ok(/public void openAccountSession\(String accJson, String sid\)[\s\S]{0,400}newTab\(u, \(accJson == null \|\| accJson\.isEmpty\(\)\) \? null : accJson\)/.test(mainJava),
+      "原生 openAccountSession 用传入账号快照开标签 (不查活跃号)");
   }
   // ── 源级护栏: purgeSession 以 archive 为最强清除 (平台无硬删 REST 路由·DELETE 恒 404/405) ──
   {
