@@ -46,6 +46,9 @@ body{margin:0;background:#0e1116;color:#cdd3de;font:13px/1.5 -apple-system,Segoe
 .b{flex:1;min-width:46px;text-align:center;background:#21262d;border:1px solid #30363d;border-radius:6px;padding:5px 0;font-size:11.5px;cursor:pointer;color:#cdd3de;white-space:nowrap}
 .b.pri{background:#0e639c;border-color:#0e639c;color:#fff}
 .b.del{color:#f85149}
+/* 账号卡五按钮: 与近期对话同构, 单行紧凑排布省空间 */
+.acts.one{flex-wrap:nowrap;margin-top:7px}
+.b.sm{min-width:0;font-size:10.5px;padding:4px 1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .empty{text-align:center;color:#6e7681;padding:30px 12px;font-size:13px}
 .toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:9px 14px;font-size:13px;opacity:0;transition:.2s;pointer-events:none;z-index:20;max-width:90%}
 .toast.show{opacity:1}.toast.fail{border-color:#f85149}.toast.ok{border-color:#3fb950}
@@ -58,7 +61,7 @@ body{margin:0;background:#0e1116;color:#cdd3de;font:13px/1.5 -apple-system,Segoe
   <div class="crumb" id="crumb"><span>🗂 全部备份</span></div>
 </div>
 <div class="tb" id="tb">
-  <input class="search" id="q" placeholder="检索 账号 / 对话名称 / 文件夹…" oninput="onSearch()" autocomplete="off"/>
+  <input class="search" id="q" placeholder="检索 序号 / 账号 / 对话名称 / 文件夹…" oninput="onSearch()" autocomplete="off"/>
   <button class="btn pri" onclick="reload()">&#128260; 刷新</button>
   <button class="btn" id="autoBtn" onclick="toggleAuto()">隐藏自动化</button>
   <button class="btn" onclick="backupAllAcc()">&#128229; 全量备份</button>
@@ -248,6 +251,13 @@ function renderAccts(){
         (when?('<span>近期 '+_esc(when)+'</span>'):'')+
         ((g.acc&&g.acc.orgName)?('<span>'+_esc(g.acc.orgName)+'</span>'):'')+
       '</div>'+
+      '<div class="acts one">'+
+        '<span class="b sm" onclick="event.stopPropagation();grpView('+i+')">&#128065; 查看</span>'+
+        '<span class="b sm" onclick="event.stopPropagation();grpEnter('+i+')" title="切到该账号并在网页端打开最近对话">&#127760; 进入</span>'+
+        '<span class="b sm" onclick="event.stopPropagation();grpMd('+i+')">&#11015; MD</span>'+
+        '<span class="b sm" onclick="event.stopPropagation();grpUp('+i+')" title="把最近对话记录注入当前 Devin 标签的上传框">&#11014; 传到当前页</span>'+
+        '<span class="b sm pri" onclick="event.stopPropagation();grpAll('+i+')">&#128230; 全部文件</span>'+
+      '</div>'+
     '</div>';
   }).join("");
   if(_view.length>LIM) html+='<div style="text-align:center;padding:12px 0"><button class="btn" onclick="moreAccts()" style="padding:8px 18px;font-size:13px">加载更多 (当前 '+LIM+' / 共 '+_view.length+')</button></div>';
@@ -269,6 +279,45 @@ function _recentPreview(g){
   return out.join(" ").slice(0,120);
 }
 function cpGrp(i){ var g=_view[i]; if(!g||!g.acc)return; cpAcc(g.acc); }
+
+// ── 账号卡五按钮 (与近期对话同构·作用于该账号最近对话·本地备份优先/云端兜底) ──
+async function _grpRecentMd(g){
+  var s=g&&g.recent; if(!s) return {md:"",title:"",sid:""};
+  var sid=s.sid||s.devin_id||s.id||"", title=s.title||sid, md="";
+  try{ if(typeof s.inlineMd==="string"&&s.inlineMd) md=s.inlineMd; }catch(e){}
+  try{ if(!md&&s.md&&N.vaultReadBackup) md=N.vaultReadBackup(s.folder||g.folder,s.md)||""; }catch(e){}
+  if(!md&&s.zip&&N.vaultReadBackupB64){ try{ var b64=N.vaultReadBackupB64(s.folder||g.folder,s.zip); if(b64) md=await DaoCloud.zipReadText(b64,"对话_人类可读.md")||""; }catch(e){} }
+  if(!md&&g.logged&&g.acc&&sid){ try{ var r=await DaoCloud.exportSession(g.acc,sid,"conversation"); if(r&&r.ok){ md=r.md||""; if(r.title)title=r.title; } }catch(e){} }
+  return {md:md,title:title,sid:sid};
+}
+function grpView(i){ var g=_view[i]; if(!g)return; if(!g.recent){ toast("该账号暂无对话备份",true); return; }
+  toast("提取对话…");
+  _grpRecentMd(g).then(function(r){ if(!r.md){ toast("MD 提取失败",true); return; } try{ N.openText&&N.openText(r.title||r.sid,r.md); }catch(e){} });
+}
+function grpEnter(i){ var g=_view[i]; if(!g)return; var s=g.recent||{}; _enterAccSess(g.acc, s.sid||s.devin_id||s.id||"", s.title||""); }
+function grpMd(i){ var g=_view[i]; if(!g)return; if(!g.recent){ toast("该账号暂无对话备份",true); return; }
+  toast("下载 MD…");
+  _grpRecentMd(g).then(function(r){ if(!r.md){ toast("MD 提取失败",true); return; }
+    var fn=safeName([(g.no||"移"),(r.title||r.sid),(g.email||g.folder)].join("_"))+".md";
+    try{ N.saveTextFile&&N.saveTextFile(fn,r.md); toast("✓ 已下载 MD"); }catch(e){ toast("下载失败",true); } });
+}
+function grpUp(i){ var g=_view[i]; if(!g)return; if(!g.recent){ toast("该账号暂无对话备份",true); return; }
+  toast("取对话记录…");
+  _grpRecentMd(g).then(function(r){ if(!r.md){ toast("MD 提取失败",true); return; }
+    var base=_convBase(g.acc,g.no,r.title||r.sid);
+    if(_deliverFiles([{name:base+".md",b64:_b64utf8(r.md)}])) toast("已投递到当前页上传框（若无 Devin 标签将提示）");
+    else toast("投递失败 · 请更新 APK",true); });
+}
+async function grpAll(i){ var g=_view[i]; if(!g)return; var s=g.recent;
+  if(!s){ toast("该账号暂无对话备份",true); return; }
+  var sid=s.sid||s.devin_id||s.id||"";
+  if(g.logged&&g.acc&&sid){ await _dlAllSess(g.acc, g.no||0, {devin_id:sid, title:s.title||sid}); return; }
+  if(s.zip){ bkSaveZip(s.folder||g.folder, s.zip); return; }
+  var r=await _grpRecentMd(g);
+  if(!r.md){ toast("无可打包内容",true); return; }
+  var zipName=safeName([(g.no||"移"),(g.email||g.folder),(r.title||r.sid)].join("_"))+".zip";
+  try{ N.saveBase64File&&N.saveBase64File(zipName,buildZipBase64([{name:"conversation.md",data:r.md}])); toast("✓ 已打包本地备份 → "+zipName); }catch(e){ toast("打包失败",true); }
+}
 function cpAcc(acc){ if(!acc)return; var t=(acc.email||acc.id||"")+"\n"+(acc.password||"");
   var done=false; try{ if(N.clip){ N.clip(t); done=true; } }catch(e){}
   if(!done){ try{ navigator.clipboard.writeText(t); done=true; }catch(e){} }
@@ -327,12 +376,14 @@ function renderLocalSessions(g){
     if(s.inlineMd){ var ik=String(_bkInlineSeq++); _bkInline[ik]={title:s.title||s.sid,md:s.inlineMd}; openBtn='<span class="b" onclick="bkOpenInline(\''+ik+'\')">&#128065; 查看</span>'; }
     else if(s.md||s.zip){ openBtn='<span class="b" onclick="bkOpenMd(\''+_esc(s.folder||g.folder)+'\',\''+_esc(s.md||'')+'\',\''+_esc(s.zip||'')+'\')">&#128065; 查看</span>'; }
     var enterBtn=(canEnter&&s.sid)?('<span class="b" onclick="bkEnter('+ri+')" title="用账密快照登录并在网页端打开此对话">&#127760; 进入</span>'):'';
+    var mdBtn=(s.inlineMd||s.md||s.zip)?('<span class="b" onclick="bkMd('+ri+')">&#11015; MD</span>'):'';
     var upBtn=(s.inlineMd||s.md||s.zip)?('<span class="b" onclick="bkUp('+ri+')" title="把本地备份 MD 注入当前 Devin 标签的上传框">&#11014; 传到当前页</span>'):'';
-    var zipBtn=s.zip?('<span class="b pri" onclick="bkSaveZip(\''+_esc(s.folder||g.folder)+'\',\''+_esc(s.zip)+'\')">&#128230; 下载ZIP</span>'):'';
+    var zipBtn=s.zip?('<span class="b pri" onclick="bkSaveZip(\''+_esc(s.folder||g.folder)+'\',\''+_esc(s.zip)+'\')">&#128230; 全部文件</span>')
+      :((s.inlineMd||s.md)?('<span class="b pri" onclick="bkAllMd('+ri+')">&#128230; 全部文件</span>'):'');
     return '<div class="row">'+
       '<div class="r1"><span class="st"></span><span class="s-title" title="'+_esc(s.title||s.sid)+'">'+_esc(String(s.title||s.sid).slice(0,80))+'</span></div>'+
       '<div class="s-meta">'+(when?'<span>备:'+_esc(when)+'</span>':'')+(s.legacyFile?'<span>旧版整包</span>':'')+'<span>本地备份</span></div>'+
-      '<div class="acts">'+openBtn+enterBtn+upBtn+zipBtn+'</div>'+
+      '<div class="acts">'+openBtn+enterBtn+mdBtn+upBtn+zipBtn+'</div>'+
     '</div>';
   }).join("");
   box.innerHTML = html || '<div class="empty">无匹配对话</div>';
@@ -351,6 +402,29 @@ async function bkUp(ri){
   var base=_convBase(g.acc, g.no, s.title||s.sid);
   if(_deliverFiles([{name:base+".md", b64:_b64utf8(md)}])) toast("已投递到当前页上传框（若无 Devin 标签将提示）");
   else toast("投递失败 · 请更新 APK",true);
+}
+// 本地备份行 MD: 读本地 MD(内联/备份夹/整包内 md) → 存为文件
+async function _bkLocalMd(g, s){
+  var md="";
+  try{ if(typeof s.inlineMd==="string"&&s.inlineMd) md=s.inlineMd; }catch(e){}
+  try{ if(!md&&s.md&&N.vaultReadBackup) md=N.vaultReadBackup(s.folder||g.folder,s.md)||""; }catch(e){}
+  if(!md&&s.zip&&N.vaultReadBackupB64){ try{ var b64=N.vaultReadBackupB64(s.folder||g.folder,s.zip); if(b64) md=await DaoCloud.zipReadText(b64,"对话_人类可读.md")||""; }catch(e){} }
+  return md;
+}
+async function bkMd(ri){
+  var s=_LR[ri]; if(!CUR||!s)return;
+  var md=await _bkLocalMd(CUR, s);
+  if(!md){ toast("本地 MD 读取失败",true); return; }
+  var fn=safeName([(CUR.no||"移"),(s.title||s.sid),(CUR.email||CUR.folder)].join("_"))+".md";
+  try{ N.saveTextFile&&N.saveTextFile(fn,md); toast("✓ 已下载 MD"); }catch(e){ toast("下载失败",true); }
+}
+// 本地备份行 全部文件(无 zip 时): 把本地 MD 打包成 zip 下载
+async function bkAllMd(ri){
+  var s=_LR[ri]; if(!CUR||!s)return;
+  var md=await _bkLocalMd(CUR, s);
+  if(!md){ toast("本地 MD 读取失败",true); return; }
+  var zipName=safeName([(CUR.no||"移"),(CUR.email||CUR.folder),(s.title||s.sid)].join("_"))+".zip";
+  try{ N.saveBase64File&&N.saveBase64File(zipName,buildZipBase64([{name:"conversation.md",data:md}])); toast("✓ 已打包 → "+zipName); }catch(e){ toast("打包失败",true); }
 }
 function bkOpenInline(key){ var e=_bkInline[key]; if(e&&e.md){ try{N.openText&&N.openText("【本地备份·旧版整包】"+e.title,e.md);}catch(x){} return;} toast("本地 MD 读取失败",true); }
 async function bkOpenMd(folder,mdName,zipName){
@@ -457,7 +531,9 @@ async function dlMd(i,kind){
 // ── 下载单对话全部文件 → 打包 zip(含文件夹) → 同步到下载面板 ──
 async function dlAll(i){
   var s=SESSIONS[i]; if(!CUR||!CUR.acc||!s)return;
-  var acc=CUR.acc;
+  await _dlAllSess(CUR.acc, CUR_NO, s);
+}
+async function _dlAllSess(acc, no, s){
   var sid=s.devin_id||s.session_id||s.id;
   toast("打包全部文件…");
   try{

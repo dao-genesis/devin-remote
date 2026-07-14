@@ -58,7 +58,7 @@ iframe{border:0;width:100%;height:100%;display:block;background:#0e1116}
 
   <!-- 近期对话 -->
   <div class="bar" id="recentBar">
-    <input class="search" id="q" placeholder="检索 账号 / 对话名称…" oninput="renderRecent()" autocomplete="off"/>
+    <input class="search" id="q" placeholder="检索 序号 / 账号 / 对话名称…" oninput="renderRecent()" autocomplete="off"/>
     <button class="mini" onclick="loadRecent(true)">&#128260; 刷新</button>
   </div>
   <div class="body">
@@ -289,11 +289,17 @@ function renderRecent(){
   var box=document.getElementById("recentList");
   if(!REC.length){ box.innerHTML='<div class="empty">暂无近期对话</div>'; return; }
   var html="", n=0, hid=0;
+  // 序号直搜: 纯数字查询优先精确命中账号序号(与备份网页端同源), 无精确命中才退回全文子串
+  var qNo=/^\d+$/.test(q)?+q:0;
+  var qNoHit=qNo>0 && REC.some(function(x){ return x.no===qNo; });
   REC.forEach(function(it,idx){
     if(it.auto && !_showAuto && !q){ hid++; return; }   // 默认隐藏自动化对话(搜索时不隐, 免漏检)
     if(q){
-      var hay=((it.acc.email||"")+" "+(it.acc.id||"")+" "+it.title+" "+it.sid+" "+it.no).toLowerCase();
-      if(hay.indexOf(q)<0) return;
+      if(qNoHit){ if(it.no!==qNo) return; }
+      else {
+        var hay=((it.acc.email||"")+" "+(it.acc.id||"")+" "+it.title+" "+it.sid+" "+it.no).toLowerCase();
+        if(hay.indexOf(q)<0) return;
+      }
     }
     n++;
     html+='<div class="rc" data-idx="'+idx+'" draggable="true">'+
