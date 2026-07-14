@@ -2,6 +2,21 @@
 
 本项目遵循语义化版本。日期格式 YYYY-MM-DD。
 
+## [3.13.0] - 2026-07-14
+
+标准版 dao-bridge 的**持久通道 `/api/relay/*` 通用接口** — 与二合一插件（`core/dao-vsix`）对齐，
+让 UI/脚本可驱动「用户只提供 Cloudflare 账号 → 后端全自动部署 Worker → 回传可复制的固定公网地址」全流程。
+
+### 新增
+- **`GET /api/relay/deep-link`**：预填全权限集（`workers_scripts:edit` / `workers_kv_storage:edit` /
+  `account_settings:read` / `zone:read` / `workers_routes:edit`）的 CF API Token 创建深链，用户点一次 Create 即得。
+- **`GET /api/relay/state`**：持久通道状态（`apiToken`/`relayToken` 脱敏），回 `{active,connected,publicUrl,state}`。
+- **`POST /api/relay/provision-token {token}`**：贴 CF API Token 后端全自动（取账号→保证 workers.dev 子域→
+  部署中继 Worker→落盘→出站接管），复用既有 `provisionWorkersRelay`。
+- **`POST /api/relay/set {url}`**：登记已部署的 workers.dev 中继地址（自动派生/复用 `session`/`relayToken`）并立即接管。
+- 四路由纳入 `DAEMON_ROUTES`（常驻桥自证），并写入自生成 API 文档表。
+- `test/relay-api.test.js`：深链权限集、状态脱敏、缺参 400、非法 url 400、合法 set 落盘派生、鉴权护栏，8/8 全绿。
+
 ## [3.12.0] - 2026-07-14
 
 被控端**持久化后端接入**（不止临时 PowerShell 通道）。
