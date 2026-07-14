@@ -376,6 +376,16 @@
   }
 
   // ── 会话创建 / 中停 / 归档 (复刻桌面 createSession/stopSession, 端点经桌面实跑确证) ──
+  // 官方环境模式(逆向自 app.devin.ai SPA·2026-07): 新建对话请求里
+  //   additional_args.platform ∈ {linux,windows,macos} + 顶层 platform_explicitly_set=true。
+  //   只作用于「新建对话」, 正在运行的对话不改(与官方一致)。
+  var ENV_PLATFORMS = ["linux", "windows", "macos"];
+  function normPlatform(m) {
+    var s = String(m == null ? "" : m).toLowerCase();
+    if (s === "windows" || s === "win") return "windows";
+    if (s === "macos" || s === "mac" || s === "osx" || s === "darwin") return "macos";
+    return "linux";
+  }
   async function createSession(acc, prompt, opts) {
     opts = opts || {};
     if (!acc || !acc.auth1 || !acc.orgId) return { ok: false, error: "需先登录(auth1)" };
@@ -385,6 +395,12 @@
     if (opts.playbookId) payload.playbook_id = opts.playbookId;
     if (opts.repos) payload.repos = opts.repos;
     if (opts.sessionSecrets) payload.session_secrets = opts.sessionSecrets;
+    if (opts.platform) {
+      var pf = normPlatform(opts.platform);
+      payload.additional_args = payload.additional_args || {};
+      payload.additional_args.platform = pf;      // 官方: 新对话运行环境
+      payload.platform_explicitly_set = true;      // 官方: 显式指定标志
+    }
     var r = await jpost(APP + "/api/sessions", acc, payload);
     if (r.status === 200 || r.status === 201) { var j = r.json || {}; return { ok: true, devinId: j.devin_id || j.session_id || j.id, isNewSession: j.is_new_session, createdAt: j.created_at, raw: j }; }
     return { ok: false, status: r.status, error: errOf(r) };
@@ -861,7 +877,40 @@
     return st;
   }
 
+  // ── 每账号环境模式(Linux/Windows/macOS) 本地持久化 · 只作用于「新建对话」 ──
+  //   键 rtflow.envmode = { <email小写>: "linux"|"windows"|"macos" }; 缺省 linux。
+  //   三态循环步进: linux → windows → macos → linux (每号各自推进·互不相干)。
+  var ENVMODE_KEY = "rtflow.envmode";
+  function _emBridge() {
+    var N = root.Native; return (N && N.envModeGet && N.envModeSet) ? N : null;
+  }
+  function _emAll() {
+    try { var j = JSON.parse((root.localStorage && root.localStorage.getItem(ENVMODE_KEY)) || "{}"); return (j && typeof j === "object") ? j : {}; } catch (e) { return {}; }
+  }
+  function _emKey(acc) { return String((acc && (acc.email || acc.id)) || "").toLowerCase(); }
+  function getEnvMode(acc) {
+    var k = _emKey(acc); if (!k) return "linux";
+    var b = _emBridge();
+    if (b) { try { var v = b.envModeGet(k); if (v) return normPlatform(v); } catch (e) {} }
+    return normPlatform(_emAll()[k]);
+  }
+  function setEnvMode(acc, mode) {
+    var k = _emKey(acc); if (!k) return "linux";
+    var m = normPlatform(mode), all = _emAll(); all[k] = m;
+    var b = _emBridge();
+    if (b) { try { b.envModeSet(k, m); } catch (e) {} }
+    try { root.localStorage && root.localStorage.setItem(ENVMODE_KEY, JSON.stringify(all)); } catch (e) {}
+    return m;
+  }
+  function nextEnvMode(acc) {
+    var cur = getEnvMode(acc), i = ENV_PLATFORMS.indexOf(cur);
+    return setEnvMode(acc, ENV_PLATFORMS[(i + 1) % ENV_PLATFORMS.length]);
+  }
+  function envModeLabel(m) { var n = normPlatform(m); return n === "windows" ? "🪟 Windows" : n === "macos" ? "🍎 macOS" : "🐧 Linux"; }
+
   root.DaoCloud = {
+    ENV_PLATFORMS: ENV_PLATFORMS, normPlatform: normPlatform,
+    getEnvMode: getEnvMode, setEnvMode: setEnvMode, nextEnvMode: nextEnvMode, envModeLabel: envModeLabel,
     QUOTA_RE: QUOTA_RE, sessStatus: sessStatus, quotaLive: quotaLive, sessStatusA: sessStatusA,
     buildZip: buildZip, buildZipAsync: buildZipAsync, zipReadText: zipReadText, zipReadBin: zipReadBin, bytesToB64: bytesToB64, utf8Bytes: utf8Bytes, exportSessionZip: exportSessionZip,
     buildAccessGuide: buildAccessGuide,

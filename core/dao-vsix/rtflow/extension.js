@@ -14564,9 +14564,15 @@ async function handleWebviewMessage(msg) {
           });
           if (prompt === undefined) break;
         }
-        _toast("\u23F3 发起对话…");
+        // 该号环境模式(Linux/Windows/macOS)注入新对话·只对新建对话生效·不动运行中的对话
+        //   读盘为准(每号独立持久·multi-window race-safe), 回退内存 envMode。
+        const _envMode = _normEnvMode(
+          (_readEnvModeState()[String(r.email || "").toLowerCase()] || {}).envMode ||
+            (_store.accounts[msg.index] || {}).envMode,
+        );
+        _toast("\u23F3 发起对话…(环境: " + _envMode + ")");
         try {
-          const res = await devinCloud.createSession(r.auth, prompt, { title: msg.title });
+          const res = await devinCloud.createSession(r.auth, prompt, { title: msg.title, platform: _envMode });
           if (res.ok) {
             _toast("\u2713 已发起: " + res.devinId);
             _notify("info", "[" + r.email + "] 已发起新对话 " + res.devinId);

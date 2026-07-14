@@ -13565,6 +13565,23 @@ async function devinCreateSession(orgId: string, userMessage: string, auth1: str
     if (opts.tags) payload.tags = opts.tags;
     if (opts.repos) payload.repos = opts.repos;
     if (opts.sessionSecrets) payload.session_secrets = opts.sessionSecrets;
+    // 官方环境模式(逆向自 app.devin.ai SPA): additional_args.platform ∈ {linux,windows,macos}
+    //   + 顶层 platform_explicitly_set; 只作用于新建对话, 不动运行中的对话。
+    //   opts.platform 未显式给时, 默认取当前号(与 auth1 同号)的每号环境模式 — 不跨号。
+    if (!opts.platform) {
+        try {
+            const int: any = _rtflowModule && _rtflowModule._internals;
+            if (int && typeof int.getAccountEnvMode === 'function' && ws.devinEmail) opts.platform = int.getAccountEnvMode(ws.devinEmail);
+        } catch { /* 守柔 */ }
+    }
+    if (opts.platform) {
+        const s = String(opts.platform).toLowerCase();
+        const pf = (s === 'windows' || s === 'win') ? 'windows'
+            : (s === 'macos' || s === 'mac' || s === 'osx' || s === 'darwin') ? 'macos' : 'linux';
+        payload.additional_args = payload.additional_args || {};
+        payload.additional_args.platform = pf;
+        payload.platform_explicitly_set = true;
+    }
     // 帛书·「反者道之动也」— 两条候选路径, 依次回退:
     //   ① api.devin.ai/v1/org/<org>/sessions (cog_ API Key) — 企业/付费档可用
     //   ② app.devin.ai/api/org-<bare>/sessions (auth1 同源) — 自助账号 cog_ 被 v1 拒(404)时兜底,

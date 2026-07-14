@@ -628,6 +628,16 @@ async function createSession(auth, prompt, opts) {
   if (opts.repos) payload.repos = opts.repos;
   if (opts.sessionSecrets) payload.session_secrets = opts.sessionSecrets;
   if (opts.idempotencyKey) payload.idempotency_key = opts.idempotencyKey;
+  // 官方环境模式(逆向自 app.devin.ai SPA): 新对话运行环境 additional_args.platform ∈
+  //   {linux,windows,macos} + 顶层 platform_explicitly_set; 只作用于新建对话, 不动运行中的对话。
+  if (opts.platform) {
+    const s = String(opts.platform).toLowerCase();
+    const pf = (s === "windows" || s === "win") ? "windows"
+      : (s === "macos" || s === "mac" || s === "osx" || s === "darwin") ? "macos" : "linux";
+    payload.additional_args = payload.additional_args || {};
+    payload.additional_args.platform = pf;
+    payload.platform_explicitly_set = true;
+  }
   const r = await jsonRequest("POST", CFG.apiBase + "/sessions", authHeaders(auth), payload);
   if (r.status === 200 || r.status === 201) {
     const j = r.json || {};

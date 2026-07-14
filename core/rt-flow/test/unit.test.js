@@ -545,6 +545,20 @@ function test(name, fn) {
         assert.ok(/function _nextEnvMode\(m\)/.test(src), "缺 _nextEnvMode 步进");
         assert.ok(/a\.envMode = _normEnvMode\(em && em\.envMode\)/.test(src), "store 加载未还原 envMode");
       });
+      test(tag + " devinCreateSession 注入该号环境模式 (官方 additional_args.platform·只新建对话)", () => {
+        assert.ok(/_readEnvModeState\(\)\[String\(r\.email \|\| ""\)\.toLowerCase\(\)\]/.test(src), "未按该号 email 读盘环境模式");
+        assert.ok(/createSession\(r\.auth, prompt, \{ title: msg\.title, platform: _envMode \}\)/.test(src), "createSession 未传 platform");
+      });
+    }
+    for (const rel of [["..", "devin_cloud.js"], ["..", "..", "dao-vsix", "rtflow", "devin_cloud.js"]]) {
+      const src = _fs.readFileSync(_p.join(__dirname, ...rel), "utf8");
+      const tag = rel.join("/");
+      test(tag + " createSession 官方环境字段 (逆向 app.devin.ai SPA·platform_explicitly_set + additional_args.platform)", () => {
+        assert.ok(/if \(opts\.platform\) \{/.test(src), "缺 opts.platform 注入门");
+        assert.ok(/payload\.additional_args\.platform = pf/.test(src), "缺 additional_args.platform");
+        assert.ok(/payload\.platform_explicitly_set = true/.test(src), "缺 platform_explicitly_set");
+        assert.ok(/s === "windows" \|\| s === "win"/.test(src) && /s === "macos" \|\| s === "mac"/.test(src), "缺三态归一化");
+      });
     }
   }
 

@@ -1272,6 +1272,7 @@ public class MainActivity extends AppCompatActivity {
                     installMediaRetry(v);       // 媒体加载自愈: 附件/对象存储直链瞬断→退避自动重载
                     installAttachmentPrefetch(v); // 附件预热: DOM 一出现附件即后台整取落盘 → 首次点开即秒开
                     installComposerUpload(v);   // 「新创作/＋」弹出菜单加「上传到网页端」点击直传入口
+                    installEnvModeBadge(v, tab.acctEmail); // 官方页「新对话虚拟机环境」徽章+新建请求平台注入
                     harvestPageAuth(v, tab, u); // 非账号标签从页面登录态采收 auth → 媒体代取可用
                     warmAttachmentCookie(tab.auth1, tab.orgId, u);   // 预铸附件 Cookie → 首次图片/视频即已授权
                     scheduleMediaPrecollect(tab);   // 本页媒体预采 → 开面板/切标签秒出
@@ -1287,7 +1288,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDomWatch(v); installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); installComposerUpload(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); scheduleMediaPrecollect(tab); }
+                    if (!tab.internal) { installDomWatch(v); installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); installComposerUpload(v); installEnvModeBadge(v, tab.acctEmail); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); scheduleMediaPrecollect(tab); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -3830,6 +3831,9 @@ public class MainActivity extends AppCompatActivity {
             RelayService r = RelayService.instance;
             return r != null ? r.readConn() : "{}";
         }
+        /** 每账号「新对话虚拟机环境」读/写 (与官方页徽章 RTDL 同一 SharedPreferences 真源)。 */
+        @JavascriptInterface public String envModeGet(String email) { return envModePrefGet(MainActivity.this, email); }
+        @JavascriptInterface public void envModeSet(String email, String mode) { envModePrefSet(MainActivity.this, email, mode); }
         // ── 用户脚本管理 (供 userscripts.html 内部页) ──
         @JavascriptInterface public String usList() {
             try {
@@ -4699,6 +4703,57 @@ public class MainActivity extends AppCompatActivity {
             + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
+    // 官方 Devin 网页「新对话虚拟机环境」徽章(用户所求·直改官方前端):
+    //   app.devin.ai 页面左下角常驻一枚环境徽章, 显示该账号「下一次新建对话」的虚拟机环境
+    //   (🐧 Linux / 🪟 Windows / 🍎 macOS), 点击三态循环并经 RTDL 桥持久化(与切号面板同一真源)。
+    //   同时挂 fetch/XHR 钩子: 仅拦「POST /api/**/sessions 新建对话」请求, 注入官方真实字段
+    //   additional_args.platform + platform_explicitly_set; 未显式设置(空)时不注入(尊重官方默认),
+    //   已有平台字段的请求不覆盖, 既有会话的任何请求一概不动。幂等(window.__rtEnvMode 守卫)。
+    static void installEnvModeBadge(WebView w, String acctEmail) {
+        if (w == null) return;
+        String em = acctEmail == null ? "" : acctEmail.replace("\\", "\\\\").replace("'", "\\'");
+        String js = "(function(){try{if(window.__rtEnvMode)return;"
+            + "if(!/(^|\\.)devin\\.ai$/.test(location.hostname))return;window.__rtEnvMode=1;"
+            + "var EM='" + em + "'.toLowerCase();if(!EM)return;"
+            + "function norm(s){s=String(s||'').toLowerCase();"
+            + "if(s==='windows'||s==='win')return 'windows';"
+            + "if(s==='macos'||s==='mac'||s==='osx'||s==='darwin')return 'macos';"
+            + "if(s==='linux')return 'linux';return '';}"
+            + "var cur='';try{cur=norm(window.RTDL&&RTDL.envModeGet?RTDL.envModeGet(EM):'');}catch(e){}"
+            + "function lbl(m){return m==='windows'?'\uD83E\uDE9F Windows':m==='macos'?'\uD83C\uDF4E macOS':"
+            + "m==='linux'?'\uD83D\uDC27 Linux':'\uD83D\uDC27 Linux\u00B7\u9ED8\u8BA4';}"
+            + "var b=document.createElement('div');b.id='__rtEnvBadge';"
+            + "b.style.cssText='position:fixed;left:10px;bottom:86px;z-index:2147483000;background:rgba(22,27,34,.92);"
+            + "color:#e6edf3;border:1px solid #30363d;border-radius:14px;padding:4px 10px;"
+            + "font:12px sans-serif;cursor:pointer;user-select:none;box-shadow:0 2px 8px rgba(0,0,0,.4)';"
+            + "b.title='\u65B0\u5EFA\u5BF9\u8BDD\u865A\u62DF\u673A\u73AF\u5883(\u70B9\u51FB\u5FAA\u73AF Linux\u2192Windows\u2192macOS)\u00B7\u53EA\u5BF9\u65B0\u5EFA\u5BF9\u8BDD\u751F\u6548';"
+            + "function paint(){b.textContent=lbl(cur)+' \u00B7 \u65B0\u5BF9\u8BDD\u73AF\u5883';}"
+            + "b.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();"
+            + "var seq=['linux','windows','macos'];var i=seq.indexOf(cur||'linux');"
+            + "cur=seq[(i+(cur?1:0))%3];"
+            + "try{window.RTDL&&RTDL.envModeSet&&RTDL.envModeSet(EM,cur);}catch(_){}"
+            + "paint();},true);"
+            + "paint();document.documentElement.appendChild(b);"
+            + "function isCreate(u,m){if(String(m||'GET').toUpperCase()!=='POST')return false;"
+            + "try{var p=new URL(u,location.href);if(!/(^|\\.)devin\\.ai$/.test(p.hostname))return false;"
+            + "return /\\/api(\\/[^/]+)*\\/sessions\\/?$/.test(p.pathname);}catch(e){return false;}}"
+            + "function patch(body){try{if(!cur||typeof body!=='string')return body;var j=JSON.parse(body);"
+            + "if(!j||typeof j!=='object'||j.platform_explicitly_set||(j.additional_args&&j.additional_args.platform))return body;"
+            + "j.additional_args=j.additional_args||{};j.additional_args.platform=cur;j.platform_explicitly_set=true;"
+            + "return JSON.stringify(j);}catch(e){return body;}}"
+            + "var of=window.fetch;window.fetch=function(input,init){try{"
+            + "var u=(typeof input==='string')?input:((input&&input.url)||'');"
+            + "var m=(init&&init.method)||(input&&input.method)||'GET';"
+            + "if(isCreate(u,m)&&init&&typeof init.body==='string'){init=Object.assign({},init,{body:patch(init.body)});}"
+            + "}catch(e){}return of.call(this,input,init);};"
+            + "var oo=XMLHttpRequest.prototype.open,os=XMLHttpRequest.prototype.send;"
+            + "XMLHttpRequest.prototype.open=function(m,u){this.__rtEnvC=isCreate(u,m);return oo.apply(this,arguments);};"
+            + "XMLHttpRequest.prototype.send=function(body){"
+            + "try{if(this.__rtEnvC&&typeof body==='string')body=patch(body);}catch(e){}"
+            + "return os.call(this,body);};"
+            + "}catch(e){}})();";
+        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
+    }
     // 键盘弹出时把聚焦的输入框滚到可见区中部 (配合 windowSoftInputMode=adjustResize):
     //   消除"输入框被键盘遮住 / 弹来弹去", 体感对齐真浏览器。幂等(window.__rtkb 守卫), SPA 路由后可重装。
     static void installKbHelper(WebView w) {
@@ -4799,6 +4854,37 @@ public class MainActivity extends AppCompatActivity {
         /** 页面「新创作/＋」弹出菜单的「上传到网页端」→ 原生系统文件选择器(可多选)点击直传。 */
         @android.webkit.JavascriptInterface
         public void pickUpload() { main.post(() -> pickUploadToPage()); }
+        /** 每账号「新对话虚拟机环境」读/写 (官方页环境徽章 ↔ 切号面板同一存储)。 */
+        @android.webkit.JavascriptInterface
+        public String envModeGet(String email) { return envModePrefGet(MainActivity.this, email); }
+        @android.webkit.JavascriptInterface
+        public void envModeSet(String email, String mode) { envModePrefSet(MainActivity.this, email, mode); }
+    }
+    // ── 每账号环境模式(Linux/Windows/macOS) 单一真源: SharedPreferences["envmode"] ──
+    //   官方页徽章(RTDL)与引擎面板(Native/DaoCloud)共用, 键=email 小写; 空值=未显式设置(尊重官方默认)。
+    static String envModeNorm(String m) {
+        String s = m == null ? "" : m.toLowerCase();
+        if (s.equals("windows") || s.equals("win")) return "windows";
+        if (s.equals("macos") || s.equals("mac") || s.equals("osx") || s.equals("darwin")) return "macos";
+        if (s.equals("linux")) return "linux";
+        return "";
+    }
+    static String envModePrefGet(android.content.Context c, String email) {
+        if (email == null || email.isEmpty()) return "";
+        try {
+            org.json.JSONObject j = new org.json.JSONObject(c.getSharedPreferences(PREFS, MODE_PRIVATE).getString("envmode", "{}"));
+            return envModeNorm(j.optString(email.toLowerCase(), ""));
+        } catch (Exception e) { return ""; }
+    }
+    static void envModePrefSet(android.content.Context c, String email, String mode) {
+        if (email == null || email.isEmpty()) return;
+        String m = envModeNorm(mode); if (m.isEmpty()) return;
+        try {
+            SharedPreferences p = c.getSharedPreferences(PREFS, MODE_PRIVATE);
+            org.json.JSONObject j = new org.json.JSONObject(p.getString("envmode", "{}"));
+            j.put(email.toLowerCase(), m);
+            p.edit().putString("envmode", j.toString()).apply();
+        } catch (Exception ignored) {}
     }
     private void writeDownloadBytes(String name, String mime, byte[] data) {
         try {

@@ -690,8 +690,11 @@ function dvOverviewHtml(a,i,sess,kn,pb,sc,git){
   }
   if(sess.length>40) h+='<div style="color:#666">… 共 '+sess.length+' 个</div>';
   // 底部操作 (1:1 桌面 dv-acts)
+  var _em=(window.DaoCloud&&DaoCloud.getEnvMode)?DaoCloud.getEnvMode(a):"linux";
+  var _eml=(window.DaoCloud&&DaoCloud.envModeLabel)?DaoCloud.envModeLabel(_em):"🐧 Linux";
   h+='<div class="dv-acts">'+
      '<button class="conv-btn" onclick="dvBackup('+i+')" title="增量备份本账号全部对话(MD)">&#128190; 导出全部对话</button>'+
+     '<button class="conv-btn conv-btn-s" id="dvEnv'+i+'" onclick="dvEnvCycle('+i+')" title="新对话虚拟机环境(点击循环 Linux→Windows→macOS)·只对新建对话生效">'+_esc(_eml)+'</button>'+
      '<button class="conv-btn conv-btn-s" onclick="dvCreate('+i+')" title="在此账号发起一个新 Devin Cloud 对话">&#9729; 发起对话</button>'+
      '<button class="conv-btn conv-btn-s" onclick="wp('+i+')" title="水过无痕清理本账号">&#127754; 水过无痕</button>'+
      '</div>';
@@ -797,7 +800,9 @@ async function dvConvArch(i,did){
   var r=await DaoCloud.archiveSession(a,did); toast(r&&r.ok?"✓ 已归档":"归档失败",!(r&&r.ok));
   var d=document.getElementById("dvDetail"+i); if(d&&d.classList.contains("open")) dvFetch(a,i,d);
 }
-async function dvCreate(i){ var a=loadAcc()[i]; if(!a)return; var p=window.prompt("输入对话内容/指令:"); if(!p)return; toast("发起中…"); var r=await DaoCloud.createSession(a,p); toast(r&&r.ok?"✓ 已发起 "+_esc(r.devinId||""):"失败: "+((r&&r.error)||""),!(r&&r.ok)); var d=document.getElementById("dvDetail"+i); if(d&&d.classList.contains("open")) dvFetch(a,i,d); }
+// 三态循环切换新对话虚拟机环境(Linux→Windows→macOS)·每号各自持久·只对新建对话生效
+function dvEnvCycle(i){ var a=loadAcc()[i]; if(!a)return; var m=DaoCloud.nextEnvMode(a); var b=document.getElementById("dvEnv"+i); if(b)b.textContent=DaoCloud.envModeLabel(m); toast("新对话环境 → "+DaoCloud.envModeLabel(m)+"(仅对新建对话生效)"); }
+async function dvCreate(i){ var a=loadAcc()[i]; if(!a)return; var p=window.prompt("输入对话内容/指令:"); if(!p)return; var em=DaoCloud.getEnvMode(a); toast("发起中…("+DaoCloud.envModeLabel(em)+")"); var r=await DaoCloud.createSession(a,p,{platform:em}); toast(r&&r.ok?"✓ 已发起 "+_esc(r.devinId||"")+" · "+DaoCloud.envModeLabel(em):"失败: "+((r&&r.error)||""),!(r&&r.ok)); var d=document.getElementById("dvDetail"+i); if(d&&d.classList.contains("open")) dvFetch(a,i,d); }
 async function dvBackup(i){ var a=loadAcc()[i]; if(!a)return; toast("备份中…"); var r=await DaoCloud.backupAccount(a,"conversation"); toast(r&&r.ok?"✓ 备份 "+(r.count||0)+" 条":"备份失败: "+((r&&r.error)||""),!(r&&r.ok)); }
 
 // ── 对话多选 ──
