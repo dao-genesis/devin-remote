@@ -669,14 +669,15 @@ class UnifiedPanel {
   }
 
   _acpRegistryPath() {
-    return path.join(os.homedir(), ".codeium", "windsurf", "acp", "registry.json");
+    const os = require("os"); const path = require("path");
+    return path.join(os.homedir(), ".windsurf", "acp", "registry.json");
   }
 
   // 官方同源 devin.openAcpLocalRegistry: 不存在则创建 {version:"1.0.0",agents:[]} 后以 jsonc 打开。
   async _acpRegistry() {
     try {
       const p = this._acpRegistryPath();
-      const fs = require("fs");
+      const fs = require("fs"); const path = require("path");
       if (!fs.existsSync(p)) {
         fs.mkdirSync(path.dirname(p), { recursive: true });
         fs.writeFileSync(p, JSON.stringify({ version: "1.0.0", agents: [] }, null, 2) + "\n");
