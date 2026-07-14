@@ -2,6 +2,20 @@
 
 本项目遵循语义化版本。日期格式 YYYY-MM-DD。
 
+## [3.12.0] - 2026-07-14
+
+被控端**持久化后端接入**（不止临时 PowerShell 通道）。
+
+### 新增
+- **`/api/install.ps1`（Windows）/ `/api/install.sh`（Linux/macOS）：一行持久化接入**。把出站长轮询代理
+  base64 落盘到 `~/.dao/hub-agent.*`（避免转义腐蚀），Windows 注册计划任务 `DaoHubAgent`（登录+开机自启·
+  崩溃 1 分钟重启·无限次·隐藏窗口），Linux 优先 systemd `--user` 服务（`enable --now` + `enable-linger`
+  开机自启·自愈）、无则回退 cron `@reboot`，并**立即后台启动**。与 `bootstrap.*`（前台临时·关窗即断）互补：
+  机器重启/断线自动重连，用户无需每次手动跑命令——即用户所述「不仅是临时 PowerShell 通道，是持久化后端」。
+- `core.js` 新增 `buildInstall` / `buildInstallSh` 并导出；`handleRoute` 挂 `/api/install.ps1|sh`（`/install.*` 同）。
+- `test/hub-public.test.js` 增断言：install.ps1 注入公网 URL + `Register-ScheduledTask DaoHubAgent` + `RestartCount`；
+  install.sh systemd `--user` / cron `@reboot`。全绿 8/8。
+
 ## [3.11.0] - 2026-07-14
 
 公网中枢形态（VPS/服务器）· hub.js。

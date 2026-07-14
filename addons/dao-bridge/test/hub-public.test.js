@@ -83,6 +83,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     assert.ok(String(boot.body).includes(BASE), 'bootstrap 注入公网入口 URL');
     ok('/api/bootstrap.ps1 注入 DAO_PUBLIC_URL');
 
+    // install.ps1 持久化(计划任务) 注入公网 URL + 崩溃自愈
+    const inst = await req('GET', '/api/install.ps1');
+    const instS = String(inst.body);
+    assert.ok(instS.includes(BASE), 'install.ps1 注入公网入口 URL');
+    assert.ok(instS.includes('Register-ScheduledTask') && instS.includes('DaoHubAgent'), 'install.ps1 注册持久化计划任务');
+    assert.ok(instS.includes('RestartCount'), 'install.ps1 崩溃自愈');
+    ok('/api/install.ps1 持久化接入(计划任务·自启·自愈)');
+
+    // install.sh 持久化(systemd --user / cron @reboot)
+    const instSh = String((await req('GET', '/api/install.sh')).body);
+    assert.ok(instSh.includes('dao-hub-agent') && (instSh.includes('systemctl --user') && instSh.includes('@reboot')), 'install.sh systemd/cron 持久化');
+    ok('/api/install.sh 持久化接入(systemd --user / cron @reboot)');
+
     console.log('\nALL ' + passed + ' TESTS PASSED');
     child.kill();
     process.exit(0);
