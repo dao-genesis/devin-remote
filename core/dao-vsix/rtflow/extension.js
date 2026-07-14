@@ -9100,7 +9100,11 @@ async function devinLogin(email, password) {
     };
   }
   try {
-    const _minGapMs = Math.max(0, +_cfg("devinLoginMinGapMs", 1200) || 1200);
+    // v3.52 · 归零限速实测(用户机·国内网): 3号×3轮=9次并发 devinLogin 全 200·零限速。
+    //   1200ms 全局串行门是「添加账号奇慢」根因 → 降至 150ms(可配·0=关)。
+    //   真限速仍由下方 _devinLoginRateLimitedUntil 自感知窗口(429/503→5min backoff)兜底。
+    const _gapRaw = _cfg("devinLoginMinGapMs", 150);
+    const _minGapMs = Math.max(0, Number.isFinite(+_gapRaw) ? +_gapRaw : 150);
     if (_minGapMs > 0) {
       const _elapsed = Date.now() - _lastDevinLoginAt;
       if (_elapsed < _minGapMs)
@@ -9763,8 +9767,10 @@ async function verifyAllAccounts(opts) {
   }
   // 道法自然 · 首次验证 (>50% 未验) → 降低并行度 · 加大间隔 · 防 Devin 整批拉黑
   const isFirstTime = uncheckedCount > total * 0.5;
-  const parallel = isFirstTime ? Math.min(userParallel, 2) : userParallel;
-  const effectiveGapMs = isFirstTime ? Math.max(gapMs, 1500) : gapMs;
+  // v3.52 · 实测并发登录零限速 → 首次不再重降速(旧 parallel2/gap1500 是奇慢根因)。
+  //   仅温和限速; 真限速由 devinLogin 自感知 backoff 窗口兜底。
+  const parallel = isFirstTime ? Math.min(userParallel, 4) : userParallel;
+  const effectiveGapMs = isFirstTime ? Math.max(gapMs, 300) : gapMs;
   log(
     "verifyAll: 启动 · 候选 " +
       queue.length +
@@ -13955,8 +13961,8 @@ async function handleWebviewMessage(msg) {
                 " 号 · 并行 verify 3 workers · 零等待",
             );
             // 并行 verify worker · 共享 _vq 队列
-            // devinLogin 序列化门保证: 任意时刻只 1 个 devinLogin 飞 · 最小间隔 1200ms
-            // 3 worker 最终效果: 3x 加速 vs 串行 + cache快路账号完全不占门
+            // v3.52 · devinLogin 全局最小间隔已降至 150ms(实测并发零限速) · 真限速自感知窗口兜底
+            // N worker(默 5·可配 verify.addParallel) 最终效果: N x 加速 vs 串行 + cache快路账号完全不占门
             async function _addBatchVerifyWorker() {
               while (_vq.length > 0) {
                 const em = _vq.shift();
@@ -13996,10 +14002,13 @@ async function handleWebviewMessage(msg) {
                 } catch (e) {
                   log("addBatch verify err " + em + " · " + (e.message || e));
                 }
-                // 无额外等待 · devinLogin 序列化门已保证最小 1200ms 间隔 · 800ms 抖动冗余废除
+                // 无额外等待 · devinLogin 已有最小间隔(150ms) · 800ms 抖动冗余废除
               }
             }
-            const nWorkers = Math.min(3, newEmails.length);
+            const nWorkers = Math.min(
+              Math.max(1, _cfg("verify.addParallel", 5) | 0 || 5),
+              newEmails.length,
+            );
             await Promise.all(
               Array.from({ length: nWorkers }, _addBatchVerifyWorker),
             );
