@@ -562,6 +562,79 @@ function test(name, fn) {
     }
   }
 
+  // ── 11a5. 原生 composer 环境模式桥 (加号菜单三态切换 + 新会话请求补注 platform + /__daoenv 同源端点) ──
+  console.log("\n[原生 composer 环境模式桥 · /__daoenv · fetch/XHR 补注]");
+  {
+    const _fs = require("fs"), _p = require("path");
+    test("buildEnvComposerJs: 幂等守卫 + /__daoenv 持久化 + 三态循环", () => {
+      const js = proxy.buildEnvComposerJs("User@Example.com", "");
+      assert.ok(js.includes("window.__daoEnvMode"), "缺幂等守卫");
+      assert.ok(js.includes("/__daoenv?email="), "缺 /__daoenv 端点");
+      assert.ok(js.includes('"user@example.com"'), "email 未小写/未 JSON 转义");
+      assert.ok(js.includes("['linux','windows','macos']"), "缺三态循环序");
+      assert.ok(!js.includes("</script>"), "脚本体不得含 </script> 闭合逃逸面");
+    });
+    test("buildEnvComposerJs: 拦 fetch + XHR · 仅 POST **/sessions · 不覆盖显式 platform", () => {
+      const js = proxy.buildEnvComposerJs("a@b.c", "/i/k1");
+      assert.ok(js.includes("window.fetch=function"), "未拦 fetch");
+      assert.ok(js.includes("XMLHttpRequest.prototype.open") && js.includes("XMLHttpRequest.prototype.send"), "未拦 XHR");
+      assert.ok(js.includes("!=='POST')return false"), "未限 POST");
+      assert.ok(js.includes("\\/sessions\\/?$"), "未限 sessions 端点");
+      assert.ok(js.includes("if(j.platform_explicitly_set)return null"), "未保留显式 platform_explicitly_set");
+      assert.ok(js.includes("if(aa&&aa.platform)return null"), "未保留显式 additional_args.platform");
+      assert.ok(js.includes("j.additional_args.platform=cur") && js.includes("j.platform_explicitly_set=true"), "缺补注字段");
+      assert.ok(js.includes('"/i/k1"'), "前缀模式 BASE 未带 /i/<accKey>");
+    });
+    test("buildEnvComposerJs: 加号菜单并列注入 (radix 菜单 + 附件项识别 + data-daoenv 幂等)", () => {
+      const js = proxy.buildEnvComposerJs("a@b.c", "");
+      assert.ok(js.includes("[data-radix-menu-content]"), "未识别 radix 菜单");
+      assert.ok(js.includes("data-daoenv"), "缺 data-daoenv 标记");
+      assert.ok(js.includes("attach|upload|file|photo"), "缺附件菜单识别正则");
+      assert.ok(js.includes("MutationObserver"), "缺菜单弹出监听");
+    });
+    test("setEnvModeStore 契约: 须含 get/set 才接受", () => {
+      proxy.setEnvModeStore(null);
+      proxy.setEnvModeStore({ get: () => "linux", getRaw: () => "", set: () => ({ ok: true, mode: "linux" }) });
+      assert.ok(typeof proxy.setEnvModeStore === "function");
+    });
+    for (const rel of [["..", "devin_proxy.js"], ["..", "..", "dao-vsix", "rtflow", "devin_proxy.js"]]) {
+      const src = _fs.readFileSync(_p.join(__dirname, ...rel), "utf8");
+      const tag = rel.join("/");
+      test(tag + " /__daoenv 同源端点 (GET 读 / ?set= 写 · 每账号隔离)", () => {
+        assert.ok(/reqUrl\.pathname === "\/__daoenv"/.test(src), "缺 /__daoenv 路由");
+        assert.ok(/searchParams\.get\("set"\)/.test(src), "缺 set 写入");
+        assert.ok(/_envModeStore\.set\(emQ, setQ\)/.test(src), "未经 store 写入");
+      });
+      test(tag + " HTML 注入环境桥 (每账号端口带 email 上下文)", () => {
+        assert.ok(/buildEnvComposerJs\(_envEmail, isPrefix \? localBase : ""\)/.test(src), "HTML 未注入环境桥");
+        assert.ok(/email: key/.test(src), "ensureProxyForAccount 未传账号 email");
+      });
+    }
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = _fs.readFileSync(_p.join(__dirname, ...rel), "utf8");
+      const tag = rel.join("/");
+      test(tag + " 宿主注入 env store + 暴露 getAccountEnvModeRaw/setAccountEnvMode", () => {
+        assert.ok(/devinProxy\.setEnvModeStore\(\{/.test(src), "未注入 setEnvModeStore");
+        assert.ok(/function getAccountEnvModeRaw\(email\)/.test(src), "缺 getAccountEnvModeRaw");
+        assert.ok(/function setAccountEnvMode\(email, mode\)/.test(src), "缺 setAccountEnvMode");
+        assert.ok(/buildEnvComposerJs: devinProxy\.buildEnvComposerJs/.test(src), "_internals 未暴露 buildEnvComposerJs");
+      });
+      test(tag + " /i/<accKey> 新会话按该号环境模式下发 platform (未显式设不下发)", () => {
+        assert.ok(/const _envRaw = getAccountEnvModeRaw\(email\);/.test(src), "未按号读环境模式");
+        assert.ok(/createSession\(authObj, prompt, _envRaw \? \{ platform: _envRaw \} : undefined\)/.test(src), "createSession 未按显式模式传 platform");
+      });
+    }
+    {
+      const src = _fs.readFileSync(_p.join(__dirname, "..", "..", "dao-vsix", "src", "extension.ts"), "utf8");
+      test("dao-vsix 主口: /__daoenv 路由 + 反代页注入环境桥 (与多实例端口同构)", () => {
+        assert.ok(/routePath === '\/__daoenv'/.test(src), "daoServeBridgeRoute 缺 /__daoenv");
+        assert.ok(/route === '\/__daoenv'/.test(src), "主路由白名单缺 /__daoenv");
+        assert.ok(/rtintEnv\.buildEnvComposerJs === 'function'/.test(src), "主口反代页未注入环境桥");
+        assert.ok(/transBridgeInline \+ envBridgeInline/.test(src), "headInject 未拼接 envBridgeInline");
+      });
+    }
+  }
+
   // ── 11b. devin_proxy · 磁盘二级缓存 L2 (v4.14.0 · 重载秒恢复 · 跨端口重定基) ──
   console.log("\n[devin_proxy._diskCache · L2]");
   {
