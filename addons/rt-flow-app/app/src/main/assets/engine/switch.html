@@ -945,6 +945,7 @@ function _deviceRecentRefresh(force){
     Object.keys(fresh).forEach(function(e){
       var nSt=fresh[e]; if(!nSt||(nSt.total|0)<=0) return;   // 仅活跃号触发通知
       var oSt=_trk[e];
+      try{ _alertLedgerPrune(e, nSt.items, nSt.exhausted|0); }catch(_e3){}   // 先剪已解除状态的账本(解除后再入才重报)
       (nSt.items||[]).forEach(function(it){
         if(it.cls==="blocked"||it.cls==="exhausted"){
           // 只有新出现的才通知(旧 _trk 里该 uuid 没有此状态)
@@ -1188,7 +1189,9 @@ async function _pollOneAcc(a, realNo){
   // 逆流兜底: running 项抓事件流判定 等你/额度/报错/停滞 → 转 卡住/额度耗尽
   for(var k=0;k<items.length;k++){ if(items[k].cls==="running"){ try{ await refineStuck(a, items[k]); }catch(e){} } }
   items.forEach(function(it){ if(it.cls==="running")running++; else if(it.cls==="awaiting")awaiting++; else if(it.cls==="exhausted")exhausted++; else if(it.cls==="blocked")blocked++; });
-  // 状态变化即时通知(道法自然·及时): 卡住/报错/停滞的对话立即弹通知, 不再默默等用户手动刷新才看到
+  // 状态变化即时通知(道法自然·及时): 卡住/报错/停滞的对话立即弹通知, 不再默默等用户手动刷新才看到;
+  //   先剪已解除状态的账本(同一状态只提示一次·解除后再入才重报)
+  try{ _alertLedgerPrune(a.id, items, exhausted); }catch(e){}
   items.forEach(function(it){ if(it.cls==="blocked"||it.cls==="exhausted") try{ _stateChangeAlert(a,it); }catch(e){} });
   var total=running+awaiting+blocked+exhausted;
   // 最新对话名恒存: 本轮取空(瞬时接口抖动/局部回包)时沿用缓存旧名, 绝不用空值覆盖 → 页签对话名不再「突然消失」。
@@ -1489,14 +1492,19 @@ function _balAlert(a){
 }
 // ── 状态变化通知 (道法自然·及时反馈): 任一对话状态变化立即通知, 不再默默等 ──
 //   用户反馈: "对话中断/结束/额度耗尽后要过~2分钟才反馈", 核心是检测到变化后没通知, 此处补全。
-//   通知层级: 额度耗尽 > 卡住/报错 > 停滞 > 待输入(不通知·太频繁)。节流: 同一对话同一状态 2 分钟不重复。
-var _stateAlertTs = {};   // uuid+cls → lastAlertTs
+//   通知层级: 额度耗尽 > 卡住/报错 > 停滞 > 待输入(不通知·太频繁)。
+//   去重: 同一对话同一状态只提示一次(账本持久化·跨重载), 状态解除后再次进入才重新提示。
+var SA_KEY="rtflow.alert.state", QA_KEY="rtflow.alert.quota";
+function _alLoad(k){ try{ return JSON.parse(localStorage.getItem(k)||"{}")||{}; }catch(e){ return {}; } }
+function _alSave(k,o){ try{ localStorage.setItem(k, JSON.stringify(o)); }catch(e){} }
+function _alPrune(o){ var now=Date.now(); Object.keys(o).forEach(function(k){ var t=(o[k]&&o[k].ts)||o[k]||0; if(now-t>30*864e5) delete o[k]; }); return o; }
+var _stateAlertTs = _alPrune(_alLoad(SA_KEY));   // aid_uuid_cls → firstAlertTs (持久账本)
 function _stateChangeAlert(a, item){
   if(!a || !item) return;
   var cls=item.cls; if(!cls || cls==="running" || cls==="awaiting") return;   // 运行中/待输入不通知(太频繁)
   var uuid=item.uuid||""; var key=(a.id||"")+"_"+uuid+"_"+cls;
-  var t=_stateAlertTs[key]||0; if(Date.now()-t<=120000) return;   // 2 分钟节流
-  _stateAlertTs[key]=Date.now();
+  if(_stateAlertTs[key]) return;   // 已提示过且状态未解除 → 绝不重复(删了不再回来)
+  _stateAlertTs[key]=Date.now(); _alSave(SA_KEY,_stateAlertTs);
   var convName=String(item.title||"").trim();
   var who=convName || String(a.email||a.id).split("@")[0];
   if(cls==="exhausted") return;   // 额度耗尽由专门的 _quotaAlert 处理(含原生推送)
@@ -1508,17 +1516,30 @@ function _stateChangeAlert(a, item){
 }
 // 额度耗尽提醒(问题②): 检测到该号有对话因配额耗尽休眠时主动弹横幅 + 震动 + 原生推送。
 //   根治「额度耗尽被误显示为对话已完成、不发通知」—— 现 sessStatus/refineStuck 单列 exhausted,
-//   一旦出现即触发, 不再静默当"完成"。节流 5 分钟一号, 避免反复刷屏 (无为·不扰民)。
-var _quotaAlertTs = {};
+//   一旦出现即触发, 不再静默当"完成"。去重: 同号同一耗尽状态只推一次(账本持久化),
+//   仅跃迁(首现/耗尽对话数增加)再推; 恢复后再耗尽才重新提示 (无为·不扰民)。
+var _quotaAlertTs = _alPrune(_alLoad(QA_KEY));   // aid → {ts,cnt} (持久账本)
 function _quotaAlert(a, cnt, convName){
   if(!a||!(cnt>0)) return;
-  var t=_quotaAlertTs[a.id]||0; if(Date.now()-t<=300000) return;
-  _quotaAlertTs[a.id]=Date.now();
+  var p=_quotaAlertTs[a.id]; if(p && (p.cnt|0)>=cnt) return;   // 已提示过且未增 → 绝不重复
+  _quotaAlertTs[a.id]={ts:Date.now(),cnt:cnt}; _alSave(QA_KEY,_quotaAlertTs);
   // 通知主体优先用「近期最新对话名」(用户要求: 有对话名则以对话名为消息主体, 不再前缀账号名, 便于快速定位); 无对话名才回退账号名。
   var who=String(convName||"").trim() || String(a.email||a.id).split("@")[0];
   var msg="🛑 "+who+" 额度已耗尽 · "+cnt+" 个对话因配额耗尽休眠, 请尽快充值/切号";
   _bigAlert(msg); _vib(120);
   try{ if(N.notify) N.notify("额度耗尽 · "+who, cnt+" 个对话因配额耗尽休眠, 请尽快处理"); }catch(e){}
+}
+// 状态解除即剪账本: 该号本轮某 uuid 不再处于旧告警状态 → 移除账本项,
+//   未来真再次进入该状态才重新提示一次; 额度恢复(本轮无耗尽)同理。
+function _alertLedgerPrune(aid, items, exhausted){
+  try{
+    aid=String(aid||""); if(!aid) return;
+    var cur={}; (items||[]).forEach(function(it){ if(it&&(it.cls==="blocked"||it.cls==="exhausted")) cur[aid+"_"+(it.uuid||"")+"_"+it.cls]=1; });
+    var ch=false;
+    Object.keys(_stateAlertTs).forEach(function(k){ if(k.indexOf(aid+"_")===0 && !cur[k]){ delete _stateAlertTs[k]; ch=true; } });
+    if(ch) _alSave(SA_KEY,_stateAlertTs);
+    if(!(exhausted>0) && _quotaAlertTs[aid]){ delete _quotaAlertTs[aid]; _alSave(QA_KEY,_quotaAlertTs); }
+  }catch(e){}
 }
 // ════════════════════════════════════════════════════════════════════════
 //  备份/清理机制 (重构·道法自然):
