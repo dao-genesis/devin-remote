@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>流量处理</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0e1117;color:#e6edf3;padding:12px;font-size:14px;-webkit-text-size-adjust:none}
+h2{font-size:17px;margin:0 0 10px;color:#58a6ff}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:14px;margin-bottom:12px}
+.card h3{font-size:14px;color:#8b949e;margin-bottom:8px}
+.row{display:flex;justify-content:space-between;align-items:center;padding:6px 0}
+.row+.row{border-top:1px solid #21262d}
+.label{color:#8b949e;font-size:13px}
+.val{font-size:15px;font-weight:600;color:#e6edf3}
+.val.up{color:#3fb950}
+.val.down{color:#58a6ff}
+.val.warn{color:#d29922}
+.toggle-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0}
+.toggle-row .desc{flex:1;margin-right:12px}
+.toggle-row .desc b{display:block;color:#e6edf3;font-size:14px;margin-bottom:2px}
+.toggle-row .desc span{color:#8b949e;font-size:12px;line-height:1.4}
+.sw{position:relative;width:44px;height:24px;flex-shrink:0}
+.sw input{opacity:0;width:0;height:0}
+.sw .sl{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#30363d;border-radius:12px;transition:.2s}
+.sw .sl:before{content:"";position:absolute;height:18px;width:18px;left:3px;bottom:3px;background:#e6edf3;border-radius:50%;transition:.2s}
+.sw input:checked+.sl{background:#238636}
+.sw input:checked+.sl:before{transform:translateX(20px)}
+.bar-wrap{height:8px;background:#21262d;border-radius:4px;margin-top:4px;overflow:hidden}
+.bar{height:100%;border-radius:4px;transition:width .3s}
+.bar.rx{background:#58a6ff}
+.bar.tx{background:#3fb950}
+.hint{color:#8b949e;font-size:11px;margin-top:6px;line-height:1.4}
+.btn{display:inline-block;background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;margin-top:6px}
+.btn:active{background:#30363d}
+.tab-list{margin-top:6px}
+.tab-item{display:flex;align-items:center;padding:6px 0;font-size:12px}
+.tab-item+.tab-item{border-top:1px solid #21262d}
+.tab-item .name{flex:1;color:#c9d1d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:8px}
+.tab-item .sz{color:#8b949e;white-space:nowrap}
+#netType{display:inline-block;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600}
+#netType.wifi{background:#1a3d2e;color:#3fb950}
+#netType.mobile{background:#3d2e1a;color:#d29922}
+#netType.offline{background:#3d1a1a;color:#f85149}
+</style>
+</head>
+<body>
+<h2>📊 流量处理</h2>
+
+<div class="card">
+  <h3>网络状态</h3>
+  <div class="row"><span class="label">连接类型</span><span id="netType">检测中</span></div>
+  <div class="row"><span class="label">本次会话时长</span><span class="val" id="sessionTime">0:00</span></div>
+</div>
+
+<div class="card">
+  <h3>本次会话流量</h3>
+  <div class="row"><span class="label">⬇ 下行</span><span class="val down" id="rxSession">0 B</span></div>
+  <div class="bar-wrap"><div class="bar rx" id="rxBar" style="width:0%"></div></div>
+  <div class="row"><span class="label">⬆ 上行</span><span class="val up" id="txSession">0 B</span></div>
+  <div class="bar-wrap"><div class="bar tx" id="txBar" style="width:0%"></div></div>
+  <div class="row"><span class="label">合计</span><span class="val" id="totalSession">0 B</span></div>
+</div>
+
+<div class="card">
+  <h3>累计流量 (自上次重置)</h3>
+  <div class="row"><span class="label">⬇ 下行</span><span class="val down" id="rxAll">0 B</span></div>
+  <div class="row"><span class="label">⬆ 上行</span><span class="val up" id="txAll">0 B</span></div>
+  <div class="row"><span class="label">合计</span><span class="val" id="totalAll">0 B</span></div>
+  <div class="row"><span class="label">起始时间</span><span class="val" id="resetTime">-</span></div>
+  <button class="btn" id="resetBtn">重置累计</button>
+</div>
+
+<div class="card">
+  <h3>低流量模式</h3>
+  <div class="toggle-row">
+    <div class="desc">
+      <b>启用低流量模式</b>
+      <span>关闭非必要后台刷新、延迟加载媒体、禁止自动备份(仅 WiFi)、降低心跳频率。适合移动数据环境。</span>
+    </div>
+    <label class="sw"><input type="checkbox" id="lowDataToggle"><span class="sl"></span></label>
+  </div>
+  <div class="toggle-row">
+    <div class="desc">
+      <b>仅 WiFi 自动备份</b>
+      <span>移动数据下不自动备份对话，避免大量后台流量消耗。</span>
+    </div>
+    <label class="sw"><input type="checkbox" id="wifiBackupToggle" checked><span class="sl"></span></label>
+  </div>
+  <div class="toggle-row">
+    <div class="desc">
+      <b>延迟加载图片/视频</b>
+      <span>对话内媒体附件不自动预览，点击后加载。节省移动流量。</span>
+    </div>
+    <label class="sw"><input type="checkbox" id="lazyMediaToggle"><span class="sl"></span></label>
+  </div>
+  <div class="toggle-row">
+    <div class="desc">
+      <b>静态资产磁盘缓存</b>
+      <span>已开启(不可关)。Devin SPA 的 JS/CSS bundle 全机只下载一次，切号/重进零流量。</span>
+    </div>
+    <label class="sw"><input type="checkbox" checked disabled><span class="sl"></span></label>
+  </div>
+  <div class="hint">低流量模式开启后，额度轮询间隔从 20s→60s，后台自动备份暂停，媒体预览改为手动加载。功能不受影响，仅降低后台数据消耗。</div>
+</div>
+
+<div class="card">
+  <h3>标签流量分布</h3>
+  <div class="tab-list" id="tabList"><div class="hint">加载中...</div></div>
+</div>
+
+<script>
+(function(){
+  var N = window.Native;
+  var startTime = Date.now();
+  var PREF_KEY = "rtflow_traffic";
+
+  function fmt(b){
+    if(b<1024) return b+" B";
+    if(b<1048576) return (b/1024).toFixed(1)+" KB";
+    if(b<1073741824) return (b/1048576).toFixed(1)+" MB";
+    return (b/1073741824).toFixed(2)+" GB";
+  }
+  function fmtTime(ms){
+    var s=Math.floor(ms/1000), m=Math.floor(s/60), h=Math.floor(m/60);
+    if(h>0) return h+":"+String(m%60).padStart(2,"0")+":"+String(s%60).padStart(2,"0");
+    return m+":"+String(s%60).padStart(2,"0");
+  }
+  function loadPref(){
+    try{
+      var raw = N ? N.prefGet(PREF_KEY) : localStorage.getItem(PREF_KEY);
+      return raw ? JSON.parse(raw) : {};
+    }catch(e){ return {}; }
+  }
+  function savePref(obj){
+    var s = JSON.stringify(obj);
+    try{ if(N) N.prefSet(PREF_KEY, s); else localStorage.setItem(PREF_KEY, s); }catch(e){}
+  }
+
+  var pref = loadPref();
+  if(!pref.resetAt) { pref.resetAt = Date.now(); pref.rxAll = 0; pref.txAll = 0; savePref(pref); }
+
+  var rxBase = 0, txBase = 0;
+  function getTraffic(){
+    if(N && N.getTrafficStats){
+      try{
+        var j = JSON.parse(N.getTrafficStats());
+        return { rx: j.rx||0, tx: j.tx||0, type: j.type||"unknown" };
+      }catch(e){}
+    }
+    var rx = window.performance ? (performance.getEntriesByType("resource")||[]).reduce(function(a,e){ return a+(e.transferSize||0); },0) : 0;
+    return { rx: rx, tx: Math.floor(rx*0.05), type: navigator.onLine ? (navigator.connection && navigator.connection.type === "cellular" ? "mobile":"wifi") : "offline" };
+  }
+
+  function setNetBadge(type){
+    var el = document.getElementById("netType");
+    var labels = {wifi:"WiFi",mobile:"移动数据",offline:"离线",unknown:"未知"};
+    el.textContent = labels[type]||type;
+    el.className = type;
+  }
+
+  var prevSnap = getTraffic();
+  rxBase = prevSnap.rx; txBase = prevSnap.tx;
+
+  function refresh(){
+    var snap = getTraffic();
+    var rxS = snap.rx - rxBase, txS = snap.tx - txBase;
+    if(rxS<0) rxS=0; if(txS<0) txS=0;
+    var total = rxS + txS;
+    document.getElementById("rxSession").textContent = fmt(rxS);
+    document.getElementById("txSession").textContent = fmt(txS);
+    document.getElementById("totalSession").textContent = fmt(total);
+    var maxBar = Math.max(rxS, txS, 1);
+    document.getElementById("rxBar").style.width = Math.round(rxS/maxBar*100)+"%";
+    document.getElementById("txBar").style.width = Math.round(txS/maxBar*100)+"%";
+    document.getElementById("sessionTime").textContent = fmtTime(Date.now()-startTime);
+    setNetBadge(snap.type);
+
+    var deltaRx = snap.rx - prevSnap.rx, deltaTx = snap.tx - prevSnap.tx;
+    if(deltaRx<0) deltaRx=0; if(deltaTx<0) deltaTx=0;
+    pref.rxAll = (pref.rxAll||0) + deltaRx;
+    pref.txAll = (pref.txAll||0) + deltaTx;
+    prevSnap = snap;
+
+    document.getElementById("rxAll").textContent = fmt(pref.rxAll);
+    document.getElementById("txAll").textContent = fmt(pref.txAll);
+    document.getElementById("totalAll").textContent = fmt(pref.rxAll + pref.txAll);
+    document.getElementById("resetTime").textContent = new Date(pref.resetAt).toLocaleDateString();
+
+    if(pref.rxAll + pref.txAll > 104857600){
+      document.getElementById("totalAll").classList.add("warn");
+    }
+    savePref(pref);
+  }
+
+  document.getElementById("resetBtn").onclick = function(){
+    pref.rxAll = 0; pref.txAll = 0; pref.resetAt = Date.now(); savePref(pref); refresh();
+  };
+
+  var lowData = document.getElementById("lowDataToggle");
+  var wifiBk = document.getElementById("wifiBackupToggle");
+  var lazyM = document.getElementById("lazyMediaToggle");
+  lowData.checked = !!pref.lowData;
+  wifiBk.checked = pref.wifiBackup !== false;
+  lazyM.checked = !!pref.lazyMedia;
+
+  function syncLowData(){
+    pref.lowData = lowData.checked;
+    if(lowData.checked){ wifiBk.checked = true; lazyM.checked = true; }
+    pref.wifiBackup = wifiBk.checked;
+    pref.lazyMedia = lazyM.checked;
+    savePref(pref);
+    if(N && N.setLowDataMode) N.setLowDataMode(lowData.checked);
+  }
+  lowData.onchange = syncLowData;
+  wifiBk.onchange = function(){ pref.wifiBackup = wifiBk.checked; savePref(pref); };
+  lazyM.onchange = function(){ pref.lazyMedia = lazyM.checked; savePref(pref); };
+
+  function renderTabs(){
+    var list = document.getElementById("tabList");
+    if(N && N.getTabTraffic){
+      try{
+        var tabs = JSON.parse(N.getTabTraffic());
+        if(!tabs.length){ list.innerHTML='<div class="hint">无活动标签</div>'; return; }
+        list.innerHTML="";
+        tabs.forEach(function(t){
+          var d=document.createElement("div"); d.className="tab-item";
+          d.innerHTML='<span class="name">'+(t.title||t.url||"(空)")+'</span><span class="sz">'+fmt(t.bytes||0)+'</span>';
+          list.appendChild(d);
+        });
+        return;
+      }catch(e){}
+    }
+    var res = performance.getEntriesByType("resource")||[];
+    var hosts = {};
+    res.forEach(function(e){
+      try{
+        var h = new URL(e.name).hostname;
+        hosts[h] = (hosts[h]||0) + (e.transferSize||0);
+      }catch(ex){}
+    });
+    var arr = Object.keys(hosts).map(function(k){ return {title:k, bytes:hosts[k]}; }).sort(function(a,b){ return b.bytes-a.bytes; }).slice(0,15);
+    list.innerHTML="";
+    if(!arr.length){ list.innerHTML='<div class="hint">暂无数据</div>'; return; }
+    arr.forEach(function(t){
+      var d=document.createElement("div"); d.className="tab-item";
+      d.innerHTML='<span class="name">'+t.title+'</span><span class="sz">'+fmt(t.bytes)+'</span>';
+      list.appendChild(d);
+    });
+  }
+
+  refresh(); renderTabs();
+  setInterval(refresh, 5000);
+  setInterval(renderTabs, 15000);
+})();
+</script>
+</body>
+</html>
