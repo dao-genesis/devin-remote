@@ -3919,7 +3919,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
     // ── 归一 · 拖拽上传桥数据源 (对齐手机 APK: 拖文件=上传该文件 / 拖会话=上传该会话 MD) ──
     //   网页内注入的 drop 桥与外壳同源, 落点后经此同源端点取字节 → 合成 File 喂入页面上传框。
     //   同一服务函数 daoServeBridgeRoute 亦注入 IDE 内多实例反代(devin_proxy)就地同源服务。
-    if (route === '/__dlfile' || route === '/__convmd' || route === '/__convguide' || route === '/__convinfo' || route === '/__convzip' || route === '/__daobridge.js' || route === '/__daotrans.js' || route === '/__daoenv') {
+    if (route === '/__dlfile' || route === '/__convmd' || route === '/__convguide' || route === '/__convinfo' || route === '/__convzip' || route === '/__daobridge.js' || route === '/__daotrans.js') {
         const br = await daoServeBridgeRoute(route, url);
         if (br) return br;
     }
@@ -13672,15 +13672,9 @@ async function devinCreateSession(orgId: string, userMessage: string, auth1: str
     if (opts.tags) payload.tags = opts.tags;
     if (opts.repos) payload.repos = opts.repos;
     if (opts.sessionSecrets) payload.session_secrets = opts.sessionSecrets;
-    // 官方环境模式(逆向自 app.devin.ai SPA): additional_args.platform ∈ {linux,windows,macos}
+    // 官方环境模式(官方 API 字段): additional_args.platform ∈ {linux,windows,macos}
     //   + 顶层 platform_explicitly_set; 只作用于新建对话, 不动运行中的对话。
-    //   opts.platform 未显式给时, 默认取当前号(与 auth1 同号)的每号环境模式 — 不跨号。
-    if (!opts.platform) {
-        try {
-            const int: any = _rtflowModule && _rtflowModule._internals;
-            if (int && typeof int.getAccountEnvMode === 'function' && ws.devinEmail) opts.platform = int.getAccountEnvMode(ws.devinEmail);
-        } catch { /* 守柔 */ }
-    }
+    //   仅当调用方显式给 opts.platform 时下发 — 环境选择以官方页面/API 为唯一真源。
     if (opts.platform) {
         const s = String(opts.platform).toLowerCase();
         const pf = (s === 'windows' || s === 'win') ? 'windows'
@@ -16736,30 +16730,6 @@ async function daoServeBridgeRoute(routePath: string, urlObj: URL, req?: any): P
         try { if (rtintI && typeof rtintI.resolveConvActive === 'function') info = await rtintI.resolveConvActive(email, sid); } catch (e) { /* 守柔 */ }
         return { _proxy: true, status: 200, contentType: 'application/json; charset=utf-8', body: JSON.stringify(info || { ok: false, active: false }), headers: { ...CORS } };
     }
-    // 环境模式(Linux/Windows/macOS) 同源读写: GET 读该账号模式 / 带 ?set= 写 (非法值经规范化)。
-    //   主口 9920 反代页(?dao_acct)与多实例各账号反代端口的 composer 环境桥共用同一真源 _env_mode.json。
-    if (routePath === '/__daoenv') {
-        const rtintE = _rtflowModule && (_rtflowModule._internals as any);
-        const emQ = String(urlObj.searchParams.get('email') || '').toLowerCase();
-        const setQ = urlObj.searchParams.get('set');
-        const HJ = { 'Cache-Control': 'no-store', ...CORS };
-        if (!rtintE || typeof rtintE.getAccountEnvModeRaw !== 'function' || typeof rtintE.setAccountEnvMode !== 'function') {
-            return { _proxy: true, status: 503, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'no-store' }), headers: HJ };
-        }
-        if (!emQ) {
-            return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'no-email' }), headers: HJ };
-        }
-        try {
-            if (setQ != null) {
-                const r = rtintE.setAccountEnvMode(emQ, setQ);
-                return { _proxy: true, status: (r && r.ok === false) ? 500 : 200, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: !(r && r.ok === false), email: emQ, mode: (r && r.mode) || String(setQ), set: true }), headers: HJ };
-            }
-            const raw = String(rtintE.getAccountEnvModeRaw(emQ) || '');
-            return { _proxy: true, status: 200, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: true, email: emQ, mode: raw || 'linux', set: !!raw }), headers: HJ };
-        } catch (e: any) {
-            return { _proxy: true, status: 500, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: (e && e.message) || String(e) }), headers: HJ };
-        }
-    }
     // 已结束对话整包 ZIP (备份引擎增量 · 有新事件则覆盖型更新为最新 ZIP)。
     if (routePath === '/__convzip') {
         const rtintZ = _rtflowModule && (_rtflowModule._internals as any);
@@ -17919,16 +17889,7 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         // 整页翻译桥(同源·与 /__web 外站页同构): Devin 反代页也注入悬浮球「译」+ __dcTr 桥
                         //   — vscode-webview 外壳恒无法触达 iframe contentDocument, 页内桥才是唯一可达翻译通道。
                         const transBridgeInline = '<script>' + daoTransBridgeInlineJs() + '<\/script>';
-                        // 环境模式 composer 桥(同源·与多实例反代端口同构): 加号菜单三态切换 + 新会话请求补注
-                        //   additional_args.platform (按 dao_acct 钉号读写 · 未钉号时用当前活动账号 · 互不串号)。
-                        let envBridgeInline = '';
-                        try {
-                            const rtintEnv = _rtflowModule && (_rtflowModule._internals as any);
-                            if (pinEmail && rtintEnv && typeof rtintEnv.buildEnvComposerJs === 'function') {
-                                envBridgeInline = '<script>' + rtintEnv.buildEnvComposerJs(pinEmail, '') + '<\/script>';
-                            }
-                        } catch (e) { /* 守柔 */ }
-                        const headInject = authBridge + swRegInline + dragBridgeInline + transBridgeInline + envBridgeInline;
+                        const headInject = authBridge + swRegInline + dragBridgeInline + transBridgeInline;
                         if (/<head[^>]*>/i.test(html)) {
                             html = html.replace(/(<head[^>]*>)/i, '$1' + headInject);
                         } else {
