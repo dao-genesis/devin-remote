@@ -751,11 +751,22 @@ function test(name, fn) {
       assert.ok(/res\.auth = 'skip-converged'/.test(ext), "命中即标 skip-converged 并跳过");
       assert.ok(/if \(res\.ok && orgId\) sigMap\[orgId\] = desiredSig;/.test(ext), "仅成功才落 sig(失败下轮重试)");
     });
+    test("批量登录落盘 auth1: injectOne 登录成功须 saveAccountAuthRecord(否则每轮全池重登·永不收敛)", () => {
+      assert.ok(/res\.auth = 'login';[\s\S]{0,600}?saveAccountAuthRecord\(a\.email, \{ auth1, orgId/.test(ext), "登录成功后须落盘 auth1(下轮命中 cached 快路)");
+    });
+    test("期望态签名稳定内核: sig 须剥离桥 MD 易变行(更新于时间戳/快隧道URL), 否则 skip-converged 永不命中", () => {
+      assert.ok(/function _stableBridgeMdForSig\(md: string\): string/.test(ext), "须有 _stableBridgeMdForSig");
+      assert.ok(/h\(_stableBridgeMdForSig\(bridgeMd\)\)/.test(ext), "computeOrgInjectSig 须以稳定内核参与哈希");
+      assert.ok(/replace\(\/\^更新于:\.\*\$\/gm, ''\)/.test(ext), "须剥离 更新于: 时间戳行");
+      assert.ok(/trycloudflare\\\.com\/g, '\(quick-tunnel\)'\)/.test(ext), "须归一化会轮换的快隧道 URL");
+    });
     test("inflight 看门狗: 带运行令牌(start 时戳)的时限守卫, 超时新轮接管, 旧轮 finally 不误清", () => {
       assert.ok(/const POOL_RECONCILE_MAX_MS = 20 \* 60 \* 1000;/.test(ext), "须有 20 分看门狗上限");
       assert.ok(/let _poolReconcileStartMs = 0;/.test(ext), "须记录运行起始时戳");
-      assert.ok(/if \(age < POOL_RECONCILE_MAX_MS\)/.test(ext), "未超时才 skip=inflight");
-      assert.ok(/inflight-stale-reset/.test(ext), "超时须 stale-reset 让新轮接管");
+      assert.ok(/if \(age < POOL_RECONCILE_MAX_MS \|\| stalled < POOL_RECONCILE_STALL_MS\)/.test(ext), "未超时或仍在推进才 skip=inflight(健康长跑豁免)");
+      assert.ok(/const POOL_RECONCILE_STALL_MS = 3 \* 60 \* 1000;/.test(ext), "须有 3 分无推进僵死阈值");
+      assert.ok(/bp\.done > _poolReconcileLastDone/.test(ext), "须以 done 递增判定推进(推进中不判僵死)");
+      assert.ok(/inflight-stale-reset/.test(ext), "超时且无推进须 stale-reset 让新轮接管");
       assert.ok(/const myStart = Date\.now\(\);/.test(ext) && /if \(_poolReconcileStartMs === myStart\) _poolReconcileInflight = false;/.test(ext), "finally 须以令牌守卫, 仅本轮清 inflight");
     });
     test("route-C 订阅半开死链看门狗(与手机版 signal.js v0.37.60 对称): ntfy HTTP 流静默失效不发 FIN/error → 须靠 >90s 无入站主动重连", () => {
