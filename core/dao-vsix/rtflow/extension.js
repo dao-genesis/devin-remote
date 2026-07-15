@@ -2027,12 +2027,23 @@ function _cloudHostFanout(mm) {
   if (_cloudWebviewPost) { try { _cloudWebviewPost(mm); } catch (e) {} }
   try { _shellCloudDispatch(mm); } catch (e) {}
 }
+// 单任务看门狗上限: 病灶(已修) — 队列无单任务超时, 某 handler 因上游(GitHub/Devin API)卡死
+// 而永不 resolve 时, _shellCloudActiveSid 被它长期锁定, 后续所有用户/板块的操作在队列上无限
+// 排队(全局假死·相悖)。正法: 每任务与看门狗竞速, 超时即释放 active-sid 锁并推进队列(卡住的任务
+// 在后台自生自灭·不阻塞他者); 其迟到回推因 activeSid 已换而降级为号主共享广播(幂等无害·绝不串台)。
+const SHELL_CLOUD_TASK_MAX_MS = 45000;
 function _shellCloudRun(sid, fn) {
   _shellCloudQueue = _shellCloudQueue.then(async () => {
     _shellCloudActiveSid = sid || '';
     try { if (_cloudProvider && _cloudProvider.setHostPost) _cloudProvider.setHostPost(_cloudHostFanout); } catch (e) {}
-    try { await fn(); } catch (e) { try { log('[shell] cloud task err: ' + (e && e.message)); } catch (x) {} }
-    finally { _shellCloudActiveSid = ''; }
+    let wd = null;
+    try {
+      await Promise.race([
+        Promise.resolve().then(fn),
+        new Promise((res) => { wd = setTimeout(() => { try { log('[shell] cloud task watchdog fired (' + SHELL_CLOUD_TASK_MAX_MS + 'ms) sid=' + (sid || '-')); } catch (x) {} res(); }, SHELL_CLOUD_TASK_MAX_MS); }),
+      ]);
+    } catch (e) { try { log('[shell] cloud task err: ' + (e && e.message)); } catch (x) {} }
+    finally { if (wd) { try { clearTimeout(wd); } catch (x) {} } _shellCloudActiveSid = ''; }
   });
   return _shellCloudQueue;
 }

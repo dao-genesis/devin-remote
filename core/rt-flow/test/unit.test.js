@@ -1264,6 +1264,22 @@ function test(name, fn) {
     }
   });
 
+  // ── /shell 串行队列单任务看门狗 (某板块卡上游不再冻结全盘 · 双副本) ──
+  // 病灶(已修): _shellCloudRun 无单任务超时 — 某 handler 卡死永不 resolve → _shellCloudActiveSid
+  //   被长期锁定, 后续所有用户/板块操作无限排队(全局假死)。正法: 每任务与看门狗竞速, 超时释放锁推进队列。
+  console.log("\n[/shell 串行队列看门狗]");
+  test("/shell: _shellCloudRun 带单任务看门狗 (超时释放 active-sid 锁·推进队列 · 双副本)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      const r = rel.join("/");
+      assert.ok(/const SHELL_CLOUD_TASK_MAX_MS = \d+;/.test(src), r + ": 须定义单任务看门狗上限 SHELL_CLOUD_TASK_MAX_MS");
+      assert.ok(/Promise\.race\(\[[\s\S]{0,240}Promise\.resolve\(\)\.then\(fn\)/.test(src), r + ": _shellCloudRun 须让任务与看门狗竞速(Promise.race)");
+      assert.ok(/setTimeout\([\s\S]{0,160}SHELL_CLOUD_TASK_MAX_MS\)/.test(src), r + ": 看门狗须用 SHELL_CLOUD_TASK_MAX_MS 定时释放");
+      assert.ok(/clearTimeout\(wd\)[\s\S]{0,80}_shellCloudActiveSid = ''/.test(src), r + ": finally 须 clearTimeout 并释放 active-sid 锁");
+    }
+  });
+
   // ── 归一外壳 /shell 板块菜单与宿主 _solo 白名单一致 (六大板块·无残留死板块 · 双副本) ──
   // 病灶(已修): 7e8fc874 删除 dao-vsix「电脑本体」板块(移出 _solo 白名单/导航/渲染器),
   //   但 rt-flow /shell 的 PAGES/BOARD_META 仍残留 board:computer → 点「操作电脑本体」
