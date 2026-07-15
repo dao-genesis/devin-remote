@@ -1,0 +1,67 @@
+# 道自动化 · push 即自动开 PR
+#
+# 开发者/Agent 只需把改动推到一条非默认分支(devin/** 等),本工作流自动:
+#   1) 若该分支尚无开启中的 PR → 自动创建一个指向默认分支(main)的 PR;
+#   2) 标题取自最新提交首行;含 [wip]/[hold] 或草稿则后续 automerge 会跳过合并。
+# 之后由 dao-automerge.yml 接力:自动打 dao-auto 标签 → 等 CI 全绿 → 限速合并 → 删分支。
+# 全程零人工:开发者只管推分支,其余全自动。
+
+name: dao-autopr
+
+on:
+  push:
+    branches:
+      - 'devin/**'
+      - 'feat/**'
+      - 'fix/**'
+      - 'chore/**'
+      - 'perf/**'
+      - 'refactor/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: dao-autopr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  open-pr:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open PR for pushed branch (if none)
+        uses: actions/github-script@v7
+        with:
+          # 必须用 PAT(DAO_MERGE_TOKEN)开 PR:GITHUB_TOKEN 开的 PR 不会触发任何
+          # 后续工作流(GitHub 防递归),且作者是 github-actions[bot](非受信成员),
+          # automerge 链路会整个断掉。PAT 开的 PR 作者=组织成员,全链自动接力。
+          github-token: ${{ secrets.DAO_MERGE_TOKEN || github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const branch = context.ref.replace('refs/heads/', '');
+            const def = context.payload.repository.default_branch;
+            if (branch === def) { core.info('推送的是默认分支,跳过'); return; }
+
+            const existing = await github.rest.pulls.list({
+              owner, repo, state: 'open', head: `${owner}:${branch}`,
+            });
+            if (existing.data.length) {
+              core.info(`分支 ${branch} 已有开启中的 PR #${existing.data[0].number},跳过`);
+              return;
+            }
+
+            const hc = context.payload.head_commit;
+            const title = ((hc && hc.message) || branch).split('\n')[0].slice(0, 120);
+            const pr = await github.rest.pulls.create({
+              owner, repo, head: branch, base: def, title,
+              body: [
+                '由 **dao-autopr** 自动开启:push 到非默认分支即自动建 PR。',
+                '',
+                '接力链路:自动打 `dao-auto` 标签 → 等 CI 全绿 → 限速自动合并 → 删分支。',
+                '如需暂缓合并:标题加 `[wip]`/`[hold]`,或把 PR 转为 draft。',
+              ].join('\n'),
+              draft: false,
+            });
+            core.info(`已为 ${branch} 开启 PR #${pr.data.number}`);
