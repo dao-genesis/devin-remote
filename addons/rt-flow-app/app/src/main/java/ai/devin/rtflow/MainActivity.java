@@ -4023,7 +4023,9 @@ public class MainActivity extends AppCompatActivity {
         }
         @JavascriptInterface public void toast(String s) { MainActivity.this.toast(s == null ? "" : s); }
         // ── 流量处理面板 (traffic.html): 本 App UID 级流量统计 + 低流量模式 + 键值持久化 ──
-        /** 本 App (UID) 累计收发字节 + 当前网络类型 → JSON {rx,tx,type}。TrafficStats 为开机以来累计, 面板端自行做差分。 */
+        /** 本 App (UID) 累计收发字节 + 当前网络 → JSON {rx,tx,type,metered,online}。
+         *  网络判定复用既有 netInfoJson()(现代 NetworkCapabilities·与系统「省流量」同源), 不另立一套。
+         *  TrafficStats 为开机以来累计, 面板端自行做差分。 */
         @JavascriptInterface public String getTrafficStats() {
             long rx = 0, tx = 0;
             try {
@@ -4032,19 +4034,29 @@ public class MainActivity extends AppCompatActivity {
                 tx = android.net.TrafficStats.getUidTxBytes(uid);
                 if (rx < 0) rx = 0; if (tx < 0) tx = 0;
             } catch (Exception ignored) {}
-            String type = "unknown";
+            boolean metered = false, online = false; String type = "unknown";
             try {
-                android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-                android.net.NetworkInfo ni = cm == null ? null : cm.getActiveNetworkInfo();
-                if (ni == null || !ni.isConnected()) type = "offline";
-                else if (cm.isActiveNetworkMetered()) type = "mobile";
-                else type = "wifi";
+                org.json.JSONObject net = new org.json.JSONObject(MainActivity.this.netInfoJson());
+                metered = net.optBoolean("metered", false);
+                online = net.optBoolean("online", false);
+                String t = net.optString("type", "unknown");
+                if (!online) type = "offline";
+                else if ("wifi".equals(t) || "ethernet".equals(t)) type = "wifi";
+                else if ("cellular".equals(t)) type = "mobile";
+                else type = metered ? "mobile" : (online ? "wifi" : "unknown");
             } catch (Exception ignored) {}
-            return "{\"rx\":" + rx + ",\"tx\":" + tx + ",\"type\":\"" + type + "\"}";
+            return "{\"rx\":" + rx + ",\"tx\":" + tx + ",\"type\":\"" + type + "\",\"metered\":" + metered + ",\"online\":" + online + "}";
         }
         /** 低流量模式总开关: 面板切换时同步到 SharedPreferences, 引擎侧 (autoclean/备份/轮询) 读此键降频。 */
         @JavascriptInterface public void setLowDataMode(boolean on) {
             try { getSharedPreferences("rtflow", MODE_PRIVATE).edit().putBoolean("lowDataMode", on).apply(); } catch (Exception ignored) {}
+        }
+        /** 自动低流量: 开启后引擎按当前网络自动选策略 (计费网络=低流量档, WiFi=全速档); 手动开关优先。 */
+        @JavascriptInterface public void setLowDataAuto(boolean on) {
+            try { getSharedPreferences("rtflow", MODE_PRIVATE).edit().putBoolean("lowDataAuto", on).apply(); } catch (Exception ignored) {}
+        }
+        @JavascriptInterface public boolean isLowDataAuto() {
+            try { return getSharedPreferences("rtflow", MODE_PRIVATE).getBoolean("lowDataAuto", false); } catch (Exception e) { return false; }
         }
         @JavascriptInterface public boolean isLowDataMode() {
             try { return getSharedPreferences("rtflow", MODE_PRIVATE).getBoolean("lowDataMode", false); } catch (Exception e) { return false; }

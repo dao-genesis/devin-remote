@@ -83,6 +83,13 @@ h2{font-size:17px;margin:0 0 10px;color:#58a6ff}
   </div>
   <div class="toggle-row">
     <div class="desc">
+      <b>自动低流量 (按网络)</b>
+      <span>可选自动模式: 计费网络(移动数据/计费热点)自动降频省流，WiFi 自动全速。以系统计费判定为准——用手机热点时若系统标记为计费同样生效。手动开关优先于自动。</span>
+    </div>
+    <label class="sw"><input type="checkbox" id="lowDataAutoToggle"><span class="sl"></span></label>
+  </div>
+  <div class="toggle-row">
+    <div class="desc">
       <b>仅 WiFi 自动备份</b>
       <span>移动数据下不自动备份对话，避免大量后台流量消耗。</span>
     </div>
@@ -102,7 +109,7 @@ h2{font-size:17px;margin:0 0 10px;color:#58a6ff}
     </div>
     <label class="sw"><input type="checkbox" checked disabled><span class="sl"></span></label>
   </div>
-  <div class="hint">低流量模式开启后，额度轮询间隔从 20s→60s，后台自动备份暂停，媒体预览改为手动加载。功能不受影响，仅降低后台数据消耗。</div>
+  <div class="hint">实测根因: 空转/后台不耗流；耗流大头是切号面板每 8s 的全账号对话轮询(随账号数线性增长)。低流量模式下自动轮询降为 ≥60s/次且载荷缩到最小档(约 2KB)，自动备份仅 WiFi，媒体手动加载。手动刷新/所有点按操作永远即时全量，功能不受影响。</div>
 </div>
 
 <div class="card">
@@ -146,18 +153,20 @@ h2{font-size:17px;margin:0 0 10px;color:#58a6ff}
     if(N && N.getTrafficStats){
       try{
         var j = JSON.parse(N.getTrafficStats());
-        return { rx: j.rx||0, tx: j.tx||0, type: j.type||"unknown" };
+        return { rx: j.rx||0, tx: j.tx||0, type: j.type||"unknown", metered: j.metered===true };
       }catch(e){}
     }
     var rx = window.performance ? (performance.getEntriesByType("resource")||[]).reduce(function(a,e){ return a+(e.transferSize||0); },0) : 0;
     return { rx: rx, tx: Math.floor(rx*0.05), type: navigator.onLine ? (navigator.connection && navigator.connection.type === "cellular" ? "mobile":"wifi") : "offline" };
   }
 
-  function setNetBadge(type){
+  function setNetBadge(type, metered){
     var el = document.getElementById("netType");
     var labels = {wifi:"WiFi",mobile:"移动数据",offline:"离线",unknown:"未知"};
-    el.textContent = labels[type]||type;
-    el.className = type;
+    var txt = labels[type]||type;
+    if(type==="wifi" && metered) txt = "WiFi (计费热点)";   // 手机热点被系统标计费 → 明示, 自动低流量按计费处理
+    el.textContent = txt;
+    el.className = (type==="wifi" && metered) ? "mobile" : type;
   }
 
   var prevSnap = getTraffic();
@@ -175,7 +184,7 @@ h2{font-size:17px;margin:0 0 10px;color:#58a6ff}
     document.getElementById("rxBar").style.width = Math.round(rxS/maxBar*100)+"%";
     document.getElementById("txBar").style.width = Math.round(txS/maxBar*100)+"%";
     document.getElementById("sessionTime").textContent = fmtTime(Date.now()-startTime);
-    setNetBadge(snap.type);
+    setNetBadge(snap.type, snap.metered);
 
     var deltaRx = snap.rx - prevSnap.rx, deltaTx = snap.tx - prevSnap.tx;
     if(deltaRx<0) deltaRx=0; if(deltaTx<0) deltaTx=0;
@@ -199,9 +208,12 @@ h2{font-size:17px;margin:0 0 10px;color:#58a6ff}
   };
 
   var lowData = document.getElementById("lowDataToggle");
+  var lowAuto = document.getElementById("lowDataAutoToggle");
   var wifiBk = document.getElementById("wifiBackupToggle");
   var lazyM = document.getElementById("lazyMediaToggle");
   lowData.checked = !!pref.lowData;
+  lowAuto.checked = !!pref.lowDataAuto;
+  try{ if(N && N.isLowDataAuto) lowAuto.checked = N.isLowDataAuto()===true; }catch(e){}
   wifiBk.checked = pref.wifiBackup !== false;
   lazyM.checked = !!pref.lazyMedia;
 
@@ -212,9 +224,18 @@ h2{font-size:17px;margin:0 0 10px;color:#58a6ff}
     pref.lazyMedia = lazyM.checked;
     savePref(pref);
     if(N && N.setLowDataMode) N.setLowDataMode(lowData.checked);
+    syncBkCfg();
+  }
+  // 与切号面板/常驻引擎共用同一配置键 (localStorage rtflow.cfg.autoBackupWifiOnly): 此处开关即真实生效于既有备份门控
+  function syncBkCfg(){
+    try{ localStorage.setItem("rtflow.cfg.autoBackupWifiOnly", JSON.stringify(wifiBk.checked)); }catch(e){}
   }
   lowData.onchange = syncLowData;
-  wifiBk.onchange = function(){ pref.wifiBackup = wifiBk.checked; savePref(pref); };
+  lowAuto.onchange = function(){
+    pref.lowDataAuto = lowAuto.checked; savePref(pref);
+    try{ if(N && N.setLowDataAuto) N.setLowDataAuto(lowAuto.checked); }catch(e){}
+  };
+  wifiBk.onchange = function(){ pref.wifiBackup = wifiBk.checked; savePref(pref); syncBkCfg(); };
   lazyM.onchange = function(){ pref.lazyMedia = lazyM.checked; savePref(pref); };
 
   function renderTabs(){

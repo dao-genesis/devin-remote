@@ -887,6 +887,17 @@ function _restoreTrkFromVault(){
 //     用与 APK 完全同源的 DaoCloud.sessStatus 归类, 回 {list, accounts, total}。网页据此重建 _trk(按账号
 //     聚合 active 对话) → 数量/状态/稳定性与手机逐一一致, 登入即同步, 不再超量/空白/滞后。
 var _devRecentBusy=false;
+// ── 低流量模式 (根因·反者道之动) ──────────────────────────────────────────────
+//   实测(AVD): 空转/后台 idle = 0 字节, 无基线泄漏; 耗流大头 = 本页每 8s 的 recentConvAll 全账号轮询,
+//   其量随账号数线性增长(计费网络下即「流量恐怖」之根)。低流量下不砍功能, 只「减频 + 缩载荷」:
+//   自动轮询最小间隔拉到 60s、载荷降到 perAcc:1 max:10; 用户手动刷新(force)永远即时全量 → 必要功能全保留。
+var _lastDevRecentTs=0;
+var _LOWDATA_POLL_MS=60000;
+function _lowDataOn(){
+  try{ if(N && N.isLowDataMode && N.isLowDataMode()===true) return true; }catch(e){}       // 手动总开关
+  try{ if(N && N.isLowDataAuto && N.isLowDataAuto()===true) return _netInfo().metered===true; }catch(e){}  // 自动: 仅计费网络启用
+  return false;
+}
 function _buildTrkFromRecent(list){
   var by=Object.create(null);
   (list||[]).forEach(function(it){
@@ -905,10 +916,12 @@ function _buildTrkFromRecent(list){
 function _deviceRecentRefresh(force){
   if(!window.__rnReady) return;
   if(!force && _notVisible()) return;
+  // 低流量减频: 非手动刷新时, 把 8s 自动轮询降到 ≥60s 一次 (force/用户手动永远即时全量, 必要功能不受限)
+  if(!force && _lowDataOn() && (Date.now()-_lastDevRecentTs) < _LOWDATA_POLL_MS) return;
   if(_devRecentBusy) return;
   var P; try{ P=window.parent; }catch(e){ P=null; }
   if(!P || P===window || typeof P.__rtRelay!=="function"){ _restoreTrkFromVault(); return; }   // 拿不到父页通道 → 回退金库镜像
-  _devRecentBusy=true;
+  _devRecentBusy=true; _lastDevRecentTs=Date.now();
   // 看门狗(知止不殆·绝利一源): 中继若久悬不决(promise 既不 resolve 也不 reject·弱网/手机后台积压所致),
   //   _devRecentBusy 会永卡 true → 此后每轮刷新在第 855 行直接 return → _trk 冻结, 网页与手机彻底失同步
   //   (正是「久不识别/滞后」之根)。故设独立硬期限, 到点无条件解锁, 保刷新永不被单次悬挂永久拖死。
@@ -948,7 +961,9 @@ function _deviceRecentRefresh(force){
     try{ _saveTrkLocalOnly(); }catch(_e){}
     try{ paintTrk(); paintRowRun(); _repushTabsFromTrk(); }catch(_e){}
   }
-  P.__rtRelay("/api/rpc", { cmd:"recentConvAll", perAcc:3, max:40, conc:6 }, 12000).then(function(res){
+  // 低流量缩载荷: 直接走已有的最小载荷档 (perAcc:1 max:10 ≈2KB), 免去满载荷的 8× 流量
+  var _q = _lowDataOn() ? { cmd:"recentConvAll", perAcc:1, max:10, conc:2 } : { cmd:"recentConvAll", perAcc:3, max:40, conc:6 };
+  P.__rtRelay("/api/rpc", _q, 12000).then(function(res){
     var b=res&&res.body;
     if(res && res.status===413){
       // 载荷仍过大 → 再次降级: 仅取 10 条(约 2KB, 穿越任何中继)

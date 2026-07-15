@@ -51,6 +51,22 @@ ok(/id="lowDataToggle"/.test(traffic) && /id="wifiBackupToggle"/.test(traffic) &
 ok(/id="rxSession"/.test(traffic) && /id="txSession"/.test(traffic) && /id="rxAll"/.test(traffic), "面板含会话/累计收发展示");
 ok(/resetBtn/.test(traffic), "面板含累计重置");
 
+// ④b 低流量真实生效 (根因: 8s recentConvAll 全账号轮询 → 低流量减频+缩载荷; 手动永远全量)
+const SWITCH = path.join(__dirname, "..", "app", "src", "main", "assets", "engine", "switch.html");
+const switchHtml = fs.readFileSync(SWITCH, "utf8");
+ok(/@JavascriptInterface public void setLowDataAuto\(boolean on\)/.test(java) && /@JavascriptInterface public boolean isLowDataAuto\(\)/.test(java),
+   "桥: setLowDataAuto/isLowDataAuto (自动按网络选策略)");
+ok(/\\"metered\\":/.test(java) && /netInfoJson\(\)/.test(java.slice(java.indexOf("getTrafficStats"))),
+   "getTrafficStats 复用 netInfoJson() 且回传 metered (计费热点可识别)");
+ok(/function _lowDataOn\(\)/.test(switchHtml), "switch.html: _lowDataOn() 低流量判定 (手动优先·自动看计费)");
+ok(/_lowDataOn\(\) && \(Date\.now\(\)-_lastDevRecentTs\) < _LOWDATA_POLL_MS/.test(switchHtml),
+   "switch.html: 低流量下 8s 自动轮询节流到 ≥60s (force 手动不受限)");
+ok(/_lowDataOn\(\) \? \{ cmd:"recentConvAll", perAcc:1, max:10, conc:2 \}/.test(switchHtml),
+   "switch.html: 低流量下 recentConvAll 载荷缩到最小档");
+ok(/id="lowDataAutoToggle"/.test(traffic) && /setLowDataAuto/.test(traffic), "面板含「自动低流量(按网络)」开关并落桥");
+ok(/计费热点/.test(traffic), "面板明示计费热点 (WiFi 热点按计费处理)");
+ok(/rtflow\.cfg\.autoBackupWifiOnly/.test(traffic), "面板「仅WiFi备份」写入引擎共用配置键 (真实生效于备份门控)");
+
 // ⑤ 网页端对齐
 ok(/\{key:"traffic", file:"traffic\.html"/.test(consoleHtml), "console.html 板块注册表含 traffic");
 ok(/"traffic\.html":"traffic"/.test(consoleHtml), "console.html FILE2KEY 含 traffic");
