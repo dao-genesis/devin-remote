@@ -1255,7 +1255,7 @@ public class MainActivity extends AppCompatActivity {
                 if (u != null && u.startsWith("http")) {
                     // document-start 即挂麦克风/语音探针 → 早于页面脚本调用 getUserMedia, 确保语音一开始就被识别为「交互中」。
                     try { v.evaluateJavascript(MIC_AND_EDIT_PROBE_JS, null); } catch (Exception ignored) {}
-                    if (!tab.internal) injectUserScripts(v, u, "start"); // 油猴 @run-at document-start
+                    if (!tab.internal) { injectUserScripts(v, u, "start"); injectCfAuto(v, u); } // 油猴 @run-at document-start + CF 全自动编排
                 }
             }
             @Override public void onPageFinished(WebView v, String u) {
@@ -1281,6 +1281,7 @@ public class MainActivity extends AppCompatActivity {
                     scheduleMediaPrecollect(tab);   // 本页媒体预采 → 开面板/切标签秒出
                     if (tab.translated) applyTranslate(v); // 翻译态跨页保持
                     injectUserScripts(v, u, "end");       // 油猴 @run-at document-end/idle
+                    injectCfAuto(v, u);                   // CF 全自动编排 (document-end 兜底, 页内幂等)
                 }
             }
             // SPA(如 Devin) 经 history.pushState/replaceState 客户端路由不会触发 onPageStarted/Finished,
@@ -3600,6 +3601,37 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception e) { toast("读取菜单失败"); }
         }); } catch (Exception e) { toast("读取菜单失败"); }
     }
+    // ── Cloudflare「全自动建 Worker」编排 (cf-auto.js) 武装态 ──
+    //   tunnel.html 内页点「全自动」→ Native.cfAutoArm(cfg) 置位; 命中 github/cloudflare 页即注入编排器,
+    //   跨页自动完成登录/2FA/授权/建Token/抓取→灌入既有 /api/cf-provision。人机验证/硬件密钥命中即停手。
+    private volatile boolean cfAutoArmed = false;
+    private volatile String cfAutoCfgJson = "{}";
+    private static boolean cfAutoHost(String u) {
+        if (u == null) return false;
+        try {
+            String h = android.net.Uri.parse(u).getHost();
+            if (h == null) return false;
+            h = h.toLowerCase();
+            return h.equals("github.com") || h.endsWith(".github.com")
+                || h.equals("cloudflare.com") || h.endsWith(".cloudflare.com");
+        } catch (Exception e) { return false; }
+    }
+    /** 武装态且命中 github/cloudflare 页时, 注入 userscript.js 运行时(供跨域桥) + 配置 + cf-auto.js 编排器。 */
+    private void injectCfAuto(WebView w, String url) {
+        if (w == null || !cfAutoArmed || !cfAutoHost(url)) return;
+        try {
+            String rt = readAssetText("engine/userscript.js");
+            String core = readAssetText("engine/cf-auto.js");
+            if (core == null) return;
+            StringBuilder js = new StringBuilder();
+            js.append("(function(){try{");
+            js.append("window.__CFAUTO=").append(cfAutoCfgJson == null ? "{}" : cfAutoCfgJson).append(";");
+            if (rt != null) js.append(rt).append("\n");
+            js.append(core).append("\n");
+            js.append("}catch(e){}})();");
+            w.evaluateJavascript(js.toString(), null);
+        } catch (Exception ignored) {}
+    }
     /** 在页面注入所有匹配且启用的脚本 (phase: "start"=document-start, "end"=document-end/idle)。 */
     private void injectUserScripts(WebView w, String url, String phase) {
         if (w == null || url == null) return;
@@ -3946,6 +3978,13 @@ public class MainActivity extends AppCompatActivity {
         }
         // 面板「刷新Token」: 保留 url/session 身份, 仅强制轮换 token (旧 token 立即失效)
         @JavascriptInterface public void rotateRelayToken() { rotateRelayTokenForce(); }
+        /** 武装 CF 全自动编排: cfg = {active,bases[],session,relayToken,gh:{user,pass,otp}}。点一次长期有效, 直到 cfAutoDisarm。 */
+        @JavascriptInterface public void cfAutoArm(String cfgJson) {
+            cfAutoCfgJson = (cfgJson == null || cfgJson.trim().isEmpty()) ? "{}" : cfgJson;
+            cfAutoArmed = true;
+        }
+        @JavascriptInterface public void cfAutoDisarm() { cfAutoArmed = false; cfAutoCfgJson = "{}"; }
+        @JavascriptInterface public boolean cfAutoArmed() { return cfAutoArmed; }
         // ── 路线B 去中心化隧道: 代理到 RelayService (引擎进程持有 cloudflared) ──
         @JavascriptInterface public String tunnelStat() { return RelayService.tunnelStatus; }
         @JavascriptInterface public boolean isTunnelEnabled() {
