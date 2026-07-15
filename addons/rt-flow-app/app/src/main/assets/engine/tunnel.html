@@ -1230,11 +1230,31 @@ async function refreshHub(){
   }).join('');
 }
 refreshHub(); setInterval(refreshHub, 10000);
-function cfOpenTokenPage(){
-  var u="https://dash.cloudflare.com/profile/api-tokens";
-  try{ if(N.openTab){N.openTab(u);} else window.open(u,'_blank'); }catch(e){ try{window.open(u,'_blank');}catch(_){} }
-  _result('cf',true,'已打开 Cloudflare API Token 页 (模板选「编辑 Workers」→ 创建 → 复制回来粘贴)');
+//__CFDEEPLINK_START__ (经 test/cf-deeplink.test.js 切片实测, 勿删标记)
+// 预填权限模板的 Create Token 深链 (与 dao-vsix daoRelayTokenDeepLink / addons/dao-relay
+// provision.mjs 单一同源·五项权限逐字一致): 打开即已勾好本通道所需最小权限 + Token 名,
+// 用户只需点一次 Create 再复制 —— 把「建 Token」这一最难步骤压到一次点击。守柔: 不代登、
+// 不代提交、不采集凭证; 登录/2FA/Create 终键仍由用户在其自有会话内完成。
+function _cfTokenDeepLink(name){
+  var perms=[
+    {key:'workers_scripts',type:'edit'},
+    {key:'workers_kv_storage',type:'edit'},
+    {key:'account_settings',type:'read'},
+    {key:'zone',type:'read'},
+    {key:'workers_routes',type:'edit'}
+  ];
+  var q='permissionGroupKeys='+encodeURIComponent(JSON.stringify(perms))
+    +'&name='+encodeURIComponent(name||'dao-relay')
+    +'&accountId='+encodeURIComponent('*')
+    +'&zoneId='+encodeURIComponent('all');
+  return 'https://dash.cloudflare.com/profile/api-tokens?'+q;
 }
+function cfOpenTokenPage(){
+  var u=_cfTokenDeepLink('dao-relay');
+  try{ if(N.openTab){N.openTab(u);} else window.open(u,'_blank'); }catch(e){ try{window.open(u,'_blank');}catch(_){} }
+  _result('cf',true,'已打开 Cloudflare 建 Token 页 (权限已按 dao-relay 预填好) · 未登录则先用 GitHub/账号登录, 直接点 Create Token → 复制回来粘贴');
+}
+//__CFDEEPLINK_END__
 var _cfPollTimer=null;
 async function cfProvision(){
   var tok=(v('cfProvTok')||"").trim();
