@@ -15000,12 +15000,23 @@ function computeOrgInjectSig(token: string, url: string, rulesText: string, brid
         s: p.secrets.map(x => x.name + '=' + h(x.value)).sort(),
         k: p.knowledge.map(x => x.name + ':' + h(x.body) + ':' + (x.trigger || '')).sort(),
         pb: p.playbooks.map(x => x.title + ':' + h(x.body)).sort(),
-        m: p.mcps.map(x => mcpSlug(x) + ':' + h(x.url || x.command || '') + ':' + h(x.headers ? JSON.stringify(x.headers) : '')).sort(),
+        m: p.mcps.map(x => mcpSlug(x) + ':' + h(_stableBridgeMdForSig(x.url || x.command || '')) + ':' + h(x.headers ? JSON.stringify(x.headers) : '')).sort(),
         a: (p.automations || []).map(x => x.name + ':' + h(x.prompt || '')).sort(),
         ml: p.messageLimitAuto ? 'auto' : String(p.messageLimit),
         mo: p.messageLimitOffset, en: p.enabled, ac: p.autoCleanup,
     });
-    return h([token, url, h(rulesText), h(bridgeMd), items].join('|'));
+    return h([token, url, h(rulesText), h(_stableBridgeMdForSig(bridgeMd)), items].join('|'));
+}
+// sig 只取桥 MD 的稳定内核 — 帛书·「不失其所者久」: bridgeGenerateCloudMd 每次生成都带
+//   鲜时间戳(更新于:)与会轮换的快隧道 URL(*.trycloudflare.com); 若原文入 sig, 期望态哈希
+//   每轮必变 → skip-converged 快路永不命中 → 全池每轮全量重注(数百号×多写入), 收敛机制形同虚设。
+//   剥离这两类易变行后, sig 仅随真正的期望态(token/持久中继/准则/档案)而变; 快隧道轮换本身
+//   不再触发全池重注 —— 云端接入以持久化通道(固定域名)为主, 快隧道地址由文档自愈机制兜底。
+function _stableBridgeMdForSig(md: string): string {
+    return String(md || '')
+        .replace(/^更新于:.*$/gm, '')
+        .replace(/^鉴权方式:.*$/gm, '')
+        .replace(/https:\/\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.trycloudflare\.com/g, '(quick-tunnel)');
 }
 function getBatchInjectConcurrency(): number {
     try {
@@ -15064,6 +15075,10 @@ async function devinBatchInjectRun(accounts: DaoBatchAccount[]): Promise<DaoBatc
                 const auth = await devinAuthOnly(a.email, a.password);
                 if (!auth.ok) { res.error = auth.error; res.auth = 'login_failed'; return res; }
                 auth1 = auth.auth1!; orgId = auth.orgId!; res.auth = 'login';
+                // 本源修复(反向注入慢/永不收敛之根): 批量登录取到的真 auth1 必须落盘, 否则每轮
+                //   reconcile 都对全池重新密码登录 (数百号 × 秒级登录 + 429 冷却 → 久过看门狗窗口 →
+                //   done=0 处反复重启, 永不收敛)。落盘后下轮命中 cached 快路 (一次廉价 GET), 秒级收敛。
+                try { saveAccountAuthRecord(a.email, { auth1, orgId, orgName: auth.orgName, userId: auth.userId }); } catch { /* 守柔 */ }
             }
             res.orgId = orgId;
             try { res.cleaned = await devinCleanLegacyDaoKnowledge(orgId, auth1); } catch { /* 守柔 */ }
@@ -15666,6 +15681,11 @@ let _poolReconcileStartMs = 0;
 //   令 finally 永不执行, 此后所有 watch/periodic 触发恒 skip=inflight, 反向注入全盘瘫痪)。
 //   (20 分钟从容覆盖最坏冷启全池串并行耗时 ~12-16 分, 不误判正常长跑为僵死。)
 const POOL_RECONCILE_MAX_MS = 20 * 60 * 1000;
+// 健康长跑豁免 — 帛书·「静胜躁」: 看门狗只杀真僵死(久过上限且持续无任何推进), 不杀正在推进的冷启大池长跑 ——
+//   否则首次种入数百号必超 20 分 → 每到上限即弃跑重启回 done=0, 永不收敛(用户所报「反向注入全坏」之一根)。
+const POOL_RECONCILE_STALL_MS = 3 * 60 * 1000;
+let _poolReconcileLastDone = -1;
+let _poolReconcileLastAdvanceMs = 0;
 let _lastPoolReconcileSig = '';
 function computeAccountPoolSig(): string {
     try {
@@ -15696,15 +15716,23 @@ async function reconcileAccountPoolInject(reason: string, opts?: { force?: boole
     if (!hasSystemItems && !hasUserItems) { poolReconcileLog('trigger=' + reason + ' skip=empty'); return skip; }
     if (_poolReconcileInflight) {
         const age = Date.now() - _poolReconcileStartMs;
-        if (age < POOL_RECONCILE_MAX_MS) { poolReconcileLog('trigger=' + reason + ' skip=inflight age=' + Math.round(age / 1000) + 's'); return skip; }
-        // 旧轮僵死超时 → 弃之, 新轮接管(旧轮若复活, 其 finally 持旧 token 不会误清新轮 inflight)。
-        poolReconcileLog('trigger=' + reason + ' inflight-stale-reset age=' + Math.round(age / 1000) + 's');
+        const bp = daoBatchProgress;
+        if (bp && bp.running && bp.done > _poolReconcileLastDone) { _poolReconcileLastDone = bp.done; _poolReconcileLastAdvanceMs = Date.now(); }
+        const stalled = Date.now() - (_poolReconcileLastAdvanceMs || _poolReconcileStartMs);
+        if (age < POOL_RECONCILE_MAX_MS || stalled < POOL_RECONCILE_STALL_MS) {
+            poolReconcileLog('trigger=' + reason + ' skip=inflight age=' + Math.round(age / 1000) + 's done=' + (bp ? bp.done + '/' + bp.total : '?'));
+            return skip;
+        }
+        // 旧轮僵死超时且无推进 → 弃之, 新轮接管(旧轮若复活, 其 finally 持旧 token 不会误清新轮 inflight)。
+        poolReconcileLog('trigger=' + reason + ' inflight-stale-reset age=' + Math.round(age / 1000) + 's stalled=' + Math.round(stalled / 1000) + 's');
     }
     const sig = computeAccountPoolSig();
     if (!(opts && opts.force) && sig === _lastPoolReconcileSig) { poolReconcileLog('trigger=' + reason + ' skip=unchanged-sig'); return skip; }
     const myStart = Date.now();
     _poolReconcileInflight = true;
     _poolReconcileStartMs = myStart;
+    _poolReconcileLastDone = -1;
+    _poolReconcileLastAdvanceMs = myStart;
     poolReconcileLog('trigger=' + reason + (opts && opts.force ? ' force=1' : '') + ' RUN sig-changed');
     try {
         const r = await daoBatchInjectAllAccounts();
