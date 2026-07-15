@@ -159,6 +159,17 @@ function ok(cond, msg) { if (cond) { console.log("  ok  - " + msg); } else { fai
   const pingToVal = (function () { const m = src.match(/RELAY_PING_TO\s*=\s*(\d+)/); return m ? parseInt(m[1], 10) : 0; })();
   ok(pingToVal >= 15000, "I2 RELAY_PING_TO ≥ 15000ms (覆盖 mesh 往返 6~9s + 重传, 实=" + pingToVal + ")");
 
+  // J) 应答方双契约归一(源码守卫): 桌面 dao-vsix 原生应答方(extension.ts sigServeFrame)回
+  //    {t:'res', status, body(对象)}, 而手机/浏览器应答方回 {t:'res', result:{status,bodyText}}。
+  //    客户端仅认 r.result 会令桌面兜底 RPC 恒解析为 undefined(实测 dao-mesh-rpc 打桌面即复现)。
+  //    守住: res 处理须兼收 r.result 与 {status, body} 并归一为 {status, bodyText}。
+  const resIdx = src.indexOf('r.t === "res"');
+  const resSeg = resIdx >= 0 ? src.slice(resIdx, resIdx + 900) : "";
+  ok(/r\.result/.test(resSeg) && /r\.body/.test(resSeg) && /bodyText/.test(resSeg),
+    "J1 res 处理兼收 result 与 {status,body} 双契约并归一 bodyText");
+  ok(/r\.status\s*===\s*undefined\s*\?\s*200\s*:\s*r\.status/.test(resSeg),
+    "J2 归一时缺省 status=200、保留应答方原 status");
+
   console.log(failures ? ("\n失败 " + failures + " 项 ✗") : "\n全通 ✓");
   process.exit(failures ? 1 : 0);
 })().catch(function (e) { console.error("测试异常:", e); process.exit(1); });

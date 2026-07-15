@@ -384,7 +384,19 @@
           if (!r || !r.id) return;
           var rw = relayWaiters[r.id]; if (!rw) return; delete relayWaiters[r.id];
           if (r.t === "pong") rw.resolve({ pong: true, ts: r.ts });
-          else if (r.t === "res") rw.resolve(r.result);
+          else if (r.t === "res") {
+            // 应答方双契约归一: 手机版/浏览器 p2p 应答方回 {result:{status,bodyText}};
+            //   桌面 dao-vsix 原生应答方(extension.ts sigServeFrame)回 {status, body(对象)}。
+            //   仅认 r.result 会令桌面兜底 RPC 恒解析为 undefined(路线C 形同半聋)。此处兼收并蓄:
+            //   优先 r.result; 否则由 {status, body} 归一为 {status, bodyText}, 使二者对客户端等价。
+            var out = r.result;
+            if (out === undefined && (r.status !== undefined || r.body !== undefined)) {
+              var bt = (typeof r.body === "string") ? r.body
+                     : (r.body === undefined || r.body === null) ? "" : JSON.stringify(r.body);
+              out = { status: (r.status === undefined ? 200 : r.status), bodyText: bt };
+            }
+            rw.resolve(out);
+          }
         });
       });
     }
