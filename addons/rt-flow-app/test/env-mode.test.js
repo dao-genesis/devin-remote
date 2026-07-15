@@ -100,4 +100,21 @@ ok(/var em=DaoCloud\.getEnvMode\(a\)/.test(switchSrc), "dvCreate 读该号(卡�
   ok(!/menu\.__rtUp\)return/.test(comp), "旧一次性 __rtUp 守卫已移除 (重渲染即失效之根)");
 }
 
+// ── 7) 官方环境 UI 显形 (buildInjection · document_start UA 去 Mobile · 源级护栏) ──
+//   官方 SPA 按移动 UA (Android + Mobile) 隐藏 Configuration(⚙ Virtual environment/MCP)入口。
+//   根修 = document_start 覆写 navigator.userAgent 去 'Mobile' 标记 (仅 JS 层·保留 Android·不动 HTTP 头)。
+{
+  const JAVA = path.join(__dirname, "..", "app", "src", "main", "java", "ai", "devin", "rtflow");
+  const tabSrc = fs.readFileSync(path.join(JAVA, "TabActivity.java"), "utf8");
+  const inj = tabSrc.match(/static String buildInjection[\s\S]*?\n    \}/)[0];
+  ok(/navigator\.userAgent\|\|''/.test(inj), "buildInjection 读 navigator.userAgent");
+  ok(/replace\(' Mobile Safari',' Safari'\)/.test(inj) && /replace\(' Mobile',''\)/.test(inj), "去 'Mobile' 标记 (Mobile Safari→Safari)");
+  ok(/Object\.defineProperty\(Navigator\.prototype,'userAgent'/.test(inj), "JS 层 defineProperty 覆写 (不动原生 WebView UA/HTTP 头)");
+  ok(/NavigatorUAData\.prototype,'mobile'/.test(inj), "UA-CH: navigator.userAgentData.mobile → false");
+  ok(/if\(dua!==ua\)/.test(inj), "非移动 UA 环境不覆写 (幂等/无副作用)");
+  ok(!/setUserAgentString\(DESKTOP_UA\)/.test(inj), "不整体换桌面 UA (保 Android 输入法路径)");
+  // 注入仍限定 app.devin.ai (document_start allowlist)
+  ok(/addDocumentStartJavaScript\(web, script, Collections\.singleton\("https:\/\/app\.devin\.ai"\)\)/.test(tabSrc), "document_start 注入仅限 app.devin.ai");
+}
+
 process.exit(failures ? 1 : 0);

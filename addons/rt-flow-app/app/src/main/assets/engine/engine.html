@@ -1256,11 +1256,28 @@
     function loadPrev(){ try { return JSON.parse(localStorage.getItem(PREV_KEY)||"{}")||{}; } catch(e){ return {}; } }
     function savePrev(o){ try { localStorage.setItem(PREV_KEY, JSON.stringify(o)); } catch(e){} }
     function notify(tag, title, text){ try { if (N.notifyGlobal) N.notifyGlobal(String(tag), String(title), String(text)); } catch(e){} }
+    // 已提示账本(持久化·同一事件只提示一次): sid|kind → ts。状态解除(会话重新活跃)即剪,
+    //   未来真再次进入该状态才重新提示一次; 30 天自然过期防账本无限增长。
+    var ALERTED_KEY = "rtflow.convwatch.alerted";
+    function loadAlerted(){ try { return JSON.parse(localStorage.getItem(ALERTED_KEY)||"{}")||{}; } catch(e){ return {}; } }
+    function saveAlerted(o){ try { localStorage.setItem(ALERTED_KEY, JSON.stringify(o)); } catch(e){} }
+    function alertedOnce(led, sid, kind, now){
+      var k = sid + "|" + kind;
+      if (led[k]) return false;
+      led[k] = now; return true;
+    }
+    function alertedClear(led, sid, prefix){
+      var ch = false;
+      Object.keys(led).forEach(function(k){ if (k.indexOf(sid + "|" + prefix) === 0) { delete led[k]; ch = true; } });
+      return ch;
+    }
+    function alertedPrune(led, now){
+      Object.keys(led).forEach(function(k){ if (now - (led[k]||0) > 30*864e5) delete led[k]; });
+    }
     function watchEnabled(){ try { var v = localStorage.getItem("rtflow.convwatch.off"); return v !== "1"; } catch(e){ return true; } }
     // ── 额度通知·真·系统推送 (与对话卡座同款 notifyGlobal: 锁屏/切后台亦达; 来源精确·按账号节流·不刷屏) ──
     var QKEY = "rtflow.convwatch.quota";          // email -> {ts, cnt}  额度耗尽节流
     var QLKEY = "rtflow.convwatch.qlow";          // email -> {ts}       额度即将耗尽节流
-    var QUOTA_THROTTLE = 30*60*1000;              // 同账号「已耗尽」通知 >=30 分钟一次 (仍耗尽则定时提醒一次, 不扰民)
     var QLOW_THROTTLE = 6*3600*1000;              // 同账号「即将耗尽」预警 >=6 小时一次
     var QLOW_PCT = 10;                            // 日额度剩余 <= 此值且无 extra usage 缓冲 -> 即将耗尽
     var LKEY = "rtflow.convwatch.latest";         // email -> {name, ts}  最近对话名缓存
@@ -1282,7 +1299,8 @@
       nm = _latestName(email); if(nm) return nm;
       return String(email||"").split("@")[0];
     }
-    // 额度耗尽: 按账号聚合 N 个休眠对话, 跃迁(从无到有/数目增加)或超节流窗即真推送一次; 恢复(本轮无)即清, 下次再耗尽立报。
+    // 额度耗尽: 按账号聚合 N 个休眠对话, 仅跃迁(从无到有/数目增加)才推送一次; 同一耗尽状态绝不到时重推
+    //   (删了不再回来); 恢复(本轮真扫到且无耗尽)即清, 下次再耗尽立报。
     function quotaWatch(byAcct, titleByAcct, now, scanned){
       var q = _ls(QKEY), nq = {};
       // 扫描失败门控: 本轮未扫到的账号(网络抖动/单号失败)不等于已恢复 → 原样保留节流账本,
@@ -1290,8 +1308,8 @@
       if(scanned){ Object.keys(q).forEach(function(email){ if(!(email in byAcct) && !scanned[String(email).toLowerCase()]) nq[email]=q[email]; }); }
       Object.keys(byAcct).forEach(function(email){
         var cnt = byAcct[email]|0; if(cnt<=0) return;
-        var p = q[email], transition = !p || (p.cnt|0) < cnt, stale = p && (now - (p.ts||0) >= QUOTA_THROTTLE);
-        if (transition || stale) {
+        var p = q[email], transition = !p || (p.cnt|0) < cnt;
+        if (transition) {
           var subj = _acctConvName(email, titleByAcct && titleByAcct[email]);   // 主体优先用该号额度耗尽对话名(用户要求: 有对话即显示对话名, 不再显示账号名)
           notify("quota-" + email, "\uD83D\uDED1 " + subj + " \u989d\u5ea6\u5df2\u8017\u5c3d", cnt + " \u4e2a\u5bf9\u8bdd\u56e0\u914d\u989d\u8017\u5c3d\u4f11\u7720, \u8bf7\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
           nq[email] = { ts: now, cnt: cnt };
@@ -1512,6 +1530,7 @@
     window.__convTick = tick;
     function _convTrack(r){
       var prev = loadPrev(), next = {}, now = Date.now();
+      var led = loadAlerted(), ledCh = false; alertedPrune(led, now);
       var coldStart = !prev || !Object.keys(prev).length;   // 冷启(prev 空): 只播种, 不对全部既有活跃会话刷屏「新对话」
       var scanned = Object.create(null); (r.scanned||[]).forEach(function(e){ scanned[String(e).toLowerCase()]=1; });   // 本轮扫描成功的账号(门控结束判定)
       // 本轮 active(running/awaiting) 与 attention(action_required/blocked) 集合
@@ -1532,7 +1551,11 @@
       Object.keys(cur).forEach(function(sid){
         var c = cur[sid], p = prev[sid];
         next[sid] = { phase: c.phase, title: c.title, email: c.email, ts: now, msgId: c.msgId, reason: c.reason };
+        // 重新活跃 → 剪已提示账本(未来真再次卡住/终态才重新提示一次)
+        if (c.phase === "active") { if (alertedClear(led, sid, "")) ledCh = true; return; }
         if (c.phase === "stuck" && (!p || p.phase !== "stuck")) {
+          if (!alertedOnce(led, sid, "stuck-" + (c.reason||""), now)) return;
+          ledCh = true;
           var head = c.reason === "action_required" ? "⚠️ 待你处理" : (c.reason === "blocked" ? "⛔ 卡住/失败" : "⏳ 等待输入");
           notify("conv-" + sid, head + ": " + c.title, (c.email ? c.email + " · " : "") + (c.label || "Devin 需要你回应") );
         }
@@ -1550,6 +1573,8 @@
         var sid = ev && ev.sid; if (!sid) return; var p = prev[sid]; if (!p) return;
         if (p.phase !== "active" && p.phase !== "stuck" && p.phase !== "quota") return;
         endedSid[sid] = 1;
+        if (!alertedOnce(led, sid, "end", now)) return;
+        ledCh = true;
         var m = TERM[ev.term] || TERM.finished;
         notify("conv-" + sid, m[0] + ": " + (ev.title || p.title || sid), (p.email ? p.email + " · " : "") + m[1]);
       });
@@ -1560,11 +1585,14 @@
         var p = prev[sid]; if (p.phase !== "active" && p.phase !== "stuck" && p.phase !== "quota") return;
         var em = String(p.email || "").toLowerCase();
         if (scanned[em]) {
+          if (!alertedOnce(led, sid, "end", now)) return;
+          ledCh = true;
           notify("conv-" + sid, "✅ 已结束: " + (p.title || sid), (p.email ? p.email + " · " : "") + "对话已完成/停止");
         } else {
           next[sid] = { phase: p.phase, title: p.title, email: p.email, ts: p.ts || now, msgId: p.msgId, reason: p.reason, carried: true };
         }
       });
+      if (ledCh) saveAlerted(led);
       savePrev(next);
       try { _mirrorTickToVault(r.sessions, now, r.ended); } catch(e){}   // 常驻后台权威态写入共享金库(含最近结束闭环) → 网页/跨设备对话追踪恒鲜(≤60s)·一号不漏
       // 额度通知 (真·系统推送, 与对话卡座同款): 已耗尽聚合 + 即将耗尽预警。

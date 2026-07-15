@@ -3,7 +3,7 @@
 //   根治: 旧版额度耗尽只在切号页弹 toast(前台瞬时·切后台/锁屏不可见·形同无效)。
 //   现: 引擎后台轮询识别额度耗尽 → 聚合按账号 → notifyGlobal 真系统推送; 并主动预警「即将耗尽」。
 //   断言: ① trackStuck 逆流 QUOTA_RE 识别额度信号为 reason="quota";
-//         ② quotaWatch 跃迁/节流: 首现即推, 节流窗内不刷屏, 超窗再提醒, 恢复后清零下次立报;
+//         ② quotaWatch 仅跃迁推送: 首现/数目增加各推一次, 同一耗尽状态绝不到时重推(删了不再回来), 恢复后清零下次立报;
 //         ③ quotaLowWatch 仅在 dPct∈(0,阈值]且无 extra usage 缓冲时预警(杜绝 stale/未知误报)。
 // 无框架: 直接 node test/quota-notify.test.js, 退出码非 0 即失败。
 const fs = require("fs");
@@ -96,14 +96,14 @@ function makeHarness() {
   h.quotaWatch({ "alice@x.com": 3 }, { "alice@x.com": "修登录 bug" }, t0 + 6*60*1000);
   ok(h.notes.length === 2 && /3 个对话/.test(h.notes[1].text), "休眠数增加 → 跃迁再推送");
 
-  // 超节流窗(+31min from last notify) 仍耗尽 → 定时提醒一次
+  // 同一耗尽状态到时也绝不重推(用户根治: 删了通知不再回来) — 31min 后同数目 → 不再推
   h.quotaWatch({ "alice@x.com": 3 }, { "alice@x.com": "修登录 bug" }, t0 + 6*60*1000 + 31*60*1000);
-  ok(h.notes.length === 3, "超节流窗仍耗尽 → 定时提醒一次(必达)");
+  ok(h.notes.length === 2, "同一耗尽状态到时绝不重推(删了不再回来)");
 
-  // 恢复(本轮无该号) → 清零; 再次耗尽 → 立即(跃迁)推送, 不受旧节流时间戳压制
+  // 恢复(本轮无该号) → 清零; 再次耗尽 → 立即(跃迁)推送
   h.quotaWatch({}, {}, t0 + 6*60*1000 + 32*60*1000);
   h.quotaWatch({ "alice@x.com": 1 }, { "alice@x.com": "修登录 bug" }, t0 + 6*60*1000 + 33*60*1000);
-  ok(h.notes.length === 4, "恢复后再耗尽 → 立即推送(下次该报必报)");
+  ok(h.notes.length === 3, "恢复后再耗尽 → 立即推送(下次该报必报)");
 
   // 扫描失败门控: 本轮该号未扫到(scanned 缺席) → 账本保留, 不视为恢复; 下轮扫描成功且仍耗尽 → 不重推(非跃迁)
   const h3 = makeHarness();

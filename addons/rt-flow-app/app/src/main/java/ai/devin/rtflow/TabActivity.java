@@ -365,6 +365,9 @@ public class TabActivity extends AppCompatActivity {
      *   ② 种入 SPA 登录态: auth1_session={token,userId} + 迁移键 + known-org-ids + post-auth-v3 守键
      *   ③ cookie webapp_logged_in=true
      *   ④ fetch/XHR 强制注入 Authorization:Bearer + x-cog-org-id (= 桌面 DNR 等价物)
+     *   ⑤ navigator.userAgent 去 Mobile 标记(仅 JS 层·保留 Android): 官方 SPA 按移动 UA 隐藏
+     *      Configuration(⚙ Virtual environment/MCP)入口 —— JS 层去掉 'Mobile' 即原样显示官方
+     *      环境切换 UI; 原生 WebView UA(HTTP 头)不动, Chromium/输入法路径不受影响。
      * 关键修正: auth1_session 必须是 {token,userId} 对象 (旧版误写裸 token → SPA 解析失败, 登不进)。
      */
     static String buildInjection(String token, String userId, String org, String orgName) {
@@ -372,6 +375,13 @@ public class TabActivity extends AppCompatActivity {
         return "(function(){try{" +
             "var __a1='" + t + "',__uid='" + u + "',__org='" + o + "',__orgName='" + on + "';" +
             "try{sessionStorage.setItem('__dao_tab_isolated__','1');}catch(e){}" +
+            // 官方环境 UI 显形: SPA 以 /Android.*Mobile/ 判移动端并隐藏 Configuration 菜单 →
+            // document_start 覆写 navigator.userAgent 去 'Mobile' 标记(保留 Android·不动 HTTP 头 UA)。
+            "(function(){try{var ua=navigator.userAgent||'';" +
+            "var dua=ua.replace(' Mobile Safari',' Safari').replace('; Mobile;',';').replace(' Mobile','');" +
+            "if(dua!==ua){Object.defineProperty(Navigator.prototype,'userAgent',{get:function(){return dua;},configurable:true});}" +
+            "if(window.NavigatorUAData){Object.defineProperty(NavigatorUAData.prototype,'mobile',{get:function(){return false;},configurable:true});}" +
+            "}catch(e){}})();" +
             // iso 垫片: dao 登录态键改走 sessionStorage (本标签私有)
             "(function(){var DAO=/^(auth1_session$|migrated-to-unscoped-auth0-token|known-org-ids-|last-internal-org-for-external-org|post-auth-v3-)/;" +
             "var P=Storage.prototype,ls=window.localStorage,ss=window.sessionStorage,g=P.getItem,st=P.setItem,rm=P.removeItem;" +
