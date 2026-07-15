@@ -131,6 +131,38 @@ async function pxStoreGet(env, acc) {
   } catch (e) { return null; }
 }
 
+// 恒定地址「透明桥」目录: token → 最近连接的 session。使持久通道成为快速隧道 /api/* 的
+//   真·drop-in —— 调用方仅凭恒定地址 + Bearer(与快速隧道同 Token 同 API), 无需知 session;
+//   session 由 agent 连接时登记的目录自动解析。存于全局 i-store DO(服务端私有·7 天 TTL)。
+//   token 先 SHA-256 成 hex 再作键 → DO 存储不落明文凭据。
+async function _tokHash(token) {
+  try {
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(token)));
+    const a = new Uint8Array(buf);
+    let h = "";
+    for (let i = 0; i < a.length; i++) h += a[i].toString(16).padStart(2, "0");
+    return h;
+  } catch (e) { return "raw:" + String(token); }
+}
+async function bridgeDirPut(env, tkHash, session) {
+  try {
+    await pxStoreDO(env).fetch(new Request("https://do/dir-store", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tk: tkHash, session: session, ttl: 604800 }),
+    }));
+  } catch (e) {}
+}
+async function bridgeDirGet(env, tkHash) {
+  try {
+    const r = await pxStoreDO(env).fetch(new Request("https://do/dir-fetch", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tk: tkHash }),
+    }));
+    const j = await r.json();
+    return (j && j.ok && j.session) ? String(j.session) : "";
+  } catch (e) { return ""; }
+}
+
 function pxFindAcct(arr, acc) {
   acc = String(acc || "");
   for (const a of arr) { if (a && (a.email === acc || a.id === acc || String(a.no) === acc)) return a; }
@@ -613,7 +645,7 @@ async function bareV3(req, env) {
 }
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const url = new URL(req.url);
     const path = url.pathname;
 
@@ -746,6 +778,8 @@ export default {
       if (!sharedTokenOk(env, t)) return json({ error: "unauthorized" }, 401);
       // 按 (session,token) 配对定址 —— 客户端用自己的随机 token 即占用该命名空间。
       const id = env.DAO_RELAY.idFromName(relayKey(session, t));
+      // 透明桥目录: 登记 token→session, 使后续 /api/* 恒定地址透传无需显式 session。
+      try { if (ctx && ctx.waitUntil) ctx.waitUntil((async () => { await bridgeDirPut(env, await _tokHash(t), session); })()); } catch (e) {}
       return env.DAO_RELAY.get(id).fetch(req);
     }
 
@@ -898,6 +932,31 @@ export default {
       return new Response(up.body, { status: up.status, statusText: up.statusText, headers: out });
     }
 
+    // ── 恒定地址「透明桥」: Bearer 授权的机控请求(/api/*、/mcp*) 直透传给已连 agent ──────────
+    //   使持久通道成为快速隧道的真·drop-in: 调用方仅凭恒定地址 + Bearer(同 Token 同 API)即可,
+    //   无需 session —— session 由「连接时登记的 token→session 目录」自动解析(也可用 X-Dao-Session
+    //   头 / `?s=` 显式指定, 多设备共享一 token 时按需选)。/relay/<session> 帧驱动照旧不变(向后兼容)。
+    //   之所以此前 /api/health 返 not_found: 恒定地址只认框架化 POST /relay/<session>, 与用户文档
+    //   「持久通道同 API·GET /api/health 探活」相悖 → 自愈探活误判持久通道已死。此分支补齐之。
+    if (/^\/(api|mcp)(\/|$)/.test(path)) {
+      const t = bearer(req);
+      if (!t) return json({ error: "token required" }, 401);
+      if (!sharedTokenOk(env, t)) return json({ error: "unauthorized" }, 401);
+      let session = req.headers.get("X-Dao-Session") || url.searchParams.get("s") || "";
+      if (!session) session = await bridgeDirGet(env, await _tokHash(t));
+      if (!session) return json({ error: "no_agent", hint: "no connected agent for this token; provide X-Dao-Session or connect the bridge first" }, 502);
+      let body;
+      if (req.method !== "GET" && req.method !== "HEAD") { try { body = await req.json(); } catch (e) { body = undefined; } }
+      const frame = { path: path + (url.search || ""), method: req.method, body: body };
+      const id = env.DAO_RELAY.idFromName(relayKey(session, t));
+      const r = new Request("https://do/relay/" + encodeURIComponent(session), {
+        method: "POST",
+        headers: { "content-type": "application/json", "authorization": "Bearer " + t },
+        body: JSON.stringify(frame),
+      });
+      return env.DAO_RELAY.get(id).fetch(r);
+    }
+
     return json({ error: "not_found", path }, 404);
   },
 };
@@ -966,6 +1025,27 @@ export class DaoRelayDO {
         return json({ ok: false });
       }
       return json({ ok: true, auth: rec.auth });
+    }
+
+    // 透明桥目录 (全局 DO 实例·与 agent 无关): agent 连接时按 token 哈希登记其 session,
+    //   恒定地址 /api/* 透传时按 token 哈希取回 session → 无需调用方显式携带。
+    if (url.pathname === "/dir-store") {
+      let b = {}; try { b = await req.json(); } catch (e) {}
+      const tk = String((b && b.tk) || ""); const session = String((b && b.session) || "");
+      if (!tk || !session) return json({ error: "no_dir" }, 400);
+      const ttl = Math.max(60, Math.min(2592000, Number(b && b.ttl) || 604800));
+      try { await this.state.storage.put("bt:" + tk, { session: session, exp: Date.now() + ttl * 1000 }); } catch (e) {}
+      return json({ ok: true });
+    }
+    if (url.pathname === "/dir-fetch") {
+      let b = {}; try { b = await req.json(); } catch (e) {}
+      const tk = String((b && b.tk) || ""); if (!tk) return json({ error: "no_dir" }, 400);
+      let rec = null; try { rec = await this.state.storage.get("bt:" + tk); } catch (e) { rec = null; }
+      if (!rec || !rec.session || (rec.exp && rec.exp < Date.now())) {
+        if (rec) { try { await this.state.storage.delete("bt:" + tk); } catch (e) {} }
+        return json({ ok: false });
+      }
+      return json({ ok: true, session: rec.session });
     }
 
     // 客户端 WSS 接入 (Hibernation: 用 state.acceptWebSocket, 空闲可驱逐、WSS 保活)

@@ -177,6 +177,32 @@ test("pxAuthBridge: override window.WebSocket 同源化(同源补前缀·异源�
   assert.ok(/__pfx\+'\/__wsx\/'\+b/.test(workerSrc), "异源 wss → 本前缀 /__wsx/<b64> 代理");
 });
 
-test("VERSION 标记含 WS 反代(部署后 /health 可核)", () => {
-  assert.ok(/i-ws-proxy/.test(VERSION) || /ws/i.test(VERSION), "VERSION 体现 /i/ WS 代理");
+test("VERSION 体现当前头部能力(部署后 /health 可核)", () => {
+  assert.ok(/bridge-passthrough/.test(VERSION) || /i-ws-proxy/.test(VERSION) || /ws/i.test(VERSION), "VERSION 体现透明桥/WS 代理能力");
+});
+
+test("透明桥: 恒定地址 /api/* 与 /mcp* 经 Bearer 直透传给已连 agent (真·drop-in)", () => {
+  assert.ok(/\/\^\\\/\(api\|mcp\)\(\\\/\|\$\)\//.test(workerSrc), "存在 /api|/mcp 机控路径匹配分支");
+  // 解析 session 的三条来源: X-Dao-Session 头 / ?s= / token→session 目录
+  assert.ok(/req\.headers\.get\("X-Dao-Session"\)/.test(workerSrc), "支持 X-Dao-Session 头显式指定 session");
+  assert.ok(/url\.searchParams\.get\("s"\)/.test(workerSrc), "支持 ?s= 显式指定 session");
+  assert.ok(/bridgeDirGet\(env, await _tokHash\(t\)\)/.test(workerSrc), "无显式 session 时按 token 哈希查目录");
+  // 无 agent 时明确 502 no_agent, 不静默 404
+  assert.ok(/"no_agent"[\s\S]{0,120}502/.test(workerSrc), "无匹配 agent → 502 no_agent");
+  // GET/HEAD 不读体, 其余读 JSON 体, 合成框架帧转 DO
+  assert.ok(/method !== "GET" && req\.method !== "HEAD"/.test(workerSrc), "GET/HEAD 不读请求体");
+  assert.ok(/const frame = \{ path: path \+ \(url\.search \|\| ""\), method: req\.method, body: body \}/.test(workerSrc), "合成 {path,method,body} 框架帧");
+  assert.ok(/"https:\/\/do\/relay\/" \+ encodeURIComponent\(session\)/.test(workerSrc), "帧化 POST 到配对 DO 的 /relay/<session>");
+});
+
+test("透明桥目录: /connect 登记 token→session, DO 持久化 dir-store/dir-fetch", () => {
+  assert.ok(/ctx\.waitUntil\(\(async \(\) => \{ await bridgeDirPut\(env, await _tokHash\(t\), session\); \}\)\(\)\)/.test(workerSrc), "connect 时 waitUntil 登记目录(不阻塞握手)");
+  assert.ok(/url\.pathname === "\/dir-store"/.test(workerSrc) && /this\.state\.storage\.put\("bt:" \+ tk/.test(workerSrc), "DO 持久化 dir-store (bt:<tokenHash>)");
+  assert.ok(/url\.pathname === "\/dir-fetch"/.test(workerSrc) && /rec\.exp && rec\.exp < Date\.now\(\)/.test(workerSrc), "DO dir-fetch 带 TTL 过期清理");
+  assert.ok(/crypto\.subtle\.digest\("SHA-256"/.test(workerSrc), "目录键用 token 的 SHA-256 哈希, 不落明文凭据");
+});
+
+test("透明桥: /connect 与 /relay/<session> 框架驱动保持向后兼容(未改协议)", () => {
+  assert.ok(/if \(path\.startsWith\("\/relay\/"\)\)/.test(workerSrc), "/relay/<session> 帧驱动路由仍在");
+  assert.ok(/if \(path === "\/connect"\)/.test(workerSrc), "/connect 出站握手路由仍在");
 });

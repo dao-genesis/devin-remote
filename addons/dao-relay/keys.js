@@ -10,7 +10,7 @@
 // 故归一于此独立模块, 入口只导出 default 处理器与 RelayDO 类。
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const VERSION = "3.7.2-i-ws-proxy-fetch"; // + GET /fetch 边缘代理(国内网络取回 S3/CloudFront 附件字节·图片/视频/产出文件) · (session,token) 配对模型 + WebSocket Hibernation(上量省钱) + GET /console 自托管单网页控制台 + 转发只选「活」socket + /i/ 反代补全 WebSocket 升级代理(注入鉴权·根治网页内 Devin「一直连接中」)。重新部署后 /health 报此值即生效。
+export const VERSION = "3.8.0-bridge-passthrough"; // + 恒定地址「透明桥」: Bearer 授权的 /api/*、/mcp* 直透传给已连 agent(token→session 目录自动解析·无需显式 session)→ 持久通道成快速隧道真·drop-in(GET /api/health 探活可用) · GET /fetch 边缘代理(国内网络取回 S3/CloudFront 附件字节) · (session,token) 配对模型 + WebSocket Hibernation(上量省钱) + GET /console 自托管单网页控制台 + 转发只选「活」socket + /i/ 反代补全 WebSocket 升级代理(注入鉴权·根治网页内 Devin「一直连接中」)。重新部署后 /health 报此值即生效。
 
 // 从 hibernation 运行时回来的 WSS 列表里挑一个「确实 OPEN」的 agent socket。
 //   病灶(真机实测): 旧逻辑直接取 getWebSockets() 末位 → 客户端断线重连的窗口里, 末位可能是
