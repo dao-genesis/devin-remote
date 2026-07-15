@@ -82,6 +82,7 @@ public class MainActivity extends AppCompatActivity {
     static final String SCRIPTS = "rtflow://scripts";
     static final String SHIZUKU = "rtflow://shizuku";
     static final String DAOPAN = "rtflow://daopan";
+    static final String TRAFFIC = "rtflow://traffic";
     static final String DEVIN = "https://app.devin.ai/";
     private static final String SW_URL = "file:///android_asset/engine/switch.html";
     private static final String TU_URL = "file:///android_asset/engine/tunnel.html";
@@ -90,6 +91,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String SCR_URL = "file:///android_asset/engine/userscripts.html";
     private static final String SHZ_URL = "file:///android_asset/engine/shizuku.html";
     private static final String DP_URL = "file:///android_asset/engine/daopan.html";
+    private static final String TR_URL = "file:///android_asset/engine/traffic.html";
 
     // 搜索引擎 (国内环境可切百度) — 持久化于 SharedPreferences
     private static final String PREF_SEARCH = "search_engine";
@@ -779,27 +781,26 @@ public class MainActivity extends AppCompatActivity {
         mu.add(0, 2, 2, "公网穿透");
         mu.add(0, 10, 3, "VPN 加速");
         mu.add(0, 3, 4, "新标签 (Devin)");
-        mu.add(0, 13, 5, "无痕标签");
-        mu.add(0, 9, 7, "浏览历史");
-        mu.add(0, 12, 8, "书签收藏");
-        mu.add(0, 17, 6, "上传文件到网页端");
-        mu.add(0, 14, 9, "用户脚本 (油猴)");
-        mu.add(0, 15, 10, "Shizuku 权限 (自我 ADB)");
+        mu.add(0, 9, 5, "浏览历史");
+        mu.add(0, 12, 6, "书签收藏");
+        mu.add(0, 14, 7, "用户脚本 (油猴)");
+        mu.add(0, 18, 8, "流量处理");
         android.view.SubMenu page = mu.addSubMenu(0, 100, 9, "页面工具");
-        page.add(0, 40, 0, "\u25C0 后退");
-        page.add(0, 41, 1, "\u25B6 前进");
-        page.add(0, 42, 2, "\u2302 主页 (切号面板)");
-        page.add(0, 20, 3, "页内查找");
-        page.add(0, 21, 4, cur() != null && cur().desktop ? "切回移动版" : "桌面版网站");
-        page.add(0, 22, 5, "阅读模式");
-        page.add(0, 23, 6, cur() != null && cur().night ? "关闭夜间模式" : "夜间模式");
-        page.add(0, 16, 7, "脚本菜单 (油猴)");
-        page.add(0, 26, 8, "导出整机分享包 (APK+全部数据)");
-        page.add(0, 27, 8, "导入分享包 (换机同步)");
-        android.view.SubMenu shareM = mu.addSubMenu(0, 101, 10, "分享 / 快捷");
-        shareM.add(0, 30, 0, "分享本页");
-        shareM.add(0, 31, 1, "复制网址");
-        shareM.add(0, 32, 2, "添加到主屏");
+        page.add(0, 13, 0, "无痕标签");
+        page.add(0, 40, 1, "\u25C0 后退");
+        page.add(0, 41, 2, "\u25B6 前进");
+        page.add(0, 42, 3, "\u2302 主页 (切号面板)");
+        page.add(0, 20, 4, "页内查找");
+        page.add(0, 21, 5, cur() != null && cur().desktop ? "切回移动版" : "桌面版网站");
+        page.add(0, 22, 6, "阅读模式");
+        page.add(0, 23, 7, cur() != null && cur().night ? "关闭夜间模式" : "夜间模式");
+        page.add(0, 16, 8, "脚本菜单 (油猴)");
+        page.add(0, 30, 9, "分享本页");
+        page.add(0, 31, 10, "复制网址");
+        page.add(0, 32, 11, "添加到主屏");
+        page.add(0, 26, 12, "导出整机分享包 (APK+全部数据)");
+        page.add(0, 27, 13, "导入分享包 (换机同步)");
+        mu.add(0, 15, 10, "Shizuku 权限 (自我 ADB)");
         mu.add(0, 51, 11, "后台常驻 · 保活");
         mu.add(0, 50, 12, "检查更新 · v" + appVersionName());
         m.setOnMenuItemClickListener(it -> {
@@ -813,7 +814,7 @@ public class MainActivity extends AppCompatActivity {
                 case 9: showHistory(); return true;
                 case 12: showBookmarks(); return true;
                 case 14: newTab(SCRIPTS, null); return true;
-                case 17: pickUploadToPage(); return true;
+                case 18: newTab(TRAFFIC, null); return true;
                 case 16: showUserscriptMenu(); return true;
                 case 15: newTab(SHIZUKU, null); return true;
                 case 40: { Tab t = cur(); if (t != null && t.web.canGoBack()) t.web.goBack(); else toast("无法后退"); return true; }
@@ -1500,6 +1501,7 @@ public class MainActivity extends AppCompatActivity {
         else if (VPN.equals(url)) { real = VPN_URL; tab.internal = true; }
         else if (SCRIPTS.equals(url)) { real = SCR_URL; tab.internal = true; }
         else if (SHIZUKU.equals(url)) { real = SHZ_URL; tab.internal = true; }
+        else if (TRAFFIC.equals(url)) { real = TR_URL; tab.internal = true; }
         tab.url = real;
         tab.web.loadUrl(real);
     }
@@ -4020,6 +4022,52 @@ public class MainActivity extends AppCompatActivity {
             });
         }
         @JavascriptInterface public void toast(String s) { MainActivity.this.toast(s == null ? "" : s); }
+        // ── 流量处理面板 (traffic.html): 本 App UID 级流量统计 + 低流量模式 + 键值持久化 ──
+        /** 本 App (UID) 累计收发字节 + 当前网络 → JSON {rx,tx,type,metered,online}。
+         *  网络判定复用既有 netInfoJson()(现代 NetworkCapabilities·与系统「省流量」同源), 不另立一套。
+         *  TrafficStats 为开机以来累计, 面板端自行做差分。 */
+        @JavascriptInterface public String getTrafficStats() {
+            long rx = 0, tx = 0;
+            try {
+                int uid = android.os.Process.myUid();
+                rx = android.net.TrafficStats.getUidRxBytes(uid);
+                tx = android.net.TrafficStats.getUidTxBytes(uid);
+                if (rx < 0) rx = 0; if (tx < 0) tx = 0;
+            } catch (Exception ignored) {}
+            boolean metered = false, online = false; String type = "unknown";
+            try {
+                org.json.JSONObject net = new org.json.JSONObject(MainActivity.this.netInfoJson());
+                metered = net.optBoolean("metered", false);
+                online = net.optBoolean("online", false);
+                String t = net.optString("type", "unknown");
+                if (!online) type = "offline";
+                else if ("wifi".equals(t) || "ethernet".equals(t)) type = "wifi";
+                else if ("cellular".equals(t)) type = "mobile";
+                else type = metered ? "mobile" : (online ? "wifi" : "unknown");
+            } catch (Exception ignored) {}
+            return "{\"rx\":" + rx + ",\"tx\":" + tx + ",\"type\":\"" + type + "\",\"metered\":" + metered + ",\"online\":" + online + "}";
+        }
+        /** 低流量模式总开关: 面板切换时同步到 SharedPreferences, 引擎侧 (autoclean/备份/轮询) 读此键降频。 */
+        @JavascriptInterface public void setLowDataMode(boolean on) {
+            try { getSharedPreferences("rtflow", MODE_PRIVATE).edit().putBoolean("lowDataMode", on).apply(); } catch (Exception ignored) {}
+        }
+        /** 自动低流量: 开启后引擎按当前网络自动选策略 (计费网络=低流量档, WiFi=全速档); 手动开关优先。 */
+        @JavascriptInterface public void setLowDataAuto(boolean on) {
+            try { getSharedPreferences("rtflow", MODE_PRIVATE).edit().putBoolean("lowDataAuto", on).apply(); } catch (Exception ignored) {}
+        }
+        @JavascriptInterface public boolean isLowDataAuto() {
+            try { return getSharedPreferences("rtflow", MODE_PRIVATE).getBoolean("lowDataAuto", false); } catch (Exception e) { return false; }
+        }
+        @JavascriptInterface public boolean isLowDataMode() {
+            try { return getSharedPreferences("rtflow", MODE_PRIVATE).getBoolean("lowDataMode", false); } catch (Exception e) { return false; }
+        }
+        /** 面板通用键值持久化 (localStorage 在 file:// 下跨版本不稳, 落 SharedPreferences)。 */
+        @JavascriptInterface public String prefGet(String key) {
+            try { return getSharedPreferences("rtflow", MODE_PRIVATE).getString("kv_" + key, null); } catch (Exception e) { return null; }
+        }
+        @JavascriptInterface public void prefSet(String key, String val) {
+            try { getSharedPreferences("rtflow", MODE_PRIVATE).edit().putString("kv_" + key, val).apply(); } catch (Exception ignored) {}
+        }
         /** 震动反馈 (多选长按/低额提醒) — 直驱 Vibrator, 不受系统触感开关影响。 */
         @JavascriptInterface public void vibrate(int ms) { MainActivity.this.doVibrate(ms > 0 ? ms : 30); }
         // 全服通近期对话: 长按某行 → 起全局拖拽 (该对话 accJson+sid), 拖到任意网页松手注入两形态文件

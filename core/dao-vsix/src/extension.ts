@@ -1935,6 +1935,36 @@ async function daoRelayOAuthLogout(): Promise<{ ok: boolean; error?: string }> {
     return { ok: true };
 }
 
+// 纯凭证「零点击」全自动打通(承担一切负担): 用户只填 CF 账号密码(+可选 TOTP), 后端用 CDP 浏览器
+//   自动化驱动 CF 登录页+OAuth 授权页 → 复用 oauth/provision 换令牌部署持久 Worker。优先复用宿主
+//   已运行的 Chrome CDP(台式机上多半已是登录态 → 跳过登录直点授权·避开数据中心 IP 的 Turnstile 墙);
+//   playwright 缺失/被验证码或两步验证挡住时**优雅回退**一键授权链接(daoRelayOAuthLogin), 绝不空手。
+//   日志只出脱敏进度, 绝不出账号密码/TOTP/令牌明文。
+async function daoRelayCredLogin(email: string, password: string, totpSecret?: string): Promise<{ ok: boolean; url?: string; healthy?: boolean; error?: string; fallback?: { url?: string } }> {
+    const em = String(email || '').trim(); const pw = String(password || '');
+    if (!em || !pw) return { ok: false, error: '需要 Cloudflare 账号与密码' };
+    let mod: any;
+    try { mod = await daoRelayLoadMod('credlogin.mjs'); }
+    catch (e: any) { return { ok: false, error: String(e && e.message || e) }; }
+    // 复用宿主 Chrome CDP(台式机常驻登录态·避开 Turnstile); 拉不起也不阻塞 — 模块内会尝试自带 chromium。
+    let cdpEndpoint: string | undefined;
+    try { await daoCdpEnsureChrome(); cdpEndpoint = 'http://127.0.0.1:' + DAO_CDP_PORT; }
+    catch { /* 无可复用 Chrome, 交给模块自行 launch(需 playwright); 失败则下方回退 OAuth */ }
+    try {
+        const st = await mod.credLoginProvision({ email: em, password: pw, totpSecret: totpSecret || undefined, cdpEndpoint,
+            log: (m: string) => { try { console.log('[relay-cred] ' + m); } catch { /* 守柔 */ } } });
+        try { if (st && st.url) await daoRelaySetPersistent(st.url); } catch { /* 守柔 */ }
+        try { refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ }
+        return { ok: true, url: st && st.url, healthy: !!(st && st.healthy) };
+    } catch (e: any) {
+        // 优雅回退: 纯凭证被验证码/两步/无浏览器挡住 → 退回一键授权链接, 用户点一次即可全自动部署。
+        try { console.log('[relay-cred] 纯凭证自动化未完成, 回退一键授权: ' + (e && e.message || e)); } catch { /* 守柔 */ }
+        let fb: any = null;
+        try { fb = await daoRelayOAuthLogin(); } catch { /* 回退亦失败 */ }
+        return { ok: false, error: String(e && e.message || e), fallback: fb && fb.ok ? { url: fb.url } : undefined };
+    }
+}
+
 function daoFetchJson(u: string, timeoutMs: number): Promise<any> {
     return new Promise((resolve, reject) => {
         try {
@@ -4194,6 +4224,12 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         case '/api/relay/provision-token': {
             const rb: any = JSON.parse(await readBody(req) || '{}');
             return await daoRelayProvisionToken(String(rb.token || ''));
+        }
+        // 纯凭证「零点击」全自动: {email,password,totp?} → 后端 CDP 驱动 CF 登录+授权 → 部署持久 Worker。
+        //   被验证码/两步/无浏览器挡住时优雅回退一键授权链接(响应含 fallback.url)。日志不出明文。
+        case '/api/relay/cred-login': {
+            const rb: any = JSON.parse(await readBody(req) || '{}');
+            return await daoRelayCredLogin(String(rb.email || ''), String(rb.password || ''), rb.totp ? String(rb.totp) : undefined);
         }
         // OAuth 一次登录全自动打通(自动注册 CF Token·PKCE): 返回登录链接即可, 用户授权后后台自动部署落盘。
         case '/api/relay/oauth-login': { return await daoRelayOAuthLogin(); }
@@ -7963,8 +7999,14 @@ function rBridgeRelayCard(r){
     h+='<button class="btn sm" onclick="cmd(&#39;relayRestart&#39;)" title="重启 Worker 通道(断开重连); 连不上则自动升级为从零重建·后端自愈">🔄 重启 Worker</button>';
     h+='<button class="btn sm danger" onclick="if(confirm(&#39;撤销 Cloudflare 授权并删除本持久通道，回退到快速隧道/mesh？&#39;))cmd(&#39;relayOAuthLogout&#39;)">🗑 删除通道/切号</button></div>';
   } else {
-    h+='<div class="card"><div style="font-size:11px;color:var(--muted);margin-bottom:6px">想要<b style="color:var(--fg)">永不漂的固定公网地址</b>？点下面按钮 → 浏览器打开 Cloudflare 登录页 → 点一次授权即可。后端<b style="color:var(--fg)">全自动</b>注册 Token、部署 Worker、落盘并置顶接管，<b style="color:var(--fg)">无需手搓 Token</b>；令牌到期自动续期，出问题自愈。</div>';
-    h+='<button class="btn primary" onclick="cmd(&#39;relayOAuthLogin&#39;)">🔐 一次登录·全自动打通(推荐)</button></div>';
+    // ① 纯凭证·零点击全自动(承担一切负担): 只填 CF 账号密码(+可选 2FA) → 后端 CDP 驱动登录+授权+部署。
+    h+='<div class="card"><div style="font-size:11px;color:var(--muted);margin-bottom:6px">想要<b style="color:var(--fg)">永不漂的固定公网地址</b>？<b style="color:var(--fg)">只填 Cloudflare 账号密码</b>，后端<b style="color:var(--fg)">全自动</b>登录→授权→注册 Token→部署你自己的固定 Worker→落盘置顶接管，令牌到期自动续期、出问题自愈。<b style="color:var(--warn)">遇验证码/两步验证挡住时自动回退</b>为下方「一次授权」链接(点一次即可)。凭证仅用于本次登录，<b style="color:var(--fg)">不落盘、日志不出明文</b>。</div>';
+    h+='<input id="relayCfEmail" type="text" placeholder="Cloudflare 账号(邮箱)" autocomplete="off" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
+    h+='<input id="relayCfPass" type="password" placeholder="Cloudflare 密码" autocomplete="new-password" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
+    h+='<input id="relayCfTotp" type="text" placeholder="2FA TOTP 密钥(可选·填了才自动过两步验证)" autocomplete="off" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
+    h+='<button class="btn primary" style="margin-top:4px" onclick="relayCredGo()" title="只填账号密码 → 后端全自动登录+授权+部署持久 Worker(承担一切负担)">🚀 用账号密码·零点击全自动打通(推荐)</button>';
+    h+='<div style="font-size:10px;color:var(--muted);margin-top:8px">或：不想填密码？点下面用浏览器一次授权(不碰你的密码):</div>';
+    h+='<button class="btn" style="margin-top:4px" onclick="cmd(&#39;relayOAuthLogin&#39;)">🔐 一次授权·全自动打通</button></div>';
   }
   return h;
 }
@@ -8065,6 +8107,8 @@ function rBridgeAgents(){
 function bridgeCfLogin(){var e=document.getElementById('cfEmail'),k=document.getElementById('cfKey');var email=e?e.value.trim():'';var key=k?k.value.trim():'';if(!key){toast('请填写 Token / API Key',false);return}toast('验证中…',true);cmd('bridgeCfLogin',{email:email,key:key})}
 // 兜底通道·单一接口: 贴 API Token → 后端全自动 provision 持久 Worker(+尽力绑定凭证/命名隧道)。
 function relayTokenGo(){var k=document.getElementById('cfKey');var token=k?k.value.trim():'';if(!token){toast('请先贴入 Cloudflare API Token',false);return}toast('全自动打通中…(取账号→部署 Worker→落盘置顶, 约 1-2 分钟)',true);cmd('relayProvisionToken',{token:token})}
+// 纯凭证·零点击全自动: 只填 CF 账号密码(+可选 TOTP) → 后端 CDP 驱动登录+授权+部署持久 Worker(承担一切负担)。
+function relayCredGo(){var e=document.getElementById('relayCfEmail'),p=document.getElementById('relayCfPass'),t=document.getElementById('relayCfTotp');var email=e?e.value.trim():'';var pass=p?p.value:'';var totp=t?t.value.trim():'';if(!email||!pass){toast('请先填 Cloudflare 账号与密码',false);return}toast('🚀 零点击全自动打通中…(登录→授权→部署 Worker, 约 1-2 分钟; 遇验证码将自动回退一次授权)',true);cmd('relayCredLogin',{email:email,password:pass,totp:totp||undefined})}
 // 代登 Cloudflare: 用 GitHub 账号(账密+2FA 存号)后端代操作 → 隔离档链式代填建 API Token(守柔不代提交)。
 function relayGhAutoLogin(){var el=document.getElementById('relayGhLogin');var login=el?el.value.trim().replace(/^@/,''):'';if(!login){toast('请先填一个 GitHub 账号 login(需先在 GitHub 板块以账密+2FA 添加)',false);return}toast('🤖 代登 Cloudflare 中…隔离档浏览器将打开(GitHub 代登链→建 Token 页代填·守柔不代提交)',true);cmd('relayGhAutoLogin',{login:login})}
 function bridgeExec(){var c=document.getElementById('bridgeCmd');var v=c?c.value.trim():'';if(!v)return;var o=document.getElementById('bridgeOut');if(o)o.textContent='执行中…';cmd('bridgeExec',{cmd:v})}
@@ -9196,7 +9240,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'relayCredLogin', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
     // GitHub 纵向板块独立于 Devin 账号池(自带 PAT 鉴权) — daoGh* 一律免 Devin 登录
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command) && !/^daoGh/.test(String(msg.command || ''))) {
         reply({ type: 'error', msg: 'Not logged in' });
@@ -10842,6 +10886,17 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const r = await daoRelayGhAutoLogin(String(msg.login || ''));
                 vscode.window[r.ok ? 'showInformationMessage' : 'showErrorMessage']('DAO 持久通道·代登 Cloudflare: ' + (r.ok ? ('已在 ' + r.login + ' 隔离档打开 CF 建 Token 页(GitHub 代登链)' + (r.hasOtp ? '·2FA已填充' : '')) : (r.error || '失败')));
                 reply({ type: 'actionResult', command: 'relayGhAutoLogin', ok: !!r.ok, login: r.login, error: r.error });
+                break;
+            }
+            // 纯凭证「零点击」全自动: 只填 CF 账号密码(+可选 TOTP) → 后端 CDP 驱动登录+授权 → 部署持久 Worker。
+            //   被验证码/两步/无浏览器挡住时优雅回退一键授权链接(actionResult.fallbackUrl)。日志/回包不出明文。
+            case 'relayCredLogin': {
+                vscode.window.showInformationMessage('DAO 持久通道: 正在用账号密码全自动打通(登录→授权→部署 Worker)…');
+                const r = await daoRelayCredLogin(String(msg.email || ''), String(msg.password || ''), msg.totp ? String(msg.totp) : undefined);
+                if (r.ok) vscode.window.showInformationMessage('DAO 持久通道: ✓ 已打通 ' + (r.url || ''));
+                else if (r.fallback && r.fallback.url) { try { await vscode.env.clipboard.writeText(r.fallback.url); } catch { /* 守柔 */ } vscode.window.showWarningMessage('纯凭证自动化未完成(' + (r.error || '') + ')。已回退一键授权: 浏览器已打开授权页(链接已复制), 点一次授权即全自动部署。'); }
+                else vscode.window.showErrorMessage('DAO 持久通道打通失败: ' + (r.error || '未知错误'));
+                refreshReply({ type: 'actionResult', command: 'relayCredLogin', ok: !!r.ok, url: r.url, error: r.error, fallbackUrl: r.fallback && r.fallback.url });
                 break;
             }
             case 'relayOAuthRefresh': {
