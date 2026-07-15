@@ -1473,8 +1473,10 @@ public class MainActivity extends AppCompatActivity {
         if (t == null) return;
         t.remoteDriveUntil = System.currentTimeMillis() + REMOTE_DRIVE_KEEP_MS;
         if (t.web != null) {
-            try { t.web.onResume(); } catch (Exception ignored) {}
-            try { t.web.resumeTimers(); } catch (Exception ignored) {}
+            // 全量唤醒(含 page-visibility 卡 hidden 的翻转纠正): 深冻结页仅 onResume+resumeTimers
+            //   不足以解冻(计时器/fetch 回调仍停摆) → 远程直驱后台标签必须与 selectTab 同级唤醒,
+            //   否则远端只能靠激活标签(抢用户前台)才能驱动 → 违背「道并行不相悖」。
+            resumeWeb(t.web);
             keepRenderer(t.web, true);
         }
     }
