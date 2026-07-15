@@ -2,7 +2,7 @@
   "name": "dao-one",
   "displayName": "道 · 归一 (Dao One)",
   "description": "归一超级插件本体: 单一驾驶舱按'意图'统御全功能面板(dao-vsix)+提示词隔离·外接模型路由(dao-proxy-pro)+Devin Cloud 多账号/备份/回归本源(rt-flow)。三引擎隐形协作,用户无感无为,系统无不为。大道至简,道法自然。",
-  "version": "2.23.3",
+  "version": "2.24.0",
   "publisher": "dao",
   "license": "Apache-2.0",
   "icon": "media/icon.png",
@@ -16,7 +16,6 @@
   "keywords": [
     "dao",
     "devin",
-    "cascade",
     "proxy",
     "byok",
     "归一",
@@ -40,11 +39,6 @@
           "id": "dao-one",
           "title": "道 · 归一",
           "icon": "media/icon.svg"
-        },
-        {
-          "id": "dao-cascade",
-          "title": "Devin Desktop",
-          "icon": "$(comment-discussion)"
         }
       ]
     },
@@ -55,50 +49,12 @@
           "name": "切号 · 账号管理",
           "type": "webview"
         }
-      ],
-      "dao-cascade": [
-        {
-          "id": "dao.cascade",
-          "name": "Cascade · 三模式",
-          "type": "webview"
-        }
       ]
     },
     "commands": [
       {
         "command": "dao.one.refresh",
         "title": "道·归一: 刷新驾驶舱"
-      },
-      {
-        "command": "dao.cascade.open",
-        "title": "Devin Desktop: 聚焦 Cascade 三模式面板"
-      },
-      {
-        "command": "dao.cascade.newSession",
-        "title": "Devin Desktop: 新建 Cascade 会话",
-        "icon": "$(add)"
-      },
-      {
-        "command": "dao.cascade.history",
-        "title": "Devin Desktop: Cascade 历史会话",
-        "icon": "$(history)"
-      },
-      {
-        "command": "dao.cascade.deepwiki",
-        "title": "Devin Desktop: DeepWiki 解释选中符号"
-      },
-      {
-        "command": "dao.cascade.genCommit",
-        "title": "Devin Desktop: ✨ 生成提交信息 (GenerateCommitMessage)",
-        "icon": "$(sparkle)"
-      },
-      {
-        "command": "dao.cascade.sendProblems",
-        "title": "Devin Desktop: 把问题发送到 Cascade (Send problems)"
-      },
-      {
-        "command": "dao.cascade.explainFix",
-        "title": "Devin Desktop: 解释并修复 (Explain and Fix)"
       },
       {
         "command": "dao.startServer",
@@ -982,51 +938,11 @@
         }
       }
     ],
-    "keybindings": [
-      {
-        "command": "dao.cascade.open",
-        "key": "ctrl+l",
-        "mac": "cmd+l",
-        "when": "!terminalFocus && !editorHasSelection"
-      },
-      {
-        "command": "dao.cascade.newSession",
-        "key": "ctrl+shift+l",
-        "mac": "cmd+shift+l",
-        "when": "!terminalFocus"
-      }
-    ],
     "menus": {
       "editor/title/run": [
         {
           "command": "dao.openDashboard",
           "when": "true"
-        }
-      ],
-      "view/title": [
-        {
-          "command": "dao.cascade.newSession",
-          "when": "view == dao.cascade",
-          "group": "navigation@1"
-        },
-        {
-          "command": "dao.cascade.history",
-          "when": "view == dao.cascade",
-          "group": "navigation@2"
-        }
-      ],
-      "scm/title": [
-        {
-          "command": "dao.cascade.genCommit",
-          "when": "scmProvider == git",
-          "group": "navigation@1"
-        }
-      ],
-      "editor/context": [
-        {
-          "command": "dao.cascade.explainFix",
-          "when": "editorTextFocus",
-          "group": "1_modification@9"
         }
       ]
     }
