@@ -5551,7 +5551,15 @@ async function daoGhFleetList(orgPat: string, org: string): Promise<{ login: str
     orgPat = String(orgPat || '').trim(); org = String(org || '').trim();
     type FleetRow = { login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string; pending?: boolean };
     const out: FleetRow[] = [];
+    let dirty = false;
     for (const a of fleet) {
+        // 自愈: 断网入队(verify='pending')的成员 PAT 在刷新时重新校验 — 网络恢复且 PAT 有效即自动清除 pending;
+        // 仍不可达则守柔保留 pending, PAT 明确失效才留待用户处理(不擅自删档)。绝不再让「一次断网」永久卡 pending。
+        if ((a as any).verify === 'pending' && a.pat && a.pat.trim()) {
+            const rv = await daoGhAccountVerify(a.pat.trim());
+            if (rv.ok) { delete (a as any).verify; if (rv.login) a.login = rv.login; dirty = true; }
+            await _ghSleep(200);
+        }
         const row: FleetRow = { login: a.login, role: a.role || 'member', note: a.note || '', addedAt: a.addedAt || '', hasPat: !!(a.pat && a.pat.trim()), hasCred: !!(a.cred && a.cred.user), active: !!(a.pat && orgPat && a.pat.trim() === orgPat), pending: (a as any).verify === 'pending' };
         if (orgPat && org) {
             const r = await ghApiRequest('GET', '/orgs/' + encodeURIComponent(org) + '/memberships/' + encodeURIComponent(a.login), orgPat);
@@ -5560,6 +5568,7 @@ async function daoGhFleetList(orgPat: string, org: string): Promise<{ login: str
         }
         out.push(row);
     }
+    if (dirty) { try { saveInjectProfile(prof); } catch { /* 守柔 */ } }
     return out;
 }
 // 组织内角色互转(管理者↔成员): 用本体组织 admin PAT PUT membership role, 并同步舰队存档。
