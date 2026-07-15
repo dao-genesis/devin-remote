@@ -290,6 +290,37 @@
     return { ok: true, title: title, md: lines.join("\n"), events: 0, fallback: true };
   }
 
+  // 结构化导出 (原生 Devin 页面式查看的数据源): 复用 exportSession 的取数/兜底/重登逻辑,
+  //   但不拼 MD, 而是把事件流经 classifyEvent 归成有序气泡项 items:[{kind,role,text,detail,ts}]。
+  //   kind ∈ user|devin|think|tool。呈现层(daopan)据此渲染同 Devin 官网的对话气泡布局。
+  async function exportSessionRich(acc, sid, low) {
+    var detail = await sessionDetail(acc, sid, low);
+    if (!detail.ok && _authDead(detail.status) && await _reloginAcc(acc)) detail = await sessionDetail(acc, sid, low);
+    var title = (detail.ok && detail.session && detail.session.title) || sid;
+    var status = (detail.ok && detail.session && (detail.session.status_enum || detail.session.status || detail.session.state)) || "";
+    var ev = await sessionEvents(acc, sid, low);
+    if (!ev.ok && _authDead(ev.status) && await _reloginAcc(acc)) ev = await sessionEvents(acc, sid, low);
+    if (ev.ok && ev.events.length) {
+      var items = [];
+      ev.events.forEach(function (e) { var c = classifyEvent(e); if (c) { c.ts = evTs(e); items.push(c); } });
+      if (items.length) return { ok: true, title: title, sid: sid, status: status, items: items, events: ev.events.length };
+    }
+    // 事件流空 → /messages 兜底 (仅用户/Devin 两类气泡)
+    var msgs = await sessionMessages(acc, sid, low);
+    if (!msgs.ok && _authDead(msgs.status) && await _reloginAcc(acc)) msgs = await sessionMessages(acc, sid, low);
+    if (!(msgs.messages || []).length) {
+      var st = msgs.status || ev.status || detail.status || 0;
+      return { ok: false, status: st, error: "提取失败: 事件流与消息均空" + (st ? " (HTTP " + st + (_authDead(st) ? " · auth1 过期且重登失败, 请核对该账号密码" : "") + ")" : "") };
+    }
+    var mitems = (msgs.messages || []).map(function (m) {
+      var role = m.role || m.type || "unknown"; var content = m.content || m.text || m.message || "";
+      if (role === "user" || role === "human") return { kind: "user", role: "用户", text: asText(content), ts: "" };
+      if (role === "assistant" || role === "ai" || role === "devin") return { kind: "devin", role: "Devin", text: asText(content), ts: "" };
+      return { kind: "tool", role: role, detail: asText(content), ts: "" };
+    });
+    return { ok: true, title: title, sid: sid, status: status, items: mitems, events: 0, fallback: true };
+  }
+
   // 平台无硬删 REST 路由 (DELETE /api/sessions/{id} 实测 404/405); v3 terminate+archive 作兜底,
   // 未来若开放硬删则自动命中。archive 才是平台最强清除, 见 purgeSession。
   async function deleteSession(acc, sid) {
@@ -916,7 +947,8 @@
     buildAccessGuide: buildAccessGuide,
     purgeSession: purgeSession, sessTs: sessTs, sessCreatedTs: sessCreatedTs,
     listSessions: listSessions, sessionDetail: sessionDetail, sessionMessages: sessionMessages,
-    sessionEvents: sessionEvents, exportSession: exportSession, deleteSession: deleteSession,
+    sessionEvents: sessionEvents, exportSession: exportSession, exportSessionRich: exportSessionRich,
+    classifyEvent: classifyEvent, evTs: evTs, deleteSession: deleteSession,
     extractAllKeys: extractAllKeys, mapKeysToPaths: mapKeysToPaths,
     resolvePresignedUrls: resolvePresignedUrls, collectSessionFiles: collectSessionFiles,
     backupAccount: backupAccount, buildConversation: buildConversation, buildWorklog: buildWorklog,

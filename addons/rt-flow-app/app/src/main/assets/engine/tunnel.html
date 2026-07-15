@@ -1108,15 +1108,34 @@ function copyAllChannels(){
 renderChannels();
 //__HUBUI_START__ 接入电脑(手机=中枢) + Cloudflare 一键建 Worker · 前端 (经本机 LocalServer 回环调 relay-app 路由; 经 test/tunnel-frugal.test.js 切片实测, 勿删标记)
 function _hubPort(){ var l=_lan(); return (l.port|0)||0; }
+// 中枢 RPC 入口候选 (道法自然·回环优先, 不可达则经公网入口回中转到本机 LocalServer):
+//   被控端(PowerShell)本就经 <公网入口>/relay/<session> 注册到本机 relay-app 注册表; 手机端查询
+//   同一注册表既可走 127.0.0.1 回环(最快), 回环端口未探到/不可达时可经任一活公网入口(去中心化隧道>
+//   零账号中继)round-trip 回本机 —— 故只要任一通道在线, 设备列表/吊销/CF 部署即可用, 不再空手报错。
+function _hubBases(){
+  var c=_conn(), l=_lan(), bases=[], port=(l.port|0)||0;
+  if(port) bases.push("http://127.0.0.1:"+port);
+  function add(u){ if(!u) return; u=String(u).replace(/\/$/,''); if(u&&bases.indexOf(u)<0) bases.push(u); }
+  try{ add(_bestPublic().base); }catch(e){}
+  try{ var t=_tunnel(); if(t) add(t.url); }catch(e){}
+  add(c.url);
+  return bases;
+}
 async function _hubRpc(path, body){
-  var c=_conn(), port=_hubPort();
-  if(!port) throw new Error("本机服务未就绪(稍候重试)");
-  var res=await fetch("http://127.0.0.1:"+port+"/relay/"+encodeURIComponent(c.session||"local"),{
-    method:"POST",
-    headers:{"Authorization":"Bearer "+(c.token||""),"Content-Type":"application/json"},
-    body:JSON.stringify({path:path,method:"POST",body:body||{}})});
-  if(!res.ok) throw new Error("本机回环 HTTP "+res.status);
-  return res.json();
+  var c=_conn(), bases=_hubBases();
+  if(!bases.length) throw new Error("无可用通道·请开启「去中心化隧道」或等零账号中继就绪后重试");
+  var lastErr="";
+  for(var i=0;i<bases.length;i++){
+    try{
+      var res=await fetch(bases[i]+"/relay/"+encodeURIComponent(c.session||"local"),{
+        method:"POST",
+        headers:{"Authorization":"Bearer "+(c.token||""),"Content-Type":"application/json"},
+        body:JSON.stringify({path:path,method:"POST",body:body||{}})});
+      if(!res.ok){ lastErr="HTTP "+res.status; continue; }
+      return res.json();
+    }catch(e){ lastErr=String(e&&e.message||e); }
+  }
+  throw new Error(lastErr||"全部通道不可达");
 }
 // 前端兜底生成「电脑一行接入」PowerShell —— 与 relay-app.js 的 hubBootstrapPs1() 逐字节同构
 // (由 test/phone-hub.test.js 断言二者一致, 改一处必须两处同步)。回环 RPC 未就绪(localServer 未起/
@@ -1187,8 +1206,8 @@ async function refreshHub(){
   // 诚实状态: RPC 失败不再静默 —— 显示真实原因+最后检查时间, 不留过期的旧「暂无」伪正常
   if(!ag){
     var ts=_hubLastCheck?new Date(_hubLastCheck).toLocaleTimeString():'—';
-    el.innerHTML='<span class="muted" style="color:#f85149">⚠ 设备列表暂不可达'+(errMsg?(' · '+errMsg.slice(0,60)):'')+'</span>'
-      +'<br><span class="muted">最后成功获取: '+ts+'</span>';
+    el.innerHTML='<span class="muted" style="color:#f85149">⚠ 设备列表暂不可达'+(errMsg?(' · '+errMsg.slice(0,80)):'')+'</span>'
+      +'<br><span class="muted">最后成功获取: '+ts+' · 先「复制 PowerShell 接入指令」到电脑运行, 或确认已开启一条公网通道</span>';
     return;
   }
   try{ var ael=document.getElementById('agents'); if(ael) ael.textContent=String(ag.filter(function(a){return a.status==='online';}).length); }catch(e){}
@@ -1211,11 +1230,31 @@ async function refreshHub(){
   }).join('');
 }
 refreshHub(); setInterval(refreshHub, 10000);
-function cfOpenTokenPage(){
-  var u="https://dash.cloudflare.com/profile/api-tokens";
-  try{ if(N.openTab){N.openTab(u);} else window.open(u,'_blank'); }catch(e){ try{window.open(u,'_blank');}catch(_){} }
-  _result('cf',true,'已打开 Cloudflare API Token 页 (模板选「编辑 Workers」→ 创建 → 复制回来粘贴)');
+//__CFDEEPLINK_START__ (经 test/cf-deeplink.test.js 切片实测, 勿删标记)
+// 预填权限模板的 Create Token 深链 (与 dao-vsix daoRelayTokenDeepLink / addons/dao-relay
+// provision.mjs 单一同源·五项权限逐字一致): 打开即已勾好本通道所需最小权限 + Token 名,
+// 用户只需点一次 Create 再复制 —— 把「建 Token」这一最难步骤压到一次点击。守柔: 不代登、
+// 不代提交、不采集凭证; 登录/2FA/Create 终键仍由用户在其自有会话内完成。
+function _cfTokenDeepLink(name){
+  var perms=[
+    {key:'workers_scripts',type:'edit'},
+    {key:'workers_kv_storage',type:'edit'},
+    {key:'account_settings',type:'read'},
+    {key:'zone',type:'read'},
+    {key:'workers_routes',type:'edit'}
+  ];
+  var q='permissionGroupKeys='+encodeURIComponent(JSON.stringify(perms))
+    +'&name='+encodeURIComponent(name||'dao-relay')
+    +'&accountId='+encodeURIComponent('*')
+    +'&zoneId='+encodeURIComponent('all');
+  return 'https://dash.cloudflare.com/profile/api-tokens?'+q;
 }
+function cfOpenTokenPage(){
+  var u=_cfTokenDeepLink('dao-relay');
+  try{ if(N.openTab){N.openTab(u);} else window.open(u,'_blank'); }catch(e){ try{window.open(u,'_blank');}catch(_){} }
+  _result('cf',true,'已打开 Cloudflare 建 Token 页 (权限已按 dao-relay 预填好) · 未登录则先用 GitHub/账号登录, 直接点 Create Token → 复制回来粘贴');
+}
+//__CFDEEPLINK_END__
 var _cfPollTimer=null;
 async function cfProvision(){
   var tok=(v('cfProvTok')||"").trim();

@@ -45,7 +45,48 @@ iframe{border:0;width:100%;height:100%;display:block;background:#0e1116}
 .cv-tab .x{color:#6e7681;font-weight:700;padding:0 1px}
 .cv-tab.on .x{color:#9aa4b2}
 .cv-actions{display:flex;gap:6px;padding:5px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
-.cv-body{flex:1;overflow:auto;padding:12px 12px 50px;white-space:pre-wrap;word-break:break-word;font:12.5px/1.6 -apple-system,Segoe UI,Roboto,monospace;color:#cdd3de}
+/* 原生 Devin 页面式对话呈现: 气泡分区 + markdown 排版 (本地备份数据驱动) */
+.cv-body{flex:1;overflow:auto;padding:14px 12px 60px;word-break:break-word;font:13.5px/1.62 -apple-system,Segoe UI,Roboto,sans-serif;color:#cdd3de}
+.cv-body.plain{white-space:pre-wrap;font-family:monospace;font-size:12.5px}
+.cv-head{margin:0 2px 12px;padding-bottom:9px;border-bottom:1px solid #21262d}
+.cv-head .h1{font-size:16px;font-weight:700;color:#e6edf3;line-height:1.35}
+.cv-head .sub{font-size:11px;color:#6e7681;margin-top:4px;display:flex;gap:9px;flex-wrap:wrap;align-items:center}
+.cv-head .pill{background:#161b22;border:1px solid #30363d;border-radius:20px;padding:1px 9px}
+.msg{display:flex;gap:9px;margin:0 0 14px;align-items:flex-start}
+.msg .av{flex:0 0 auto;width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:15px;background:#1b212b;border:1px solid #2a313c}
+.msg.user .av{background:#11304d;border-color:#1f4b73}
+.msg.devin .av{background:#1a2b1f;border-color:#2c5138}
+.msg .col{flex:1;min-width:0}
+.msg .who{font-size:12px;font-weight:700;color:#adbac7;margin:3px 0 4px;display:flex;gap:8px;align-items:center}
+.msg .who .t{font-weight:400;color:#6e7681;font-size:10.5px}
+.msg .bub{background:#161b22;border:1px solid #21262d;border-radius:10px;padding:9px 12px;overflow:hidden}
+.msg.user .bub{background:#12233a;border-color:#1f3a56}
+.msg.devin .bub{background:#131a15;border-color:#243d2b}
+/* 思考 / 工具: 默认折叠的淡化块 */
+.step{margin:0 0 9px 37px;border:1px solid #21262d;border-radius:9px;background:#12161c;overflow:hidden}
+.step>summary{cursor:pointer;list-style:none;padding:6px 11px;font-size:12px;color:#8b949e;display:flex;gap:7px;align-items:center;user-select:none}
+.step>summary::-webkit-details-marker{display:none}
+.step>summary .caret{color:#5a626c;transition:.15s;font-size:10px}
+.step[open]>summary .caret{transform:rotate(90deg)}
+.step.think>summary{color:#9a86c4}
+.step .in{padding:2px 12px 11px}
+.step .in pre{margin:6px 0 0}
+/* markdown 元素 */
+.md{font-size:13.5px;line-height:1.62}
+.md p{margin:0 0 9px}.md p:last-child{margin-bottom:0}
+.md h1,.md h2,.md h3,.md h4{margin:14px 0 7px;color:#e6edf3;line-height:1.3;font-weight:700}
+.md h1{font-size:18px}.md h2{font-size:16px}.md h3{font-size:14.5px}.md h4{font-size:13.5px}
+.md ul,.md ol{margin:0 0 9px;padding-left:22px}.md li{margin:2px 0}
+.md a{color:#58a6ff;text-decoration:none}.md a:active{text-decoration:underline}
+.md code{background:#0d1117;border:1px solid #21262d;border-radius:4px;padding:1px 5px;font:12px/1.5 monospace;color:#c9d1d9}
+.md pre{background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:10px 12px;overflow:auto;margin:0 0 9px}
+.md pre code{background:none;border:0;padding:0;white-space:pre;color:#c9d1d9}
+.md blockquote{margin:0 0 9px;padding:2px 0 2px 11px;border-left:3px solid #30363d;color:#9aa4b2}
+.md img{max-width:100%;height:auto;border-radius:8px;margin:6px 0;display:block;background:#0d1117}
+.md table{border-collapse:collapse;margin:0 0 9px;font-size:12.5px;display:block;overflow:auto}
+.md th,.md td{border:1px solid #30363d;padding:4px 9px}.md th{background:#161b22}
+.md hr{border:0;border-top:1px solid #21262d;margin:12px 0}
+.viewtoggle{font-size:11px;color:#6e7681}
 .toast{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:8px 14px;font-size:12.5px;opacity:0;transition:.2s;pointer-events:none;z-index:30;max-width:90%}
 .toast.show{opacity:1}.toast.fail{border-color:#f85149}.toast.ok{border-color:#3fb950}
 </style></head>
@@ -174,6 +215,62 @@ function _seedFromCache(){
 }
 
 function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
+// ── 轻量 markdown → HTML (原生 Devin 页面式对话呈现·无外部依赖) ─────────────
+//   支持: 代码块(```), 标题, 有序/无序列表, 引用, 表格, 图片, 链接, 行内 code/粗斜体, 水平线。
+//   安全: 先整体转义, 再在受控子集上还原标记; 链接/图片只放行 http(s)/相对/data: 图片, 杜绝注入。
+function _mdInline(s){
+  s=_esc(s);
+  // 行内代码先占位, 避免其内文本被其它规则改写
+  var codes=[]; s=s.replace(/`([^`]+)`/g,function(_,c){ codes.push(c); return "\u0000"+(codes.length-1)+"\u0000"; });
+  // 图片 ![alt](url)
+  s=s.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g,function(_,alt,u){ return _safeUrl(u)?'<img alt="'+alt+'" src="'+u+'" loading="lazy">':_esc(alt); });
+  // 链接 [text](url)
+  s=s.replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g,function(_,tx,u){ return _safeUrl(u)?'<a href="'+u+'" target="_blank" rel="noopener">'+tx+'</a>':tx; });
+  // 裸链接
+  s=s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g,function(_,p,u){ return p+'<a href="'+u+'" target="_blank" rel="noopener">'+u+'</a>'; });
+  s=s.replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>").replace(/(^|[^*])\*([^*\n]+)\*/g,"$1<em>$2</em>");
+  s=s.replace(/\u0000(\d+)\u0000/g,function(_,i){ return "<code>"+codes[+i]+"</code>"; });
+  return s;
+}
+function _safeUrl(u){ return /^(https?:\/\/|\/|data:image\/)/i.test(String(u||"")); }
+function mdToHtml(md){
+  var src=String(md==null?"":md).replace(/\r\n?/g,"\n");
+  var out=[], i=0, lines=src.split("\n");
+  function flushList(st){ if(st.mode){ out.push(st.mode==="ul"?"</ul>":"</ol>"); st.mode=""; } }
+  var st={mode:""};
+  while(i<lines.length){
+    var ln=lines[i];
+    var fence=ln.match(/^```(.*)$/);
+    if(fence){ flushList(st); var buf=[]; i++; while(i<lines.length && !/^```/.test(lines[i])){ buf.push(lines[i]); i++; } i++;
+      out.push('<pre><code>'+_esc(buf.join("\n"))+'</code></pre>'); continue; }
+    if(/^\s*$/.test(ln)){ flushList(st); i++; continue; }
+    var h=ln.match(/^(#{1,6})\s+(.*)$/);
+    if(h){ flushList(st); var lvl=Math.min(h[1].length,4); out.push("<h"+lvl+">"+_mdInline(h[2])+"</h"+lvl+">"); i++; continue; }
+    if(/^\s*([-*_])\1{2,}\s*$/.test(ln)){ flushList(st); out.push("<hr>"); i++; continue; }
+    var q=ln.match(/^\s*>\s?(.*)$/);
+    if(q){ flushList(st); var qb=[]; while(i<lines.length){ var qm=lines[i].match(/^\s*>\s?(.*)$/); if(!qm)break; qb.push(qm[1]); i++; }
+      out.push("<blockquote>"+mdToHtml(qb.join("\n"))+"</blockquote>"); continue; }
+    // 表格 (| a | b | 且下一行为分隔行)
+    if(/^\s*\|.*\|\s*$/.test(ln) && i+1<lines.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i+1]) && /-/.test(lines[i+1])){
+      flushList(st);
+      function cells(r){ return r.replace(/^\s*\|/,"").replace(/\|\s*$/,"").split("|").map(function(c){return c.trim();}); }
+      var head=cells(ln); i+=2; var rows=[];
+      while(i<lines.length && /^\s*\|.*\|\s*$/.test(lines[i])){ rows.push(cells(lines[i])); i++; }
+      var t="<table><thead><tr>"+head.map(function(c){return "<th>"+_mdInline(c)+"</th>";}).join("")+"</tr></thead><tbody>";
+      t+=rows.map(function(r){return "<tr>"+r.map(function(c){return "<td>"+_mdInline(c)+"</td>";}).join("")+"</tr>";}).join("");
+      out.push(t+"</tbody></table>"); continue;
+    }
+    var ol=ln.match(/^\s*\d+[.)]\s+(.*)$/), ul=ln.match(/^\s*[-*+]\s+(.*)$/);
+    if(ol||ul){ var want=ol?"ol":"ul"; if(st.mode!==want){ flushList(st); out.push(want==="ul"?"<ul>":"<ol>"); st.mode=want; }
+      out.push("<li>"+_mdInline((ol?ol[1]:ul[1]))+"</li>"); i++; continue; }
+    // 普通段落 (合并连续非空行)
+    flushList(st); var pb=[ln]; i++;
+    while(i<lines.length && !/^\s*$/.test(lines[i]) && !/^(#{1,6}\s|```|\s*>|\s*[-*+]\s|\s*\d+[.)]\s|\s*\|)/.test(lines[i])){ pb.push(lines[i]); i++; }
+    out.push("<p>"+_mdInline(pb.join("\n")).replace(/\n/g,"<br>")+"</p>");
+  }
+  flushList(st);
+  return out.join("");
+}
 function toast(m,bad){ var t=document.getElementById("toast"); t.textContent=m; t.className="toast show"+(bad?" fail":" ok"); setTimeout(function(){t.className="toast";},2000); }
 function stClass(s){ s=String(s||"").toLowerCase(); if(/run|work|active/.test(s))return"running"; if(/finish|complete|done/.test(s))return"finished"; if(/block|wait|stuck/.test(s))return"blocked"; if(/expir|fail|error/.test(s))return"expired"; return""; }
 function safeName(s){ return String(s||"").replace(/[\\\/:*?"<>|]/g,"_").slice(0,120); }
@@ -448,7 +545,7 @@ function viewConv(idx){
   var it=REC[idx]; if(!it) return;
   var ex=-1; for(var i=0;i<CONV_TABS.length;i++){ if(CONV_TABS[i].sid===it.sid){ ex=i; break; } }
   if(ex>=0){ CONV_ACTIVE=ex; }
-  else { CONV_TABS.push({ acc:it.acc, sid:it.sid, title:it.title||it.sid, md:"", loading:true }); CONV_ACTIVE=CONV_TABS.length-1; }
+  else { CONV_TABS.push({ acc:it.acc, sid:it.sid, title:it.title||it.sid, items:null, status:it.status||"", md:"", err:"", loading:true }); CONV_ACTIVE=CONV_TABS.length-1; }
   document.getElementById("convView").classList.add("on");
   renderConvTabs();
   if(ex<0) loadConvMd(CONV_ACTIVE);
@@ -456,10 +553,10 @@ function viewConv(idx){
 async function loadConvMd(ti){
   var t=CONV_TABS[ti]; if(!t) return;
   try{
-    var r=await DaoCloud.exportSession(t.acc, t.sid, "conversation");
-    if(r&&r.ok){ t.md=r.md||""; t.title=r.title||t.title; }
-    else t.md="(提取失败: "+((r&&r.error)||"")+")";
-  }catch(e){ t.md="(异常: "+e+")"; }
+    var r=await DaoCloud.exportSessionRich(t.acc, t.sid);
+    if(r&&r.ok){ t.items=r.items||[]; t.title=r.title||t.title; t.status=r.status||t.status; t.err=""; }
+    else { t.items=[]; t.err=(r&&r.error)||"提取失败"; }
+  }catch(e){ t.items=[]; t.err="异常: "+e; }
   t.loading=false; renderConvTabs();
 }
 function activateConv(ti){ CONV_ACTIVE=ti; renderConvTabs(); }
@@ -474,13 +571,46 @@ function renderConvTabs(){
   CONV_TABS.forEach(function(t,i){ h+='<div class="cv-tab'+(i===CONV_ACTIVE?" on":"")+'" onclick="activateConv('+i+')"><span class="nm" title="'+_esc(t.title)+'">'+_esc(String(t.title).slice(0,40))+'</span><span class="x" onclick="closeConvTab('+i+',event)">&#10005;</span></div>'; });
   tabsEl.innerHTML=h;
   var cur=CONV_TABS[CONV_ACTIVE];
-  if(!cur){ bodyEl.textContent=""; actEl.innerHTML=""; return; }
+  if(!cur){ bodyEl.textContent=""; bodyEl.className="cv-body"; actEl.innerHTML=""; return; }
   actEl.innerHTML='<span class="b" onclick="cvDl('+CONV_ACTIVE+')">&#11015; MD</span><span class="b pri" onclick="cvZip('+CONV_ACTIVE+')">&#128230; 全部文件</span>';
-  bodyEl.textContent = cur.loading ? "提取对话中…" : (cur.md||"(空)");
+  bodyEl.className="cv-body";
+  if(cur.loading){ bodyEl.innerHTML='<div class="empty">提取对话中…</div>'; bodyEl.scrollTop=0; return; }
+  if(cur.err){ bodyEl.innerHTML='<div class="empty">'+_esc(cur.err)+'</div>'; bodyEl.scrollTop=0; return; }
+  bodyEl.innerHTML=renderConvHtml(cur);
   bodyEl.scrollTop=0;
 }
-function cvDl(ti){ var t=CONV_TABS[ti]; if(!t){ toast("无内容",true); return; }
-  if(!t.md){ toast("对话为空, 重新提取…"); loadConvMd(ti).then(function(){ if(CONV_TABS[ti]&&CONV_TABS[ti].md) cvDl(ti); else toast("提取失败",true); }); return; }
+// 原生 Devin 页面式对话渲染: 标题头 + 有序气泡 (👤用户 / 🤖Devin / 💭思考折叠 / 🔧工具折叠)
+function renderConvHtml(t){
+  var items=t.items||[];
+  var sc=stClass(t.status);
+  var h='<div class="cv-head"><div class="h1">'+_esc(t.title||t.sid)+'</div>'
+      + '<div class="sub"><span class="pill">'+items.length+' 条</span>'
+      + (t.status?'<span class="pill"><span class="st '+sc+'" style="display:inline-block;margin-right:5px;vertical-align:middle"></span>'+_esc(t.status)+'</span>':'')
+      + '<span class="pill">'+_esc(String(t.sid).slice(0,18))+'…</span></div></div>';
+  if(!items.length){ return h+'<div class="empty">(对话为空)</div>'; }
+  items.forEach(function(c){
+    var ts=c.ts?_fmtTs(c.ts):"";
+    if(c.kind==="user"){
+      h+='<div class="msg user"><div class="av">&#128100;</div><div class="col"><div class="who">'+_esc(c.role||"用户")+(ts?'<span class="t">'+ts+'</span>':'')+'</div><div class="bub md">'+mdToHtml(c.text||"")+'</div></div></div>';
+    } else if(c.kind==="devin"){
+      h+='<div class="msg devin"><div class="av">&#129302;</div><div class="col"><div class="who">Devin'+(ts?'<span class="t">'+ts+'</span>':'')+'</div><div class="bub md">'+mdToHtml(c.text||"")+'</div></div></div>';
+    } else if(c.kind==="think"){
+      h+='<details class="step think"><summary><span class="caret">&#9654;</span>&#128173; 思考'+(ts?' · '+ts:'')+'</summary><div class="in md">'+mdToHtml(c.text||"")+'</div></details>';
+    } else if(c.kind==="tool"){
+      var d=c.detail!=null?String(c.detail):"";
+      h+='<details class="step"><summary><span class="caret">&#9654;</span>'+_esc(c.role||"工具")+(ts?' · '+ts:'')+'</summary><div class="in">'+(d?'<pre><code>'+_esc(d.slice(0,8000))+'</code></pre>':'<div class="tip">(无输出)</div>')+'</div></details>';
+    }
+  });
+  return h;
+}
+function _fmtTs(iso){ try{ var d=new Date(iso); if(isNaN(d))return""; var p=function(n){return(n<10?"0":"")+n;}; return (d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes()); }catch(e){ return ""; } }
+// MD 下载: 呈现层走结构化 items, 下载仍取原生对齐的完整 MD (按需拉取一次, 缓存 t.md)
+async function cvDl(ti){ var t=CONV_TABS[ti]; if(!t){ toast("无内容",true); return; }
+  if(!t.md){
+    toast("生成 MD…");
+    try{ var r=await DaoCloud.exportSession(t.acc, t.sid, "conversation"); if(r&&r.ok){ t.md=r.md||""; t.title=r.title||t.title; } }catch(e){}
+    if(!t.md){ toast("提取失败",true); return; }
+  }
   var it=null; for(var i2=0;i2<REC.length;i2++){ if(REC[i2].sid===t.sid){ it=REC[i2]; break; } }
   var fn=(it?convBase(it, t.title):safeName(t.title||t.sid))+".md";
   try{
