@@ -14,6 +14,9 @@ const os = require("os");
 const path = require("path");
 const hostStateMod = require("./host-state");
 const backup = require("./backup");
+const envSync = require("./env-sync");
+const ls = require("./ls-bridge");
+const { AcpWssClient } = require("./acp-wss");
 
 function statePath() { return process.env.DAO_LOCAL_API_FILE || path.join(os.homedir(), ".dao", "local-api.json"); }
 
@@ -52,9 +55,25 @@ function cascadeView() {
   return { sessions: f.cascadeLocal || null, memories: f.memories || null };
 }
 
-// 路由表(全只读): 路径 → () => 数据。绝不暴露凭据/token 本身。
+// 路由表(GET 只读): 路径 → 数据(可返 Promise)。绝不暴露凭据/token 本身。
 function routes(reqUrl) {
   const u = reqUrl.split("?")[0];
+  const q = new URLSearchParams(reqUrl.split("?")[1] || "");
+  if (u === "/api/env") return envSync.detect();
+  if (u === "/api/models") return ls.listModels();
+  if (u === "/api/cascade/trajectories") return ls.call("GetAllCascadeTrajectories", {}).then((r) => r.trajectorySummaries || {});
+  if (u === "/api/cascade/steps") {
+    const cid = q.get("cascadeId") || "";
+    if (!cid) throw new Error("cascadeId required");
+    return ls.call("GetCascadeTrajectorySteps", { cascadeId: cid });
+  }
+  if (u === "/api/cloud/sessions") {
+    return withCloud(async (c) => {
+      const l = await c.listSessions();
+      const ss = (l && l.sessions) || [];
+      return ss.map((s) => ({ sessionId: s.sessionId || s.id, title: s.title || "" }));
+    });
+  }
   if (u === "/api/account") return accountView();
   if (u === "/api/mcp") return mcpView();
   if (u === "/api/host") return hostView();
@@ -67,6 +86,60 @@ function routes(reqUrl) {
     const l = backup.listBackups();
     return { account: accountView(), host: hostView(), mcp: mcpView(), cascade: cascadeView(),
       backups: { accounts: l.accounts.length, conversations: l.accounts.reduce((s, x) => s + x.convCount, 0) } };
+  }
+  return null;
+}
+
+// Devin Cloud 一次性连接(官方 /acp/live 同源): 用完即断, 不常驻。
+async function withCloud(fn) {
+  const c = new AcpWssClient({ log: () => {}, onUpdate: () => {} });
+  try {
+    await c.connect();
+    return await fn(c);
+  } finally { try { c.stop(); } catch (_) {} }
+}
+
+// POST 路由(后端原生调度): AI/脚本可直接驱动 Cascade 会话, 与面板同源(ls-bridge 同一真源)。
+async function postRoutes(u, body) {
+  if (u === "/api/cascade/send") {
+    const text = String((body || {}).text || "").trim();
+    if (!text) throw new Error("text required");
+    let cid = (body || {}).cascadeId || "";
+    if (!cid) cid = (await ls.call("StartCascade", {})).cascadeId;
+    let uid = (body || {}).modelUid || "";
+    if (!uid) {
+      const ms = await ls.listModels();
+      const pick = ms.find((m) => m.recommended && !m.disabled) || ms.find((m) => !m.disabled) || ms[0];
+      uid = pick && pick.uid;
+    }
+    const drive = ls.driveStream(cid, null);
+    try {
+      await ls.call("SendUserCascadeMessage", {
+        cascadeId: cid, items: [{ text }],
+        cascadeConfig: { plannerConfig: { requestedModelUid: uid, toolConfig: { askUserQuestion: { enabled: true } } } },
+      });
+    } finally { setTimeout(() => { try { drive.close(); } catch (_) {} }, 120000).unref(); }
+    return { ok: true, cascadeId: cid, modelUid: uid };
+  }
+  if (u === "/api/cloud/send") {
+    const text = String((body || {}).text || "").trim();
+    if (!text) throw new Error("text required");
+    return withCloud(async (c) => {
+      let out = "";
+      c._onUpdate = (u2) => {
+        try {
+          const s = u2.update || u2;
+          if ((s.sessionUpdate || s.kind) === "agent_message_chunk") out += ((s.content || {}).text) || "";
+        } catch (_) {}
+      };
+      if ((body || {}).sessionId) await c.loadSession(body.sessionId);
+      else await c.newSession("/");
+      const r = await c.prompt(text);
+      return { ok: true, sessionId: c.sessionId, stopReason: (r || {}).stopReason || "", reply: out };
+    });
+  }
+  if (u === "/api/backup/run") {
+    return backup.backupAll(ls, body || {});
   }
   return null;
 }
@@ -97,10 +170,23 @@ function start(preferredPort) {
       if (u === "/api/health") return send(200, { ok: true, service: "dao-desktop-local-api", port: _port });
       const auth = req.headers["authorization"] || "";
       if (auth !== "Bearer " + _token) return send(401, { error: "unauthorized" });
-      let data;
-      try { data = routes(req.url || ""); } catch (e) { return send(500, { error: e.message }); }
-      if (data === null) return send(404, { error: "not found" });
-      send(200, data);
+      if (req.method === "POST") {
+        let raw = "";
+        req.on("data", (c) => { raw += c; if (raw.length > 1e6) req.destroy(); });
+        req.on("end", () => {
+          let body = {};
+          try { body = raw ? JSON.parse(raw) : {}; } catch (_) { return send(400, { error: "invalid json" }); }
+          Promise.resolve()
+            .then(() => postRoutes(u, body))
+            .then((d) => (d === null ? send(404, { error: "not found" }) : send(200, d)))
+            .catch((e) => send(500, { error: e.message }));
+        });
+        return;
+      }
+      Promise.resolve()
+        .then(() => routes(req.url || ""))
+        .then((d) => (d === null || d === undefined ? send(404, { error: "not found" }) : send(200, d)))
+        .catch((e) => send(500, { error: e.message }));
     });
     _server.on("error", (e) => { _server = null; reject(e); });
     _server.listen(preferredPort || 0, "127.0.0.1", () => {
@@ -118,4 +204,4 @@ function stop() {
   });
 }
 
-module.exports = { start, stop, running, token, port, statePath, accountView, mcpView, hostView, cascadeView, routes };
+module.exports = { start, stop, running, token, port, statePath, accountView, mcpView, hostView, cascadeView, routes, postRoutes };
