@@ -170,6 +170,45 @@ const _servers = new Map();
 let _bridgeServe = null;
 function setBridgeServe(fn) { _bridgeServe = (typeof fn === "function") ? fn : null; }
 
+// ═══ 环境模式(Linux/Windows/macOS) 同源读写钩子 (由 rt-flow 宿主注入 · 每账号持久化) ═══
+//   签名: { get(email)→'linux'|'windows'|'macos', getRaw(email)→''|mode(未显式设置返''), set(email,mode)→{ok,mode} }
+let _envModeStore = null;
+function setEnvModeStore(s) { _envModeStore = (s && typeof s.get === "function" && typeof s.set === "function") ? s : null; }
+
+// 帛书·「大制无割」— 原生 composer 加号菜单「环境模式」注入脚本 (对齐手机 APK installEnvModeBadge):
+//   · 菜单层: Radix 菜单弹出时并列追加「🖥 环境: <当前模式>」项, 点击三态循环 linux→windows→macos;
+//   · 数据层: 拦 fetch/XHR 的 POST /api/**/sessions 新会话请求, 按账号显式模式补注
+//     additional_args.platform + platform_explicitly_set (已带 platform / 已显式声明则绝不覆盖);
+//   · 持久层: 经同源 /__daoenv 端点按账号读写 (多实例各端口/前缀各自账号 · 互不串号)。
+//   email 经 JSON.stringify 转义 → 无 </script> 闭合逃逸面; 幂等守卫 window.__daoEnvMode。
+function buildEnvComposerJs(email, rewriteBase) {
+  const em = JSON.stringify(String(email || "").toLowerCase());
+  const base = JSON.stringify(String(rewriteBase || "").charAt(0) === "/" ? String(rewriteBase).replace(/\/+$/, "") : "");
+  return [
+    "(function(){",
+    "if(window.__daoEnvMode)return;window.__daoEnvMode=1;",
+    "var EM=" + em + ",BASE=" + base + ";",
+    "if(!EM)return;",
+    "var CYCLE=['linux','windows','macos'];",
+    "function norm(m){m=String(m==null?'':m).toLowerCase();if(m==='windows'||m==='win')return 'windows';if(m==='macos'||m==='mac'||m==='osx'||m==='darwin')return 'macos';return 'linux';}",
+    "function label(m){return m==='windows'?'🪟 Windows':(m==='macos'?'🍎 macOS':'🐧 Linux');}",
+    "var cur='linux',explicit=false;",
+    "var EP=BASE+'/__daoenv?email='+encodeURIComponent(EM);",
+    "function refresh(){try{var ns=document.querySelectorAll('[data-daoenv]');for(var i=0;i<ns.length;i++){if(ns[i].__daoPaint)ns[i].__daoPaint();}}catch(e){}}",
+    "try{fetch(EP).then(function(r){return r.json()}).then(function(j){if(j&&j.ok){cur=norm(j.mode);explicit=!!j.set;refresh();}}).catch(function(){});}catch(e){}",
+    "window.__daoEnvCur=function(){return cur};",
+    "window.__daoEnvSet=function(m){cur=norm(m);explicit=true;try{fetch(EP+'&set='+encodeURIComponent(cur),{method:'POST'}).catch(function(){})}catch(e){}refresh();};",
+    "function patchBody(t){try{var j=JSON.parse(t);if(!j||typeof j!=='object'||Array.isArray(j))return null;if(j.platform_explicitly_set)return null;var aa=j.additional_args;if(aa&&aa.platform)return null;if(!explicit)return null;j.additional_args=(aa&&typeof aa==='object')?aa:{};j.additional_args.platform=cur;j.platform_explicitly_set=true;return JSON.stringify(j);}catch(e){return null;}}",
+    "function isCreate(method,url){try{if(String(method||'GET').toUpperCase()!=='POST')return false;var uo=new URL(url,location.href);var dv=/(^|\\.)devin\\.ai$/i.test(uo.hostname);if(uo.origin!==location.origin&&!dv)return false;if(!/\\/sessions\\/?$/.test(uo.pathname))return false;return dv||/api/i.test(uo.pathname);}catch(e){return false;}}",
+    "try{var _F=window.fetch;window.fetch=function(inp,ini){try{var url=(typeof inp==='string')?inp:((inp&&inp.url)||'');var mth=(ini&&ini.method)||(inp&&inp.method)||'GET';if(isCreate(mth,url)){var b=ini&&ini.body;if(typeof b==='string'){var nb=patchBody(b);if(nb!==null)return _F.call(this,inp,Object.assign({},ini,{body:nb}));}else if(b==null&&inp&&typeof inp!=='string'&&typeof inp.clone==='function'){var rq=inp,slf=this;return rq.clone().text().then(function(t){var n2=patchBody(t);return n2===null?_F.call(slf,rq,ini):_F.call(slf,new Request(rq,{body:n2}),ini);});}}}catch(e){}return _F.call(this,inp,ini);};}catch(e){}",
+    "try{var _xo=XMLHttpRequest.prototype.open,_xs=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.open=function(m,u){try{this.__daoEnvHit=isCreate(m,u);}catch(e){}return _xo.apply(this,arguments);};XMLHttpRequest.prototype.send=function(b){try{if(this.__daoEnvHit&&typeof b==='string'){var nb=patchBody(b);if(nb!==null)b=nb;}}catch(e){}return _xs.call(this,b);};}catch(e){}",
+    "function mkItem(menu){try{if(!menu||!menu.querySelectorAll||menu.querySelector('[data-daoenv]'))return;var items=menu.querySelectorAll('[role=\"menuitem\"]');if(!items.length)return;var RX=/attach|upload|file|photo|screenshot|camera|machine|snapshot|附件|上传|文件|图片|截图|拍照/i;var hit=false;for(var i=0;i<items.length;i++){if(RX.test(items[i].textContent||'')){hit=true;break;}}if(!hit)return;var it=items[0].cloneNode(false);it.setAttribute('data-daoenv','1');it.removeAttribute('id');it.style.cursor='pointer';it.__daoPaint=function(){it.textContent='🖥 环境: '+label(cur)+(explicit?'':' (默认)');};it.__daoPaint();var stop=function(ev){try{ev.preventDefault();ev.stopPropagation();ev.stopImmediatePropagation();}catch(e){}};it.addEventListener('pointerdown',stop,true);it.addEventListener('pointerup',stop,true);it.addEventListener('click',function(ev){stop(ev);var i2=CYCLE.indexOf(norm(cur));window.__daoEnvSet(CYCLE[(i2+1)%CYCLE.length]);},true);items[items.length-1].parentNode.appendChild(it);}catch(e){}}",
+    "function scan(r){try{var ms=(r&&r.querySelectorAll)?r.querySelectorAll('[role=\"menu\"],[data-radix-menu-content]'):null;if(!ms)return;for(var i=0;i<ms.length;i++)mkItem(ms[i]);}catch(e){}}",
+    "try{new MutationObserver(function(muts){for(var i=0;i<muts.length;i++){var an=muts[i].addedNodes||[];for(var j=0;j<an.length;j++){var n=an[j];if(n&&n.nodeType===1){if(n.matches&&(n.matches('[role=\"menu\"]')||n.matches('[data-radix-menu-content]')))mkItem(n);scan(n);}}}}).observe(document.documentElement,{childList:true,subtree:true});}catch(e){}",
+    "})();",
+  ].join("");
+}
+
 // ═══ 附件鉴权 Cookie (attachments_token) · 移植手机 APK ══════════════════════════
 // 帛书·「无有入于无间」: app.devin.ai/attachments/* 的真鉴权是 httpOnly Cookie
 //   `attachments_token`(POST /api/users/set-attachment-cookie 用 Bearer 铸造)。Bearer
@@ -863,15 +902,17 @@ async function _prewarmGraph(localBase, auth, log) {
 //     · 前缀模式 (新·公网经主口 9920 隧道): handleRequest(req,res,auth,{rewriteBase:'/i/<accKey>',parsePath,log})
 //       → 改写基址 = 同源相对前缀, 公网手机/电脑浏览器无感同源访问该账号页。
 async function handleRequest(req, res, auth, opts, _log) {
-  let rewriteBase, parsePath, log;
+  let rewriteBase, parsePath, log, ownEmail;
   if (opts && typeof opts === "object") {
     rewriteBase = String(opts.rewriteBase || "");
     parsePath = opts.parsePath != null ? opts.parsePath : (req.url || "/");
     log = opts.log;
+    ownEmail = String(opts.email || "");
   } else {
     rewriteBase = "http://localhost:" + opts; // opts = port (旧签名)
     parsePath = req.url || "/";
     log = _log;
+    ownEmail = "";
   }
   const localBase = rewriteBase; // 下游沿用 localBase 命名 = 改写基址
   const isPrefix = localBase.charAt(0) === "/"; // 同源前缀模式 (/i/<accKey>)
@@ -886,6 +927,28 @@ async function handleRequest(req, res, auth, opts, _log) {
   }
 
   const reqUrl = new URL(parsePath || "/", parseBase);
+  // 环境模式同源端点: GET 读该账号模式 / POST ?set= 写 (仅本账号 · 非法值经 norm 规范化)。
+  if (reqUrl.pathname === "/__daoenv") {
+    const emQ = String(reqUrl.searchParams.get("email") || ownEmail || "").toLowerCase();
+    const setQ = reqUrl.searchParams.get("set");
+    const H = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" };
+    try {
+      if (!_envModeStore || !emQ) { res.writeHead(503, H); res.end(JSON.stringify({ ok: false, error: _envModeStore ? "no-email" : "no-store" })); return; }
+      if (setQ != null) {
+        const r = _envModeStore.set(emQ, setQ);
+        res.writeHead(r && r.ok === false ? 500 : 200, H);
+        res.end(JSON.stringify({ ok: !(r && r.ok === false), email: emQ, mode: (r && r.mode) || String(setQ), set: true }));
+        return;
+      }
+      const raw = typeof _envModeStore.getRaw === "function" ? String(_envModeStore.getRaw(emQ) || "") : "";
+      res.writeHead(200, H);
+      res.end(JSON.stringify({ ok: true, email: emQ, mode: raw || String(_envModeStore.get(emQ) || "linux"), set: !!raw }));
+      return;
+    } catch (e) {
+      try { res.writeHead(500, H); res.end(JSON.stringify({ ok: false, error: e && e.message })); } catch {}
+      return;
+    }
+  }
   // 拖拽上传桥 (同源直服本反代端口 → 对齐 /i/ 同源页·根治 IDE 内拖拽无反应)。
   if (_bridgeServe) {
     const bp = reqUrl.pathname;
@@ -1168,6 +1231,16 @@ async function handleRequest(req, res, auth, opts, _log) {
           if (/<head[^>]*>/i.test(html)) html = html.replace(/(<head[^>]*>)/i, "$1" + bridge);
           else if (/<\/head>/i.test(html)) html = html.replace(/<\/head>/i, bridge + "</head>");
           else html = bridge + html;
+          // 环境模式 composer 桥: 加号菜单三态切换 + 新会话请求补注 platform (每账号各自持久化)。
+          const _envEmail = ownEmail || String(auth && auth.email ? auth.email : "");
+          if (_envEmail && _envModeStore) {
+            try {
+              const envJs = "<script>" + buildEnvComposerJs(_envEmail, isPrefix ? localBase : "") + "</script>";
+              if (/<head[^>]*>/i.test(html)) html = html.replace(/(<head[^>]*>)/i, "$1" + envJs);
+              else if (/<\/head>/i.test(html)) html = html.replace(/<\/head>/i, envJs + "</head>");
+              else html = envJs + html;
+            } catch (e) { /* 守柔: 环境桥注入失败不阻断反代 */ }
+          }
           // Service Worker 注册 (端口模式·IDE webview 提速): 同源注册 → 该 origin 所有标签/导航共享 Cache。
           if (!isPrefix) {
             if (/<head[^>]*>/i.test(html)) html = html.replace(/(<head[^>]*>)/i, "$1" + _swReg);
@@ -1308,7 +1381,7 @@ async function ensureProxyForAccount(email, auth, log) {
   if (!port) return { ok: false, error: "no-port" };
   const entry = { server: null, port, auth };
   const server = http.createServer((req, res) => {
-    handleRequest(req, res, entry.auth, port, log).catch((e) => {
+    handleRequest(req, res, entry.auth, { rewriteBase: "http://localhost:" + port, parsePath: req.url, log, email: key }).catch((e) => {
       if (!res.headersSent) {
         try {
           res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
@@ -1371,6 +1444,8 @@ module.exports = {
   stopAll,
   buildAuthBridge,
   setBridgeServe,
+  buildEnvComposerJs,
+  setEnvModeStore,
   // 预热状态自省: criticalWarm=首屏关键路径已暖(可即时供首开新账号), fullWarm=全模块图已暖。
   prewarmStatus: () => ({ criticalWarm: !!_prewarmCritical, fullWarm: !!_prewarmKey, key: _prewarmKey || _prewarmCritical }),
   // 供单测访问磁盘二级缓存内部 (非对外 API)。

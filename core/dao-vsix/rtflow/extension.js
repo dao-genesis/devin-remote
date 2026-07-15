@@ -2119,7 +2119,9 @@ async function shellAccountProxy(accKey, restPath, req, res) {
       let prompt = '';
       try { const j = JSON.parse(body || '{}'); prompt = String(j.prompt || j.user_message || ''); } catch (e) {}
       if (!prompt.trim()) { _json(400, { ok: false, error: 'empty prompt' }); return; }
-      const r = await devinCloud.createSession(authObj, prompt);
+      // 环境模式: 该账号显式设过模式才随新会话下发 platform (未设 = 官方默认)。
+      const _envRaw = getAccountEnvModeRaw(email);
+      const r = await devinCloud.createSession(authObj, prompt, _envRaw ? { platform: _envRaw } : undefined);
       if (r && r.ok && r.devinId) _json(200, { ok: true, devinId: r.devinId, url: base + '/sessions/' + encodeURIComponent(r.devinId) });
       else _json(502, { ok: false, error: (r && r.error) || 'create failed' });
       return;
@@ -7251,6 +7253,27 @@ function _writeEnvModeStates(items) {
     return { ok: false, changed: 0 };
   }
 }
+// 环境模式读写 (单一真源 _env_mode.json · 供内部/同源端点/反代注入共用)
+function getAccountEnvModeRaw(email) {
+  const m = _readEnvModeState()[String(email || "").toLowerCase()];
+  return m && m.envMode ? _normEnvMode(m.envMode) : "";
+}
+function setAccountEnvMode(email, mode) {
+  const e = String(email || "").toLowerCase();
+  if (!e) return { ok: false, error: "no-email" };
+  const m = _normEnvMode(mode);
+  const r = _writeEnvModeStates([{ email: e, mode: m }]);
+  return { ok: !!(r && r.ok), mode: m };
+}
+// 把环境模式存储注入多实例反代 (devin_proxy) → 各账号端口/前缀页同源 /__daoenv 就地读写。
+try {
+  devinProxy.setEnvModeStore({
+    get: (email) => _normEnvMode(getAccountEnvModeRaw(email)),
+    getRaw: getAccountEnvModeRaw,
+    set: setAccountEnvMode,
+  });
+} catch (e) { /* 守柔 */ }
+
 function _esc(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;")
@@ -17445,5 +17468,8 @@ module.exports = {
       const m = _readEnvModeState()[String(email || "").toLowerCase()];
       return _normEnvMode(m && m.envMode);
     },
+    getAccountEnvModeRaw, // 未显式设置返 '' (供 /__daoenv 区分默认/显式)
+    setAccountEnvMode, // 写入并规范化 (linux/windows/macos)
+    buildEnvComposerJs: devinProxy.buildEnvComposerJs, // 供 dao-vsix 主口 9920 反代页同构注入
   },
 };
