@@ -27,8 +27,8 @@ ok(/uploadDownloadedToPage[\s\S]{0,1600}dropB64FilesIntoPage\(fw,/.test(java), "
 ok(/ActivityResultLauncher<Intent> uploadPicker/.test(java), "存在 uploadPicker launcher");
 ok(/private void pickUploadToPage\(\)/.test(java), "存在 pickUploadToPage (系统选择器)");
 ok(/EXTRA_ALLOW_MULTIPLE, true\);\s*\n\s*uploadPicker\.launch/.test(java), "选择器支持多选");
-ok(/mu\.add\(0, 17, 6, "上传文件到网页端"\)/.test(java) && /case 17: pickUploadToPage\(\); return true;/.test(java),
-   "☰ 菜单含「上传文件到网页端」→ pickUploadToPage");
+ok(!/上传文件到网页端/.test(java) && !/case 17: pickUploadToPage\(\); return true;/.test(java),
+   "☰ 菜单已砍「上传文件到网页端」(官方自带上传, 点击直传保留于下载面板 ⬆/⋮)");
 ok(/up\.setText\("⬆ 上传"\)/.test(java) && /up\.setOnClickListener\(v -> pickUploadToPage\(\)\)/.test(java),
    "下载面板头部含「⬆ 上传」按钮");
 ok(/private void uploadUrisToPage\(final java\.util\.List<Uri> uris\)/.test(java), "存在 uploadUrisToPage");

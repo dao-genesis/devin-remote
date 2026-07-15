@@ -934,7 +934,8 @@
     {key:"scripts", file:"userscripts.html", label:"用户脚本 (油猴)", ic:"🐵"},
     {key:"shizuku", file:"shizuku.html",     label:"Shizuku 权限",    ic:"🔑"},
     {key:"daopan",  file:"daopan.html",      label:"全服通",          ic:"🌊"},
-    {key:"panel",   file:"panel.html",       label:"控制面板",        ic:"🎛"}
+    {key:"panel",   file:"panel.html",       label:"控制面板",        ic:"🎛"},
+    {key:"traffic", file:"traffic.html",     label:"流量处理",        ic:"📊"}
   ];
   function pageByKey(k){ for(var i=0;i<PAGES.length;i++) if(PAGES[i].key===k) return PAGES[i]; return null; }
 
@@ -1173,7 +1174,7 @@
   var CLIENT_ID="web_"+(Math.random().toString(36).slice(2,8))+(Date.now().toString(36).slice(-4));
   var FRONT_VID=0;
   var FILE2KEY={ "switch.html":"switch","cloud.html":"cloud","tunnel.html":"tunnel","vpn.html":"vpn",
-    "userscripts.html":"scripts","shizuku.html":"shizuku","daopan.html":"daopan","panel.html":"panel" };
+    "userscripts.html":"scripts","shizuku.html":"shizuku","daopan.html":"daopan","panel.html":"panel","traffic.html":"traffic" };
   function internalKey(url){ try{ var m=String(url||"").match(/engine\/([a-z0-9_]+\.html)/i); return m?(FILE2KEY[m[1].toLowerCase()]||null):null; }catch(e){ return null; } }
   function acctTag(a){ if(!a||typeof a!=="object") return ""; var n=(a.no!=null&&a.no!=="")?("#"+a.no):""; var o=a.orgName||"";
     var s=[n,o].filter(Boolean).join(" "); return s||(a.email||""); }
@@ -1763,17 +1764,17 @@
     mi("🌐","公网穿透",        function(){ openPage("tunnel"); });
     mi("🚀","VPN 加速",        function(){ openPage("vpn"); });
     mi("🟢","新标签 (Devin)",  function(){ openInPage("https://app.devin.ai/", "", "Devin"); });
-    mi("🕶","无痕标签",        function(){ openInPage("https://app.devin.ai/", "", "Devin (无痕)", {incognito:true}); toast("无痕标签 (不记浏览历史)"); });
     mi("🕐","浏览历史",        function(){ openListPage("hist"); });
     mi("⭐","书签收藏",        function(){ openListPage("bm"); });
     mi("🐵","用户脚本 (油猴)", function(){ openPage("scripts"); });
-    mi("🔑","Shizuku 权限 (自我 ADB)", function(){ openPage("shizuku"); });
+    mi("📊","流量处理",        function(){ openPage("traffic"); });
     miSub("🔎","搜索引擎 ("+({google:"Google",baidu:"百度",bing:"Bing"}[searchEngine()]||"Google")+")", function(sub){
       [["google","Google"],["baidu","百度"],["bing","Bing"]].forEach(function(e){
         mi(searchEngine()===e[0]?"✓":"　", e[1], function(){ setSearchEngine(e[0]); menuPop.dataset.built=""; toast("搜索引擎已设为 "+e[1]); }, {parent:sub});
       });
     });
     miSub("🧰","页面工具", function(sub){
+      mi("🕶","无痕标签",        function(){ openInPage("https://app.devin.ai/", "", "Devin (无痕)", {incognito:true}); toast("无痕标签 (不记浏览历史)"); }, {parent:sub});
       mi("◀","后退",            function(){ tabNav(-1); }, {parent:sub});
       mi("▶","前进",            function(){ tabNav(1); },  {parent:sub});
       mi("⌂","主页 (切号面板)", function(){ openPage("switch"); }, {parent:sub});
@@ -1782,14 +1783,13 @@
       mi("📖","阅读模式",        function(){ tabReader(); },  {parent:sub});
       mi("🌙","夜间模式",        function(){ tabNight(); },   {parent:sub});
       mi("🐵","脚本菜单 (油猴)", function(){ openPage("scripts"); }, {parent:sub});
+      mi("📤","分享本页",        function(){ shareCurrent(); },  {parent:sub});
+      mi("🔗","复制网址",        function(){ copyCurrentUrl(); }, {parent:sub});
+      mi("➕","添加到主屏",      function(){ toast("「添加到主屏」为 APK/系统能力; 网页端请用浏览器自带「添加到主屏幕」"); }, {parent:sub, cls:"apkonly"});
       mi("📦","导出整机分享包",  function(){ toast("整机分享包为 APK 专属 (含 APK 本体+数据)。网页端用「复制接入链接」分享访问"); }, {parent:sub, cls:"apkonly"});
       mi("📥","导入分享包",      function(){ toast("导入分享包为 APK 专属。网页端经接入链接 (session/token) 即同步金库数据"); }, {parent:sub, cls:"apkonly"});
     });
-    miSub("🔗","分享 / 快捷", function(sub){
-      mi("📤","分享本页",  function(){ shareCurrent(); },  {parent:sub});
-      mi("🔗","复制网址",  function(){ copyCurrentUrl(); }, {parent:sub});
-      mi("➕","添加到主屏", function(){ toast("「添加到主屏」为 APK/系统能力; 网页端请用浏览器自带「添加到主屏幕」"); }, {parent:sub, cls:"apkonly"});
-    });
+    mi("🔑","Shizuku 权限 (自我 ADB)", function(){ openPage("shizuku"); });
     mi("📌","后台常驻 · 保活", function(){ toast("后台常驻·保活为 APK 专属 (防系统杀进程致整页重载)。网页端由浏览器标签托管, 切后台不被杀"); }, {cls:"apkonly"});
     mi("⟳","检查更新 · 网页端", function(){ toast("网页端始终为最新 (随中继下发 GitHub main); 正在硬刷新…"); setTimeout(function(){ location.reload(); }, 600); });
     sep();
