@@ -1290,7 +1290,8 @@ function test(name, fn) {
   // ── /shell 公网单页「双重兜底」失效转移 (参照手机 APK 多路失效转移·双副本源级护栏) ──
   // 病灶: 单页只绑一个公网源, CF 快速隧道轮换/Worker 挂掉 → 整页死链, 无法继续操作。
   // 正法: 宿主把全部公网源注入 DAO_ALTS + 链接携带 ?dao_alt=; 页面长轮询持续失败(≥6次且>15s)
-  //   → 逐个 no-cors 探活备用源 /api/health → 探活成功即整页 location.replace 转移续用。
+  //   → 逐个 cors 真·探活备用源 /api/health(r.ok 才算活·死隧道 CF 边缘 530 不再被 opaque 误判)
+  //   → 探活成功即整页 location.replace 转移续用; 90s 内跳转≥2 次环回熔断防 A↔B 乒乓。
   console.log("\n[/shell 双重兜底失效转移]");
   test("/shell: DAO_ALTS 注入 + 失效转移垫片 + copyBridgeShell 双通道链接 (双副本源级护栏)", () => {
     const fs = require("fs"), path = require("path");
@@ -1300,7 +1301,8 @@ function test(name, fn) {
       assert.ok(/window\.DAO_ALTS='\s*\+\s*JSON\.stringify\(alts\)/.test(src), r + ": _standaloneShellHtml 须注入 window.DAO_ALTS");
       assert.ok(/dao_alt/.test(src), r + ": 垫片须支持 ?dao_alt= 备用源");
       assert.ok(/_foFails>=6&&\(Date\.now\(\)-_foT\)>15000/.test(src), r + ": 须持续失败(≥6次且>15s)才触发转移(防抖·本地瞬断不转移)");
-      assert.ok(/mode:'no-cors'/.test(src), r + ": 备用源探活须 no-cors fetch /api/health");
+      assert.ok(/fetch\(base\+'\/api\/health',\{mode:'cors'\}\)\.then\(function\(r\)\{if\(!r\.ok\)throw 0;/.test(src), r + ": 备用源探活须 cors fetch /api/health 且校验 r.ok(灭 opaque 误判)");
+      assert.ok(/_foDisabled/.test(src) && /dao_fo_hops/.test(src), r + ": 须有 90s 环回熔断(sessionStorage dao_fo_hops)防 A↔B 乒乓跳转");
       assert.ok(/location\.replace\(base\+'\/shell\?dao_alt='/.test(src), r + ": 探活成功须整页转移到备用源 /shell 并回携原源");
       assert.ok(/connect-src \\'self\\' https:/.test(src), r + ": CSP connect-src 须放开 https:(供备用源探活)");
     }

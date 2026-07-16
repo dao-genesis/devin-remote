@@ -737,7 +737,9 @@ export default {
         + "function go(){if(!ALTS.length){el.textContent='\u94fe\u63a5\u672a\u643a\u5e26 dao_alt \u5907\u7528\u6e90 \u00b7 \u8bf7\u7528\u63d2\u4ef6\u91cd\u65b0\u590d\u5236\u516c\u7f51\u5355\u9875\u7f51\u5740';return;}"
         + "(function next(i){if(i>=ALTS.length){el.textContent='\u5168\u90e8\u5907\u7528\u6e90\u6682\u4e0d\u53ef\u8fbe \u00b7 10s \u540e\u91cd\u63a2';setTimeout(go,10000);return;}"
         + "var b=ALTS[i];el.textContent='\u63a2\u6d3b '+b+' \u2026';"
-        + "fetch(b+'/api/health',{mode:'no-cors'}).then(function(){"
+        // 真·探活(灭乒乓跳转根因): 插件 /api/health 带 ACAO:* → 用 cors 模式读 r.ok 才算活;
+        //   旧 no-cors opaque 恒 resolve —— 死隧道的 CF 边缘 530 也被当作健康 → 永跳死址循环。
+        + "fetch(b+'/api/health',{mode:'cors'}).then(function(r){if(!r.ok)throw 0;"
         + "var q=new URLSearchParams(location.search);q.delete('dao_alt');var rest=q.toString();"
         + "location.replace(b+'/shell?dao_alt='+encodeURIComponent(location.origin+location.pathname)+(rest?('&'+rest):''));"
         + "}).catch(function(){next(i+1);});})(0);}go();<\/script></body></html>";
