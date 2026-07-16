@@ -1,6 +1,6 @@
 {
-  "versionCode": 343,
-  "versionName": "0.37.238",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.238/DevinCloud-mobile-v0.37.238.apk",
-  "notes": "v0.37.238 · 消息通知归一·只报一遍·状态解除即撤: ①通知只走手机原生一条路——切号板块只展示对话状态(状态点/徽标), 不再自行弹页面横幅/震动/toast(杜绝切号板与手机通知双份刷屏)。②同一事件只通知一遍——额度耗尽/即将耗尽仅首次进入该态推一次, 休眠数增加也绝不重推(删了不再回来)。③状态解除即撤——会话重新活跃/额度恢复时按同一 tag 主动撤掉通知栏残留旧条目(老对话早已结束/恢复的通知不再残留反复弹)。"
+  "versionCode": 344,
+  "versionName": "0.37.239",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.239/DevinCloud-mobile-v0.37.239.apk",
+  "notes": "v0.37.239 · 局域网直连也「单网页传输一切」: 局域网面板新增『网页直开』链接(http://<局域网IP>:<port>/?session=&token=&auto=1)——同一 Wi-Fi 的任意浏览器打开即与手机 APK 同款满血操作, 同源直连本机 /relay, 零中继·零隧道·零 Worker(实测 7ms RPC 往返)。与公网『网页直开』卡片同款结构: 网页直开(给人) + 裸 RPC 入口(给云端 Agent/程序/curl)分列。此前局域网面板仅给 curl/RPC, 现补齐浏览器直开的完整 APK UI 入口。"
 }
