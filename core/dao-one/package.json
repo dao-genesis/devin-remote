@@ -2,13 +2,7 @@
   "name": "dao-one",
   "displayName": "道 · 归一 (Dao One)",
   "description": "归一超级插件本体: 单一驾驶舱按'意图'统御全功能面板(dao-vsix)+提示词隔离·外接模型路由(dao-proxy-pro)+Devin Cloud 多账号/备份/回归本源(rt-flow)。三引擎隐形协作,用户无感无为,系统无不为。大道至简,道法自然。",
-<<<<<<< HEAD
-  "version": "2.24.5",
-||||||| parent of fdd03b88 (fix(rt-flow): /shell 失效转移环回熔断 — 灭主页 A↔B 无限乒乓跳转(no-cors 探活恒 opaque-resolve 误判健康+双源互带 ?dao_alt= 互相 replace); 90s 内跳转≥2 次即熔断定于当前源 (rt-flow 4.30.1 / dao-vsix 3.56.3 / dao-one 2.24.6))
-  "version": "2.24.4",
-=======
   "version": "2.24.6",
->>>>>>> fdd03b88 (fix(rt-flow): /shell 失效转移环回熔断 — 灭主页 A↔B 无限乒乓跳转(no-cors 探活恒 opaque-resolve 误判健康+双源互带 ?dao_alt= 互相 replace); 90s 内跳转≥2 次即熔断定于当前源 (rt-flow 4.30.1 / dao-vsix 3.56.3 / dao-one 2.24.6))
   "publisher": "dao",
   "license": "Apache-2.0",
   "icon": "media/icon.png",
