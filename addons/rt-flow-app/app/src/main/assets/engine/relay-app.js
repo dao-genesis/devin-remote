@@ -264,8 +264,11 @@ const DaoRelayApp = (function () {
   // ═══════════════════════════════════════════════════════════════════════
   //__CFPROV_START__ Cloudflare 一键建 Worker (可选·固定域名) —— 纯 fetch 移植自
   //   addons/dao-relay/provision.mjs (桌面版走 wrangler; 手机 WebView 无 Node,
-  //   改走 CF REST 多模块上传, worker 源取自公开仓 raw)。API Token 仅本次内存使用,
-  //   不落盘不过中继; 成功后仅把恒定 URL 前插到 relay 端点(内置端点保留为兜底)。
+  //   改走 CF REST 多模块上传, worker 源取自公开仓 raw)。
+  //   凭证任选其一, 全程纯后端 API·零浏览器·零 CAPTCHA·零点击:
+  //     ① API Token (Bearer)         —— 传字符串或 {token}
+  //     ② Global API Key (email+key) —— 传 {email,key}: 用 X-Auth-Email/X-Auth-Key 头
+  //   凭证仅本次内存使用, 不落盘不过中继; 成功后仅把恒定 URL 前插到 relay 端点(内置端点保留为兜底)。
   //   经 test/cf-provision.test.js 切片实测, 勿删标记。
   // ═══════════════════════════════════════════════════════════════════════
   var CF_API = "https://api.cloudflare.com/client/v4";
@@ -278,9 +281,18 @@ const DaoRelayApp = (function () {
     cfProv.phase = phase; cfProv.step = step; cfProv.msg = msg; cfProv.ts = Date.now();
     if (extra) Object.assign(cfProv, extra);
   }
-  async function cfApi(path, token, init) {
+  // 凭证→请求头: Global API Key({email,key}) 走 X-Auth-Email/X-Auth-Key; 否则 API Token 走 Bearer。
+  function cfAuthHeaders(auth) {
+    if (auth && typeof auth === "object") {
+      if (auth.email && auth.key) return { "X-Auth-Email": auth.email, "X-Auth-Key": auth.key };
+      if (auth.token) return { Authorization: "Bearer " + auth.token };
+    }
+    return { Authorization: "Bearer " + String(auth || "") };
+  }
+  function cfIsGlobalKey(auth) { return !!(auth && typeof auth === "object" && auth.email && auth.key); }
+  async function cfApi(path, auth, init) {
     init = init || {};
-    var headers = Object.assign({ Authorization: "Bearer " + token }, init.headers || {});
+    var headers = Object.assign({}, cfAuthHeaders(auth), init.headers || {});
     if (!(init.body instanceof FormData) && !headers["content-type"]) headers["content-type"] = "application/json";
     var r = await cfFetch(CF_API + path, Object.assign({}, init, { headers: headers }));
     var j = null; try { j = await r.json(); } catch (e) { j = {}; }
@@ -290,13 +302,13 @@ const DaoRelayApp = (function () {
     }
     return j.result;
   }
-  async function cfEnsureSubdomain(token, accountId) {
+  async function cfEnsureSubdomain(auth, accountId) {
     try {
-      var r = await cfApi("/accounts/" + accountId + "/workers/subdomain", token);
+      var r = await cfApi("/accounts/" + accountId + "/workers/subdomain", auth);
       if (r && r.subdomain) return r.subdomain;
     } catch (e) { /* 未注册 → 下方登记 */ }
     var cand = "dao-" + String(accountId).slice(0, 8);
-    var put = await cfApi("/accounts/" + accountId + "/workers/subdomain", token, { method: "PUT", body: JSON.stringify({ subdomain: cand }) });
+    var put = await cfApi("/accounts/" + accountId + "/workers/subdomain", auth, { method: "PUT", body: JSON.stringify({ subdomain: cand }) });
     return (put && put.subdomain) || cand;
   }
   async function cfFetchSrc(name) {
@@ -317,16 +329,22 @@ const DaoRelayApp = (function () {
     fd.append("keys.js", new Blob([keysSrc], { type: "application/javascript+module" }), "keys.js");
     return fd;
   }
-  async function cfProvisionRun(token) {
-    cfSet("running", 1, "① 校验 API Token…", { error: "", url: "" });
-    var v = await cfApi("/user/tokens/verify", token);
-    if (!v || v.status !== "active") throw new Error("token 未激活 (status=" + (v && v.status) + ")");
+  async function cfProvisionRun(auth) {
+    var glob = cfIsGlobalKey(auth);
+    cfSet("running", 1, glob ? "① 校验 Global API Key…" : "① 校验 API Token…", { error: "", url: "" });
+    if (glob) {
+      var u = await cfApi("/user", auth);
+      if (!u || !u.email) throw new Error("Global API Key 校验失败 (邮箱/密钥不匹配)");
+    } else {
+      var v = await cfApi("/user/tokens/verify", auth);
+      if (!v || v.status !== "active") throw new Error("token 未激活 (status=" + (v && v.status) + ")");
+    }
     cfSet("running", 2, "② 读取账号…");
-    var accounts = await cfApi("/accounts?per_page=50", token);
+    var accounts = await cfApi("/accounts?per_page=50", auth);
     if (!Array.isArray(accounts) || !accounts.length) throw new Error("此 Token 读不到任何账号 (需含 Account 读取权限)");
     var accountId = accounts[0].id;
     cfSet("running", 3, "③ 登记 workers.dev 子域…", { accountId: accountId });
-    var subdomain = await cfEnsureSubdomain(token, accountId);
+    var subdomain = await cfEnsureSubdomain(auth, accountId);
     var url = "https://" + CF_WORKER_NAME + "." + subdomain + ".workers.dev";
     cfSet("running", 4, "④ 取中继 Worker 源码 (公开仓最新版)…", { subdomain: subdomain });
     var workerSrc = await cfFetchSrc("worker.js");
@@ -334,13 +352,13 @@ const DaoRelayApp = (function () {
     cfSet("running", 5, "⑤ 上传部署 Worker (Durable Object)…");
     var scriptPath = "/accounts/" + accountId + "/workers/scripts/" + CF_WORKER_NAME;
     try {
-      await cfApi(scriptPath, token, { method: "PUT", body: cfBuildForm(workerSrc, keysSrc, true) });
+      await cfApi(scriptPath, auth, { method: "PUT", body: cfBuildForm(workerSrc, keysSrc, true) });
     } catch (e) {
       // 已部署过同 migration tag → 去掉 migrations 重传 (幂等更新)
-      await cfApi(scriptPath, token, { method: "PUT", body: cfBuildForm(workerSrc, keysSrc, false) });
+      await cfApi(scriptPath, auth, { method: "PUT", body: cfBuildForm(workerSrc, keysSrc, false) });
     }
     cfSet("running", 6, "⑥ 开启 workers.dev 路由…");
-    try { await cfApi(scriptPath + "/subdomain", token, { method: "POST", body: JSON.stringify({ enabled: true }) }); } catch (e) { /* 部分套餐默认已开 */ }
+    try { await cfApi(scriptPath + "/subdomain", auth, { method: "POST", body: JSON.stringify({ enabled: true }) }); } catch (e) { /* 部分套餐默认已开 */ }
     cfSet("running", 7, "⑦ 健康检查 (边缘传播需几秒)…", { url: url });
     var healthy = false;
     for (var i = 0; i < 8 && !healthy; i++) {
@@ -434,10 +452,16 @@ const DaoRelayApp = (function () {
     }
     if (path === "/api/cf-status") { return { status: 200, body: Object.assign({}, cfProv) }; }
     if (path === "/api/cf-provision") {
-      var cfTok = (m.body && m.body.token) || "";
-      if (!cfTok || cfTok.length < 20) return { status: 400, body: { error: "need body.token (Cloudflare API Token)" } };
+      var cb = (m && m.body) || {};
+      var cfAuth = null;
+      var cfEmail = String(cb.email || "").trim();
+      var cfKey = String(cb.apiKey || cb.key || "").trim();
+      var cfTok = String(cb.token || "").trim();
+      if (cfEmail && cfKey.length >= 20) cfAuth = { email: cfEmail, key: cfKey };       // Global API Key (纯后端·零浏览器)
+      else if (cfTok.length >= 20) cfAuth = { token: cfTok };                            // API Token
+      if (!cfAuth) return { status: 400, body: { error: "need body.token (API Token) 或 body.email+body.apiKey (Global API Key)" } };
       if (cfProv.phase === "running") return { status: 200, body: Object.assign({ already: true }, cfProv) };
-      cfProvisionRun(cfTok).catch(function (e) { cfSet("error", cfProv.step, "✗ " + String((e && e.message) || e), { error: String((e && e.message) || e) }); });
+      cfProvisionRun(cfAuth).catch(function (e) { cfSet("error", cfProv.step, "✗ " + String((e && e.message) || e), { error: String((e && e.message) || e) }); });
       return { status: 200, body: { started: true, poll: "/api/cf-status" } };
     }
     if (path === "/api/result-fetch") {

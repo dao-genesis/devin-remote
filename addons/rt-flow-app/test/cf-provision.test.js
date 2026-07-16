@@ -26,8 +26,10 @@ function textResp(s, status) {
   return Promise.resolve({ ok: (status || 200) < 400, status: status || 200, text: () => Promise.resolve(s), json: () => Promise.resolve({}) });
 }
 function mockFetch(url, init) {
-  calls.push({ url: String(url), method: (init && init.method) || "GET", hasForm: !!(init && init.body && typeof FormData !== "undefined" && init.body instanceof FormData) });
+  const hdrs = (init && init.headers) || {};
+  calls.push({ url: String(url), method: (init && init.method) || "GET", hasForm: !!(init && init.body && typeof FormData !== "undefined" && init.body instanceof FormData), headers: hdrs });
   const u = String(url);
+  if (u.endsWith("/user")) return jsonResp({ success: true, result: { id: "usr1", email: "fib@example.com" } });
   if (u.endsWith("/user/tokens/verify")) return jsonResp({ success: true, result: { status: "active" } });
   if (u.indexOf("/accounts?per_page") >= 0) return jsonResp({ success: true, result: [{ id: "acc123456789" }] });
   if (/\/accounts\/[^/]+\/workers\/subdomain$/.test(u)) return jsonResp({ success: true, result: { subdomain: "myzone" } });
@@ -67,6 +69,20 @@ function mockFetch(url, init) {
   ok(seq.some((u) => u.indexOf("/accounts?per_page") >= 0), "调用了 accounts 列举");
   ok(calls.some((c) => /\/workers\/scripts\/dao-relay-do$/.test(c.url) && c.method === "PUT" && c.hasForm), "以 multipart FormData PUT 上传 worker 脚本");
   ok(seq.filter((u) => u.indexOf("raw.githubusercontent.com") >= 0).length === 2, "取了 worker.js + keys.js 两个模块源");
+
+  // 4b) Global API Key (email+key) 路: 纯后端·零浏览器 —— 走 /user 校验 + X-Auth-* 头
+  calls.length = 0;
+  DaoRelayApp.setNetFn(mockFetch);
+  const badGk = await rpc("/api/cf-provision", "POST", { email: "fib@example.com", apiKey: "short" });
+  ok(badGk.status === 400, "Global API Key 过短 → 400");
+  const startGk = await rpc("/api/cf-provision", "POST", { email: "fib@example.com", apiKey: "globalkey_abcdefghijklmnopqrstuvwxyz" });
+  ok(startGk.status === 200 && startGk.body.started === true, "Global API Key 启动 → started=true");
+  let sg = null;
+  for (let i = 0; i < 50; i++) { sg = await rpc("/api/cf-status", "GET"); if (sg.body.phase === "done" || sg.body.phase === "error") break; await sleep(20); }
+  ok(sg.body.phase === "done", "Global API Key 编排完成 → done");
+  ok(calls.some((c) => c.url.endsWith("/user") && c.headers["X-Auth-Email"] === "fib@example.com"), "Global API Key 走 /user 校验且带 X-Auth-Email 头");
+  ok(calls.some((c) => c.headers["X-Auth-Key"] === "globalkey_abcdefghijklmnopqrstuvwxyz") && !calls.some((c) => (c.headers.Authorization || "").indexOf("globalkey_") >= 0), "全程走 X-Auth-Key 头·不降级成 Bearer");
+  ok(!calls.some((c) => c.url.endsWith("/user/tokens/verify")), "Global API Key 路不调 token verify");
 
   // 5) verify 失败 → error 且不泄 token
   calls.length = 0;
