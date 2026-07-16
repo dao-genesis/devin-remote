@@ -99,12 +99,17 @@ details.adv[open]>summary{color:var(--vscode-textLink-foreground)}
 <!-- Cloudflare 固定域名 (可选·一键建 Worker·唯一真正需要用户配置的东西) -->
 <div class="card">
   <div class="lbl">☁️ 固定域名 · Cloudflare 一键建 Worker（可选）</div>
-  <div class="muted" style="font-size:11px;margin-top:4px">默认零账号通道已全自动, <b>无需任何配置</b>。仅当你想要<b>恒定不变的公网地址</b>时: ① 点下方按钮到 Cloudflare 创建 API Token（模板选「编辑 Workers」, 可用 GitHub 账号登录）② 粘贴回来一键部署, 其余全自动。Token 只在本机内存用一次, 不落盘不上传。</div>
+  <div class="muted" style="font-size:11px;margin-top:4px">默认零账号通道已全自动, <b>无需任何配置</b>。仅当你想要<b>恒定不变的公网地址</b>时: ① 点下方按钮到 Cloudflare 创建 API Token（模板选「编辑 Workers」, 可用 GitHub 或 Cloudflare 账号登录）② 粘贴回来一键部署, 其余全自动。Token 只在本机内存用一次, 不落盘不上传。</div>
   <button onclick="cfAutoStart()" style="margin-top:6px;background:#8957e5">🤖 全自动建 Worker（代登录→建Token→部署·一键到底）</button>
-  <details class="adv cfgh" style="margin-top:6px"><summary style="font-size:11px">可选·填 GitHub 账号让「登录/2FA」也自动完成（不填则命中登录页时等你手点一次）</summary>
+  <details class="adv cfgh" style="margin-top:6px"><summary style="font-size:11px">可选·填账号让「登录/2FA」也自动完成（GitHub 或 Cloudflare 账号任选其一。不填则命中登录页时等你手点一次）</summary>
+    <div class="muted" style="font-size:10px;margin-top:2px">① GitHub 账号（经 OAuth 登 Cloudflare）</div>
     <input id="cfGhUser" placeholder="GitHub 用户名/邮箱（可选）">
     <input id="cfGhPass" type="password" placeholder="GitHub 密码（可选·仅本机内存注入登录页, 不落盘不上传）">
     <input id="cfGhOtp" placeholder="GitHub 2FA TOTP 密钥 base32（可选·本机算码, 不上传）">
+    <div class="muted" style="font-size:10px;margin-top:4px">② 或 Cloudflare 账号（直登 CF）</div>
+    <input id="cfCfUser" placeholder="Cloudflare 邮箱（可选）">
+    <input id="cfCfPass" type="password" placeholder="Cloudflare 密码（可选·仅本机内存注入登录页, 不落盘不上传）">
+    <input id="cfCfOtp" placeholder="Cloudflare 2FA TOTP 密钥 base32（可选·本机算码, 不上传）">
     <div class="muted" style="font-size:10px">留空即「辅助到极致」：非验证步骤自动跑, 仅登录/2FA/人机验证等你点一次后自动续跑。填了则连登录/2FA 也代办。人机验证/硬件密钥永不代按。</div>
   </details>
   <button onclick="cfOpenTokenPage()" style="margin-top:6px">🌐 仅打开取 Token 页（手动）</button>
@@ -1267,15 +1272,17 @@ function cfOpenTokenPage(){
 function cfAutoStart(){
   var c=_conn();
   var gh={ user:(v('cfGhUser')||'').trim(), pass:v('cfGhPass')||'', otp:(v('cfGhOtp')||'').trim().replace(/\s+/g,'') };
+  var cf={ user:(v('cfCfUser')||'').trim(), pass:v('cfCfPass')||'', otp:(v('cfCfOtp')||'').trim().replace(/\s+/g,'') };
   var cfg={ active:true, bases:_hubBases(), session:c.session||'local', relayToken:c.token||'' };
   if(gh.user||gh.otp) cfg.gh=gh;
+  if(cf.user||cf.otp) cfg.cf=cf;
   try{
     if(N.cfAutoArm) N.cfAutoArm(JSON.stringify(cfg));
     else { _result('cf',false,'本机版本不支持全自动编排(需 0.37.226+), 请用上方手动流程'); return; }
   }catch(e){ _result('cf',false,'武装失败: '+(e&&e.message||e)); return; }
   var u=_cfTokenDeepLink('dao-relay');
   try{ if(N.openTab){N.openTab(u);} else window.open(u,'_blank'); }catch(e){ try{window.open(u,'_blank');}catch(_){} }
-  _result('cf',true,'已启动全自动·已打开建 Token 页。编排器将自动完成'+(cfg.gh?'登录/2FA/':'')+'授权→建Token→抓取→部署; 命中人机验证/硬件密钥会停下等你点一次后自动续跑。进度看下方状态与部署栏。');
+  _result('cf',true,'已启动全自动·已打开建 Token 页。编排器将自动完成'+((cfg.gh||cfg.cf)?'登录/2FA/':'')+'授权→建Token→抓取→部署; 命中人机验证/硬件密钥会停下等你点一次后自动续跑。进度看下方状态与部署栏。');
   cfPollStatus();
 }
 //__CFDEEPLINK_END__

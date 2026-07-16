@@ -8,8 +8,13 @@
  *   GitHub 登录页  → 填账密并提交
  *   GitHub 2FA 页  → 用 TOTP 密钥本地算 6 位码并提交
  *   OAuth 授权页   → 点 Authorize
+ *   CF 登录页      → 填 Cloudflare 邮箱/密码并提交 (直登 CF 账号·GitHub 之外的另一路)
+ *   CF 2FA 页      → 用 TOTP 密钥本地算 6 位码并提交
  *   CF 建 Token 页 → 逐步点 Continue → Create Token
  *   CF 结果页      → 抓取新 Token → 经本机中继灌入 /api/cf-provision (既有全自动部署)
+ *
+ * 一条龙: 无论用户给的是 GitHub 账号(经 OAuth 登 CF)还是 Cloudflare 账号(直登),
+ *   都收敛到「登 CF → 建 Token → 部署 Worker」同一条链, 用户各点一次「允许」即长期有效。
  *
  * 守一条不可代之界: 提供商人机验证/硬件密钥/新设备验证 (CAPTCHA/WebAuthn) 命中即停手,
  *   置状态交用户点一下, 随后自动续跑 —— 不静默绕过任何安全控制。
@@ -54,7 +59,7 @@
   }
 
   // ── 页面分类 (纯函数·据 url + facts 判定当前阶段) ──
-  //   facts: { ghLogin, gh2fa, ghSso, ghOauth, cfContinue, cfCreate, cfTokenText, captcha, webauthn }
+  //   facts: { ghLogin, gh2fa, ghSso, ghOauth, cfLogin, cf2fa, cfContinue, cfCreate, cfTokenText, captcha, webauthn }
   function classifyPage(url, facts) {
     facts = facts || {};
     url = String(url || "");
@@ -72,6 +77,8 @@
       if (facts.cfTokenText) return "cf_token_result";
       if (facts.cfCreate) return "cf_create";
       if (facts.cfContinue) return "cf_continue";
+      if (facts.cf2fa) return "cf_2fa";
+      if (facts.cfLogin) return "cf_login";
     }
     return "unknown";
   }
@@ -175,6 +182,8 @@
           ghOauth: !!(q("button[name=authorize][value='1'], #js-oauth-authorize-btn") || btnByText(/^authorize\b|授权/i)),
           cfContinue: !!btnByText(/continue to summary|继续.*(摘要|以显示)/i),
           cfCreate: !!btnByText(/create token|创建令牌|创建.*token/i),
+          cf2fa: !!((q("input[name=totp]") || q("input[autocomplete=one-time-code]") || q("#totp-input") || q("input[name='2fa_code']")) && /two.?factor|verification code|authentication code|身份验证|两步验证|验证码|一次性/i.test(body)),
+          cfLogin: !!((q("input[type=email]") || q("input[name=email]") || q("input[name=identity]")) && (q("input[type=password]") || q("input[name=password]"))),
           cfTokenText: (function () {
             var ro = qa("input[readonly], textarea[readonly], code, pre");
             for (var i = 0; i < ro.length; i++) { var t = text(ro[i]); if (/^[A-Za-z0-9_-]{40}$/.test(t)) return t; }
@@ -199,6 +208,27 @@
           return;
         }
         if (cat === "gh_oauth") { var b = q("#js-oauth-authorize-btn") || q("button[name=authorize][value='1']") || btnByText(/^authorize\b|授权/i); if (b) b.click(); return; }
+        if (cat === "cf_login") {
+          if (CFG.cf && CFG.cf.user) {
+            var cem = q("input[type=email]") || q("input[name=email]") || q("input[name=identity]");
+            var cpw = q("input[type=password]") || q("input[name=password]");
+            if (cem) setVal(cem, CFG.cf.user);
+            if (cpw) setVal(cpw, CFG.cf.pass || "");
+            var csb = (cpw && cpw.form && cpw.form.querySelector("button[type=submit], input[type=submit]")) || btnByText(/log ?in|sign ?in|登录|登入|continue|next|下一步/i);
+            if (csb) csb.click();
+          } else status("wait", "Cloudflare 登录页·未提供账密, 等你手动登录");
+          return;
+        }
+        if (cat === "cf_2fa") {
+          if (CFG.cf && CFG.cf.otp) {
+            var ccode = await totp(CFG.cf.otp, Date.now());
+            var cinp = q("input[name=totp]") || q("input[autocomplete=one-time-code]") || q("#totp-input") || q("input[name='2fa_code']");
+            setVal(cinp, ccode);
+            var cf2 = cinp && cinp.form; var csb2 = (cf2 && cf2.querySelector("button[type=submit], input[type=submit]")) || btnByText(/verify|confirm|验证|确认/i);
+            if (csb2) csb2.click();
+          } else status("wait", "Cloudflare 2FA·未提供 TOTP 密钥, 等你手动输入");
+          return;
+        }
         if (cat === "cf_continue") { var c = btnByText(/continue to summary|继续.*(摘要|以显示)/i); if (c) c.click(); return; }
         if (cat === "cf_create") { var cr = btnByText(/create token|创建令牌|创建.*token/i); if (cr) cr.click(); return; }
         if (cat === "cf_token_result") {
