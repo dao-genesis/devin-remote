@@ -198,7 +198,7 @@ details.adv[open]>summary{color:var(--vscode-textLink-foreground)}
   </label>
   <span id="lanLabel" style="font-size:12px;color:var(--vscode-descriptionForeground)">已关闭</span>
 </div>
-<div class="lbl">局域网直连 URL（同网控制端直接使用）</div>
+<div class="lbl">局域网直连 URL（网页直开=同网浏览器满血 APK 同款操作 · RPC=程序调用）</div>
 <div id="lanUrls" class="url">—</div>
 <div class="row" style="margin-top:6px">
   <button onclick="copyLanAccess()">📋 复制局域网直连接入信息</button>
@@ -856,7 +856,9 @@ function refreshLan(){
   var lb=document.getElementById('lanLabel'); if(lb) lb.textContent=on?((l.urls&&l.urls.length)?('已开启 🟢 · '+l.urls.length+' 个地址'):'已开启 · 等待局域网地址…'):'已关闭';
   var u=document.getElementById('lanUrls');
   if(u){ var c=_conn(); var urls=(l.urls||[]);
-    u.textContent = (on&&urls.length)? urls.map(function(x){return x+"/relay/"+(c.session||"");}).join("\n") : (on?'(未取得局域网地址·请确认已连 Wi-Fi)':'—'); }
+    // 同网浏览器直开 = 满血 APK 同款 (单网页传输一切·同源直连本机·零中继零隧道); 另附裸 RPC 入口给程序调用。
+    u.textContent = (on&&urls.length)? urls.map(function(x){var b=String(x).replace(/\/$/,'');
+      return "网页直开(同网浏览器·满血 APK 同款操作): "+_webConsoleUrl(b,true)+"\nRPC 直连(程序/curl): "+b+"/relay/"+(c.session||"");}).join("\n\n") : (on?'(未取得局域网地址·请确认已连 Wi-Fi)':'—'); }
 }
 // ── 网页控制台 (手机=中枢, 浏览器全功能接入) ──
 //   控制台网址 = <本机入口>/?session=&token= → 浏览器打开即自动连通本机 RPC。
@@ -950,6 +952,10 @@ function copyLanAccess(){
   var l=_lan(), c=_conn(); var urls=(l.urls||[]);
   if(!urls.length){ _result('copyLan', false, '暂无局域网地址 (请确认已连 Wi-Fi 且局域网直连已开)'); return; }
   var lines=["═══ Devin Cloud 手机版 · 局域网直连 (零中继·零隧道·直连本机) ═══"];
+  lines.push("【网页直开·同网任意浏览器打开即与 APK 同款满血操作 (单网页传输一切·同源直连本机·零中继零隧道)】");
+  urls.forEach(function(x){ lines.push("  "+_webConsoleUrl(String(x).replace(/\/$/,''),true)); });
+  lines.push("");
+  lines.push("【RPC·给云端 Agent / 程序 (非浏览器直开)】");
   urls.forEach(function(x){ lines.push("直连入口: "+x+"/relay/"+(c.session||"")); });
   lines.push("Token: "+(c.token||l.token||""));
   lines.push("Session: "+(c.session||l.session||""));
