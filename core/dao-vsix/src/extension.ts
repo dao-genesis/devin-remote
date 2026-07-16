@@ -15117,15 +15117,20 @@ async function devinBatchInjectRun(accounts: DaoBatchAccount[]): Promise<DaoBatc
                 const wantM = (injectProfile.enabled ? (injectProfile.mcps || []) : []).filter(m => m && m.name);
                 if (!wantM.length) { res.mcp = true; }
                 else {
-                    try {
-                        const inst = await devinListMcpInstallations(orgId, auth1);
-                        const have = new Set<string>();
-                        if (inst.ok && inst.items) for (const it of inst.items) {
-                            const nm = String((it.name || '').replace(/^★ /, '')).toLowerCase();
-                            if (nm) have.add(nm);
-                        }
-                        res.mcp = wantM.every(m => have.has(String(m.name).toLowerCase()) || have.has(mcpSlug(m)));
-                    } catch { /* 守柔 */ }
+                    // MCP 落地同样有写后读延迟(read-after-write lag): 刚 devinAddCustomMcp 的安装可能未即时回读到 →
+                    //   与上面知识库校验同源, 退避重读至多3次(0/400/900ms), 命中即止, 免把「刚 add 未回读」误判 mcp=false。
+                    for (let attempt = 0; attempt < 3 && !res.mcp; attempt++) {
+                        if (attempt > 0) await new Promise(r => setTimeout(r, attempt === 1 ? 400 : 900));
+                        try {
+                            const inst = await devinListMcpInstallations(orgId, auth1);
+                            const have = new Set<string>();
+                            if (inst.ok && inst.items) for (const it of inst.items) {
+                                const nm = String((it.name || '').replace(/^★ /, '')).toLowerCase();
+                                if (nm) have.add(nm);
+                            }
+                            res.mcp = wantM.every(m => have.has(String(m.name).toLowerCase()) || have.has(mcpSlug(m)));
+                        } catch { /* 守柔 */ }
+                    }
                 }
             }
             // 校验: 回读知识库确认「道法自然准则」落地且正文完整(防截断/损坏)
