@@ -197,15 +197,15 @@ export async function credLoginProvision({ email, password, totpSecret, cdpEndpo
     await page.waitForTimeout(1500);
 
     // ② 登录页: 自动填账号密码 + (可选)两步验证。
-    const needLogin = isLoginPage(page.url()) || await page.locator('input[type="email"],input[name="email"]').first().isVisible({ timeout: 3000 }).catch(() => false);
+    const needLogin = isLoginPage(page.url()) || await page.locator('input[type="email"],input[name="email"],input[autocomplete="username"]').first().isVisible({ timeout: 3000 }).catch(() => false);
     if (needLogin) {
       if (await hitsHardWall(page)) throw new Error("登录页命中人机验证/硬件密钥, 后端不代过 —— 请改用一键授权, 或先在插件浏览器手动登录一次");
       log("② 登录页: 自动填账号密码…");
-      await fillFirst(page, ['input[name="email"]', 'input[type="email"]', 'input#email'], email, log, "账号");
+      await fillFirst(page, ['input[type="email"]', 'input[name="email"]', 'input[autocomplete="username"]', 'input#email'], email, log, "账号");
       await fillFirst(page, ['input[name="password"]', 'input[type="password"]', 'input#password'], password, log, "密码");
-      const loginBtn = await firstText(page, ["Log in", "Sign in", "登录", "Login"]) || page.locator('button[type="submit"]').first();
+      const loginBtn = await firstText(page, ["Sign in", "Log in", "登录", "Login"]) || page.locator('button[type="submit"]').first();
       await loginBtn.click().catch(() => {});
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(4000);
 
       const otpVisible = await page.locator('input[name="otp"],input[autocomplete="one-time-code"],input[name="totp"]').first().isVisible({ timeout: 3000 }).catch(() => false);
       if (otpVisible) {
@@ -220,8 +220,8 @@ export async function credLoginProvision({ email, password, totpSecret, cdpEndpo
       if (await hitsHardWall(page)) throw new Error("登录后命中人机验证/硬件密钥, 后端不代过 —— 请改用一键授权");
     }
 
-    // ③ 等进入已登录 dashboard 会话态(直连或登录后)。
-    for (let i = 0; i < 20 && !isAuthedDash(page.url()); i++) { await page.waitForTimeout(1000); }
+    // ③ 等进入已登录 dashboard 会话态(直连或登录后)。现代 CF 统一登录重定向可能耗时十余秒, 给足 ~45s。
+    for (let i = 0; i < 45 && !isAuthedDash(page.url()); i++) { await page.waitForTimeout(1000); }
     if (isAuthedDash(page.url())) {
       // ④ ★内部接口纯 HTTP 直建 Token(主路径·零点击零抓取)。
       log("④ 已进 dashboard 会话态, 经内部接口直建 API Token…");
