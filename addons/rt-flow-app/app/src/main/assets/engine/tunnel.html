@@ -112,7 +112,10 @@ details.adv[open]>summary{color:var(--vscode-textLink-foreground)}
     <input id="cfCfOtp" placeholder="Cloudflare 2FA TOTP 密钥 base32（可选·本机算码, 不上传）">
     <div class="muted" style="font-size:10px">留空即「辅助到极致」：非验证步骤自动跑, 仅登录/2FA/人机验证等你点一次后自动续跑。填了则连登录/2FA 也代办。人机验证/硬件密钥永不代按。</div>
   </details>
-  <button onclick="cfOpenTokenPage()" style="margin-top:6px">🌐 仅打开取 Token 页（手动）</button>
+  <div class="muted" style="font-size:11px;margin-top:8px"><b>⭐ 推荐·纯后端一条龙（零浏览器·零人机验证·零点击）</b>：填下方 Cloudflare 邮箱 + Global API Key（在 dash → 我的个人资料 → API 令牌 → Global API Key 一次取回），后端直接建 Worker→回填穿透，全自动。凭证仅本机内存用一次，不落盘不上传。</div>
+  <input id="cfProvEmail" placeholder="Cloudflare 邮箱（用 Global API Key 时填）">
+  <input id="cfProvKey" type="password" placeholder="Global API Key（纯后端·零浏览器·一次即全自动）">
+  <button onclick="cfOpenTokenPage()" style="margin-top:6px">🌐 或开取 Token 页（手动）</button>
   <input id="cfProvTok" type="password" placeholder="或手动粘贴 Cloudflare API Token">
   <div class="row">
     <button onclick="cfProvision()" style="background:#238636">⚡ 一键部署专属 Worker</button>
@@ -1289,11 +1292,17 @@ function cfAutoStart(){
 var _cfPollTimer=null;
 async function cfProvision(){
   var tok=(v('cfProvTok')||"").trim();
-  if(tok.length<20){ _result('cf',false,'请先粘贴 Cloudflare API Token'); return; }
+  var email=(v('cfProvEmail')||"").trim();
+  var key=(v('cfProvKey')||"").trim();
+  var payload=null;
+  if(email && key.length>=20) payload={email:email, apiKey:key};   // 纯后端 Global API Key 优先
+  else if(tok.length>=20) payload={token:tok};
+  else { _result('cf',false,'请填 Cloudflare 邮箱 + Global API Key（推荐），或粘贴 API Token'); return; }
   try{
-    var r=await _hubRpc("/api/cf-provision",{token:tok});
-    document.getElementById('cfProvTok').value="";
-    if(r&&(r.started||r.already)){ _result('cf',true,'部署已启动 · 全自动进行中…'); cfPollStatus(); }
+    var r=await _hubRpc("/api/cf-provision",payload);
+    var et=document.getElementById('cfProvTok'); if(et) et.value="";
+    var ek=document.getElementById('cfProvKey'); if(ek) ek.value="";
+    if(r&&(r.started||r.already)){ _result('cf',true,'部署已启动 · 纯后端全自动进行中…'); cfPollStatus(); }
     else _result('cf',false,(r&&r.error)||'启动失败');
   }catch(e){ _result('cf',false,String(e&&e.message||e)); }
 }
