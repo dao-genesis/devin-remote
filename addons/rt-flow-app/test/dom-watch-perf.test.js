@@ -37,8 +37,7 @@ const vf = (main.match(/static void installVideoFit[\s\S]{0,6000}/) || [""])[0];
 ok(/if\(window\.__rtWatch\)\{window\.__rtWatch\(deb\);\}/.test(vf), "videoFit 经 __rtWatch (兜底自建)");
 const pf = (main.match(/static void installAttachmentPrefetch[\s\S]{0,2500}/) || [""])[0];
 ok(/if\(window\.__rtWatch\)\{window\.__rtWatch\(later\);\}/.test(pf), "attachmentPrefetch 经 __rtWatch (兜底自建)");
-const cu = (main.match(/static void installComposerUpload[\s\S]{0,3000}/) || [""])[0];
-ok(/if\(window\.__rtWatch\)\{window\.__rtWatch\(scan\);\}/.test(cu), "composerUpload 经 __rtWatch (兜底自建)");
+ok(!/static void installComposerUpload/.test(main), "composerUpload 扫描子已整体撤除 (官方 ＋ 菜单零注入)");
 
 // ── ③ 安装链: 主壳两处 + 全屏号页两处, installDomWatch 先于各扫描子 ──
 ok(/installDomWatch\(v\);\s*\/\/[^\n]*\n\s*installKbHelper\(v\);/.test(main), "主壳 onPageFinished 先装 installDomWatch");
@@ -47,7 +46,7 @@ ok(/MainActivity\.installDomWatch\(v\);/.test(tab), "全屏号页安装 installD
 
 // ── ④ 全屏号页资源钩子对齐主壳: 附件预热 + ＋菜单上传入口 ──
 ok(/MainActivity\.installAttachmentPrefetch\(v\);/.test(tab), "全屏号页装附件预热 (与主壳一致)");
-ok(/MainActivity\.installComposerUpload\(v\);/.test(tab), "全屏号页装 ＋菜单上传入口 (与主壳一致)");
+ok(!/MainActivity\.installComposerUpload\(v\);/.test(tab), "全屏号页同样零注入 (＋菜单上传入口已撤)");
 
 if (failures) { console.error(failures + " failure(s)"); process.exit(1); }
 console.log("dom-watch-perf: all ok");

@@ -66,38 +66,23 @@ ok(/var em=DaoCloud\.getEnvMode\(a\)/.test(switchSrc), "dvCreate 读该号(卡�
   ok(!/additional_args\.platform/.test(others.replace(/\/\/[^\n]*/g, "")), "additional_args.platform 只出现在 createSession");
 }
 
-// ── 6) 官方网页前端徽章 (installEnvModeBadge · 源级护栏) ──
+// ── 6) 官方页零注入 (无为而治 · 源级护栏): 旧注入的「⬆上传到网页端」＋菜单项与
+//      「新对话虚拟机环境」切换/请求钩子已整体撤除 —— 上传/环境选择全走官方原生入口。
 {
   const JAVA = path.join(__dirname, "..", "app", "src", "main", "java", "ai", "devin", "rtflow");
   const mainSrc = fs.readFileSync(path.join(JAVA, "MainActivity.java"), "utf8");
   const tabSrc = fs.readFileSync(path.join(JAVA, "TabActivity.java"), "utf8");
   const relaySrc = fs.readFileSync(path.join(JAVA, "RelayService.java"), "utf8");
-  ok(/static void installEnvModeBadge\(WebView w, String acctEmail\)/.test(mainSrc), "MainActivity 含 installEnvModeBadge(官方页徽章)");
-  ok(/window\.__rtEnvMode/.test(mainSrc), "徽章注入幂等守卫 __rtEnvMode");
-  ok(/devin\\\\\.ai/.test(mainSrc.match(/static void installEnvModeBadge[\s\S]*?\n    \}/)[0]), "徽章只在 devin.ai 域注入");
-  const badge = mainSrc.match(/static void installEnvModeBadge[\s\S]*?\n    \}/)[0];
-  ok(/if\(!EM\)return/.test(badge), "无账号 email 不注入 (不用全局活动号兜底)");
-  ok(/j\.platform_explicitly_set\|\|\(j\.additional_args&&j\.additional_args\.platform\)/.test(badge), "已带平台字段的请求不覆盖");
-  ok(/if\(!cur\|\|/.test(badge), "未显式设置(空)不注入 · 尊重官方默认");
-  ok(badge.indexOf("api(\\\\/[^/]+)*\\\\/sessions") >= 0, "只拦 POST /api/**/sessions 新建请求");
-  ok(/POST/.test(badge) && /isCreate\(u,m\)/.test(badge), "fetch/XHR 钩子仅限新建 POST · 既有会话请求不动");
-  ok(/installEnvModeBadge\(v, tab\.acctEmail\)/.test(mainSrc), "主壳 onPageFinished/doUpdateVisitedHistory 挂徽章");
-  ok(/installEnvModeBadge\(v, fEmail\)/.test(tabSrc), "TabActivity 全屏号页同样挂徽章");
-  ok(/envModePrefGet/.test(mainSrc) && /envModePrefSet/.test(mainSrc), "SharedPreferences 单一真源读写");
+  ok(!/installEnvModeBadge/.test(mainSrc) && !/installEnvModeBadge/.test(tabSrc), "installEnvModeBadge 已整体撤除 (环境选择全走官方 Configuration)");
+  ok(!/installComposerUpload/.test(tabSrc) && !/static void installComposerUpload/.test(mainSrc), "installComposerUpload 已整体撤除 (上传走官方附件入口)");
+  ok(!/data-rtenv/.test(mainSrc) && !/data-rtup/.test(mainSrc), "官方 ＋ 菜单零注入菜单项 (data-rtup/data-rtenv 绝迹)");
+  ok(!/__rtEnvMode/.test(mainSrc) && !/__rtNewUp/.test(mainSrc), "官方页 fetch/XHR 环境钩子与菜单观察器绝迹");
+  ok(!/上传到网页端/.test(mainSrc.match(/private class DlBridge[\s\S]*?\n    \}/)[0] || ""), "RTDL 桥不再暴露 pickUpload (菜单注入链已断)");
+  ok(/private void pickUploadToPage\(\)/.test(mainSrc), "下载悬浮窗「⬆ 上传」原生入口保留 (pickUploadToPage)");
+  // 引擎切号面板(自家页面·非官方页注入)的环境模式能力保留:
+  ok(/envModePrefGet/.test(mainSrc) && /envModePrefSet/.test(mainSrc), "SharedPreferences 单一真源读写保留 (引擎面板用)");
   ok(/envModeGet/.test(relaySrc) && /envModeSet/.test(relaySrc), "RelayService 引擎桥同一真源");
-  ok(/String envModeGet\(String email\)/.test(mainSrc), "RTDL/Native 桥暴露 envModeGet");
-  ok(/_emBridge/.test(cloudSrc), "devin-cloud.js getEnvMode/setEnvMode 优先原生桥 (与徽章同一真源)");
-  // 环境切换原生整合进官方 ＋ 菜单 (不再常驻悬浮徽章)
-  ok(!/document\.createElement\('div'\);b\.id='__rtEnvBadge'/.test(badge), "无常驻悬浮徽章创建");
-  ok(/__rtEnvBadge'\);if\(ob\)ob\.remove\(\)/.test(badge), "旧悬浮徽章残留即移除");
-  ok(/window\.__rtEnvEM=EM;window\.__rtEnvCur=cur/.test(badge), "数据层暴露 __rtEnvEM/__rtEnvCur");
-  ok(/window\.__rtEnvSet=function\(m\)/.test(badge), "__rtEnvSet 写回原生 SharedPreferences");
-  const comp = mainSrc.match(/static void installComposerUpload[\s\S]*?\n    \}/)[0];
-  ok(/data-rtenv/.test(comp), "＋菜单注入环境模式菜单项 (与上传到网页端同级)");
-  ok(/\['linux','windows','macos'\]/.test(comp), "点击三态循环 linux→windows→macos");
-  ok(/window\.__rtEnvSet&&window\.__rtEnvSet\(m\)/.test(comp), "菜单项点击经 __rtEnvSet 持久化");
-  ok(/!menu\.querySelector\('\[data-rtup\]'\)/.test(comp) && /!menu\.querySelector\('\[data-rtenv\]'\)/.test(comp), "按存在性重注入 (React 重渲染删除节点后可复活)");
-  ok(!/menu\.__rtUp\)return/.test(comp), "旧一次性 __rtUp 守卫已移除 (重渲染即失效之根)");
+  ok(/_emBridge/.test(cloudSrc), "devin-cloud.js getEnvMode/setEnvMode 优先原生桥");
 }
 
 // ── 7) 官方环境 UI 显形 (buildInjection · document_start UA 去 Mobile · 源级护栏) ──

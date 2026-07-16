@@ -1,8 +1,6 @@
 "use strict";
-// 源级护栏: ①「新创作/＋」弹出菜单点击直传; ② app.devin.ai /assets/* 静态资产磁盘缓存。
-// ① RTDL 桥新增 pickUpload → pickUploadToPage (与下载悬浮窗同一注入链, 点击不依赖拖拽);
-//    installComposerUpload 注入 Radix menu 观察器, 语义门 (附件/上传/文件…) 命中才追加菜单项;
-//    onPageFinished 与 doUpdateVisitedHistory (SPA 路由) 都装 (幂等)。
+// 源级护栏: ① 官方 ＋ 菜单零注入 (旧「上传到网页端」菜单项已撤·上传走官方附件入口,
+//    下载悬浮窗「⬆ 上传」原生入口保留); ② app.devin.ai /assets/* 静态资产磁盘缓存。
 // ② assetCacheResponse: 只缓存内容哈希命名的不可变资产; 命中本地供给 immutable;
 //    未命中后台整取 (identity 传输校验 Content-Length, 取不全不落盘), LRU 限容;
 //    页内标签与 TabActivity 全屏号页两处 shouldInterceptRequest 都接入。
@@ -18,17 +16,12 @@ const tabj = fs.readFileSync(TABJ, "utf8");
 let fails = 0;
 function ok(cond, msg) { if (cond) { console.log("  ok  - " + msg); } else { console.error("  FAIL- " + msg); fails++; } }
 
-// ①「新创作/＋」弹出菜单点击直传
-ok(/public void pickUpload\(\) \{ main\.post\(\(\) -> pickUploadToPage\(\)\); \}/.test(java), "RTDL 桥含 pickUpload → pickUploadToPage");
-ok(/static void installComposerUpload\(WebView w\)/.test(java), "存在 installComposerUpload");
-ok(/window\.__rtNewUp/.test(java), "注入幂等守卫 __rtNewUp");
-ok(/attach\|upload\|file\|photo\|screenshot\|camera\|附件\|上传\|文件\|图片\|截图\|拍照/.test(java), "语义门: 附件/上传类弹出菜单才追加");
-ok(/\[role=\\"menu\\"\],\[data-radix-menu-content\]/.test(java), "观察 Radix menu 弹出");
-ok(/function scan\(\)\{T=0;try\{document\.querySelectorAll/.test(java), "全文档防抖重扫(Radix portal 先挂节点后置属性也不漏)");
-ok(/attributes:true,attributeFilter:\['role','data-radix-menu-content'\]/.test(java), "同时观察 role 属性变化");
-ok(/RTDL&&RTDL\.pickUpload&&RTDL\.pickUpload\(\)/.test(java), "菜单项点击 → RTDL.pickUpload");
-ok(/installAttachmentPrefetch\(v\); \/\/[^\n]*\n\s*installComposerUpload\(v\);/.test(java), "onPageFinished 装 installComposerUpload");
-ok(/installAttachmentPrefetch\(v\); installComposerUpload\(v\); installEnvModeBadge\(v, tab\.acctEmail\); harvestPageAuth/.test(java), "SPA 路由(doUpdateVisitedHistory)重装");
+// ① 官方 ＋ 菜单零注入 (旧菜单项/观察器绝迹) · 下载悬浮窗原生上传入口保留
+ok(!/static void installComposerUpload/.test(java) && !/MainActivity\.installComposerUpload/.test(tabj), "installComposerUpload 已整体撤除");
+ok(!/window\.__rtNewUp/.test(java), "菜单观察器守卫 __rtNewUp 绝迹");
+ok(!/data-rtup/.test(java) && !/data-rtenv/.test(java), "菜单注入项 data-rtup/data-rtenv 绝迹");
+ok(!/RTDL&&RTDL\.pickUpload/.test(java) && !/public void pickUpload\(\)/.test(java), "RTDL.pickUpload 注入桥已撤");
+ok(/private void pickUploadToPage\(\)/.test(java) && /up\.setOnClickListener\(v -> pickUploadToPage\(\)\)/.test(java), "下载悬浮窗「⬆ 上传」原生入口保留");
 
 // ② 静态资产磁盘缓存
 ok(/static WebResourceResponse assetCacheResponse\(WebResourceRequest req\)/.test(java), "存在 assetCacheResponse");

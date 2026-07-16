@@ -1275,8 +1275,6 @@ public class MainActivity extends AppCompatActivity {
                     installVideoFit(v);         // 录像播放器窄屏适配: 视频区与步骤栏纵向堆叠同屏
                     installMediaRetry(v);       // 媒体加载自愈: 附件/对象存储直链瞬断→退避自动重载
                     installAttachmentPrefetch(v); // 附件预热: DOM 一出现附件即后台整取落盘 → 首次点开即秒开
-                    installComposerUpload(v);   // 「新创作/＋」弹出菜单加「上传到网页端」点击直传入口
-                    installEnvModeBadge(v, tab.acctEmail); // 官方页「新对话虚拟机环境」徽章+新建请求平台注入
                     harvestPageAuth(v, tab, u); // 非账号标签从页面登录态采收 auth → 媒体代取可用
                     warmAttachmentCookie(tab.auth1, tab.orgId, u);   // 预铸附件 Cookie → 首次图片/视频即已授权
                     scheduleMediaPrecollect(tab);   // 本页媒体预采 → 开面板/切标签秒出
@@ -1293,7 +1291,7 @@ public class MainActivity extends AppCompatActivity {
                     if (tabOf(v) == active) setAddr(u);
                     scheduleRenderTabStrip(); scheduleSaveTabs();
                     // SPA 客户端路由后挂载点可能被替换 → 重装下载/键盘钩子(幂等), 修"切到对话页后点下载无反应、要刷新才行"。
-                    if (!tab.internal) { installDomWatch(v); installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); installComposerUpload(v); installEnvModeBadge(v, tab.acctEmail); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); scheduleMediaPrecollect(tab); }
+                    if (!tab.internal) { installDomWatch(v); installDownloadHook(v); installKbHelper(v); installBackspaceGuard(v); installVideoFit(v); installMediaRetry(v); installAttachmentPrefetch(v); harvestPageAuth(v, tab, u); warmAttachmentCookie(tab.auth1, tab.orgId, u); scheduleMediaPrecollect(tab); }
                 }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
@@ -3870,7 +3868,7 @@ public class MainActivity extends AppCompatActivity {
             RelayService r = RelayService.instance;
             return r != null ? r.readConn() : "{}";
         }
-        /** 每账号「新对话虚拟机环境」读/写 (与官方页徽章 RTDL 同一 SharedPreferences 真源)。 */
+        /** 每账号「新对话虚拟机环境」读/写 (引擎切号面板同一 SharedPreferences 真源)。 */
         @JavascriptInterface public String envModeGet(String email) { return envModePrefGet(MainActivity.this, email); }
         @JavascriptInterface public void envModeSet(String email, String mode) { envModePrefSet(MainActivity.this, email, mode); }
         // ── 用户脚本管理 (供 userscripts.html 内部页) ──
@@ -4577,7 +4575,7 @@ public class MainActivity extends AppCompatActivity {
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
     // 页面侧「输入让行 · 单观察者」根治 (道法自然·由多归一 —— 打字/语音一卡一卡之本源):
-    //   旧疾: installVideoFit / installAttachmentPrefetch / installComposerUpload 各自在
+    //   旧疾: installVideoFit / installAttachmentPrefetch 等扫描子各自在
     //   document 全子树各挂一个 MutationObserver(含 attributes) → Devin 对话流式吐字时全文档
     //   每帧海量 DOM 变更被三份观察者分别记账 + 回调, 主线程被反复打断, 恰与前台输入(打字/
     //   语音上屏)争同一渲染线程 = 「一卡一卡·经常卡死」之根。
@@ -4764,95 +4762,9 @@ public class MainActivity extends AppCompatActivity {
             + "}catch(e){}})();";
         try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
     }
-    // 「新创作/＋」弹出菜单点击直传: Devin 对话页 composer 的 ＋ 弹出菜单(Radix menu)一出现,
-    //   若其项含 附件/上传/文件 等语义(即新创作/附件类弹窗), 就地追加一项「⬆ 上传到网页端」——
-    //   点击经 RTDL.pickUpload 原生桥拉系统文件选择器(可多选), 与下载悬浮窗同一注入链直传,
-    //   不再依赖拖拽。幂等(window.__rtNewUp 守卫), SPA 路由后可重装。
-    static void installComposerUpload(WebView w) {
-        if (w == null) return;
-        String js = "(function(){try{if(window.__rtNewUp)return;"
-            + "if(!/(^|\\.)devin\\.ai$/.test(location.hostname))return;window.__rtNewUp=1;"
-            + "var RX=/attach|upload|file|photo|screenshot|camera|附件|上传|文件|图片|截图|拍照/i;"
-            + "function enhance(menu){try{"
-            + "var items=[].filter.call(menu.querySelectorAll('[role=\"menuitem\"]'),function(x){return !x.hasAttribute('data-rtup')&&!x.hasAttribute('data-rtenv');});"
-            + "if(!items.length||!RX.test(menu.textContent||''))return;"
-            + "var ref=items[items.length-1];"
-            + "if(!menu.querySelector('[data-rtup]')){"
-            + "var it=ref.cloneNode(false);it.removeAttribute('id');it.setAttribute('data-rtup','1');"
-            + "it.textContent='\u2B06 \u4E0A\u4F20\u5230\u7F51\u9875\u7AEF';"
-            + "['click','pointerdown','pointerup','mousedown','mouseup'].forEach(function(ev){"
-            + "it.addEventListener(ev,function(e){e.preventDefault();e.stopPropagation();"
-            + "if(ev!=='click')return;"
-            + "try{document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));}catch(_){}"
-            + "try{window.RTDL&&RTDL.pickUpload&&RTDL.pickUpload();}catch(_){}"
-            + "},true);});"
-            + "ref.parentNode.appendChild(it);}"
-            + "if(window.__rtEnvEM&&!menu.querySelector('[data-rtenv]')){"
-            + "var elbl=function(){var m=window.__rtEnvCur;"
-            + "return (m==='windows'?'\uD83E\uDE9F Windows':m==='macos'?'\uD83C\uDF4E macOS':"
-            + "m==='linux'?'\uD83D\uDC27 Linux':'\uD83D\uDC27 Linux\u00B7\u9ED8\u8BA4')+' \u00B7 \u65B0\u5BF9\u8BDD\u73AF\u5883';};"
-            + "var ei=ref.cloneNode(false);ei.removeAttribute('id');ei.setAttribute('data-rtenv','1');"
-            + "ei.textContent=elbl();"
-            + "['click','pointerdown','pointerup','mousedown','mouseup'].forEach(function(ev){"
-            + "ei.addEventListener(ev,function(e){e.preventDefault();e.stopPropagation();"
-            + "if(ev!=='click')return;"
-            + "var seq=['linux','windows','macos'];var c=window.__rtEnvCur||'linux';"
-            + "var m=seq[(seq.indexOf(c)+1)%3];"
-            + "try{window.__rtEnvSet&&window.__rtEnvSet(m);}catch(_){}"
-            + "ei.textContent=elbl();},true);});"
-            + "ref.parentNode.appendChild(ei);}"
-            + "}catch(e){}}"
-            + "var T=0;function scan(){T=0;try{document.querySelectorAll('[role=\"menu\"],[data-radix-menu-content]').forEach(enhance);}catch(e){}}"
-            + "function kick(){if(T)return;T=setTimeout(scan,50);}"
-            + "if(window.__rtWatch){window.__rtWatch(scan);}"
-            + "else{new MutationObserver(kick)"
-            + ".observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['role','data-radix-menu-content']});}"
-            + "scan();"
-            + "}catch(e){}})();";
-        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
-    }
-    // 官方 Devin 网页「新对话虚拟机环境」(用户所求·直改官方前端):
-    //   不再有常驻悬浮徽章 —— 环境切换项原生整合进 composer「＋」弹出菜单(与「上传到网页端」同级,
-    //   见 installComposerUpload), 点击三态循环 (🐧 Linux / 🪟 Windows / 🍎 macOS) 并经 RTDL 桥
-    //   持久化(与切号面板同一真源)。本函数只装数据层: window.__rtEnvEM/__rtEnvCur/__rtEnvSet +
-    //   fetch/XHR 钩子: 仅拦「POST /api/**/sessions 新建对话」请求, 注入官方真实字段
-    //   additional_args.platform + platform_explicitly_set; 未显式设置(空)时不注入(尊重官方默认),
-    //   已有平台字段的请求不覆盖, 既有会话的任何请求一概不动。幂等(window.__rtEnvMode 守卫)。
-    static void installEnvModeBadge(WebView w, String acctEmail) {
-        if (w == null) return;
-        String em = acctEmail == null ? "" : acctEmail.replace("\\", "\\\\").replace("'", "\\'");
-        String js = "(function(){try{if(window.__rtEnvMode)return;"
-            + "if(!/(^|\\.)devin\\.ai$/.test(location.hostname))return;window.__rtEnvMode=1;"
-            + "var EM='" + em + "'.toLowerCase();if(!EM)return;"
-            + "function norm(s){s=String(s||'').toLowerCase();"
-            + "if(s==='windows'||s==='win')return 'windows';"
-            + "if(s==='macos'||s==='mac'||s==='osx'||s==='darwin')return 'macos';"
-            + "if(s==='linux')return 'linux';return '';}"
-            + "var cur='';try{cur=norm(window.RTDL&&RTDL.envModeGet?RTDL.envModeGet(EM):'');}catch(e){}"
-            + "try{var ob=document.getElementById('__rtEnvBadge');if(ob)ob.remove();}catch(e){}"
-            + "window.__rtEnvEM=EM;window.__rtEnvCur=cur;"
-            + "window.__rtEnvSet=function(m){window.__rtEnvCur=norm(m);"
-            + "try{window.RTDL&&RTDL.envModeSet&&RTDL.envModeSet(EM,window.__rtEnvCur);}catch(_){}};"
-            + "function isCreate(u,m){if(String(m||'GET').toUpperCase()!=='POST')return false;"
-            + "try{var p=new URL(u,location.href);if(!/(^|\\.)devin\\.ai$/.test(p.hostname))return false;"
-            + "return /\\/api(\\/[^/]+)*\\/sessions\\/?$/.test(p.pathname);}catch(e){return false;}}"
-            + "function patch(body){try{var cur=window.__rtEnvCur;if(!cur||typeof body!=='string')return body;var j=JSON.parse(body);"
-            + "if(!j||typeof j!=='object'||j.platform_explicitly_set||(j.additional_args&&j.additional_args.platform))return body;"
-            + "j.additional_args=j.additional_args||{};j.additional_args.platform=cur;j.platform_explicitly_set=true;"
-            + "return JSON.stringify(j);}catch(e){return body;}}"
-            + "var of=window.fetch;window.fetch=function(input,init){try{"
-            + "var u=(typeof input==='string')?input:((input&&input.url)||'');"
-            + "var m=(init&&init.method)||(input&&input.method)||'GET';"
-            + "if(isCreate(u,m)&&init&&typeof init.body==='string'){init=Object.assign({},init,{body:patch(init.body)});}"
-            + "}catch(e){}return of.call(this,input,init);};"
-            + "var oo=XMLHttpRequest.prototype.open,os=XMLHttpRequest.prototype.send;"
-            + "XMLHttpRequest.prototype.open=function(m,u){this.__rtEnvC=isCreate(u,m);return oo.apply(this,arguments);};"
-            + "XMLHttpRequest.prototype.send=function(body){"
-            + "try{if(this.__rtEnvC&&typeof body==='string')body=patch(body);}catch(e){}"
-            + "return os.call(this,body);};"
-            + "}catch(e){}})();";
-        try { w.evaluateJavascript(js, null); } catch (Exception ignored) {}
-    }
+    // 官方 composer「＋」菜单/环境选择已由官方 SPA 原生提供(UA 去 Mobile 后显形) ——
+    // 旧注入的「⬆上传到网页端」菜单项与「新对话虚拟机环境」切换/请求钩子已整体撤除(无为而治),
+    // 上传走官方附件入口, 环境选择走官方 Configuration; 下载悬浮窗的「⬆ 上传」原生入口保留(pickUploadToPage)。
     // 键盘弹出时把聚焦的输入框滚到可见区中部 (配合 windowSoftInputMode=adjustResize):
     //   消除"输入框被键盘遮住 / 弹来弹去", 体感对齐真浏览器。幂等(window.__rtkb 守卫), SPA 路由后可重装。
     static void installKbHelper(WebView w) {
@@ -4950,17 +4862,9 @@ public class MainActivity extends AppCompatActivity {
             try { byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); writeDownloadBytes(name, mime, data); }
             catch (Exception e) { main.post(() -> toast("下载捕获失败")); }
         }
-        /** 页面「新创作/＋」弹出菜单的「上传到网页端」→ 原生系统文件选择器(可多选)点击直传。 */
-        @android.webkit.JavascriptInterface
-        public void pickUpload() { main.post(() -> pickUploadToPage()); }
-        /** 每账号「新对话虚拟机环境」读/写 (官方页环境徽章 ↔ 切号面板同一存储)。 */
-        @android.webkit.JavascriptInterface
-        public String envModeGet(String email) { return envModePrefGet(MainActivity.this, email); }
-        @android.webkit.JavascriptInterface
-        public void envModeSet(String email, String mode) { envModePrefSet(MainActivity.this, email, mode); }
     }
     // ── 每账号环境模式(Linux/Windows/macOS) 单一真源: SharedPreferences["envmode"] ──
-    //   官方页徽章(RTDL)与引擎面板(Native/DaoCloud)共用, 键=email 小写; 空值=未显式设置(尊重官方默认)。
+    //   引擎面板(Native/DaoCloud)专用(切号板发起对话), 键=email 小写; 空值=未显式设置(尊重官方默认)。
     static String envModeNorm(String m) {
         String s = m == null ? "" : m.toLowerCase();
         if (s.equals("windows") || s.equals("win")) return "windows";
