@@ -5776,6 +5776,45 @@ function daoGhFleetOpenPat(login: string): { ok: boolean; login: string; launche
     const launched = daoLaunchChromiumIsolated(url, safeKey, fp, proxy, profileDir, patExt ? [patExt] : []);
     return { ok: !!launched, login, launched: !!launched, scopes: cfg.scopes, expDays: cfg.expDays };
 }
+// 全自动建 PAT: 用该号账密+TOTP 在【专属隔离档】走 GitHub 官方登录 → 官网建经典 PAT → 回吐并落舰队。
+//   与 daoGhFleetOpenPat 同 profileDir(不张冠李戴)。守柔: 撞真·人机/设备/硬件密钥挑战即 needUser 交回
+//   (前端引导用户改走「续登助手」半自动)。TOTP 是号主自有第二因子(本地 RFC6238), 非绕过安全挑战。
+async function daoGhCredMint(login: string, opts?: { headless?: boolean }): Promise<{ ok: boolean; login: string; role?: string; needUser?: boolean; error?: string }> {
+    login = String(login || '').trim().replace(/^@/, '');
+    const prof = loadInjectProfile();
+    const a = (prof.ghFleet || []).find(x => x.login.toLowerCase() === login.toLowerCase());
+    if (!a) return { ok: false, login, error: '账号不在池中' };
+    if (a.pat) { const v = await daoGhAccountVerify(a.pat); if (v.ok) return { ok: true, login, role: a.role }; }
+    const cred = a.cred;
+    if (!cred || !cred.user || !cred.pass) return { ok: false, login, error: '该账号无「账密+2FA」存号 — 用「③ 账密+2FA」模式添号后再自动建 PAT' };
+    let mod: any;
+    try { mod = await daoRelayLoadMod('gh-credmint.mjs'); } catch (e: any) { return { ok: false, login, error: '建 PAT 模块缺失: ' + String(e && e.message || e) }; }
+    const cfg = daoGhGetPatCfg();
+    const safeKey = ('gh:' + login).replace(/[^a-zA-Z0-9._@-]/g, '_');
+    const profileDir = path.join(DAO_DIR, 'browser-profiles', safeKey);
+    try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* 守柔 */ }
+    const proxy = daoAcctProxy(safeKey);
+    let res: any;
+    try {
+        res = await mod.mintPat({
+            login, pass: cred.pass, otp: cred.otp || '',
+            role: a.role === 'admin' ? 'admin' : 'member',
+            scopes: cfg.scopes, profileDir,
+            proxy: proxy && proxy.server ? proxy.server : (typeof proxy === 'string' ? proxy : undefined),
+            headless: opts && opts.headless === false ? false : true,
+            log: (m: string) => { try { console.log('[gh-credmint] ' + login + ' ' + m); } catch { /* 守柔 */ } },
+        });
+    } catch (e: any) { return { ok: false, login, error: String(e && e.message || e) }; }
+    if (!res || !res.ok) return { ok: false, login, needUser: !!(res && res.needUser), error: (res && res.error) || '建 PAT 失败' };
+    // 落舰队(经 loadInjectProfile/saveInjectProfile 串行写, 不与后台 reconcile 抢写)
+    const p2 = loadInjectProfile();
+    if (!Array.isArray(p2.ghFleet)) p2.ghFleet = [];
+    const ex = p2.ghFleet.find(x => x.login.toLowerCase() === login.toLowerCase());
+    if (ex) { ex.pat = res.token; if ((ex as any).verify) delete (ex as any).verify; if (ex.note) delete ex.note; }
+    else p2.ghFleet.push({ login, pat: res.token, role: a.role === 'admin' ? 'admin' : 'member', addedAt: new Date().toISOString() });
+    saveInjectProfile(p2);
+    return { ok: true, login, role: a.role };
+}
 // ═══════════════════════════════════════════════════════════
 // 持久化 Worker · 后端代登助手(用 GitHub 账号登 Cloudflare → 建 API Token → provision)
 //   本源: 内网穿透默认走零账号 dao-relay(无需任何账号·见 AGENTS.md 三)。仅当用户要「固定不漂公网
@@ -5892,7 +5931,7 @@ function ghGenerateMgmtMd(): string {
         '',
         '- 板块状态源 = `~/.dao/dao-inject-profile.json` 的 `ghFleet` / `orgBody` / `mcps`(⚠ 含明文 PAT — 读取后禁止外传/打印)。',
         '- 热查看: `POST /api/exec` 读上述文件; 热修复: `POST /api/write` + `POST /api/command` (`workbench.action.reloadWindow`) 重载生效。',
-        '- 面板命令(webview cmd → 后端): `daoGhAccountAdd` `daoGhAccountDetail` `daoGhAccountRepos` `daoGhSetActive` `daoGhFleetList` `daoGhFleetRole` `daoGhFleetRemoveOrg` `daoGhFleetForget` `daoGhFleetAssistLogin`(半登录续登·隔离档自动填充不提交) `daoGhFleetOpenPat`(该号隔离档建 PAT·按通用配置预勾·不张冠李戴) `daoGhGetPatCfg`/`daoGhSavePatCfg`(账号池通用 PAT 权限/有效期配置) `daoGhForkRepos` `daoGhSyncRepos` `daoGhCreateOrg` `daoGhInvite` `daoGhCopyMd`。',
+        '- 面板命令(webview cmd → 后端): `daoGhAccountAdd` `daoGhAccountDetail` `daoGhAccountRepos` `daoGhSetActive` `daoGhFleetList` `daoGhFleetRole` `daoGhFleetRemoveOrg` `daoGhFleetForget` `daoGhFleetAssistLogin`(半登录续登·隔离档自动填充不提交) `daoGhFleetOpenPat`(该号隔离档建 PAT·按通用配置预勾·不张冠李戴) `daoGhFleetMintPat`(全自动: 隔离档账密+TOTP 官方登录→官网建经典 PAT→落舰队·守柔撞挑战交回) `daoGhGetPatCfg`/`daoGhSavePatCfg`(账号池通用 PAT 权限/有效期配置) `daoGhForkRepos` `daoGhSyncRepos` `daoGhCreateOrg` `daoGhInvite` `daoGhCopyMd`。',
         '- GitHub REST 直调: 后端 `ghApiRequest(method, path, pat)` → api.github.com(限速自守)。',
         '',
         '## AI 守则',
@@ -5919,7 +5958,7 @@ function _ghParseCredLine(line: string): { user: string; pass: string; otp: stri
     if (!user) return null;
     return { user, pass: rest[0] || '', otp };
 }
-// 统一添号入口: mode=pat 复用舰队 PAT 校验; mode=cred 账密+2FA 本地存号(不做无头登录·引导官网换 PAT)。
+// 统一添号入口: mode=pat 复用舰队 PAT 校验; mode=cred 账密+2FA 本地存号(随后可点「⚡ 自动建 PAT」隔离档官方登录建 PAT)。
 async function daoGhAccountAdd(text: string, role: string, mode: string): Promise<{ ok: boolean; results: { login: string; ok: boolean; role?: string; note?: string; error?: string }[] }> {
     const lines = String(text || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     if (mode !== 'cred') return daoGhFleetAdd(lines, role);
@@ -5934,7 +5973,7 @@ async function daoGhAccountAdd(text: string, role: string, mode: string): Promis
         const ex = prof.ghFleet.find(a => a.login.toLowerCase() === login.toLowerCase());
         if (ex) { ex.cred = c; if (!ex.note) ex.note = '账密存号'; }
         else prof.ghFleet.push({ login, pat: '', role: prof.ghFleet.length === 0 ? 'admin' : r, note: '账密存号·待官网换 PAT', addedAt: new Date().toISOString(), cred: c });
-        results.push({ login, ok: true, role: (ex ? ex.role : r), note: '已本地存号 · 点「建 PAT」跳官网换 PAT 后贴回①' });
+        results.push({ login, ok: true, role: (ex ? ex.role : r), note: '已本地存号 · 点「⚡ 自动建 PAT」隔离档官方登录→官网建经典 PAT→自动落舰队(撞人机/设备验证则改点「🚀 续登」半自动)' });
     }
     saveInjectProfile(prof);
     return { ok: results.some(x => x.ok), results };
@@ -8698,6 +8737,7 @@ function ghFleetRemoveOrg(login){if(!login)return;if(typeof confirm==='function'
 function ghFleetForget(login){if(!login)return;if(typeof confirm==='function'&&!confirm('从本地舰队删除 '+login+'?(不影响其 GitHub 账号)'))return;cmd('daoGhFleetForget',{login:login})}
 function ghAssistLogin(login){if(!login)return;toast('🚀 隔离档续登(自动填充·守柔不提交): '+login,true);cmd('daoGhFleetAssistLogin',{login:login})}
 function ghFleetOpenPat(login){if(!login)return;toast('🔑 该号隔离档打开建 PAT('+((_ghState().patCfg||{}).expDays===0?'永不过期':(((_ghState().patCfg||{}).expDays||30)+'天'))+'): '+login,true);cmd('daoGhFleetOpenPat',{login:login})}
+function ghFleetMintPat(login){if(!login)return;toast('⚡ 全自动建 PAT(隔离档官方登录→建经典 PAT→落舰队·约 1-2 分钟): '+login,true);cmd('daoGhFleetMintPat',{login:login})}
 // PAT 通用配置窗: 先拉当前配置(含全量 scope 清单)再弹窗渲染。
 function ghPatCfgOpen(){_ghState().patCfgWantShow=true;toast('⏳ 载入 PAT 通用配置…',true);cmd('daoGhGetPatCfg',{})}
 function ghPatCfgShow(d){
@@ -8729,7 +8769,8 @@ function ghRenderGhFleet(){var st=_ghState();var v=document.getElementById('ghGh
   h+='<div class="br" style="margin-top:4px">';
   h+='<button class="btn sm" onclick="ghAcctDetail(&#39;'+lg+'&#39;)" title="下拉查看账号数据(login/名字/scopes/组织)">🔍 详情</button>';
   h+='<button class="btn sm" onclick="ghAcctRepos(&#39;'+lg+'&#39;)" title="列该账号当前可管理仓库">📚 仓库</button>';
-  if(!a.hasPat&&a.hasCred)h+='<button class="btn sm primary" onclick="ghAssistLogin(&#39;'+lg+'&#39;)" title="半登录续登: 该号隔离档打开 GitHub 登录页·自动填充账密+当前2FA(守柔不自动提交)">🚀 续登</button>';
+  if(!a.hasPat&&a.hasCred)h+='<button class="btn sm primary" onclick="ghFleetMintPat(&#39;'+lg+'&#39;)" title="全自动建 PAT: 该号隔离档官方登录(账密+本地算 2FA)→官网建经典 PAT→落舰队·守柔撞人机/设备验证即交回">⚡ 自动建 PAT</button>';
+  if(!a.hasPat&&a.hasCred)h+='<button class="btn sm" onclick="ghAssistLogin(&#39;'+lg+'&#39;)" title="半登录续登: 该号隔离档打开 GitHub 登录页·自动填充账密+当前2FA(守柔不自动提交)">🚀 续登</button>';
   h+='<button class="btn sm" onclick="ghFleetOpenPat(&#39;'+lg+'&#39;)" title="该号专属隔离档打开建 PAT 页(不张冠李戴·必为本号建)">🔑 建 PAT</button>';
   h+='<button class="btn sm" onclick="ghOpen(&#39;https://github.com/settings/tokens&#39;)" title="官网查看该账号所有 PAT 状态">📋 PAT 列表</button>';
   h+='</div>';
@@ -8833,6 +8874,7 @@ function ghOnResult(d){
   else if(d.kind==='fleetForget'){if(d.ok){toast('✓ 已从舰队删除 '+d.login,true);cmd('daoGhFleetList',{})}}
   else if(d.kind==='assistLogin'){if(d.ok)toast('✓ 已在 '+d.login+' 隔离档打开 GitHub 登录'+(d.hasOtp?'·2FA已填充':'')+' · 核对后手动登入',true);else toast('✗ '+esc(d.error||'续登失败'),false);}
   else if(d.kind==='fleetOpenPat'){if(d.ok)toast('✓ 已在 '+d.login+' 隔离档打开建 PAT 页(scope '+((d.scopes||[]).length)+' 项·'+(d.expDays===0?'永不过期':((d.expDays==null?30:d.expDays)+'天'))+'·助手已预勾)',true);else toast('✗ 打开建 PAT 页失败',false);}
+  else if(d.kind==='fleetMintPat'){if(d.ok){toast('✓ '+d.login+' 已全自动建 PAT 并落舰队('+(d.role==='admin'?'管理者':'成员')+')',true);cmd('daoGhFleetList',{});}else if(d.needUser){toast('⚠ '+d.login+' 撞人机/设备验证 → 请改点「🚀 续登」半自动登入后再「🔑 建 PAT」: '+(d.error||''),false);}else toast('✗ '+d.login+' 自动建 PAT 失败: '+(d.error||''),false);}
   else if(d.kind==='patCfg'){st.patCfg={scopes:d.scopes||[],expDays:(d.expDays==null?30:d.expDays)};if(st.patCfgWantShow){st.patCfgWantShow=false;ghPatCfgShow(d);}}
   else if(d.kind==='patCfgSaved'){st.patCfg={scopes:d.scopes||[],expDays:(d.expDays==null?30:d.expDays)};toast('✓ PAT 通用配置已保存(scope '+((d.scopes||[]).length)+' 项·'+(d.expDays===0?'永不过期':d.expDays+'天')+')',true);}
   else if(d.kind==='injectPat'){
@@ -10075,6 +10117,12 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // 隔离建 PAT: 在该号专属隔离档打开建 PAT 页(与续登同 profile · 不张冠李戴)。
                 const r = daoGhFleetOpenPat(String(msg.login || ''));
                 reply({ type: 'daoGhResult', kind: 'fleetOpenPat', ...r });
+                break;
+            }
+            case 'daoGhFleetMintPat': {
+                // 全自动建 PAT: 账密+TOTP 隔离档官方登录 → 官网建经典 PAT → 落舰队。守柔撞挑战 needUser 交回。
+                const r = await daoGhCredMint(String(msg.login || ''), { headless: msg.headless === false ? false : true });
+                reply({ type: 'daoGhResult', kind: 'fleetMintPat', ...r });
                 break;
             }
             case 'daoGhGetPatCfg': {
