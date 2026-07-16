@@ -3975,7 +3975,8 @@ public class MainActivity extends AppCompatActivity {
         }
         // 面板「刷新Token」: 保留 url/session 身份, 仅强制轮换 token (旧 token 立即失效)
         @JavascriptInterface public void rotateRelayToken() { rotateRelayTokenForce(); }
-        /** 武装 CF 全自动编排: cfg = {active,bases[],session,relayToken,gh:{user,pass,otp}}。点一次长期有效, 直到 cfAutoDisarm。 */
+        /** 武装 CF 全自动编排: cfg = {active,bases[],session,relayToken,gh:{user,pass,otp},cf:{user,pass,otp}}。
+         *  gh=GitHub 账号(经 OAuth 登 CF); cf=Cloudflare 账号(直登); 任填其一即可。点一次长期有效, 直到 cfAutoDisarm。 */
         @JavascriptInterface public void cfAutoArm(String cfgJson) {
             cfAutoCfgJson = (cfgJson == null || cfgJson.trim().isEmpty()) ? "{}" : cfgJson;
             cfAutoArmed = true;

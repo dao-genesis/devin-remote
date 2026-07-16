@@ -42,6 +42,18 @@ function ts(name, fn) { return t(name, async () => fn()); }
     assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/profile/api-tokens", { cfCreate: true }), "cf_create");
     assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/x", { cfTokenText: "a".repeat(40) }), "cf_token_result");
   });
+  await ts("classify cloudflare 直登/2FA (GitHub 之外的另一路)", () => {
+    assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/login", { cfLogin: true }), "cf_login");
+    assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/login", { cf2fa: true }), "cf_2fa");
+    // 2FA 优先于登录 (登录表单可能已消失)
+    assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/login", { cfLogin: true, cf2fa: true }), "cf_2fa");
+    // 建 Token 页阶段优先于登录态判定
+    assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/profile/api-tokens", { cfCreate: true, cfLogin: true }), "cf_create");
+    // GitHub 页即便有 email/password 也不误判为 cf_login
+    assert.strictEqual(CFAUTO.classifyPage("https://github.com/login", { ghLogin: true, cfLogin: true }), "gh_login");
+    // 人机验证仍优先于 CF 直登
+    assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/login", { cfLogin: true, captcha: true }), "captcha");
+  });
   await ts("classify 人机验证/硬件密钥优先停手", () => {
     assert.strictEqual(CFAUTO.classifyPage("https://github.com/login", { ghLogin: true, captcha: true }), "captcha");
     assert.strictEqual(CFAUTO.classifyPage("https://github.com/x", { webauthn: true }), "webauthn");

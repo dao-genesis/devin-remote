@@ -1,6 +1,6 @@
 {
-  "versionCode": 338,
-  "versionName": "0.37.233",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.233/DevinCloud-mobile-v0.37.233.apk",
-  "notes": "v0.37.233 · 撤除官方页前端注入(「⬆上传到网页端」＋菜单项/「环境模式切换」及其钩子)·环境与上传归一官方原生入口"
+  "versionCode": 339,
+  "versionName": "0.37.234",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.234/DevinCloud-mobile-v0.37.234.apk",
+  "notes": "v0.37.234 · CF 一条龙补齐直登 Cloudflare 账号路(cf_login/cf_2fa)·GitHub 或 Cloudflare 账号任填其一即代登→建Token→部署 Worker·人机验证/硬件密钥永不代按"
 }
