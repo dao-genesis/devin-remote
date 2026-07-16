@@ -10,11 +10,13 @@
  *   OAuth 授权页   → 点 Authorize
  *   CF 登录页      → 填 Cloudflare 邮箱/密码并提交 (直登 CF 账号·GitHub 之外的另一路)
  *   CF 2FA 页      → 用 TOTP 密钥本地算 6 位码并提交
- *   CF 建 Token 页 → 逐步点 Continue → Create Token
- *   CF 结果页      → 抓取新 Token → 经本机中继灌入 /api/cf-provision (既有全自动部署)
+ *   CF 已登录(dash) → ★内部接口直建 Token (POST /api/v4/user/tokens·同 dashboard 前端调的
+ *                      同一 HTTP 接口·同源带 cookie·零 UI 点击·零抓取)→ 灌入 /api/cf-provision
+ *   [兜底] CF 建 Token 页 → 逐步点 Continue → Create Token → 结果页抓 Token (内部接口不可用时)
  *
  * 一条龙: 无论用户给的是 GitHub 账号(经 OAuth 登 CF)还是 Cloudflare 账号(直登),
- *   都收敛到「登 CF → 建 Token → 部署 Worker」同一条链, 用户各点一次「允许」即长期有效。
+ *   都收敛到「登 CF → (会话态)内部接口建 Token → 部署 Worker」同一条链。登录一次(含其
+ *   Turnstile 人机验证·用户本来手动也要过的同一道关)之后, 建 Token+部署全程纯接口自动化。
  *
  * 守一条不可代之界: 提供商人机验证/硬件密钥/新设备验证 (CAPTCHA/WebAuthn) 命中即停手,
  *   置状态交用户点一下, 随后自动续跑 —— 不静默绕过任何安全控制。
@@ -79,6 +81,8 @@
       if (facts.cfContinue) return "cf_continue";
       if (facts.cf2fa) return "cf_2fa";
       if (facts.cfLogin) return "cf_login";
+      // 已登录 dash 且无登录/2FA/建token 表单 → 直接走内部接口建 Token (首选·零 UI)
+      if (/(^|\.)dash\.cloudflare\.com$/i.test(hostOf(url))) return "cf_authed";
     }
     return "unknown";
   }
@@ -121,12 +125,41 @@
     return tryNext();
   }
 
+  // ── 从 CF 内部接口的权限组全集里按名挑出所需组 (纯函数·可测) ──
+  function pickGroups(all, names) {
+    all = Array.isArray(all) ? all : [];
+    return (names || []).map(function (n) {
+      for (var i = 0; i < all.length; i++) { if (all[i] && all[i].name === n) return { id: all[i].id }; }
+      return null;
+    }).filter(Boolean);
+  }
+
+  // ── 构造 POST /api/v4/user/tokens 的请求体 (纯函数·可测) ──
+  //   最小权限: 账号级 Workers 脚本写 + 账号设置读; 用户级 用户详情读 + 成员读 (供 verify/accounts)。
+  function buildTokenPayload(o) {
+    o = o || {};
+    var acctG = pickGroups(o.groups, ["Workers Scripts Write", "Account Settings Read"]);
+    var userG = pickGroups(o.groups, ["User Details Read", "Memberships Read"]);
+    var policies = [];
+    if (acctG.length && o.accountId) {
+      var ar = {}; ar["com.cloudflare.api.account." + o.accountId] = "*";
+      policies.push({ effect: "allow", resources: ar, permission_groups: acctG });
+    }
+    if (userG.length && o.userId) {
+      var ur = {}; ur["com.cloudflare.api.user." + o.userId] = "*";
+      policies.push({ effect: "allow", resources: ur, permission_groups: userG });
+    }
+    return { name: o.name || ("dao-relay " + Date.now()), policies: policies };
+  }
+
   CFAUTO.base32Decode = base32Decode;
   CFAUTO.totp = totp;
   CFAUTO.classifyPage = classifyPage;
   CFAUTO.scrapeToken = scrapeToken;
   CFAUTO.feedToken = feedToken;
   CFAUTO.hostOf = hostOf;
+  CFAUTO.pickGroups = pickGroups;
+  CFAUTO.buildTokenPayload = buildTokenPayload;
 
   // ═══ DOM 驱动 (仅浏览器·测试环境不跑) ═══════════════════════════════════
   //__CFAUTO_RUN_START__
@@ -192,6 +225,31 @@
         };
       };
 
+      // ── ★会话态·经 CF 内部接口纯 HTTP 直建 Token (同源带 cookie·零 UI·零抓取) ──
+      //   与 dashboard 前端调的同一批 /api/v4 接口: 读用户/账号/权限组 → POST 建 Token → 取 value。
+      var cfMintToken = async function () {
+        var api = async function (path, init) {
+          init = init || {};
+          var r = await fetch(path, {
+            method: init.method || "GET",
+            credentials: "include",
+            headers: Object.assign({ Accept: "application/json" }, init.headers || {}),
+            body: init.body
+          });
+          var t = null; try { t = await r.json(); } catch (e) { t = {}; }
+          if (!r.ok || t.success === false) throw new Error("cf " + path + " HTTP " + r.status);
+          return t.result;
+        };
+        var user = await api("/api/v4/user");
+        var accts = await api("/api/v4/accounts?per_page=50");
+        if (!accts || !accts.length) throw new Error("no_account");
+        var groups = await api("/api/v4/user/tokens/permission_groups");
+        var payload = buildTokenPayload({ name: "dao-relay " + Date.now(), accountId: accts[0].id, userId: user.id, groups: groups });
+        if (!payload.policies.length) throw new Error("no_permission_groups_matched");
+        var res = await api("/api/v4/user/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        return res && res.value;
+      };
+
       var act = async function () {
         var f = facts();
         var cat = classifyPage(location.href, f);
@@ -227,6 +285,20 @@
             var cf2 = cinp && cinp.form; var csb2 = (cf2 && cf2.querySelector("button[type=submit], input[type=submit]")) || btnByText(/verify|confirm|验证|确认/i);
             if (csb2) csb2.click();
           } else status("wait", "Cloudflare 2FA·未提供 TOTP 密钥, 等你手动输入");
+          return;
+        }
+        if (cat === "cf_authed") {
+          if (root.__cfMinted) return;
+          root.__cfMinted = 1;
+          status("mint", "已登录 CF·经内部接口直建 Token…");
+          try {
+            var mtk = await cfMintToken();
+            if (mtk) {
+              status("token", "内部接口已建 Token, 灌入部署…");
+              var mr = await feedToken(CFG.bases || [], CFG.session, CFG.relayToken, mtk, xhr);
+              status("done", mr.ok ? "Token 已建·全自动部署 Worker 中" : "灌入失败");
+            } else { root.__cfMinted = 0; status("wait", "未取到 Token, 重试中"); }
+          } catch (e) { root.__cfMinted = 0; status("error", "建 Token 失败: " + (e && e.message || e)); }
           return;
         }
         if (cat === "cf_continue") { var c = btnByText(/continue to summary|继续.*(摘要|以显示)/i); if (c) c.click(); return; }
