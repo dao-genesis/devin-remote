@@ -132,6 +132,11 @@ const RELAY_STATE_FILE = path.join(DAO_DIR, 'relay.json');
 function getPersistentRelayUrl(): string {
     try {
         const s = JSON.parse(fs.readFileSync(RELAY_STATE_FILE, 'utf8'));
+        // 优先自有固定域名(aliasUrl/customDomain) — 绕过 *.workers.dev 在部分网络(如国内)被 DNS
+        // 污染而恒不可达的根病(见 dao-bridge-hub AGENTS「DNS 根治」)。同一 Worker 经自有域名
+        // 直达, 健康探测与出站 WSS 皆走它, relay.json 仍留 url 作记录/回退。
+        const alias = s && (s.aliasUrl || s.customDomain);
+        if (alias && typeof alias === 'string' && /^https?:\/\//.test(alias)) return String(alias).replace(/\/$/, '');
         if (s && typeof s.url === 'string' && /^https?:\/\//.test(s.url)) return s.url.replace(/\/$/, '');
     } catch { /* 守柔: 未注册持久通道则无 */ }
     return '';
@@ -6973,7 +6978,9 @@ function bridgeRelayState(): any {
         active: !!url,
         url: url || '',
         connected: !!ws.relayConnected,
-        healthy: !!(st && st.healthy),
+        // 活的出站 WSS 长连 = 通道确证可用(比一次性 /health HTTP 探测更强的事实依据)。
+        // 根治「已连接却仍显·边缘传播中」的自相矛盾, 亦免 *.workers.dev 被 DNS 污染时的健康假阴。
+        healthy: !!(st && st.healthy) || !!ws.relayConnected,
         auth: (st && st.auth) || (st && st.token ? 'token' : ''),
         oauth: !!(st && st.oauth && st.oauth.refreshToken),
         expiry: (st && st.oauth && st.oauth.expiry) || '',
