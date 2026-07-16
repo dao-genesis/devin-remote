@@ -47,5 +47,25 @@ ok(/64L \* 1024 \* 1024/.test(nf), "超大文件不整读回内存同步系统�
 ok(/devin-public-attachments\.s3\.dualstack\.us-west-2\.amazonaws\.com/.test(main), "探测真实附件桶宿主 (与实际下载同路)");
 ok(/kickMediaRouteProbe\(\); } catch \(Throwable ignored\) {}/.test(main.match(/protected void onCreate[\s\S]{0,600}/)[0]), "开屏即探直连可达性");
 
+// ── ⑦ 自更新下载「黑洞看门人」: 国内 DM 跟 302 到被墙 githubusercontent 后永久暂停 → 卡「更新下载中」──
+ok(/private void watchUpdateDmStall\(final long id\)/.test(main), "watchUpdateDmStall 存在");
+ok(/watchUpdateDmStall\(updateDlId\);/.test(main), "更新包入队即挂看门人");
+const wu = main.match(/private void watchUpdateDmStall[\s\S]{0,2000}/)[0];
+ok(/STATUS_PAUSED \|\| got <= 0/.test(wu), "暂停态或 0 字节即判黑洞");
+ok(/tryNextUpdateMirror\("更新下载卡住/.test(wu), "斩 DM 后自动换下一镜像");
+ok(/watchUpdateDmStall\(id\);\s*\/\/ 有进度/.test(wu), "有进度继续看护 (防中途断流)");
+
+// ── ⑧ 更新镜像含「自有边缘中继代取」: 绕开被墙 GitHub 直链 ──
+const am = main.match(/private org\.json\.JSONArray apkMirrors[\s\S]{0,700}/)[0];
+ok(/githubusercontent\.com/.test(am), "apkMirrors 亦覆盖 githubusercontent 直链");
+ok(/edgeBaseCandidates\(\)/.test(am) && /\/fetch\?u=/.test(am), "apkMirrors 追加边缘中继 /fetch 代取候选");
+
+// ── ⑨ 中继 /fetch 白名单放通 GitHub 发布资产宿主 ──
+const worker = fs.readFileSync(path.join(ROOT, "../dao-relay/worker.js"), "utf8");
+const fetchBlk = worker.match(/if \(path === "\/fetch"[\s\S]{0,1400}/)[0];
+ok(/thost === "github\.com"/.test(fetchBlk), "/fetch 放通 github.com");
+ok(/githubusercontent\\\.com\$/.test(fetchBlk), "/fetch 放通 *.githubusercontent.com");
+ok(/codeload\.github\.com/.test(fetchBlk), "/fetch 放通 codeload.github.com");
+
 if (failures) { console.error("edge-route-breakout: " + failures + " failed"); process.exit(1); }
 console.log("# edge-route-breakout: all passed");

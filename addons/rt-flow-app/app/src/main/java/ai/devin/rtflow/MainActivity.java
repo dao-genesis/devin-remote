@@ -4987,7 +4987,14 @@ public class MainActivity extends AppCompatActivity {
         org.json.JSONArray a = new org.json.JSONArray();
         if (gh == null || gh.isEmpty()) return a;
         a.put(gh);
-        if (gh.startsWith("https://github.com/")) { a.put("https://ghproxy.net/" + gh); a.put("https://gh-proxy.com/" + gh); }
+        if (gh.startsWith("https://github.com/") || gh.contains("githubusercontent.com")) {
+            a.put("https://ghproxy.net/" + gh); a.put("https://gh-proxy.com/" + gh);
+            // 经自有边缘中继代取: Worker 在 CF 全球边缘拉 GitHub 发布资产回传, 手机 DownloadManager
+            //   只连中继(国内可达自有域) → 绕开被墙的 objects.githubusercontent.com, 不再卡「更新下载中」。
+            for (String base : edgeBaseCandidates()) {
+                try { a.put(base + "/fetch?u=" + java.net.URLEncoder.encode(gh, "UTF-8")); } catch (Exception ignored) {}
+            }
+        }
         return a;
     }
     /** 在候选 URL 中挑第一个可达的 (HEAD 探测); 全不通则回退第一个。 */
@@ -5114,8 +5121,42 @@ public class MainActivity extends AppCompatActivity {
             updateDlId = dm.enqueue(req);
             // 持久化任务 id: 进程被杀/Activity 重建后, 仍能据此 (或据文件名) 认领下载完成回调, 不再误当普通下载。
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putLong("updateDlId", updateDlId).apply();
+            watchUpdateDmStall(updateDlId);
             toast("正在下载更新…");
         } catch (Exception e) { toast("更新失败: " + e.getMessage()); }
+    }
+
+    /** 更新包下载「黑洞看门人」(与普通下载 watchDmStall 同理): 国内网络下 DownloadManager 跟 302 到
+     *  被墙的 objects.githubusercontent.com 后会永久停在「已暂停·等待网络」(0 B)——既不失败也不完成,
+     *  完成/失败广播都永不触发 → 更新永远卡在「更新下载中」进度条(用户实测即此病灶)。入队后定时回查:
+     *  若 25s 后仍 0 字节或处于暂停态, 斩 DM 改走下一镜像(ghproxy / 自有边缘中继代取), 直至试遍所有源。 */
+    private void watchUpdateDmStall(final long id) {
+        if (id < 0) return;
+        main.postDelayed(() -> {
+            if (id != updateDlId) return;   // 已换源 / 已完成 / 已认领
+            try {
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm == null) return;
+                android.database.Cursor cur = dm.query(new DownloadManager.Query().setFilterById(id));
+                if (cur == null) return;
+                long got = -1; int st = -1;
+                try {
+                    if (cur.moveToFirst()) {
+                        got = cur.getLong(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                        st = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                    }
+                } finally { cur.close(); }
+                if (st == DownloadManager.STATUS_SUCCESSFUL || st == DownloadManager.STATUS_FAILED) return;   // 正路广播处理
+                if (st == DownloadManager.STATUS_PAUSED || got <= 0) {
+                    try { dm.remove(id); } catch (Exception ignored) {}
+                    updateDlId = -1;
+                    try { getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove("updateDlId").apply(); } catch (Exception ignored) {}
+                    tryNextUpdateMirror("更新下载卡住(直连被墙)");
+                } else {
+                    watchUpdateDmStall(id);   // 有进度: 继续看护(防中途断流卡死)
+                }
+            } catch (Exception ignored) {}
+        }, 25_000L);
     }
 
     /** 此 id 是否为「更新包」下载: 内存字段 / 持久化 id / 落地文件名 三重判定 (任一命中即是), 进程重建也不漏认。 */
