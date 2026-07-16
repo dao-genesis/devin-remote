@@ -906,7 +906,10 @@ export default {
       let thost = "";
       try { thost = new URL(target).hostname; } catch (e) { return json({ error: "bad_url" }, 400); }
       const okHost = /(^|\.)amazonaws\.com$/i.test(thost) || thost === "app.devin.ai" ||
-        /(^|\.)devinapps\.com$/i.test(thost) || /(^|\.)cloudfront\.net$/i.test(thost);
+        /(^|\.)devinapps\.com$/i.test(thost) || /(^|\.)cloudfront\.net$/i.test(thost) ||
+        // 自更新 APK / 版本清单: GitHub 发布资产在国内直连(objects.githubusercontent.com)必墙,
+        //   经边缘代取 → 手机 DownloadManager 从中继(国内可达域)拿字节, 不再卡「更新下载中」。
+        thost === "github.com" || /(^|\.)githubusercontent\.com$/i.test(thost) || thost === "codeload.github.com";
       if (!okHost) return json({ error: "host_not_allowed", host: thost }, 403);
       let fwd = {};
       const hh = url.searchParams.get("h");

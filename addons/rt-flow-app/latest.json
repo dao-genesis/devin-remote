@@ -1,6 +1,6 @@
 {
-  "versionCode": 344,
-  "versionName": "0.37.239",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.239/DevinCloud-mobile-v0.37.239.apk",
-  "notes": "v0.37.239 · 局域网直连也「单网页传输一切」: 局域网面板新增『网页直开』链接(http://<局域网IP>:<port>/?session=&token=&auto=1)——同一 Wi-Fi 的任意浏览器打开即与手机 APK 同款满血操作, 同源直连本机 /relay, 零中继·零隧道·零 Worker(实测 7ms RPC 往返)。与公网『网页直开』卡片同款结构: 网页直开(给人) + 裸 RPC 入口(给云端 Agent/程序/curl)分列。此前局域网面板仅给 curl/RPC, 现补齐浏览器直开的完整 APK UI 入口。"
+  "versionCode": 345,
+  "versionName": "0.37.240",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.240/DevinCloud-mobile-v0.37.240.apk",
+  "notes": "v0.37.240 · 根治国内网络『更新下载中』永久卡死 + 『下载失败』: ① 自更新下载新增『黑洞看门人』——DownloadManager 跟 302 到被墙的 objects.githubusercontent.com 后会永久停在『已暂停·等待网络』(0B, 既不失败也不完成→更新永远卡进度条), 现 25s 无进度即斩 DM 自动换下一镜像。② 更新镜像新增『自有边缘中继代取』(Worker 在 CF 全球边缘拉 GitHub 发布资产回传, 手机只连国内可达自有域), 绕开被墙 GitHub 直链。③ 中继 /fetch 边缘代理白名单放通 github.com / *.githubusercontent.com / codeload.github.com。"
 }
