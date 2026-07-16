@@ -11005,7 +11005,10 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 let agents: any[] = [];
                 try { const j = JSON.parse(r.text || '{}'); agents = Array.isArray(j.agents) ? j.agents : []; } catch { /* 守柔 */ }
                 const host = (c && c.host) || os.hostname();
-                reply({ type: 'bridgeAgents', ok: r.status === 200, host, online: !!(c && c.url), agents });
+                // 本机(中枢)在线判定 = 本地桥 API 有应答(整机直连 127.0.0.1 通即活)或已有可达公网 URL。
+                // 旧病灶: 仅凭 `!!c.url` — 快速隧道漂移/未连时 conn.url 为空, 明明本机在跑却恒显「离线」。
+                const hubOnline = r.status === 200 || !!(c && c.url);
+                reply({ type: 'bridgeAgents', ok: r.status === 200, host, online: hubOnline, agents });
                 break;
             }
             // 一行接入 · 复制把另一台设备接进本中枢的 PowerShell 一行命令(irm .../bootstrap.ps1 | iex)。
