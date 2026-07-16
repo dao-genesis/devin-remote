@@ -1,6 +1,6 @@
 {
-  "versionCode": 342,
-  "versionName": "0.37.237",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.237/DevinCloud-mobile-v0.37.237.apk",
-  "notes": "v0.37.237 · CF 一条龙两种登录方式完全分离·二选一: ①Cloudflare 账号(邮箱+密码+2FA 直登) ②GitHub 账号(用户名+密码+2FA 种子·经 CF 登录页「用 GitHub 登录」入口→OAuth 授权登进 CF)。两条各自独立(CF 就是 CF·GitHub 就是 GitHub·互不混), 登进 CF 后同归一: 会话态内部接口 POST /api/v4/user/tokens 纯 HTTP 直建 Token→自动灌入部署 Worker→回填穿透。人机验证/硬件密钥永不代按。"
+  "versionCode": 343,
+  "versionName": "0.37.238",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.238/DevinCloud-mobile-v0.37.238.apk",
+  "notes": "v0.37.238 · 消息通知归一·只报一遍·状态解除即撤: ①通知只走手机原生一条路——切号板块只展示对话状态(状态点/徽标), 不再自行弹页面横幅/震动/toast(杜绝切号板与手机通知双份刷屏)。②同一事件只通知一遍——额度耗尽/即将耗尽仅首次进入该态推一次, 休眠数增加也绝不重推(删了不再回来)。③状态解除即撤——会话重新活跃/额度恢复时按同一 tag 主动撤掉通知栏残留旧条目(老对话早已结束/恢复的通知不再残留反复弹)。"
 }
