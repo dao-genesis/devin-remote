@@ -1280,6 +1280,8 @@
     function watchEnabled(){ try { var v = localStorage.getItem("rtflow.convwatch.off"); return v !== "1"; } catch(e){ return true; } }
     // ── 额度通知·真·系统推送 (与对话卡座同款 notifyGlobal: 锁屏/切后台亦达; 来源精确·按账号节流·不刷屏) ──
     var QKEY = "rtflow.convwatch.quota";          // email -> {ts, cnt}  额度耗尽节流
+    var QNOTIFY_KEY = "rtflow.notify.quota";      // "1" 才推额度类通知; 默认关(用户要求: 额度耗尽根本不用提示·账本/撤销仍照常运转)
+    function quotaNotifyOn(){ try{ return localStorage.getItem(QNOTIFY_KEY)==="1"; }catch(e){ return false; } }
     var QLKEY = "rtflow.convwatch.qlow";          // email -> {ts}       额度即将耗尽节流
     var QLOW_THROTTLE = 6*3600*1000;              // 同账号「即将耗尽」预警 >=6 小时一次
     var QLOW_PCT = 10;                            // 日额度剩余 <= 此值且无 extra usage 缓冲 -> 即将耗尽
@@ -1315,8 +1317,10 @@
         // 只报一遍(用户要求): 同号首次进入耗尽态推一次; 之后即使耗尽对话数增加也绝不重推,
         //   直到恢复(本轮真扫到且无耗尽)清账本, 下次再耗尽才重新提示一次。
         if (!p) {
-          var subj = _acctConvName(email, titleByAcct && titleByAcct[email]);   // 主体优先用该号额度耗尽对话名(用户要求: 有对话即显示对话名, 不再显示账号名)
-          notify("quota-" + email, "\uD83D\uDED1 " + subj + " \u989d\u5ea6\u5df2\u8017\u5c3d", cnt + " \u4e2a\u5bf9\u8bdd\u56e0\u914d\u989d\u8017\u5c3d\u4f11\u7720, \u8bf7\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
+          if (quotaNotifyOn()) {
+            var subj = _acctConvName(email, titleByAcct && titleByAcct[email]);   // 主体优先用该号额度耗尽对话名(有对话即显示对话名, 不再显示账号名)
+            notify("quota-" + email, "\uD83D\uDED1 " + subj + " \u989d\u5ea6\u5df2\u8017\u5c3d", cnt + " \u4e2a\u5bf9\u8bdd\u56e0\u914d\u989d\u8017\u5c3d\u4f11\u7720, \u8bf7\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
+          }
           nq[email] = { ts: now, cnt: cnt };
         } else { nq[email] = { ts: p.ts||now, cnt: cnt }; }
       });
@@ -1334,8 +1338,10 @@
           var p = s[a.email];
           // 只报一遍(用户要求): 同号首次进入「即将耗尽」推一次; 之后绝不到时重推, 直到恢复清账本才再报。
           if(!p){
-            var subj = _acctConvName(a.email, titleByAcct && titleByAcct[a.email]);   // 主体优先用该号最近对话名, 仅全新无对话账号才回退账号名
-            notify("qlow-" + a.email, "\u26a0\ufe0f " + subj + " \u989d\u5ea6\u5373\u5c06\u8017\u5c3d", "\u65e5\u989d\u5ea6\u4ec5\u5269 " + pct + "%, \u5efa\u8bae\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
+            if (quotaNotifyOn()) {
+              var subjL = _acctConvName(a.email, titleByAcct && titleByAcct[a.email]);   // 主体优先用该号最近对话名, 仅全新无对话账号才回退账号名
+              notify("qlow-" + a.email, "\u26a0\ufe0f " + subjL + " \u989d\u5ea6\u5373\u5c06\u8017\u5c3d", "\u65e5\u989d\u5ea6\u4ec5\u5269 " + pct + "%, \u5efa\u8bae\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
+            }
             ns[a.email] = { ts: now };
           } else ns[a.email] = { ts: p.ts||now };
         }

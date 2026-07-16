@@ -58,6 +58,7 @@ const qseg = engineSrc.match(/var QKEY = "rtflow\.convwatch\.quota";[\s\S]*?func
 if (!qseg) { console.error("FAIL: 未找到 engine.html 额度轨区段"); process.exit(1); }
 function makeQuotaHarness(store) {
   store = store || {};
+  store["rtflow.notify.quota"] = "1";   // 额度类通知默认全关(quota-notify.test 另测默认静默), 此处显式开启以测去重/撤销行为
   const notifs = [], cancels = [];
   const localStorage = {
     getItem(k){ return k in store ? store[k] : null; },

@@ -52,8 +52,15 @@ ok(/function _acctConvName\(email, preferred\)/.test(engineSrc) &&
    "源级: _acctConvName 优先 当前对话名→最近对话名缓存→(仅零对话才)账号名");
 ok(/var subj = _acctConvName\(email, titleByAcct && titleByAcct\[email\]\);/.test(engineSrc),
    "源级: quotaWatch 通知主体用 _acctConvName(对话名优先·不再硬用账号名)");
-ok(/var subj = _acctConvName\(a\.email, titleByAcct && titleByAcct\[a\.email\]\);/.test(engineSrc),
+ok(/var subjL = _acctConvName\(a\.email, titleByAcct && titleByAcct\[a\.email\]\);/.test(engineSrc),
    "源级: quotaLowWatch 通知主体用 _acctConvName(对话名优先·不再硬用账号名)");
+// ── 源级护栏: 额度类通知默认全关(用户要求: 耗尽根本不用提示), 仅 rtflow.notify.quota==="1" 才推 ──
+ok(/var QNOTIFY_KEY = "rtflow\.notify\.quota"/.test(engineSrc) &&
+   /function quotaNotifyOn\(\)\{ try\{ return localStorage\.getItem\(QNOTIFY_KEY\)==="1"; \}catch\(e\)\{ return false; \} \}/.test(engineSrc),
+   "源级: quotaNotifyOn 默认关(只有显式置 1 才开)");
+ok(/if \(quotaNotifyOn\(\)\) \{\s*\n\s*var subj = _acctConvName/.test(engineSrc) &&
+   /if \(quotaNotifyOn\(\)\) \{\s*\n\s*var subjL = _acctConvName/.test(engineSrc),
+   "源级: quotaWatch/quotaLowWatch 的 notify 均受 quotaNotifyOn 门控(账本/撤销仍照常)");
 ok(/var LKEY = "rtflow\.convwatch\.latest"/.test(engineSrc) && /function _updLatest\(titleByAcct, now\)/.test(engineSrc),
    "源级: 最近对话名缓存(LKEY)+_updLatest 每轮更新(供本轮无活跃对话的号回忆对话名)");
 
@@ -62,8 +69,9 @@ ok(/var LKEY = "rtflow\.convwatch\.latest"/.test(engineSrc) && /function _updLat
 const seg = engineSrc.match(/var QKEY = "rtflow\.convwatch\.quota";[\s\S]*?function quotaLowWatch\(accs, titleByAcct, now\)\{[\s\S]*?\n    \}/);
 if (!seg) { console.error("FAIL: 未找到 quotaWatch/quotaLowWatch 区段"); process.exit(1); }
 
-function makeHarness() {
+function makeHarness(optIn) {
   const store = {};
+  if (optIn !== false) store["rtflow.notify.quota"] = "1";   // 默认开启以测既有行为; 传 false 测「默认全静默」
   const notes = [];
   const localStorage = {
     getItem(k){ return k in store ? store[k] : null; },
@@ -124,6 +132,18 @@ function makeHarness() {
   h2.quotaWatch({ "bob@x.com": 1 }, {}, t0);
   ok(h2.notes.length === 1 && /bob 额度已耗尽/.test(h2.notes[0].title),
      "无任何对话名(全新账号) → 才回退账号名");
+}
+
+// ①b 默认全静默(用户要求: 额度耗尽根本不用提示): 不置开关 → 耗尽/预警均不推, 但账本照记·恢复撤销照跑
+{
+  const h = makeHarness(false);
+  const t0 = 3_000_000_000_000;
+  h.quotaWatch({ "dave@x.com": 2 }, { "dave@x.com": "重构支付" }, t0);
+  ok(h.notes.length === 0, "默认(无开关): 额度耗尽不推任何通知");
+  h.quotaLowWatch([{ email: "dave@x.com", quota: { dPct: 5, overageDollars: 0 } }], {}, t0);
+  ok(h.notes.length === 0, "默认(无开关): 即将耗尽也不推");
+  h.quotaWatch({}, {}, t0 + 60*1000);
+  ok(h.cancels.indexOf("quota-dave@x.com") >= 0, "静默下账本仍运转: 恢复时照常撤销(无残留)");
 }
 
 // ② 额度即将耗尽: 仅在低剩余且无 extra usage 缓冲时预警
