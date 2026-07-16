@@ -14,7 +14,11 @@
  *                      同一 HTTP 接口·同源带 cookie·零 UI 点击·零抓取)→ 灌入 /api/cf-provision
  *   [兜底] CF 建 Token 页 → 逐步点 Continue → Create Token → 结果页抓 Token (内部接口不可用时)
  *
- * 一条龙: 无论用户给的是 GitHub 账号(经 OAuth 登 CF)还是 Cloudflare 账号(直登),
+ * 两种登录模式·完全分离·用户二选一 (底层归一):
+ *   模式A · Cloudflare 直登  = 只填 Cloudflare 邮箱+密码(+2FA) → CF 登录页直接填表提交。
+ *   模式B · GitHub 登 CF     = 只填 GitHub 账号+密码+2FA 种子 → CF 登录页点「用 GitHub 登录」
+ *                              → GitHub 登录/2FA/OAuth 授权 → 落回 CF dash。
+ *   两条各自独立(CF 就是 CF·GitHub 就是 GitHub·互不混), 登进 CF 之后完全一模一样:
  *   都收敛到「登 CF → (会话态)内部接口建 Token → 部署 Worker」同一条链。登录一次(含其
  *   Turnstile 人机验证·用户本来手动也要过的同一道关)之后, 建 Token+部署全程纯接口自动化。
  *
@@ -125,6 +129,20 @@
     return tryNext();
   }
 
+  // ── 判定用户选定的登录模式 (纯函数·可测): 两种模式完全分离·二选一 ──
+  //   github     = 只给了 GitHub 账号 → 经 CF 登录页的「用 GitHub 登录」入口
+  //   cloudflare = 只给了 Cloudflare 账号 → CF 登录页直接填邮箱密码
+  //   manual     = 都没给 → 命中登录页时等用户手动登一次
+  function loginMode(cfg) {
+    cfg = cfg || {};
+    var gh = !!(cfg.gh && (cfg.gh.user || cfg.gh.otp));
+    var cf = !!(cfg.cf && (cfg.cf.user || cfg.cf.otp));
+    if (gh && !cf) return "github";
+    if (cf && !gh) return "cloudflare";
+    if (gh && cf) return "github";   // 都填则以 GitHub 优先(两链仍各自独立)
+    return "manual";
+  }
+
   // ── 从 CF 内部接口的权限组全集里按名挑出所需组 (纯函数·可测) ──
   function pickGroups(all, names) {
     all = Array.isArray(all) ? all : [];
@@ -160,6 +178,7 @@
   CFAUTO.hostOf = hostOf;
   CFAUTO.pickGroups = pickGroups;
   CFAUTO.buildTokenPayload = buildTokenPayload;
+  CFAUTO.loginMode = loginMode;
 
   // ═══ DOM 驱动 (仅浏览器·测试环境不跑) ═══════════════════════════════════
   //__CFAUTO_RUN_START__
@@ -267,7 +286,15 @@
         }
         if (cat === "gh_oauth") { var b = q("#js-oauth-authorize-btn") || q("button[name=authorize][value='1']") || btnByText(/^authorize\b|授权/i); if (b) b.click(); return; }
         if (cat === "cf_login") {
-          if (CFG.cf && CFG.cf.user) {
+          var mode = loginMode(CFG);
+          if (mode === "github") {
+            // 模式B: 在 CF 登录页点「用 GitHub 登录」入口 → 跳 github.com 走 gh_login/gh_2fa/gh_oauth
+            var ghBtn = q("a[href*='github'], a[data-provider='github'], button[data-provider='github']") || btnByText(/github/i);
+            if (ghBtn) { status("oauth", "CF 登录页·点「用 GitHub 登录」"); ghBtn.click(); }
+            else status("wait", "CF 登录页·未见 GitHub 登录入口, 等你手动点一次");
+            return;
+          }
+          if (mode === "cloudflare" && CFG.cf && CFG.cf.user) {
             var cem = q("input[type=email]") || q("input[name=email]") || q("input[name=identity]");
             var cpw = q("input[type=password]") || q("input[name=password]");
             if (cem) setVal(cem, CFG.cf.user);

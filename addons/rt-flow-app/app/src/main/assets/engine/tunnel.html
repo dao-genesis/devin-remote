@@ -100,18 +100,25 @@ details.adv[open]>summary{color:var(--vscode-textLink-foreground)}
 <div class="card">
   <div class="lbl">☁️ 固定域名 · Cloudflare 一键建 Worker（可选）</div>
   <div class="muted" style="font-size:11px;margin-top:4px">默认零账号通道已全自动, <b>无需任何配置</b>。仅当你想要<b>恒定不变的公网地址</b>时: ① 点下方按钮到 Cloudflare 创建 API Token（模板选「编辑 Workers」, 可用 GitHub 或 Cloudflare 账号登录）② 粘贴回来一键部署, 其余全自动。Token 只在本机内存用一次, 不落盘不上传。</div>
-  <button onclick="cfAutoStart()" style="margin-top:6px;background:#8957e5">🤖 全自动建 Worker（代登录→建Token→部署·一键到底）</button>
-  <details class="adv cfgh" style="margin-top:6px"><summary style="font-size:11px">可选·填账号让「登录/2FA」也自动完成（GitHub 或 Cloudflare 账号任选其一。不填则命中登录页时等你手点一次）</summary>
-    <div class="muted" style="font-size:10px;margin-top:2px">① GitHub 账号（经 OAuth 登 Cloudflare）</div>
-    <input id="cfGhUser" placeholder="GitHub 用户名/邮箱（可选）">
-    <input id="cfGhPass" type="password" placeholder="GitHub 密码（可选·仅本机内存注入登录页, 不落盘不上传）">
-    <input id="cfGhOtp" placeholder="GitHub 2FA TOTP 密钥 base32（可选·本机算码, 不上传）">
-    <div class="muted" style="font-size:10px;margin-top:4px">② 或 Cloudflare 账号（直登 CF）</div>
-    <input id="cfCfUser" placeholder="Cloudflare 邮箱（可选）">
-    <input id="cfCfPass" type="password" placeholder="Cloudflare 密码（可选·仅本机内存注入登录页, 不落盘不上传）">
-    <input id="cfCfOtp" placeholder="Cloudflare 2FA TOTP 密钥 base32（可选·本机算码, 不上传）">
-    <div class="muted" style="font-size:10px">留空即「辅助到极致」：非验证步骤自动跑, 仅登录/2FA/人机验证等你点一次后自动续跑。填了则连登录/2FA 也代办。人机验证/硬件密钥永不代按。</div>
-  </details>
+  <button onclick="cfAutoStart()" style="margin-top:6px;background:#8957e5">🤖 全自动建 Worker（登录→建Token→部署·一键到底）</button>
+  <div class="muted" style="font-size:11px;margin-top:8px"><b>两种登录方式·任选其一（完全分离）</b>：填哪一套就走哪一套，底层同归一（登进 CF → 建 Token → 部署 Worker）。</div>
+  <div class="row" style="margin-top:4px">
+    <label style="font-size:11px"><input type="radio" name="cfMode" value="cf" checked onchange="cfModeSwitch()"> ① Cloudflare 账号</label>
+    <label style="font-size:11px"><input type="radio" name="cfMode" value="gh" onchange="cfModeSwitch()"> ② GitHub 账号</label>
+  </div>
+  <div id="cfModeCf" style="margin-top:4px">
+    <div class="muted" style="font-size:10px">Cloudflare 直登（邮箱+密码，有 2FA 再填种子）</div>
+    <input id="cfCfUser" placeholder="Cloudflare 邮箱">
+    <input id="cfCfPass" type="password" placeholder="Cloudflare 密码（仅本机内存注入登录页, 不落盘不上传）">
+    <input id="cfCfOtp" placeholder="Cloudflare 2FA TOTP 密钥 base32（无 2FA 免填·本机算码不上传）">
+  </div>
+  <div id="cfModeGh" style="margin-top:4px;display:none">
+    <div class="muted" style="font-size:10px">GitHub 登 Cloudflare（账号+密码+2FA 种子，经「用 GitHub 登录」入口）</div>
+    <input id="cfGhUser" placeholder="GitHub 用户名/邮箱">
+    <input id="cfGhPass" type="password" placeholder="GitHub 密码（仅本机内存注入登录页, 不落盘不上传）">
+    <input id="cfGhOtp" placeholder="GitHub 2FA TOTP 密钥 base32（本机算码, 不上传）">
+  </div>
+  <div class="muted" style="font-size:10px;margin-top:2px">留空即「辅助到极致」：非验证步骤自动跑, 仅登录/2FA/人机验证等你点一次后自动续跑。填了则连登录/2FA 也代办。人机验证/硬件密钥永不代按。</div>
   <div class="muted" style="font-size:11px;margin-top:8px"><b>⭐ 推荐·纯后端一条龙（零浏览器·零人机验证·零点击）</b>：填下方 Cloudflare 邮箱 + Global API Key（在 dash → 我的个人资料 → API 令牌 → Global API Key 一次取回），后端直接建 Worker→回填穿透，全自动。凭证仅本机内存用一次，不落盘不上传。</div>
   <input id="cfProvEmail" placeholder="Cloudflare 邮箱（用 Global API Key 时填）">
   <input id="cfProvKey" type="password" placeholder="Global API Key（纯后端·零浏览器·一次即全自动）">
@@ -1272,13 +1279,24 @@ function cfOpenTokenPage(){
 }
 // 全自动: 武装 cf-auto 编排器 (代登录/2FA/授权/建Token/抓取→灌入既有部署) + 打开预填权限深链。
 // bases = 本机中继回环/隧道地址 (供编排器抓到 Token 后经中继灌入 /api/cf-provision)。
+function cfModeSwitch(){
+  var m='cf'; try{ var r=document.querySelector('input[name=cfMode]:checked'); if(r) m=r.value; }catch(e){}
+  var cfBox=document.getElementById('cfModeCf'), ghBox=document.getElementById('cfModeGh');
+  if(cfBox) cfBox.style.display=(m==='cf')?'':'none';
+  if(ghBox) ghBox.style.display=(m==='gh')?'':'none';
+}
 function cfAutoStart(){
   var c=_conn();
-  var gh={ user:(v('cfGhUser')||'').trim(), pass:v('cfGhPass')||'', otp:(v('cfGhOtp')||'').trim().replace(/\s+/g,'') };
-  var cf={ user:(v('cfCfUser')||'').trim(), pass:v('cfCfPass')||'', otp:(v('cfCfOtp')||'').trim().replace(/\s+/g,'') };
+  var mode='cf'; try{ var r=document.querySelector('input[name=cfMode]:checked'); if(r) mode=r.value; }catch(e){}
   var cfg={ active:true, bases:_hubBases(), session:c.session||'local', relayToken:c.token||'' };
-  if(gh.user||gh.otp) cfg.gh=gh;
-  if(cf.user||cf.otp) cfg.cf=cf;
+  // 两种模式完全分离·只透传所选那一套凭证 (CF 就是 CF·GitHub 就是 GitHub·互不混)
+  if(mode==='gh'){
+    var gh={ user:(v('cfGhUser')||'').trim(), pass:v('cfGhPass')||'', otp:(v('cfGhOtp')||'').trim().replace(/\s+/g,'') };
+    if(gh.user||gh.otp) cfg.gh=gh;
+  } else {
+    var cf={ user:(v('cfCfUser')||'').trim(), pass:v('cfCfPass')||'', otp:(v('cfCfOtp')||'').trim().replace(/\s+/g,'') };
+    if(cf.user||cf.otp) cfg.cf=cf;
+  }
   try{
     if(N.cfAutoArm) N.cfAutoArm(JSON.stringify(cfg));
     else { _result('cf',false,'本机版本不支持全自动编排(需 0.37.226+), 请用上方手动流程'); return; }

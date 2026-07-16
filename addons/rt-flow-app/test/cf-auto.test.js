@@ -103,6 +103,18 @@ function ts(name, fn) { return t(name, async () => fn()); }
     assert.strictEqual(CFAUTO.classifyPage("https://example.com", {}), "unknown");
   });
 
+  // ── loginMode: 两种模式完全分离·二选一 ──
+  await ts("loginMode 二选一: CF 直登 / GitHub 登 CF / 手动", () => {
+    assert.strictEqual(CFAUTO.loginMode({ cf: { user: "a@b.c", pass: "x" } }), "cloudflare");
+    assert.strictEqual(CFAUTO.loginMode({ gh: { user: "u", pass: "x", otp: "K" } }), "github");
+    assert.strictEqual(CFAUTO.loginMode({ gh: { otp: "K" } }), "github");        // 仅种子也算 github
+    assert.strictEqual(CFAUTO.loginMode({ cf: { otp: "K" } }), "cloudflare");
+    assert.strictEqual(CFAUTO.loginMode({}), "manual");
+    assert.strictEqual(CFAUTO.loginMode(null), "manual");
+    assert.strictEqual(CFAUTO.loginMode({ gh: {}, cf: {} }), "manual");          // 空对象不算填
+    assert.strictEqual(CFAUTO.loginMode({ gh: { user: "u" }, cf: { user: "a" } }), "github"); // 都填以 GitHub 优先
+  });
+
   // ── scrapeToken ──
   await ts("scrapeToken 独占值/句中/排除URL", () => {
     const tk = "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0";
