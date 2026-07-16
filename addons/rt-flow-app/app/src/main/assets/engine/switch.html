@@ -1503,11 +1503,9 @@ function _stateChangeAlert(a, item){
   var convName=String(item.title||"").trim();
   var who=convName || String(a.email||a.id).split("@")[0];
   if(cls==="exhausted") return;   // 额度耗尽由专门的 _quotaAlert 处理(含原生推送)
-  var reason=item._stuck||"";
-  var lbl=(reason==="stall")?"停滞无进度":(reason==="error")?"运行报错":(reason==="await")?"等待回复":(reason==="action")?"需你处理":"对话卡住";
-  var msg="⚠ "+who+" · "+lbl;
-  _bigAlert(msg); _vib(80);
-  try{ if(N.notify) N.notify(lbl+" · "+who, "对话需要关注, 请及时处理"); }catch(e){}
+  // 通知归一·道法自然: 切号板只展示对话状态(状态点/徽标), 不再自行发页面横幅/震动/toast。
+  //   所有「卡住/待处理」提醒统一由常驻后台引擎(engine.html·notifyGlobal)走手机原生通知一条路,
+  //   同一事件只通知一遍, 杜绝切号板与手机通知双份刷屏。此处仅记账本(留作状态解除剪枝的锚)。
 }
 // 额度耗尽提醒(问题②): 检测到该号有对话因配额耗尽休眠时主动弹横幅 + 震动 + 原生推送。
 //   根治「额度耗尽被误显示为对话已完成、不发通知」—— 现 sessStatus/refineStuck 单列 exhausted,
@@ -1518,11 +1516,8 @@ function _quotaAlert(a, cnt, convName){
   if(!a||!(cnt>0)) return;
   var p=_quotaAlertTs[a.id]; if(p && (p.cnt|0)>=cnt) return;   // 已提示过且未增 → 绝不重复
   _quotaAlertTs[a.id]={ts:Date.now(),cnt:cnt}; _alSave(QA_KEY,_quotaAlertTs);
-  // 通知主体优先用「近期最新对话名」(用户要求: 有对话名则以对话名为消息主体, 不再前缀账号名, 便于快速定位); 无对话名才回退账号名。
-  var who=String(convName||"").trim() || String(a.email||a.id).split("@")[0];
-  var msg="🛑 "+who+" 额度已耗尽 · "+cnt+" 个对话因配额耗尽休眠, 请尽快充值/切号";
-  _bigAlert(msg); _vib(120);
-  try{ if(N.notify) N.notify("额度耗尽 · "+who, cnt+" 个对话因配额耗尽休眠, 请尽快处理"); }catch(e){}
+  // 通知归一: 额度耗尽的手机原生推送由常驻后台引擎(engine.html·quotaWatch)统一发, 只报一遍。
+  //   切号板此处仅记账本(供状态解除剪枝), 不再自行弹横幅/震动/toast。
 }
 // 状态解除即剪账本: 该号本轮某 uuid 不再处于旧告警状态 → 移除账本项,
 //   未来真再次进入该状态才重新提示一次; 额度恢复(本轮无耗尽)同理。

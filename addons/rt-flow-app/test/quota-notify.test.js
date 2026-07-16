@@ -70,10 +70,12 @@ function makeHarness() {
     setItem(k,v){ store[k] = String(v); }
   };
   function notify(tag, title, text){ notes.push({ tag, title, text }); }
-  const factory = new Function("localStorage", "notify",
+  const cancels = [];
+  function cancelNotify(tag){ cancels.push(tag); }
+  const factory = new Function("localStorage", "notify", "cancelNotify",
     seg[0] + "\n return { quotaWatch: quotaWatch, quotaLowWatch: quotaLowWatch, _store: arguments[0] };");
-  const api = factory(localStorage, notify);
-  api.notes = notes;
+  const api = factory(localStorage, notify, cancelNotify);
+  api.notes = notes; api.cancels = cancels;
   return api;
 }
 
@@ -92,18 +94,19 @@ function makeHarness() {
   h.quotaWatch({ "alice@x.com": 2 }, { "alice@x.com": "修登录 bug" }, t0 + 5*60*1000);
   ok(h.notes.length === 1, "节流窗内(<30min)同状态 → 不刷屏");
 
-  // 数目增加(2→3) → 跃迁再推
+  // 数目增加(2→3) → 仍不重推(用户要求: 只报一遍)
   h.quotaWatch({ "alice@x.com": 3 }, { "alice@x.com": "修登录 bug" }, t0 + 6*60*1000);
-  ok(h.notes.length === 2 && /3 个对话/.test(h.notes[1].text), "休眠数增加 → 跃迁再推送");
+  ok(h.notes.length === 1, "休眠数增加 → 仍不重推(只报一遍)");
 
-  // 同一耗尽状态到时也绝不重推(用户根治: 删了通知不再回来) — 31min 后同数目 → 不再推
+  // 同一耗尽状态到时也绝不重推(用户根治: 删了通知不再回来) — 31min 后 → 不再推
   h.quotaWatch({ "alice@x.com": 3 }, { "alice@x.com": "修登录 bug" }, t0 + 6*60*1000 + 31*60*1000);
-  ok(h.notes.length === 2, "同一耗尽状态到时绝不重推(删了不再回来)");
+  ok(h.notes.length === 1, "同一耗尽状态到时绝不重推(删了不再回来)");
 
-  // 恢复(本轮无该号) → 清零; 再次耗尽 → 立即(跃迁)推送
+  // 恢复(本轮无该号) → 清零并主动撤旧通知; 再次耗尽 → 重新推送一次
   h.quotaWatch({}, {}, t0 + 6*60*1000 + 32*60*1000);
+  ok(h.cancels.indexOf("quota-alice@x.com") >= 0, "额度恢复 → 主动撤掉栏中旧通知");
   h.quotaWatch({ "alice@x.com": 1 }, { "alice@x.com": "修登录 bug" }, t0 + 6*60*1000 + 33*60*1000);
-  ok(h.notes.length === 3, "恢复后再耗尽 → 立即推送(下次该报必报)");
+  ok(h.notes.length === 2, "恢复后再耗尽 → 重新推送一次(下次该报必报)");
 
   // 扫描失败门控: 本轮该号未扫到(scanned 缺席) → 账本保留, 不视为恢复; 下轮扫描成功且仍耗尽 → 不重推(非跃迁)
   const h3 = makeHarness();
@@ -142,9 +145,9 @@ function makeHarness() {
   ok(/重构支付/.test(h.notes[0].title) && !/b 额度/.test(h.notes[0].title),
      "预警主体用该号对话名(非账号名)");
 
-  // 6h 内不重复
+  // 同态不重复(只报一遍)
   h.quotaLowWatch([{ email: "b@x.com", quota: { dPct: 5, overageDollars: 0 } }], { "b@x.com": "重构支付" }, t0 + 3*3600*1000);
-  ok(h.notes.length === 1, "预警 6h 内不重复(不扰民)");
+  ok(h.notes.length === 1, "同一即将耗尽态 → 不重复(只报一遍)");
 
   // 剩余=0 不在此预警(归「已耗尽」处理) → 不预警
   h.quotaLowWatch([{ email: "c@x.com", quota: { dPct: 0, overageDollars: 0 } }], {}, t0);

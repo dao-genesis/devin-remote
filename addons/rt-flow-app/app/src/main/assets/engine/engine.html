@@ -1256,6 +1256,9 @@
     function loadPrev(){ try { return JSON.parse(localStorage.getItem(PREV_KEY)||"{}")||{}; } catch(e){ return {}; } }
     function savePrev(o){ try { localStorage.setItem(PREV_KEY, JSON.stringify(o)); } catch(e){} }
     function notify(tag, title, text){ try { if (N.notifyGlobal) N.notifyGlobal(String(tag), String(title), String(text)); } catch(e){} }
+    // 状态解除即主动撤掉已推的手机通知(道·反者道之动): 会话重新活跃 / 额度恢复时, 把旧通知从通知栏抹掉,
+    //   杜绝「对话早已结束/恢复, 通知却残留栏中」。原生按同一 tag 的稳定 id cancel。
+    function cancelNotify(tag){ try { if (N.cancelConv) N.cancelConv(String(tag)); } catch(e){} }
     // 已提示账本(持久化·同一事件只提示一次): sid|kind → ts。状态解除(会话重新活跃)即剪,
     //   未来真再次进入该状态才重新提示一次; 30 天自然过期防账本无限增长。
     var ALERTED_KEY = "rtflow.convwatch.alerted";
@@ -1299,8 +1302,8 @@
       nm = _latestName(email); if(nm) return nm;
       return String(email||"").split("@")[0];
     }
-    // 额度耗尽: 按账号聚合 N 个休眠对话, 仅跃迁(从无到有/数目增加)才推送一次; 同一耗尽状态绝不到时重推
-    //   (删了不再回来); 恢复(本轮真扫到且无耗尽)即清, 下次再耗尽立报。
+    // 额度耗尽: 按账号聚合休眠对话, 仅首次进入耗尽态推送一次(只报一遍·数目增加也不重推); 同一耗尽状态绝不重推
+    //   (删了不再回来); 恢复(本轮真扫到且无耗尽)即清账本并主动撤旧通知, 下次再耗尽才立报一次。
     function quotaWatch(byAcct, titleByAcct, now, scanned){
       var q = _ls(QKEY), nq = {};
       // 扫描失败门控: 本轮未扫到的账号(网络抖动/单号失败)不等于已恢复 → 原样保留节流账本,
@@ -1308,13 +1311,17 @@
       if(scanned){ Object.keys(q).forEach(function(email){ if(!(email in byAcct) && !scanned[String(email).toLowerCase()]) nq[email]=q[email]; }); }
       Object.keys(byAcct).forEach(function(email){
         var cnt = byAcct[email]|0; if(cnt<=0) return;
-        var p = q[email], transition = !p || (p.cnt|0) < cnt;
-        if (transition) {
+        var p = q[email];
+        // 只报一遍(用户要求): 同号首次进入耗尽态推一次; 之后即使耗尽对话数增加也绝不重推,
+        //   直到恢复(本轮真扫到且无耗尽)清账本, 下次再耗尽才重新提示一次。
+        if (!p) {
           var subj = _acctConvName(email, titleByAcct && titleByAcct[email]);   // 主体优先用该号额度耗尽对话名(用户要求: 有对话即显示对话名, 不再显示账号名)
           notify("quota-" + email, "\uD83D\uDED1 " + subj + " \u989d\u5ea6\u5df2\u8017\u5c3d", cnt + " \u4e2a\u5bf9\u8bdd\u56e0\u914d\u989d\u8017\u5c3d\u4f11\u7720, \u8bf7\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
           nq[email] = { ts: now, cnt: cnt };
-        } else { nq[email] = { ts: (p&&p.ts)||now, cnt: cnt }; }
+        } else { nq[email] = { ts: p.ts||now, cnt: cnt }; }
       });
+      // 恢复(上轮耗尽·本轮扫到且无耗尽)→ 主动撤掉该号残留的额度通知
+      Object.keys(q).forEach(function(email){ if(!(email in nq)) cancelNotify("quota-" + email); });
       _ss(QKEY, nq);   // 未出现在本轮的账号自动清出 -> 视为恢复
     }
     // 额度即将耗尽: 主动预警 (仅当 quota.dPct 为数值且 ∈(0,阈值] 且无 extra usage 美金缓冲 -> 杜绝 stale/未知误报)。
@@ -1324,14 +1331,17 @@
         var qd = a.quota; if(!qd || typeof qd.dPct !== "number") return;
         var pct = qd.dPct, ovg = (typeof qd.overageDollars === "number") ? qd.overageDollars : 0;
         if(pct>0 && pct<=QLOW_PCT && ovg<=0){
-          var p = s[a.email], last = (p&&p.ts)||0;
-          if(now-last >= QLOW_THROTTLE){
+          var p = s[a.email];
+          // 只报一遍(用户要求): 同号首次进入「即将耗尽」推一次; 之后绝不到时重推, 直到恢复清账本才再报。
+          if(!p){
             var subj = _acctConvName(a.email, titleByAcct && titleByAcct[a.email]);   // 主体优先用该号最近对话名, 仅全新无对话账号才回退账号名
             notify("qlow-" + a.email, "\u26a0\ufe0f " + subj + " \u989d\u5ea6\u5373\u5c06\u8017\u5c3d", "\u65e5\u989d\u5ea6\u4ec5\u5269 " + pct + "%, \u5efa\u8bae\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
             ns[a.email] = { ts: now };
-          } else ns[a.email] = { ts: last };
+          } else ns[a.email] = { ts: p.ts||now };
         }
       });
+      // 恢复(不再「即将耗尽」)→ 主动撤掉该号残留的预警通知
+      Object.keys(s).forEach(function(email){ if(!(email in ns)) cancelNotify("qlow-" + email); });
       _ss(QLKEY, ns);
     }
     // ── 常驻后台·权威金库刷新 (道法自然·正本清源·一号不漏) ──────────────────────────────
@@ -1551,8 +1561,8 @@
       Object.keys(cur).forEach(function(sid){
         var c = cur[sid], p = prev[sid];
         next[sid] = { phase: c.phase, title: c.title, email: c.email, ts: now, msgId: c.msgId, reason: c.reason };
-        // 重新活跃 → 剪已提示账本(未来真再次卡住/终态才重新提示一次)
-        if (c.phase === "active") { if (alertedClear(led, sid, "")) ledCh = true; return; }
+        // 重新活跃 → 剪已提示账本(未来真再次卡住/终态才重新提示一次) + 主动撤掉该会话残留通知
+        if (c.phase === "active") { if (alertedClear(led, sid, "")) { ledCh = true; cancelNotify("conv-" + sid); } return; }
         if (c.phase === "stuck" && (!p || p.phase !== "stuck")) {
           if (!alertedOnce(led, sid, "stuck-" + (c.reason||""), now)) return;
           ledCh = true;

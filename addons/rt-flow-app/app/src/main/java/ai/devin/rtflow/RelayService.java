@@ -1486,6 +1486,10 @@ public class RelayService extends Service {
         @JavascriptInterface public void notifyGlobal(String tag, String title, String text) {
             main.post(() -> postConvNotification(tag, title, text));
         }
+        /** 状态解除即撤通知 (会话重新活跃 / 额度恢复时, 引擎按同一 tag 主动抹掉通知栏里的旧条目·不残留)。 */
+        @JavascriptInterface public void cancelConv(String tag) {
+            main.post(() -> cancelConvNotification(tag));
+        }
         /** 原生 HTTP (无 CORS, 可设 Origin/Referer) — 登录/额度/会话/Git 的底座; 结果经 window.__httpCb 回灌。 */
         @JavascriptInterface public void httpReq(String reqId, String method, String url, String headersJson, String body) {
             HttpBridge.exec(reqId, method, url, headersJson, body, (id, json) ->
@@ -2091,9 +2095,22 @@ public class RelayService extends Service {
                 b.setPriority(Notification.PRIORITY_MAX);
                 b.setDefaults(Notification.DEFAULT_ALL);
             }
-            int id = 0x7000_0000 | ((tag == null ? "" : tag).hashCode() & 0x0FFF_FFFF);
+            int id = convNotifyId(tag);
             nm.notify(id, b.build());
         } catch (Exception e) { android.util.Log.w("RTFlowEngine", "postConvNotification err " + e); }
+    }
+
+    /** 对话追踪通知的稳定 id (同一 tag 恒定 → 更新即替换、撤销即精确命中)。 */
+    private static int convNotifyId(String tag) {
+        return 0x7000_0000 | ((tag == null ? "" : tag).hashCode() & 0x0FFF_FFFF);
+    }
+
+    /** 按 tag 主动撤掉对话追踪通知 (状态解除时由引擎调用, 通知栏不残留旧条目)。 */
+    public void cancelConvNotification(String tag) {
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (nm != null) nm.cancel(convNotifyId(tag));
+        } catch (Exception e) { android.util.Log.w("RTFlowEngine", "cancelConvNotification err " + e); }
     }
 
     private String readAsset(String path) {
