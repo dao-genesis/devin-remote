@@ -1857,19 +1857,27 @@ const SHELL_HTTP_SHIM = "(function(){"
   + "var _st={};var lastSeq=0;var gotAny=false;var polling=false;"
   // 双重兜底(参照手机 APK P2P/中继多路失效转移): 当前源持续打不通 → 探测备用公网源(Worker 恒定地址
   //   / CF 快速隧道, 由宿主注入 DAO_ALTS + 链接携带 ?dao_alt=), 探活成功即整页跳转到备用源 /shell 续用。
-  + "var _foFails=0,_foT=0,_foBusy=false;"
+  + "var _foFails=0,_foT=0,_foBusy=false,_foDisabled=false;"
+  // 环回熔断(实证·主页跳来跳去根因): no-cors 探活恒 opaque-resolve → 只要备用源网络可达就误判「健康」并 location.replace 过去;
+  //   而两源各自携带对方为 ?dao_alt=, 任一源瞬断即互相 replace → 无限 A↔B 乒乓跳转(「加载新页面又跳回来」)。
+  //   正法: 90s 窗口内累计跳转 ≥2 次即熔断失效转移, 定在当前源持续长轮询(持久通道就绪后本就稳定), 杜绝振荡。
+  + "function _foHops(){try{var a=JSON.parse(sessionStorage.getItem('dao_fo_hops')||'[]');var now=Date.now();a=a.filter(function(t){return now-t<90000;});return a;}catch(e){return[];}}"
+  + "function _foMark(){try{var a=_foHops();a.push(Date.now());sessionStorage.setItem('dao_fo_hops',JSON.stringify(a));}catch(e){}}"
+  + "try{if(_foHops().length>=2)_foDisabled=true;}catch(e){}"
   + "function _foAlts(){var a=[];try{(window.DAO_ALTS||[]).forEach(function(u){a.push(u);});}catch(e){}"
   + "try{var qa=new URLSearchParams(location.search).get('dao_alt');if(qa)a.push(qa);}catch(e){}"
   + "var seen={},out=[];a.forEach(function(u){u=String(u||'').replace(/\\/+$/,'');if(!/^https?:\\/\\//i.test(u))return;"
   + "if(u.toLowerCase()===String(location.origin).toLowerCase())return;if(seen[u])return;seen[u]=1;out.push(u);});return out;}"
   + "function _foOk(){_foFails=0;_foT=0;}"
-  + "function _foTry(){if(_foBusy)return;var alts=_foAlts();if(!alts.length)return;_foBusy=true;"
+  + "function _foTry(){if(_foBusy||_foDisabled)return;var alts=_foAlts();if(!alts.length)return;_foBusy=true;"
   + "(function next(i){if(i>=alts.length){_foBusy=false;_foFails=0;_foT=0;return;}var base=alts[i];"
-  + "fetch(base+'/api/health',{mode:'no-cors'}).then(function(){"
+  // 真·探活: /api/health 带 ACAO:* → cors 模式读 r.ok 才算活(死隧道的 CF 边缘 530 不再被 opaque 误判健康)。
+  + "fetch(base+'/api/health',{mode:'cors'}).then(function(r){if(!r.ok)throw 0;"
   + "var m='';try{m=new URLSearchParams(location.search).get('m')||'';}catch(e){}"
+  + "_foMark();"
   + "location.replace(base+'/shell?dao_alt='+encodeURIComponent(location.origin)+(m?('&m='+m):''));"
   + "}).catch(function(){next(i+1);});})(0);}"
-  + "function _foFail(){_foFails++;if(!_foT)_foT=Date.now();if(_foFails>=6&&(Date.now()-_foT)>15000)_foTry();}"
+  + "function _foFail(){if(_foDisabled)return;_foFails++;if(!_foT)_foT=Date.now();if(_foFails>=6&&(Date.now()-_foT)>15000)_foTry();}"
   + "function post(m){try{fetch('/api/shell/msg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid:SID,msg:m})}).catch(function(){});}catch(e){}}"
   + "function apply(m){if(!m)return;if(typeof m._q==='number'){if(m._q<=lastSeq)return;lastSeq=m._q;}gotAny=true;"
   + "if(m.type==='__copy'){try{navigator.clipboard.writeText(m.text||'');}catch(e){}return;}"
