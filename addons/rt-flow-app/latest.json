@@ -1,6 +1,6 @@
 {
-  "versionCode": 345,
-  "versionName": "0.37.240",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.240/DevinCloud-mobile-v0.37.240.apk",
-  "notes": "v0.37.240 · 根治国内网络『更新下载中』永久卡死 + 『下载失败』: ① 自更新下载新增『黑洞看门人』——DownloadManager 跟 302 到被墙的 objects.githubusercontent.com 后会永久停在『已暂停·等待网络』(0B, 既不失败也不完成→更新永远卡进度条), 现 25s 无进度即斩 DM 自动换下一镜像。② 更新镜像新增『自有边缘中继代取』(Worker 在 CF 全球边缘拉 GitHub 发布资产回传, 手机只连国内可达自有域), 绕开被墙 GitHub 直链。③ 中继 /fetch 边缘代理白名单放通 github.com / *.githubusercontent.com / codeload.github.com。"
+  "versionCode": 346,
+  "versionName": "0.37.241",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.241/DevinCloud-mobile-v0.37.241.apk",
+  "notes": "v0.37.241 · 额度通知归静: 『额度已耗尽/即将耗尽』系统通知默认全关(用户要求·根本不用提示), 账本/恢复撤销照常运转; 如需恢复可置 localStorage rtflow.notify.quota=1。配套插件端(dao-vsix 3.57.0) 反向注入单会话上限改为每条新消息按『当前余额−预留3』动态封顶(70→67、40→37), 根治凭空冒出的『$4』上限。"
 }

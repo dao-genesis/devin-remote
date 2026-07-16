@@ -4389,6 +4389,14 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             if (typeof maxCredits !== 'number') return { ok: false, error: 'maxCredits (number) required' };
             return await devinSetMessageLimit(ws.devinOrgId, maxCredits, ws.devinAuth1);
         }
+        case '/api/devin/usage/limit-probe': {
+            // 额度跟随透视 — 返回活动号四处余额字段原值 + 当前将回写的 cap, 供排查「上限从何而来」。
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            const d = await devinFetchAvailDetail(ws.devinOrgId, ws.devinAuth1);
+            const pp = loadInjectProfile();
+            const poff = (typeof pp.messageLimitOffset === 'number') ? pp.messageLimitOffset : 3;
+            return { ok: true, orgId: ws.devinOrgId, fields: d.fields, avail: d.best, offset: poff, cap: (d.best == null ? null : quotaCapFromAvail(d.best, poff)) };
+        }
         case '/api/devin/mcp/installations': {
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
             return await devinListMcpInstallations(ws.devinOrgId, ws.devinAuth1);
@@ -7543,14 +7551,14 @@ function startBridgeLivenessLoop(context: vscode.ExtensionContext): void {
 //   账号切换/批量注入时另由 applyInjectProfileToOrg 即刻据本号算注; 此环负责活动号「额度刷新即跟随」。
 //
 // 单会话上限计算 — 帛书·「大盈若盅·其用不窘」:
-//   余额充裕 → 留余量 off, cap = floor(余额 − off)(如 69 → 66);
-//   余额不足 off(最后一点小钱) → 不再钉死 1(那样残额永远花不掉, 此前根本错误),
-//     反而抬到 off+1(>off, 默认 4), 让最后一点能在一次对话里全部消耗完;
-//   负余额(欠费)同样收敛到 off+1。故 cap = max(floor(余额 − off), off + 1) — 恒 > off, 单调随余额增。
+//   余额充裕 → 留足预留 off, cap = floor(余额 − off)(如 70 → 67, 40 → 37) — 每条新消息按「当前余额−预留」封顶;
+//   余额不足以留预留(最后一点小钱) → 不再钉死 off+1(旧法: 余额 <7 一律回写 4, 凭空冒出与真实余额
+//     无关的「$4」且可高于实际余额·用户莫名) — 改为 min(floor(余额), off)(≤真实余额, 残额仍可花),
+//     最低 1(服务端 max_credits ≥1)。三支取 max 保单调随余额增, 且 余额≥1 时恒 ≤ 余额。
 function quotaCapFromAvail(avail: number, off: number): number {
-    return Math.max(Math.floor(avail - off), off + 1);
+    return Math.max(1, Math.floor(avail - off), Math.min(Math.floor(avail), off));
 }
-const QUOTA_AUTO_LIMIT_INTERVAL_MS = 60 * 1000;
+const QUOTA_AUTO_LIMIT_INTERVAL_MS = 30 * 1000;
 let _quotaAutoLimitTimer: ReturnType<typeof setInterval> | null = null;
 let _lastAutoLimitSig = '';
 async function quotaAutoLimitTick(): Promise<void> {
@@ -7582,7 +7590,7 @@ function startQuotaAutoLimitLoop(context: vscode.ExtensionContext): void {
 //     ④ 隔离清理: 删除该号一切「非期望(不在档案 automations) 且 未被用户锁定」的自动化 → 止血·根除每周烧额度残留;
 //     ② 额度跟随: messageLimitAuto 时据本号当前余额重算 cap = 余额 − off, 仅变化才回写(守柔省网)。
 //   守柔: 单账号错误隔离; 仅档案 enabled 时巡; 清理受 injectReset 开关约束; 跳过被 RT Flow 清理/出库的账号。
-const POOL_STEADY_INTERVAL_MS = 5 * 60 * 1000;
+const POOL_STEADY_INTERVAL_MS = 2 * 60 * 1000;
 let _poolSteadyTimer: ReturnType<typeof setInterval> | null = null;
 let _poolSteadyInflight = false;
 const _steadyQuotaSig = new Map<string, number>();
@@ -14167,19 +14175,24 @@ async function devinSetMessageLimit(orgId: string, maxCredits: number, auth1: st
 //   (即「$69 余额却上限 $1」之根因)。故四者取最大为「余额」; 全 0 或负(欠费)→ 收敛为 0 → cap=1。
 //   守柔: 两端点皆未给出任一有效数字字段才返回 null(跳过管理, 不误改)。
 async function devinFetchAvailableAcus(orgId: string, auth1: string): Promise<number | null> {
+    return (await devinFetchAvailDetail(orgId, auth1)).best;
+}
+// 同上·带字段明细(供 /api/devin/usage/limit-probe 透视「上限从何而来」·根治上限值莫名)。
+async function devinFetchAvailDetail(orgId: string, auth1: string): Promise<{ best: number | null; fields: Record<string, number> }> {
     const bareOrgId = orgId.replace(/^org-/, '');
     const h = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
     let best: number | null = null;
-    const take = (v: any) => { if (typeof v === 'number' && isFinite(v)) { best = (best === null) ? v : Math.max(best, v); } };
+    const fields: Record<string, number> = {};
+    const take = (k: string, v: any) => { if (typeof v === 'number' && isFinite(v)) { fields[k] = v; best = (best === null) ? v : Math.max(best, v); } };
     try {
         const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/usage/stats', h);
-        if (r.status === 200 && r.json) { take(r.json.available_acus); take(r.json.balance); }
+        if (r.status === 200 && r.json) { take('available_acus', r.json.available_acus); take('balance', r.json.balance); }
     } catch { /* 守柔 */ }
     try {
         const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/status', h);
-        if (r.status === 200 && r.json) { take(r.json.available_credits); take(r.json.overage_credits); }
+        if (r.status === 200 && r.json) { take('available_credits', r.json.available_credits); take('overage_credits', r.json.overage_credits); }
     } catch { /* 守柔 */ }
-    return best;
+    return { best, fields };
 }
 
 // 列出本组织已安装的自定义 MCP (与官网 Connections 一致)
@@ -18160,6 +18173,7 @@ if (process.env.DAO_SELFTEST === '1') {
         bridgeMachinePort,
         bridgeReadPublishedToken,
         daoHeadlessExec,
+        quotaCapFromAvail,
         setState(s: { ws?: any; bridgeUrl?: string; bridgeToken?: string }) {
             if (s.ws) ws = s.ws;
             if (typeof s.bridgeUrl === 'string') bridgeUrl = s.bridgeUrl;
