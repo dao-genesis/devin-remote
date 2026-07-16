@@ -15086,14 +15086,30 @@ async function devinBatchInjectRun(accounts: DaoBatchAccount[]): Promise<DaoBatc
             }
             res.orgId = orgId;
             try { res.cleaned = await devinCleanLegacyDaoKnowledge(orgId, auth1); } catch { /* 守柔 */ }
-            if (rulesText) res.knowledge = (await devinUpsertKnowledge(orgId, DAO_RULES_KB_NAME, rulesText, DAO_RULES_KB_TRIGGER, auth1)).ok;
-            if (token) res.bridge = (await devinUpsertKnowledge(orgId, DAO_BRIDGE_KB_NAME, bridgeMd, DAO_BRIDGE_KB_TRIGGER, auth1)).ok;
-            if (token) res.secret = (await devinUpsertSecret(orgId, 'DAO_TOKEN', token, auth1)).ok;
+            // 本源修复(灭「auth=cached 却 ok=false·error 为空」不可诊断的假失败): 上行写(K/桥/密)
+            //   返回 {ok:false} 而不抛异常时, 旧码只吞掉 .ok 布尔、res.error 恒空 → 用户读作「大量注入
+            //   失败」却无从查因。改为: ①失败即退避重试一次(多为 429/5xx 瞬态, 重试即成); ②仍败则把
+            //   该步真实 error 归集进 stepErrs, 令 res.error 非空可诊断。
+            const stepErrs: string[] = [];
+            const upK = async (name: string, body: string, trig: string): Promise<boolean> => {
+                let r = await devinUpsertKnowledge(orgId, name, body, trig, auth1);
+                if (!r.ok) { await new Promise(x => setTimeout(x, 700)); r = await devinUpsertKnowledge(orgId, name, body, trig, auth1); }
+                if (!r.ok) stepErrs.push(name + ': ' + (r.error || 'upsert failed'));
+                return r.ok;
+            };
+            if (rulesText) res.knowledge = await upK(DAO_RULES_KB_NAME, rulesText, DAO_RULES_KB_TRIGGER);
+            if (token) res.bridge = await upK(DAO_BRIDGE_KB_NAME, bridgeMd, DAO_BRIDGE_KB_TRIGGER);
+            if (token) {
+                let sr = await devinUpsertSecret(orgId, 'DAO_TOKEN', token, auth1);
+                if (!sr.ok) { await new Promise(x => setTimeout(x, 700)); sr = await devinUpsertSecret(orgId, 'DAO_TOKEN', token, auth1); }
+                if (!sr.ok) stepErrs.push('DAO_TOKEN: ' + (sr.error || 'upsert failed'));
+                res.secret = sr.ok;
+            }
             // 剧本「老三样」(道法自然合订/帛书老子/道藏阴符经)随档案注入; 不再注入「Operate Local Environment via Dao」
             //   (本机操作说明已并入知识库内穿MD+MCP文档), 该旧剧本由 resetOrgInjectables 自动清除。
             // 全覆盖: 把用户完整注入档案(K/P/S/MCP/Automations)注入该账号; 先清后注且单账号锁定项被跳过不覆盖。
             // 用户自选档案受 enabled 门控; !enabled 时仅注系统级固定道藏, 不触碰用户 org 自选项(根治「新账号初始化没配好」)。
-            if (injectProfile.enabled) { try { await applyInjectProfileToOrg(orgId, auth1, injectProfile); res.profile = true; res.playbook = true; } catch { /* 守柔 */ } }
+            if (injectProfile.enabled) { try { await applyInjectProfileToOrg(orgId, auth1, injectProfile); res.profile = true; res.playbook = true; } catch (e: any) { stepErrs.push('profile: ' + (e?.message || String(e))); } }
             else { res.profile = true; res.playbook = true; }
             // MCP 落地校验: 回读该 org 的 MCP 安装, 确认档案钉住的每个 MCP(含官方 GitHub MCP)真已安装。
             //   无钉住 MCP → 视作已达成(true); 有则须全部命中方 true。res.mcp 供 batch-inject/status 观测。
@@ -15130,6 +15146,8 @@ async function devinBatchInjectRun(accounts: DaoBatchAccount[]): Promise<DaoBatc
             }
             // 成功 = 准则KB落地 + (无桥控制剧本或已注) + (无DAO_TOKEN或已注) + 用户完整档案已应用
             res.ok = (!rulesText || res.knowledge) && (!pbBody || res.playbook) && (!token || res.secret) && res.profile;
+            // 未成功即把各步真实 error 落进 res.error(灭「ok=false·error 空」的不可诊断假失败)。
+            if (!res.ok && !res.error && stepErrs.length) res.error = stepErrs.join('; ');
             // 收敛即落 sig: 仅成功才记, 失败下轮重试(不误标已收敛)。
             if (res.ok && orgId) sigMap[orgId] = desiredSig;
         } catch (e: any) { res.error = e?.message || String(e); }
