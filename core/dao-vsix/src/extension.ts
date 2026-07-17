@@ -6386,6 +6386,22 @@ function bridgeHubApi(p: string): Promise<{ status: number; text: string }> {
     });
 }
 
+// 设备活性以 /api/health 为准(心跳只证明曾经活过): 直探该设备已发布通道的 /api/health, 2xx 即在线。
+function bridgeProbeDeviceHealth(base: string, timeoutMs = 6000): Promise<boolean> {
+    return new Promise((resolve) => {
+        let u: URL;
+        try { u = new URL(String(base).replace(/\/$/, '') + '/api/health'); } catch { resolve(false); return; }
+        const mod = u.protocol === 'https:' ? require('https') : require('http');
+        const req = mod.request({ hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80), path: u.pathname, method: 'GET', rejectUnauthorized: false }, (res: any) => {
+            res.resume();
+            resolve(res.statusCode >= 200 && res.statusCode < 300);
+        });
+        req.on('error', () => resolve(false));
+        req.setTimeout(timeoutMs, () => { req.destroy(); resolve(false); });
+        req.end();
+    });
+}
+
 function bridgeFindCloudflared(): string {
     const { execSync } = require('child_process');
     const isWin = process.platform === 'win32';
@@ -8243,7 +8259,7 @@ function rBridgeAgents(){
   var ags=ba.agents||[];
   for(var i=0;i<ags.length;i++){var a=ags[i];var onl=(a.status==='online');
     rows+='<div class="cr" style="border-top:1px solid var(--border);padding-top:5px;margin-top:5px"><span class="l"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;background:'+(onl?'var(--success)':'var(--muted)')+'"></span>'+esc(a.hostname||a.id||'?')+'</span><span class="v" style="color:'+(onl?'var(--success)':'var(--muted)')+';font-size:11px">'+(onl?'● 在线':'○ 离线')+'</span></div>';
-    var meta=[];if(a.user)meta.push('用户 '+a.user);if(a.os)meta.push(String(a.os).slice(0,40));if(a.last_seen)meta.push('心跳 '+bkRel(Date.parse(a.last_seen)));
+    var meta=[];if(a.user)meta.push('用户 '+a.user);if(a.os)meta.push(String(a.os).slice(0,40));if(a.last_seen)meta.push('心跳 '+bkRel(Date.parse(a.last_seen)));if(a.probed_at)meta.push('探活 '+bkRel(Date.parse(a.probed_at))+(a.probe==='health-ok'?' ✓':' ✗'));
     if(meta.length)rows+='<div style="font-size:10px;color:var(--muted);margin:2px 0 0 14px">'+esc(meta.join(' · '))+'</div>';
   }
   if(!ags.length)rows+='<div style="font-size:10px;color:var(--muted);margin-top:6px">暂无其他接入设备 — 用下方「一行接入」命令把更多设备接进来。</div>';
@@ -11193,6 +11209,14 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const r = await bridgeHubApi('/api/agents');
                 let agents: any[] = [];
                 try { const j = JSON.parse(r.text || '{}'); agents = Array.isArray(j.agents) ? j.agents : []; } catch { /* 守柔 */ }
+                // 心跳只证明过去活过 — 对心跳已陈但登记过可达地址的设备, 直探其 /api/health 定生死
+                //   (relay 直连设备不走中枢心跳, 旧法仅凭 lastSeen 会把在线设备恒判离线)。
+                await Promise.all(agents.filter((a: any) => a && a.status !== 'online' && (a.url || a.publicUrl)).slice(0, 8).map(async (a: any) => {
+                    if (await bridgeProbeDeviceHealth(String(a.url || a.publicUrl))) {
+                        a.status = 'online'; a.probe = 'health-ok'; a.last_seen = new Date().toISOString();
+                    } else { a.probe = 'health-fail'; }
+                    a.probed_at = new Date().toISOString();
+                }));
                 const host = (c && c.host) || os.hostname();
                 // 本机(中枢)在线判定 = 本地桥 API 有应答(整机直连 127.0.0.1 通即活)或已有可达公网 URL。
                 // 旧病灶: 仅凭 `!!c.url` — 快速隧道漂移/未连时 conn.url 为空, 明明本机在跑却恒显「离线」。
