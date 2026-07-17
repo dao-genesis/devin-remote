@@ -1,6 +1,6 @@
 {
-  "versionCode": 347,
-  "versionName": "0.37.242",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.242/DevinCloud-mobile-v0.37.242.apk",
-  "notes": "v0.37.242 · 额度读取正本清源: overage_credits 双符号实证归一(负值=以负号记账的 Remaining balance·幅值即美金, 仅伴 billing_error 才计 0) — 根治『账号明明有 $60-70 余额, 单话上限却被钉成 $4』: 旧法把负值账态的真实余额抹 0, 余额被读成小残值(如 $7) → 上限 7−3=$4。桌面端(dao-vsix 3.57.1/rt-flow 4.30.2)同源修复, limit-probe 透视端点新增 overage_balance 字段可见解释后的余额。流量处理: 累计流量改为按 UID 级开机单调计数器跨面板追平(面板关闭期间/重启后的消耗不再漏计, 根治『累计≈单次会话』); 自动低流量默认开(仅计费网络降自动轮询频率·手动操作永远即时全量·体感不变)。"
+  "versionCode": 349,
+  "versionName": "0.37.244",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.244/DevinCloud-mobile-v0.37.244.apk",
+  "notes": "v0.37.244 · 两套屏幕·完全隔离(类多RDP/虚拟机·从源头修): 远程/Agent 通道恒在后台影子屏(常驻 INVISIBLE autoHost)开页与操作, 结构上不可能抢占用户物理前台屏。修掉病灶 —— browseOpen 的 foreground:true 会 appToFront()+browseActivateTab() 把 Agent 页(如 CF 登录)拽上用户屏、与用户互斥打断操作; 现 browseOpen 忽略 foreground 恒后台, appToFront/browseActivateTab 两命令对远程恒 no-op。Agent 页的所见经 screenshot/mirror 从影子屏取帧, 用户屏与 Agent 屏彻底分离、同机而互不干扰。源级护栏 test/screen-isolation.test.js。"
 }
