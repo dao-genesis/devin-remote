@@ -523,6 +523,63 @@ public class MainActivity extends AppCompatActivity {
         new Thread(this::reconcileSystemDownloads).start();   // 认领 App 被杀期间完成的下载(广播漏收) → 补记下载库+同步系统下载
         // 启动即强刷一轮开着的账号(绕过引擎心跳等待) → 页签金额/状态点尽快由「持久化旧值」换成实时值
         main.postDelayed(() -> { pushOpenAcctsToSwitch(); triggerEngineRefresh(""); }, 4000);
+        // 冷启动经通知点入: 标签恢复完成后消费跳转目标 → 精准落到该账号该对话页
+        main.postDelayed(() -> handleNotifTarget(getIntent()), 1200);
+    }
+
+    /** 通知点按 (singleTask·进程已在): 不重建 Activity、不重载任何页, 仅精准路由到目标账号/对话页签。 */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleNotifTarget(intent);
+    }
+
+    /** 消费通知跳转目标 (notif_email/notif_sid): 消费即清, 防旋转/恢复重复路由。 */
+    private void handleNotifTarget(Intent i) {
+        if (i == null) return;
+        String email = i.getStringExtra("notif_email");
+        if (email == null || email.isEmpty()) return;
+        String sid = i.getStringExtra("notif_sid");
+        i.removeExtra("notif_email"); i.removeExtra("notif_sid"); i.removeExtra("notif_no");
+        sid = (sid == null) ? "" : sid.trim();
+        if (sid.startsWith("devin-")) sid = sid.substring(6);
+        routeToAccount(email, sid);
+    }
+
+    /** 精准路由: ① 该对话页已开 → 直接切过去(零重载); ② 该号有页签 → 复用其鉴权开精确对话页;
+     *  ③ 该号无页签(冷启动等) → 经切号板账号库解出账号开页。 */
+    private void routeToAccount(String email, String sid) {
+        String eLc = email.toLowerCase();
+        int acctIdx = -1;
+        for (int idx = 0; idx < tabs.size(); idx++) {
+            Tab t = tabs.get(idx);
+            if (t.accountJson == null) continue;
+            String te = (t.acctEmail == null || t.acctEmail.isEmpty()) ? t.acctId : t.acctEmail;
+            if (te == null || !te.toLowerCase().equals(eLc)) continue;
+            if (!sid.isEmpty() && t.url != null && t.url.contains(sid)) { selectTab(idx); return; }
+            if (acctIdx < 0) acctIdx = idx;
+        }
+        if (acctIdx >= 0) {
+            if (sid.isEmpty()) { selectTab(acctIdx); return; }
+            newTab("https://app.devin.ai/sessions/" + sid, tabs.get(acctIdx).accountJson);
+            return;
+        }
+        openAccountViaSwitch(email, sid);
+    }
+
+    /** 该号无已开页签: 让切号板(账号库属主)按 email 解出完整账号(auth1/no) → openAccountSession/openAccountTab。 */
+    private void openAccountViaSwitch(String email, String sid) {
+        final String js = "(function(){try{var L=JSON.parse(localStorage.getItem('rtflow.accounts')||'[]');"
+                + "var e=" + org.json.JSONObject.quote(email.toLowerCase()) + ",s=" + org.json.JSONObject.quote(sid) + ";"
+                + "for(var i=0;i<L.length;i++){var x=L[i];if(String((x.email||x.id)||'').toLowerCase()===e){"
+                + "var a={};for(var k in x){if(Object.prototype.hasOwnProperty.call(x,k))a[k]=x[k];}if(!a.no)a.no=i+1;"
+                + "if(s)Native.openAccountSession(JSON.stringify(a),s);else Native.openAccountTab(JSON.stringify(a));return 1;}}}catch(err){}return 0;})()";
+        Tab sw = null;
+        for (Tab t : tabs) { if (t.internal && t.url != null && t.url.endsWith("switch.html")) { sw = t; break; } }
+        if (sw != null) { final Tab fsw = sw; try { fsw.web.evaluateJavascript(js, null); } catch (Exception ignored) {} return; }
+        final Tab nsw = newTab(SWITCH, null);
+        main.postDelayed(() -> { try { nsw.web.evaluateJavascript(js, null); } catch (Exception ignored) {} }, 1500);
     }
 
     /** 冷启动后台静默检查更新; 有新版则弹一次确认框, 用户点「立即更新」即下载+唤起安装。 */

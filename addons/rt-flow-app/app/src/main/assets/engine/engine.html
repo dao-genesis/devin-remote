@@ -1270,7 +1270,21 @@
     var POLL_MS = 30000, MAINT_MIN_MS = 60000, FIRST_DELAY = 15000;
     function loadPrev(){ try { return JSON.parse(localStorage.getItem(PREV_KEY)||"{}")||{}; } catch(e){ return {}; } }
     function savePrev(o){ try { localStorage.setItem(PREV_KEY, JSON.stringify(o)); } catch(e){} }
-    function notify(tag, title, text){ try { if (N.notifyGlobal) N.notifyGlobal(String(tag), String(title), String(text)); } catch(e){} }
+    // 通知统一出口: 标题冠稳定永久序号【N】(账号终身身份·与切号板/页签同源), target 携带精准跳转目标
+    //   {email, sid, no} → 原生 PendingIntent 按 tag 独立存放, 点按经 onNewIntent 精准落到该账号该对话页(不重载 APK)。
+    function _accNoOf(email){
+      try { var e = String(email||"").toLowerCase(); if (!e) return 0;
+        var L = loadAcc();
+        for (var i = 0; i < L.length; i++){ var x = L[i]; if (String((x && (x.email||x.id))||"").toLowerCase() === e) return (x.no|0) || (i+1); }
+      } catch(err){}
+      return 0;
+    }
+    function notify(tag, title, text, target){ try {
+      var t = String(title==null?"":title), tgt = target || null;
+      if (tgt && tgt.email) { var no = _accNoOf(tgt.email); if (no > 0) { t = "\u3010" + no + "\u3011" + t; tgt.no = no; } }
+      if (N.notifyGlobalT) N.notifyGlobalT(String(tag), t, String(text), tgt ? JSON.stringify(tgt) : "");
+      else if (N.notifyGlobal) N.notifyGlobal(String(tag), t, String(text));
+    } catch(e){} }
     // 状态解除即主动撤掉已推的手机通知(道·反者道之动): 会话重新活跃 / 额度恢复时, 把旧通知从通知栏抹掉,
     //   杜绝「对话早已结束/恢复, 通知却残留栏中」。原生按同一 tag 的稳定 id cancel。
     function cancelNotify(tag){ try { if (N.cancelConv) N.cancelConv(String(tag)); } catch(e){} }
@@ -1347,7 +1361,7 @@
         if (!p) {
           if (quotaNotifyOn()) {
             var subj = _acctConvName(email, titleByAcct && titleByAcct[email]);   // 主体优先用该号额度耗尽对话名(有对话即显示对话名, 不再显示账号名)
-            notify("quota-" + email, "\uD83D\uDED1 " + subj + " \u989d\u5ea6\u5df2\u8017\u5c3d", cnt + " \u4e2a\u5bf9\u8bdd\u56e0\u914d\u989d\u8017\u5c3d\u4f11\u7720, \u8bf7\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
+            notify("quota-" + email, "\uD83D\uDED1 " + subj + " \u989d\u5ea6\u5df2\u8017\u5c3d", cnt + " \u4e2a\u5bf9\u8bdd\u56e0\u914d\u989d\u8017\u5c3d\u4f11\u7720, \u8bf7\u5c3d\u5feb\u5145\u503c/\u5207\u53f7", {email:email});
           }
           nq[email] = { ts: now, cnt: cnt };
         } else { nq[email] = { ts: p.ts||now, cnt: cnt }; }
@@ -1368,7 +1382,7 @@
           if(!p){
             if (quotaNotifyOn()) {
               var subjL = _acctConvName(a.email, titleByAcct && titleByAcct[a.email]);   // 主体优先用该号最近对话名, 仅全新无对话账号才回退账号名
-              notify("qlow-" + a.email, "\u26a0\ufe0f " + subjL + " \u989d\u5ea6\u5373\u5c06\u8017\u5c3d", "\u65e5\u989d\u5ea6\u4ec5\u5269 " + pct + "%, \u5efa\u8bae\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
+              notify("qlow-" + a.email, "\u26a0\ufe0f " + subjL + " \u989d\u5ea6\u5373\u5c06\u8017\u5c3d", "\u65e5\u989d\u5ea6\u4ec5\u5269 " + pct + "%, \u5efa\u8bae\u5c3d\u5feb\u5145\u503c/\u5207\u53f7", {email:a.email});
             }
             ns[a.email] = { ts: now };
           } else ns[a.email] = { ts: p.ts||now };
@@ -1486,7 +1500,7 @@
       },
       onRemoved: function(a){
         try{ if(N.setTabStatus){ N.setTabStatus(a.id||"","",""); if(a.email) N.setTabStatus(a.email,"",""); } }catch(e){}
-        notify("clean-"+(a.id||a.email), "\u2713 \u5f52\u96f6\u8d26\u53f7\u5df2\u5907\u4efd\u5e76\u79fb\u51fa\u8d26\u53f7\u5e93", String(a.email||a.id||""));
+        notify("clean-"+(a.id||a.email), "\u2713 \u5f52\u96f6\u8d26\u53f7\u5df2\u5907\u4efd\u5e76\u79fb\u51fa\u8d26\u53f7\u5e93", String(a.email||a.id||""), {email:(a.email||a.id||"")});
       },
       // auth1 过期自愈: 用账密重登一次(autoclean 内部 10min 节流), 归零号不再因登录态过期永滞库中
       relogin: async function(a){
@@ -1607,12 +1621,12 @@
         if (c.phase === "stuck" && (!p || p.phase !== "stuck") && alertedOnce(led, sid, "stuck-" + (c.reason||""), now)) {
           ledCh = true;
           var head = c.reason === "action_required" ? "⚠️ 待你处理" : (c.reason === "blocked" ? "⛔ 卡住/失败" : "⏳ 等待输入");
-          notify("conv-" + sid, head + ": " + c.title, (c.email ? c.email + " · " : "") + (c.label || "Devin 需要你回应") );
+          notify("conv-" + sid, head + ": " + c.title, (c.email ? c.email + " · " : "") + (c.label || "Devin 需要你回应"), {email:c.email, sid:sid});
           if (c.msgId) next[sid].notifiedMsgId = c.msgId;   // 本条卡住通知已覆盖此消息 → 消息横幅不再双发
           return;
         }
         // 微信式新消息横幅: 弹一次(原生 HIGH 渠道 → heads-up + 震动 + 声音), 同一条消息绝不重弹
-        if (ma.fire) notify("conv-" + sid, "💬 " + c.title, (c.email ? c.email + " · " : "") + "有新消息 · 点开即回");
+        if (ma.fire) notify("conv-" + sid, "💬 " + c.title, (c.email ? c.email + " · " : "") + "有新消息 · 点开即回", {email:c.email, sid:sid});
       });
       // 结束闭环①·精确终态: trackStuck 已观测到「曾追踪→已终态」的会话, 按 中断/过期/挂起/停止/归档/完成 分流文案。
       var endedSid = Object.create(null), TERM = {
@@ -1630,7 +1644,7 @@
         if (!alertedOnce(led, sid, "end", now)) return;
         ledCh = true;
         var m = TERM[ev.term] || TERM.finished;
-        notify("conv-" + sid, m[0] + ": " + (ev.title || p.title || sid), (p.email ? p.email + " · " : "") + m[1]);
+        notify("conv-" + sid, m[0] + ": " + (ev.title || p.title || sid), (p.email ? p.email + " · " : "") + m[1], {email:(ev.email||p.email), sid:sid});
       });
       // 结束闭环②·兜底: 上轮在追踪、本轮既不在活跃也未登记终态 → 仅当其账号本轮扫描成功才判「已结束」;
       //   账号本轮扫描失败(不在 scanned) → 不判结束·原样保留追踪态(根治个别号扫描失败误报「已结束」)。
@@ -1641,7 +1655,7 @@
         if (scanned[em]) {
           if (!alertedOnce(led, sid, "end", now)) return;
           ledCh = true;
-          notify("conv-" + sid, "✅ 已结束: " + (p.title || sid), (p.email ? p.email + " · " : "") + "对话已完成/停止");
+          notify("conv-" + sid, "✅ 已结束: " + (p.title || sid), (p.email ? p.email + " · " : "") + "对话已完成/停止", {email:p.email, sid:sid});
         } else {
           next[sid] = { phase: p.phase, title: p.title, email: p.email, ts: p.ts || now, msgId: p.msgId, reason: p.reason, unread: p.unread, notifiedMsgId: p.notifiedMsgId, carried: true };
         }
