@@ -5158,8 +5158,15 @@ function daoBridgeDaemonProxy(route: string, urlObj: any, req: any): Promise<any
                 if (xfHost && !/^127\.0\.0\.1|^localhost/i.test(xfHost)) {
                     const proto = String(req.headers?.['x-forwarded-proto'] || 'https');
                     body = body.replace(/\$U='[^']*'/, "$U='" + proto + '://' + xfHost + "'");
-                } else if (ws.publicUrl) {
-                    body = body.replace(/\$U='[^']*'/, "$U='" + ws.publicUrl.replace(/\/$/, '') + "'");
+                } else {
+                    try {
+                        const c = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.dao', 'bridge', 'conn.json'), 'utf8'));
+                        const u = c && c.url ? String(c.url).replace(/\/$/, '') : '';
+                        if (u) body = body.replace(/\$U='[^']*'/, "$U='" + u + "'");
+                        else if (ws.publicUrl) body = body.replace(/\$U='[^']*'/, "$U='" + ws.publicUrl.replace(/\/$/, '') + "'");
+                    } catch {
+                        if (ws.publicUrl) body = body.replace(/\$U='[^']*'/, "$U='" + ws.publicUrl.replace(/\/$/, '') + "'");
+                    }
                 }
             }
             resolve({ _proxy: true, status, contentType: ctype, body });
@@ -8617,14 +8624,14 @@ function rT(tab,items,err,fallbackProxy){
       v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6">账号凭证随 IDE 登录状态自动同步, 无需手动 API Key。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试自动获取</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
     } else {
       // 其他错误
-      v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--danger);font-size:12px">Error: '+esc(err||'Unknown')+'</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;'+tab+'&#39;})">⟳ 重试</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 在 Devin Cloud 中打开</button></div></div>';
+      v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--danger);font-size:12px">Error: '+esc(err||'Unknown')+'</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn" onclick="loadTab(&#39;'+tab+'&#39;)">⟳ 重试</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 在 Devin Cloud 中打开</button></div></div>';
     }
     return;
   }
-  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅',profile:'👤',customization:'🎛️',apikeys:'🔐'}[tab]||'🌐')+'</div><h3>'+({sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时',profile:'Profile 身份',customization:'Customization 偏好',apikeys:'API Keys'}[tab]||tab)+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
+  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅',profile:'👤',customization:'🎛️',apikeys:'🔐'}[tab]||'🌐')+'</div><h3>'+({sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时',profile:'Profile 身份',customization:'Customization 偏好',apikeys:'API Keys'}[tab]||tab)+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn" onclick="loadTab(&#39;'+tab+'&#39;)">⟳ 重试</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
   // ★ v1.0.1 · 各tab添加新建按钮 · 帛书·「道生一·一生二」
   const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>',automations:'<button class="btn sm danger" onclick="if(confirm(&#39;确认清除本账号官网全部自动化?此操作不可撤销&#39;))cmd(&#39;clearAutomations&#39;)">🧹 清除全部</button>'};
-  let h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' items</span><div class="br">'+(createBtns[tab]||'')+'<button class="btn sm" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;'+tab+'&#39;})">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐</button></div></div>';
+  let h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' items</span><div class="br">'+(createBtns[tab]||'')+'<button class="btn sm" onclick="loadTab(&#39;'+tab+'&#39;)">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐</button></div></div>';
   if(tab==='sessions'){
     items.forEach(s=>{
       const id=s.devin_id||s.id||'';const title=s.title||s.name||'Untitled';const status=s.status||'';const created=s.created_at||'';
@@ -9135,7 +9142,16 @@ function rInject(){
   if(!Array.isArray(p.automations))p.automations=[];
   const tgl=(on,fn)=>'<span onclick="'+fn+'" style="cursor:pointer;display:inline-block;width:40px;height:20px;border-radius:10px;background:'+(on?'var(--success)':'var(--muted)')+';position:relative;vertical-align:middle"><span style="position:absolute;top:2px;left:'+(on?'22px':'2px')+';width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s"></span></span>';
   let h='';
-  try{var ist=S.injectStatus||{};var ta=ist.tunnelAlive;var tla=ist.tunnelLastAlive;var tlStr=tla?new Date(tla).toLocaleTimeString():'—';var upH=ist.uptime?Math.floor(ist.uptime/3600)+'h'+Math.floor((ist.uptime%3600)/60)+'m':'—';var inj=S.inject||{};var kC=(inj.knowledge||0);var pC=(inj.playbook||0);var sC=(inj.secret||0);var gC=(inj.git||0);var injT=inj.timestamp?new Date(inj.timestamp).toLocaleTimeString():'—';h+='<div class="card" style="margin-bottom:12px;border-left:3px solid '+(ta?'var(--success)':'var(--danger,#e55)')+'"><div class="cr"><span class="l">隧道状态</span><span class="v" style="color:'+(ta?'var(--success)':'var(--danger,#e55)')+'">●'+(ta?' 在线':' 离线')+'</span></div>'+(ist.tunnelUrl?'<div class="cr"><span class="l">URL</span><span class="v" style="font-size:10px;word-break:break-all">'+esc(ist.tunnelUrl)+'</span></div>':'')+'<div class="cr"><span class="l">本地端口</span><span class="v">:'+(ist.localPort||9920)+'</span></div><div class="cr"><span class="l">探活失败</span><span class="v">'+(ist.tunnelFails||0)+'</span></div><div class="cr"><span class="l">上次探活</span><span class="v">'+tlStr+'</span></div><div class="cr"><span class="l">上次注入</span><span class="v">'+injT+'</span></div><div class="cr"><span class="l">注入内容</span><span class="v">K:'+kC+' P:'+pC+' S:'+sC+' G:'+gC+'</span></div><div class="cr"><span class="l">运行时长</span><span class="v">'+upH+'</span></div><div style="padding:6px 0"><button class="btn sm primary" onclick="V.postMessage({command:&#39;injectDiagnose&#39;})" style="width:100%">🔧 一键诊断修复</button></div></div>';}catch(e){h+='';}
+  try{var ist=S.injectStatus||{};var ta=ist.tunnelAlive;var tla=ist.tunnelLastAlive;var tlStr=tla?new Date(tla).toLocaleTimeString():'—';var upH=ist.uptime?Math.floor(ist.uptime/3600)+'h'+Math.floor((ist.uptime%3600)/60)+'m':'—';var inj=S.inject||{};var kC=(inj.knowledge||0);var pC=(inj.playbook||0);var sC=(inj.secret||0);var gC=(inj.git||0);var injT=inj.timestamp?new Date(inj.timestamp).toLocaleTimeString():'—';
+  // 双通道内网穿透状态(反向注入专用·同步内网穿透板块两条通道): 快速通道 + 持久 Worker 各自健康/角色。
+  var ch=ist.channels||{};var qk=ch.quick||{};var wk=ch.worker||{};var actC=ist.activeChannel||'';
+  var lrStr=ist.lastRefresh?new Date(ist.lastRefresh).toLocaleTimeString():'—';
+  var chRow=function(name,icon,c,isActive){var al=!!c.alive;var badge=isActive?'<span style="font-size:9px;background:var(--success);color:#fff;border-radius:3px;padding:0 4px;margin-left:5px">主</span>':(c.url?'<span style="font-size:9px;background:var(--muted);color:#fff;border-radius:3px;padding:0 4px;margin-left:5px">备</span>':'');return '<div class="cr" style="border-top:1px solid var(--border,#222);padding-top:5px"><span class="l">'+icon+' '+name+badge+'</span><span class="v" style="color:'+(al?'var(--success)':'var(--danger,#e55)')+'">●'+(al?' 在线':(c.url?' 离线':' 未配置'))+'</span></div>'+(c.url?'<div class="cr"><span class="l" style="font-size:10px;color:var(--muted)">URL</span><span class="v" style="font-size:10px;word-break:break-all">'+esc(c.url)+'</span></div>':'');};
+  h+='<div class="card" style="margin-bottom:12px;border-left:3px solid '+(ta?'var(--success)':'var(--danger,#e55)')+'"><div class="cr"><span class="l">内网穿透 · 双通道</span><span class="v" style="color:'+(ta?'var(--success)':'var(--danger,#e55)')+'">●'+(ta?' 在线':' 全部离线')+'</span></div>'
+    +chRow('快速通道 (CloudFlare)','⚡',qk,actC==='quick')
+    +chRow('持久 Worker 中继','🛰️',wk,actC==='worker')
+    +'<div class="cr" style="border-top:1px solid var(--border,#222);padding-top:5px"><span class="l">本地端口</span><span class="v">:'+(ist.localPort||9920)+'</span></div><div class="cr"><span class="l">探活失败</span><span class="v">'+(ist.tunnelFails||0)+'</span></div><div class="cr"><span class="l">上次探活</span><span class="v">'+tlStr+'</span></div><div class="cr"><span class="l">上次刷新</span><span class="v">'+lrStr+'</span></div><div class="cr"><span class="l">上次注入</span><span class="v">'+injT+'</span></div><div class="cr"><span class="l">注入内容</span><span class="v">K:'+kC+' P:'+pC+' S:'+sC+' G:'+gC+'</span></div><div class="cr"><span class="l">运行时长</span><span class="v">'+upH+'</span></div>'
+    +'<div class="br" style="padding:6px 0"><button class="btn sm" onclick="cmd(&#39;getInjectProfile&#39;)" title="重新探活两条通道并刷新状态">⟳ 刷新通道</button><button class="btn sm primary" onclick="V.postMessage({command:&#39;injectDiagnose&#39;})" title="探活失败通道→刷新→通道恢复后重注入全池">🔧 诊断修复 + 重注入</button></div></div>';}catch(e){h+='';}
   h+='<div class="st">反向注入 · 通用自动注入 · 无为而无不为</div>';
   h+='<p style="font-size:11px;color:var(--muted);line-height:1.6;margin:4px 0 10px">通用模块：配置一次，此后账号随 IDE 登录自动切换时，系统按此清单<b>反向注入</b>到每个新账号，并(默认)清理旧账号的同名注入。默认道藏载荷：道法自然准则 · 内网穿透MD · 道德经/阴符经/道法自然 三剧本 · MCP 服务器同步。</p>';
   h+='<div class="card"><div class="cr"><span class="l">启用自动注入</span><span class="v">'+tgl(p.enabled,'ipToggle(&#39;enabled&#39;)')+'</span></div><div class="cr"><span class="l">切账号时清理旧账号</span><span class="v">'+tgl(p.autoCleanup,'ipToggle(&#39;autoCleanup&#39;)')+'</span></div>'+(p.lastInjectedOrg?'<div class="cr"><span class="l">上次注入 org</span><span class="v" style="font-size:10px">'+esc(p.lastInjectedOrg)+'</span></div>':'')+'</div>';
@@ -9371,16 +9387,29 @@ function refreshDaoCloudMiddlePanel() {
             }).catch(() => { _injectStatusProbing = false; });
         }
         // 通道在线 = 快速隧道探活 ∪ 持久 relay(WS 已连即活) — 曾只看隧道探活, 持久通道用户恒被渲成「离线」。
-        let _relayAlive = false; let _relayUrl = '';
-        try { const _rs = bridgeRelayState(); _relayAlive = !!(_rs && _rs.active && (_rs.connected || _rs.healthy)); _relayUrl = (_rs && _rs.url) || ''; } catch { /* 守柔 */ }
+        let _relayAlive = false; let _relayUrl = ''; let _relayHealthy = false;
+        try { const _rs = bridgeRelayState(); _relayAlive = !!(_rs && _rs.active && (_rs.connected || _rs.healthy)); _relayUrl = (_rs && _rs.url) || ''; _relayHealthy = !!(_rs && _rs.healthy); } catch { /* 守柔 */ }
+        // 快速通道(cloudflared quick tunnel)探活: 进程内 bridgeUrl 90s 内探活成功即活。
+        const _quickAlive = _bridgeLastAliveMs > 0 && (Date.now() - _bridgeLastAliveMs) < 90000;
+        // 出站置顶策略(见 connectRelay): 持久 Worker 已登记即置顶接管, 否则走快速通道。active = 实际承载出站的通道。
+        const _activeChannel = _relayAlive ? 'worker' : (_quickAlive ? 'quick' : (_relayUrl ? 'worker' : 'quick'));
         data.injectStatus = {
+            // 兼容旧字段(单通道渲染回退)
             tunnelUrl: bridgeUrl || _relayUrl || '',
-            tunnelAlive: (_bridgeLastAliveMs > 0 && (Date.now() - _bridgeLastAliveMs) < 90000) || _relayAlive,
+            tunnelAlive: _quickAlive || _relayAlive,
             tunnelLastAlive: _bridgeLastAliveMs || 0,
             tunnelFails: _bridgeLivenessFail,
             lastInjectedUrl: _lastInjectedBridgeUrl || '',
             localPort: ws.port || DEFAULT_PORT,
             uptime: process.uptime(),
+            // 双通道明细(反向注入板块专用): 快速通道 + 持久 Worker 各自 URL/健康/角色。
+            channels: {
+                quick: { url: bridgeUrl || '', alive: _quickAlive, lastAlive: _bridgeLastAliveMs || 0, fails: _bridgeLivenessFail },
+                worker: { url: _relayUrl, alive: _relayAlive, healthy: _relayHealthy },
+            },
+            activeChannel: _activeChannel,
+            fallbackChannel: _activeChannel === 'worker' ? 'quick' : 'worker',
+            lastRefresh: Date.now(),
         };
     } catch { data.injectStatus = {}; }
     postMiddle(data);
@@ -9879,7 +9908,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     } catch { /* 守柔 */ }
                     return k;
                 });
-                reply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: knowledgeView, playbooks: p.playbooks, mcps: p.mcps, automations: p.automations, messageLimit: p.messageLimit, messageLimitAuto: p.messageLimitAuto, messageLimitOffset: p.messageLimitOffset, lastInjectedOrg: p.lastInjectedOrg } });
+                // refreshReply: 先重发 init(含双通道 injectStatus 实时探活) 再回 profile → 「⟳ 刷新通道」按钮一键双拉。
+                refreshReply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: knowledgeView, playbooks: p.playbooks, mcps: p.mcps, automations: p.automations, messageLimit: p.messageLimit, messageLimitAuto: p.messageLimitAuto, messageLimitOffset: p.messageLimitOffset, lastInjectedOrg: p.lastInjectedOrg } });
                 break;
             }
             case 'setInjectProfile': {
