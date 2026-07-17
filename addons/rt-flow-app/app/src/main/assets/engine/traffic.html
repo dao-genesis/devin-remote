@@ -149,8 +149,9 @@ h2{font-size:17px;margin:0 0 10px;color:#58a6ff}
   if(!pref.resetAt) { pref.resetAt = Date.now(); pref.rxAll = 0; pref.txAll = 0; savePref(pref); }
 
   var rxBase = 0, txBase = 0;
+  var hasNative = !!(N && N.getTrafficStats);
   function getTraffic(){
-    if(N && N.getTrafficStats){
+    if(hasNative){
       try{
         var j = JSON.parse(N.getTrafficStats());
         return { rx: j.rx||0, tx: j.tx||0, type: j.type||"unknown", metered: j.metered===true };
@@ -158,6 +159,20 @@ h2{font-size:17px;margin:0 0 10px;color:#58a6ff}
     }
     var rx = window.performance ? (performance.getEntriesByType("resource")||[]).reduce(function(a,e){ return a+(e.transferSize||0); },0) : 0;
     return { rx: rx, tx: Math.floor(rx*0.05), type: navigator.onLine ? (navigator.connection && navigator.connection.type === "cellular" ? "mobile":"wifi") : "offline" };
+  }
+  // 累计口径补齐: TrafficStats 是 UID 级「开机以来」单调计数器, 据此跨面板开关追平 —
+  //   面板关闭期间的消耗 = 当前读数 − 上次落盘快照(同一次开机内); 读数变小 = 已重启 → 计入本次开机至今。
+  //   仅原生计数器可跨页追平; 纯网页回退(performance 条目)为页级, 不做追平。
+  function catchUp(snap){
+    if(!hasNative) return;
+    if(typeof pref.snapRx === "number" && typeof pref.snapTx === "number"){
+      var dRx = snap.rx >= pref.snapRx ? snap.rx - pref.snapRx : snap.rx;
+      var dTx = snap.tx >= pref.snapTx ? snap.tx - pref.snapTx : snap.tx;
+      pref.rxAll = (pref.rxAll||0) + dRx;
+      pref.txAll = (pref.txAll||0) + dTx;
+    }
+    pref.snapRx = snap.rx; pref.snapTx = snap.tx;
+    savePref(pref);
   }
 
   function setNetBadge(type, metered){
@@ -171,6 +186,7 @@ h2{font-size:17px;margin:0 0 10px;color:#58a6ff}
 
   var prevSnap = getTraffic();
   rxBase = prevSnap.rx; txBase = prevSnap.tx;
+  catchUp(prevSnap);
 
   function refresh(){
     var snap = getTraffic();
@@ -187,9 +203,11 @@ h2{font-size:17px;margin:0 0 10px;color:#58a6ff}
     setNetBadge(snap.type, snap.metered);
 
     var deltaRx = snap.rx - prevSnap.rx, deltaTx = snap.tx - prevSnap.tx;
-    if(deltaRx<0) deltaRx=0; if(deltaTx<0) deltaTx=0;
+    if(deltaRx<0){ deltaRx = snap.rx; }  // 计数器变小 = 已重启 → 计本次开机至今
+    if(deltaTx<0){ deltaTx = snap.tx; }
     pref.rxAll = (pref.rxAll||0) + deltaRx;
     pref.txAll = (pref.txAll||0) + deltaTx;
+    if(hasNative){ pref.snapRx = snap.rx; pref.snapTx = snap.tx; }
     prevSnap = snap;
 
     document.getElementById("rxAll").textContent = fmt(pref.rxAll);
@@ -204,7 +222,10 @@ h2{font-size:17px;margin:0 0 10px;color:#58a6ff}
   }
 
   document.getElementById("resetBtn").onclick = function(){
-    pref.rxAll = 0; pref.txAll = 0; pref.resetAt = Date.now(); savePref(pref); refresh();
+    pref.rxAll = 0; pref.txAll = 0; pref.resetAt = Date.now();
+    var s = getTraffic();
+    if(hasNative){ pref.snapRx = s.rx; pref.snapTx = s.tx; }
+    savePref(pref); refresh();
   };
 
   var lowData = document.getElementById("lowDataToggle");

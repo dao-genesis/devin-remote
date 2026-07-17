@@ -14174,6 +14174,18 @@ async function devinSetMessageLimit(orgId: string, maxCredits: number, auth1: st
 //   实测本号池(pro-trial·订阅已取消)真实余额恒在 overage_credits, 其余三者皆 0 → 旧版只读 stats 永远取 0 → cap 被钉 1
 //   (即「$69 余额却上限 $1」之根因)。故四者取最大为「余额」; 全 0 或负(欠费)→ 收敛为 0 → cap=1。
 //   守柔: 两端点皆未给出任一有效数字字段才返回 null(跳过管理, 不误改)。
+//
+// overage_credits 双符号实证归一(正本清源·根治「有 $60-70 余额却被限 $4」):
+//   本仓两处实测记录并存 — ① 正值=可用余额(rioskolton: overage_credits=+33.27·changelog v4.4.1);
+//   ② 负值=以负号记账的「Remaining balance」(v3.0 _tryDevinBillingFallback 实证: overage_credits<0 且
+//   billing_error 为空 = 有实际额度, 幅值即美金)。旧法把原值直接进 max() → 负值账态的真实余额被当最小值
+//   丢弃, 残余小额字段(如 available_acus≈7)接管 → cap=7−3=4, 「$4」在满额账号上诡异复现。
+//   归一: 幅值即余额 — 负值仅当伴 billing_error(真欠费)才计 0。
+function overageBalance(oc: any, billingError: any): number {
+    if (typeof oc !== 'number' || !isFinite(oc)) return 0;
+    if (oc < 0) return billingError ? 0 : -oc;
+    return oc;
+}
 async function devinFetchAvailableAcus(orgId: string, auth1: string): Promise<number | null> {
     return (await devinFetchAvailDetail(orgId, auth1)).best;
 }
@@ -14190,7 +14202,16 @@ async function devinFetchAvailDetail(orgId: string, auth1: string): Promise<{ be
     } catch { /* 守柔 */ }
     try {
         const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/status', h);
-        if (r.status === 200 && r.json) { take('available_credits', r.json.available_credits); take('overage_credits', r.json.overage_credits); }
+        if (r.status === 200 && r.json) {
+            take('available_credits', r.json.available_credits);
+            const oc = r.json.overage_credits;
+            if (typeof oc === 'number' && isFinite(oc)) {
+                fields['overage_credits'] = oc;  // 原值(可负)·供 limit-probe 透视
+                const ob = overageBalance(oc, r.json.billing_error);
+                fields['overage_balance'] = ob;
+                best = (best === null) ? ob : Math.max(best, ob);
+            }
+        }
     } catch { /* 守柔 */ }
     return { best, fields };
 }
@@ -18174,6 +18195,7 @@ if (process.env.DAO_SELFTEST === '1') {
         bridgeReadPublishedToken,
         daoHeadlessExec,
         quotaCapFromAvail,
+        overageBalance,
         setState(s: { ws?: any; bridgeUrl?: string; bridgeToken?: string }) {
             if (s.ws) ws = s.ws;
             if (typeof s.bridgeUrl === 'string') bridgeUrl = s.bridgeUrl;

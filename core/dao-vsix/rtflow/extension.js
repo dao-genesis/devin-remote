@@ -9694,12 +9694,11 @@ async function _tryDevinBillingFallback(auth1) {
     } catch {
       return null;
     }
-    // overage_credits < 0 且无 billing_error → 有实际额度
-    const hasFunds =
-      typeof j.overage_credits === "number" &&
-      j.overage_credits < 0 &&
-      !j.billing_error;
-    const dollarAmt = hasFunds ? Math.abs(j.overage_credits) : 0;
+    // overage_credits 双符号实证归一(与 devin_cloud.overageBalance 同源):
+    //   负值且无 billing_error = 以负号记账的剩余余额(v3.0 实证); 正值 = 可用余额(rioskolton +33.27 实证)。
+    //   旧法只认负值 → 正值账态的满额号被误判 $0。幅值即余额, 负值仅伴 billing_error(真欠费)才计 0。
+    const dollarAmt = devinCloud.overageBalance(j.overage_credits, j.billing_error);
+    const hasFunds = dollarAmt > 0;
     return {
       checked: true,
       plan: "Trial", // billing API 不返 plan 名称 · 保守设 Trial
