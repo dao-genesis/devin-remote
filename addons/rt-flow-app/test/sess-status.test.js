@@ -430,9 +430,9 @@ ok(/CMDS\.trackStuck\(\{ watchSids: Object\.keys\(_pv\), priorityEmails: Object\
    "源级: tick 把上轮 sid 集作为 watchSids 传入 trackStuck(并附上轮账号优先扫描)");
 ok(/\(r\.scanned\|\|\[\]\)\.forEach\(function\(e\)\{ scanned\[String\(e\)\.toLowerCase\(\)\]=1; \}\)/.test(engineSrc),
    "源级: tick 提取 r.scanned 成功账号集(门控结束判定)");
-// 新对话/续跑/新内容 → 仅追踪+标签变绿·不发消息提示(用户要求·静默)。next[sid] 登记状态供金库/网页镜像。
-ok(/next\[sid\] = \{ phase: c\.phase, title: c\.title, email: c\.email, ts: now, msgId: c\.msgId, reason: c\.reason \}/.test(engineSrc),
-   "源级: tick 仍登记 next[sid] 状态(驱动标签变绿·与通知解耦)");
+// 新对话/续跑 → 仅追踪+标签变绿·不发提示; 未读新消息(unread+msgId 跃迁)才微信式弹一次(notify-dedup.test 专测)。
+ok(/next\[sid\] = \{ phase: c\.phase, title: c\.title, email: c\.email, ts: now, msgId: c\.msgId, reason: c\.reason, unread: !!c\.unread \}/.test(engineSrc),
+   "源级: tick 仍登记 next[sid] 状态(含 unread·驱动标签变绿·与通知解耦)");
 ok(!/🆕 新对话/.test(engineSrc),
    "源级: 新对话静默·不发 🆕 通知(用户要求·只追踪+变绿)");
 ok(!/🟢 对话继续/.test(engineSrc),

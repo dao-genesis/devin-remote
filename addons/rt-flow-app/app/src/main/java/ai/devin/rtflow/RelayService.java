@@ -36,8 +36,9 @@ public class RelayService extends Service {
     // 对话追踪·全局通知频道。⚠️ Android 通知渠道「不可变」: 渠道一旦创建, 其 importance/震动/铃声
     //   无法再被代码升级 (只有用户能在系统设置里改)。早期版本若以低优先级首建了 rtflow-conv,
     //   后续即便写 IMPORTANCE_HIGH 也不弹横幅/不震动。故升 id → 强制重建为 HIGH 渠道, 绕开旧缓存。
-    public static final String CONV_CH = "rtflow-conv-hi2";   // 对话追踪·全局通知频道 (高优先·弹窗 heads-up·震动·锁屏可见)
+    public static final String CONV_CH = "rtflow-conv-hi3";   // 对话追踪·全局通知频道 (高优先·弹窗 heads-up·震动·锁屏可见)
     public static final String CONV_CH_OLD = "rtflow-conv";   // 旧渠道 (低优先残留) — 启动时清除, 防双份/旧设置干扰
+    public static final String CONV_CH_OLD2 = "rtflow-conv-hi2";   // 旧高优渠道 — 若在设备上被降级为静默则无法程序恢复, 一并清除重建
     public static volatile String lastStatus = "{\"connected\":false}";
     public static volatile RelayService instance;
 
@@ -2058,6 +2059,7 @@ public class RelayService extends Service {
             if (Build.VERSION.SDK_INT >= 26) {
                 // 旧低优先渠道清除 (不影响新 id 渠道; 仅去除残留的静默条目)。
                 try { nm.deleteNotificationChannel(CONV_CH_OLD); } catch (Exception ignore) {}
+                try { nm.deleteNotificationChannel(CONV_CH_OLD2); } catch (Exception ignore) {}
                 NotificationChannel ch = new NotificationChannel(CONV_CH, "对话追踪提醒", NotificationManager.IMPORTANCE_HIGH);
                 ch.setDescription("会话卡住/待处理/额度/结束提醒 — 弹窗横幅 + 震动");
                 ch.setShowBadge(true);
