@@ -27,43 +27,49 @@ ok((engineSrc.match(/if \(!alertedOnce\(led, sid, "end", now\)\) return;/g)||[])
    "源级: 终态(已挂起/已完成等)与兜底已结束均经 alertedOnce(sid|end) 去重");
 ok(/function cancelNotify\(tag\)\{ try \{ if \(N\.cancelConv\) N\.cancelConv\(String\(tag\)\); \} catch\(e\)\{\} \}/.test(engineSrc),
    "源级: engine 具 cancelNotify → 原生 N.cancelConv(状态解除撤通知)");
-ok(/if \(!c\.unread && \(hadStuck \|\| \(p && p\.unread\)\)\) cancelNotify\("conv-" \+ sid\);/.test(engineSrc),
-   "源级: 会话重新活跃且已读 → 剪账本 + 主动撤通知; 未读新消息的横幅保留待用户处理");
-ok(/if \(ma\.fire\) notify\("conv-" \+ sid, "\ud83d\udcac " \+ c\.title/.test(engineSrc),
-   "源级: 微信式新消息横幅 — unread+msgId 跃迁才弹, 走原生 HIGH 渠道(heads-up+震动)");
-ok(/next\[sid\]\.notifiedMsgId = c\.msgId;   \/\/ 本条卡住通知已覆盖此消息/.test(engineSrc),
-   "源级: 卡住通知与消息横幅同条消息不双发(卡住已报即记账)");
+ok(/if \(c\.phase === "active"\) \{\s*\n\s*if \(alertedClear\(led, sid, ""\)\) \{ ledCh = true; cancelNotify\("conv-" \+ sid\); \}/.test(engineSrc),
+   "源级: 会话重新活跃 → 剪账本 + 主动撤掉栏中残留的卡住通知");
+// 用户要求(本轮): 彻底移除「微信式新消息横幅」——不存在「有新消息就弹」, 只在 卡住/待处理/等待输入 与 结束 时提示。
+ok(!/\ud83d\udcac " \+ c\.title/.test(engineSrc) && !/有新消息 · 点开即回/.test(engineSrc),
+   "源级: 已无微信式新消息横幅(💬 有新消息) —— 用户发消息/运行中新消息不再弹");
+ok(!/function msgAlertDecide/.test(engineSrc) && !/\bma\.fire\b/.test(engineSrc),
+   "源级: msgAlertDecide 新消息判定已整体移除(无残留引用)");
 ok(/function alertedPrune\(led, now\)/.test(engineSrc) && /30\*864e5/.test(engineSrc),
    "源级: 账本 30 天自然过期防无限增长");
 ok(!/QUOTA_THROTTLE/.test(engineSrc),
    "源级: quotaWatch 已无 30min 超窗定时重推(同一耗尽状态绝不重刷)");
 
-// ── 功能实测: msgAlertDecide (微信式新消息判定·纯函数) ──
+// ── 功能实测: 只在卡住/终态提示·新消息静默 (抽出 _convTrack 跃迁体, mock notify/cancelNotify) ──
+//   验证用户要求: 会话进入 stuck 弹一次; 保持运行/新消息(unread) 一律不弹。
 {
-  const mseg = engineSrc.match(/function msgAlertDecide\(c, p, coldStart\)\{[\s\S]*?\n    \}/);
-  ok(!!mseg, "源级: engine 具 msgAlertDecide 纯函数");
-  const dec = new Function(mseg[0] + "\n return msgAlertDecide;")();
-  // 新未读消息 → 弹一次
-  let r = dec({ phase:"active", msgId:"m1", unread:true }, { notifiedMsgId:"m0" }, false);
-  ok(r.fire === true && r.mid === "m1", "新未读消息(msgId 跃迁) → 弹一次并记账");
-  // 同一条消息再次轮询 → 绝不重弹
-  r = dec({ phase:"active", msgId:"m1", unread:true }, { notifiedMsgId:"m1" }, false);
-  ok(r.fire === false && r.mid === "m1", "同一条消息再轮询/重连/重载 → 绝不重弹");
-  // 又来一条新消息 → 再弹一次
-  r = dec({ phase:"stuck", msgId:"m2", unread:true }, { notifiedMsgId:"m1" }, false);
-  ok(r.fire === true && r.mid === "m2", "同会话又来新消息 → 再弹一次(该提必提)");
-  // 冷启只播种不刷屏
-  r = dec({ phase:"active", msgId:"m9", unread:true }, undefined, true);
-  ok(r.fire === false && r.mid === "m9", "冷启(prev 空) → 只播种不刷屏");
-  // 已读 → 不弹且播种为已提示
-  r = dec({ phase:"active", msgId:"m3", unread:false }, { notifiedMsgId:"m1" }, false);
-  ok(r.fire === false && r.mid === "m3", "已读(unread=false) → 静默播种(视为已消费)");
-  // quota 会话不走消息横幅
-  r = dec({ phase:"quota", msgId:"m4", unread:true }, { notifiedMsgId:"m1" }, false);
-  ok(r.fire === false && r.mid === "m1", "quota 会话 → 不走消息横幅(额度轨专管)");
-  // 无 msgId → 不弹
-  r = dec({ phase:"active", msgId:"", unread:true }, { notifiedMsgId:"m1" }, false);
-  ok(r.fire === false && r.mid === "m1", "无稳定消息 id → 不弹(宁静勿误)");
+  const seg = engineSrc.match(/Object\.keys\(cur\)\.forEach\(function\(sid\)\{[\s\S]*?\n      \}\);/);
+  ok(!!seg, "源级: engine 具 cur 跃迁循环体");
+  function runTrans(curMap, prevMap) {
+    const notifs = [], cancels = [];
+    const led = {}; let ledCh = false; const next = {};
+    const now = Date.now();
+    const notify = (tag, title) => notifs.push({ tag, title });
+    const cancelNotify = (tag) => cancels.push(tag);
+    const alertedOnce = (l, sid, kind) => { const k = sid + "|" + kind; if (l[k]) return false; l[k] = now; return true; };
+    const alertedClear = (l, sid, prefix) => { let ch = false; Object.keys(l).forEach(k => { if (k.indexOf(sid + "|" + prefix) === 0) { delete l[k]; ch = true; } }); return ch; };
+    const cur = curMap, prev = prevMap;
+    const fn = new Function("cur","prev","next","led","now","notify","cancelNotify","alertedOnce","alertedClear", "var ledCh=false;\n" + seg[0]);
+    fn(cur, prev, next, led, now, notify, cancelNotify, alertedOnce, alertedClear);
+    return { notifs, cancels, next };
+  }
+  // 新未读消息(纯运行) → 不弹
+  let r = runTrans({ s1:{ phase:"active", title:"A", email:"a@x", msgId:"m1", unread:true } }, {});
+  ok(r.notifs.length === 0, "纯运行有未读新消息 → 不弹(用户发消息/新消息静默)");
+  // 首次进入卡住 → 弹一次
+  r = runTrans({ s2:{ phase:"stuck", title:"B", email:"b@x", reason:"blocked", msgId:"m2", unread:true } }, {});
+  ok(r.notifs.length === 1 && /卡住/.test(r.notifs[0].title), "首次进入卡住 → 弹一次");
+  // 卡住态未变 → 不重弹
+  r = runTrans({ s2:{ phase:"stuck", title:"B", email:"b@x", reason:"blocked", msgId:"m2", unread:true } }, { s2:{ phase:"stuck", reason:"blocked" } });
+  ok(r.notifs.length === 0, "卡住态未变(上轮已 stuck) → 不重弹");
+  // 卡住→重新活跃 → 撤掉旧卡住通知
+  r = runTrans({ s3:{ phase:"active", title:"C", email:"c@x", msgId:"m3", unread:false } }, {});
+  // 上轮已报过 stuck 的场景需账本预置, 此处仅验证 active 不弹新通知
+  ok(r.notifs.length === 0, "重新活跃 → 不弹新通知");
 }
 
 // ── switch.html 源级护栏: 切号板只展示状态·不再自行发通知 ──

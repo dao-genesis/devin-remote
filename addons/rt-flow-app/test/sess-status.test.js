@@ -424,13 +424,13 @@ ok(/return \{ok:true, count:hits\.length, actionRequired:need\.length, needAtten
    "源级: trackStuck 返回 sessions + ended + scanned");
 
 // ── 源级护栏: tick 闭环 (新对话/新内容/精确终态/扫描门控) ──
-ok(/var coldStart = !prev \|\| !Object\.keys\(prev\)\.length/.test(engineSrc),
-   "源级: tick 冷启判定(prev 空只播种·不刷屏「新对话」)");
+ok(!/coldStart/.test(engineSrc),
+   "源级: 冷启播种判定已随新消息横幅一并移除(无残留 coldStart)");
 ok(/CMDS\.trackStuck\(\{ watchSids: Object\.keys\(_pv\), priorityEmails: Object\.keys\(_pe\) \}\)/.test(engineSrc),
    "源级: tick 把上轮 sid 集作为 watchSids 传入 trackStuck(并附上轮账号优先扫描)");
 ok(/\(r\.scanned\|\|\[\]\)\.forEach\(function\(e\)\{ scanned\[String\(e\)\.toLowerCase\(\)\]=1; \}\)/.test(engineSrc),
    "源级: tick 提取 r.scanned 成功账号集(门控结束判定)");
-// 新对话/续跑 → 仅追踪+标签变绿·不发提示; 未读新消息(unread+msgId 跃迁)才微信式弹一次(notify-dedup.test 专测)。
+// 新对话/续跑/新消息 → 仅追踪+标签变绿·一律不发提示(只卡住/终态才弹·notify-dedup.test 专测)。
 ok(/next\[sid\] = \{ phase: c\.phase, title: c\.title, email: c\.email, ts: now, msgId: c\.msgId, reason: c\.reason, unread: !!c\.unread \}/.test(engineSrc),
    "源级: tick 仍登记 next[sid] 状态(含 unread·驱动标签变绿·与通知解耦)");
 ok(!/🆕 新对话/.test(engineSrc),
