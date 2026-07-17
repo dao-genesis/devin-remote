@@ -17826,7 +17826,15 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
         const u = new URL(targetUrl);
         // 道·直连优先 + 代理兜底: 未被墙站(app.devin.ai 等)直连最快(实测 ~0.3s), 经 Clash 反而 3.7~7.9s 冷开白屏;
         //   仅当直连被 RST/超时(GFW) 才回退本机代理隧道。与 genericWebProxy/#4 同策。两向各只试一次, 不空转。
-        let _triedProxy = false, _triedDirect = false, _attRetried = false;
+        let _triedProxy = false, _triedDirect = false, _attRetried = false, _freshRetries = 0;
+        const pageGet = (req.method || 'GET').toUpperCase() === 'GET' && isPageRequest;
+        const retryFreshDirect = () => {
+            if (!pageGet || _freshRetries >= 3) return false;
+            const retryNo = ++_freshRetries;
+            const delayMs = retryNo === 1 ? 500 : retryNo === 2 ? 1000 : 2000;
+            setTimeout(() => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, fwdHeaders, false), delayMs);
+            return true;
+        };
 
         const makeRequest = (hostname: string, port: number, reqPath: string, h: any, isProxyTunnel: boolean = false) => {
             const options: any = {
@@ -17836,7 +17844,7 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                 timeout: 15000,
             };
             if (!isProxyTunnel) options.rejectUnauthorized = false;
-            options.agent = isProxyTunnel ? upstreamHttpAgent : upstreamHttpsAgent;
+            options.agent = isProxyTunnel ? upstreamHttpAgent : (pageGet ? false : upstreamHttpsAgent);
             // 代理隧道用http.request(127.0.0.1不是TLS!)，直连用https.request
             const proxyReq = (isProxyTunnel ? http.request : https.request)(options, (proxyRes: any) => {
                 // 缺陷4修复: 处理3xx重定向 — 改写Location头指向代理
@@ -17970,8 +17978,10 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         } catch { /* 守柔: 重铸失败则按原响应继续 */ }
                     }
                     const rawBody = Buffer.concat(chunks);
+                    const statusCode = proxyRes.statusCode || 200;
+                    if ((statusCode === 502 || statusCode === 503 || statusCode === 504) && retryFreshDirect()) return;
                     // localBase 已在函数顶部按访问者来源(本地/公网隧道)归一计算, 此处复用
-                    const okCache = isImmutableAsset && proxyRes.statusCode === 200;
+                    const okCache = isImmutableAsset && statusCode === 200;
 
                     // 道·「不言之教·无为之益」— 解压改异步, 移出扩展宿主事件循环
                     //   原 gunzipSync/brotliDecompressSync 对数 MB bundle 同步阻塞主线程
@@ -18244,7 +18254,8 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
             });
 
             const _fallback = (errLabel?: string) => {
-                // 直连失败(GFW RST/超时) → 有本机代理则改走代理兜底; 代理失败 → 降级直连。互为兜底, 各只一次。
+                // 直连失败(GFW RST/超时) → 页面导航先换新 socket 分级重试; 仍失败再走代理兜底。
+                if (retryFreshDirect()) return true;
                 if (!isProxyTunnel && detectedProxyPort > 0 && !_triedProxy) {
                     _triedProxy = true;
                     makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, fwdHeaders, { Host: u.hostname }), true);
