@@ -118,8 +118,8 @@ var _libByKey={};   // 活跃账号库: email/id(lower) -> {acc,no}
 function _buildLib(){
   _libByKey={}; var arr=[]; try{ arr=DaoCore.loadAcc()||[]; }catch(e){}
   arr.forEach(function(a,i){
-    if(a.email) _libByKey[String(a.email).toLowerCase()]={acc:a,no:i+1};
-    if(a.id)    _libByKey[String(a.id).toLowerCase()]={acc:a,no:i+1};
+    if(a.email) _libByKey[String(a.email).toLowerCase()]={acc:a,no:a.no||i+1};
+    if(a.id)    _libByKey[String(a.id).toLowerCase()]={acc:a,no:a.no||i+1};
   });
   return arr;
 }
@@ -171,7 +171,7 @@ function loadGroups(){
     sessions.forEach(function(s){ var bt=Math.max(s.backedUpAt||0, s.ts||0); if(bt>tAny){tAny=bt;sAny=s;} if(!_isAutoConv(s.title||s.sid)&&bt>tHuman){tHuman=bt;sHuman=s;} });
     var t=tHuman||tAny||(rm?rm.removedAt:0)||(hit&&hit.acc&&(hit.acc.lastActiveAt||hit.acc.addedAt))||0;
     var allAuto=sessions.length>0 && sessions.every(function(s){return _isAutoConv(s.title||s.sid);});
-    _groups.push({folder:folder,email:email,no:hit?hit.no:0,acc:hit?hit.acc:(rm?rm.account:null),
+    _groups.push({folder:folder,email:email,no:hit?hit.no:((rm&&rm.account&&rm.account.no)||0),acc:hit?hit.acc:(rm?rm.account:null),
       logged:!!(hit&&hit.acc&&hit.acc.auth1&&hit.acc.orgId),removed:removed,removedAt:rm?rm.removedAt:0,
       sessions:sessions,t:t,allAuto:allAuto,recent:sHuman||sAny,recentIsHuman:!!sHuman});
     if(key)seen[key]=1; seen[String(folder).toLowerCase()]=1;
@@ -182,13 +182,13 @@ function loadGroups(){
       var rec=null; try{ rec=JSON.parse(N.vaultReadBackup("_移出总账",n)||""); }catch(e){}
       if(!rec||!rec.account) return; var em=rec.account.email||rec.account.id||n, k=String(em).toLowerCase();
       if(seen[k]){ for(var i=0;i<_groups.length;i++){ if(String(_groups[i].email).toLowerCase()===k){ _groups[i].removed=true; if(!_groups[i].removedAt)_groups[i].removedAt=rec.removedAt||0; if(!_groups[i].t)_groups[i].t=rec.removedAt||0; break; } } return; }
-      _groups.push({folder:rec.folder||"_移出总账",email:em,no:0,acc:rec.account,logged:false,removed:true,removedAt:rec.removedAt||0,sessions:[],t:rec.removedAt||0,allAuto:false}); seen[k]=1;
+      _groups.push({folder:rec.folder||"_移出总账",email:em,no:(rec.account&&rec.account.no)||0,acc:rec.account,logged:false,removed:true,removedAt:rec.removedAt||0,sessions:[],t:rec.removedAt||0,allAuto:false}); seen[k]=1;
     });
   } }catch(e){}
   // 账号库中「尚无备份夹」的活跃账号并入 → 活跃号绝不遗漏
   libArr.forEach(function(a,i){ var k=String(a.email||"").toLowerCase(), k2=String(a.id||"").toLowerCase();
     if((k&&seen[k])||(k2&&seen[k2])) return;
-    _groups.push({folder:"",email:a.email||a.id||("acc"+(i+1)),no:i+1,acc:a,logged:!!(a.auth1&&a.orgId),removed:false,removedAt:0,sessions:[],t:(a.lastActiveAt||a.addedAt||0),allAuto:false});
+    _groups.push({folder:"",email:a.email||a.id||("acc"+(a.no||i+1)),no:a.no||i+1,acc:a,logged:!!(a.auth1&&a.orgId),removed:false,removedAt:0,sessions:[],t:(a.lastActiveAt||a.addedAt||0),allAuto:false});
     if(k)seen[k]=1; if(k2)seen[k2]=1;
   });
   // 近期活跃时序降序; 自动化-only 账号一律下沉(不删); 同档按序号靠前
@@ -250,7 +250,7 @@ function renderAccts(){
   var html=_view.slice(0,LIM).map(function(g,i){
     var name=g.email||g.folder||("acc"+(g.no||i));
     var pw=(g.acc&&g.acc.password)||"";
-    var noHtml=g.no?('<span class="acc-no">'+g.no+'</span>'):'<span class="acc-no rm">移</span>';
+    var noHtml=g.no?('<span class="acc-no'+(g.removed?' rm':'')+'" title="'+(g.removed?'移出前永久编号 '+g.no:'永久编号 '+g.no)+'">'+g.no+'</span>'):'<span class="acc-no rm">移</span>';
     var tags='';
     if(g.removed) tags+=' <span class="tag rm">已移出库'+(g.removedAt?('·'+new Date(g.removedAt).toLocaleDateString()):'')+'</span>';
     if(g.allAuto) tags+=' <span class="tag auto">自动化</span>';

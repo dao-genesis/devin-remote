@@ -1910,7 +1910,7 @@ public class MainActivity extends AppCompatActivity {
                 // 标签标题优先显示该账号最活跃对话名 + 实时状态点 (运行/卡顿/结束)
                 String emailLc = email.toLowerCase();
                 // 最左账号池序号【N】(切号板块列表同序·紧凑小占位)
-                // 序号真源 = 切号板块账号池当前排序(sAcctNo·随出入库实时同步); accountJson 里的 no 是开标签
+                // 序号真源 = 账号池稳定永久编号(sAcctNo·号入库即领号·他号出库绝不平移); accountJson 里的 no 是开标签
                 // 时的陈旧快照, 只作兜底 —— 否则他号出库后序号平移, 页签仍显旧序号。
                 Integer no = sAcctNo.get(id.toLowerCase());
                 if (no == null) no = sAcctNo.get(emailLc);
@@ -2188,7 +2188,8 @@ public class MainActivity extends AppCompatActivity {
         if (sw == null) return;
         String js = "(function(){try{var a=JSON.parse(localStorage.getItem('rtflow.accounts')||'[]');var o={};"
             + "for(var i=0;i<a.length;i++){var k=(a[i].id||'').toLowerCase(),e=(a[i].email||'').toLowerCase();"
-            + "if(k)o[k]=i+1;if(e)o[e]=i+1;}return JSON.stringify(o);}catch(x){return '{}';}})()";
+            + "var n=(typeof a[i].no==='number'&&a[i].no>0)?a[i].no:(i+1);"
+            + "if(k)o[k]=n;if(e)o[e]=n;}return JSON.stringify(o);}catch(x){return '{}';}})()";
         try {
             sw.evaluateJavascript(js, val -> {
                 try {
@@ -6575,7 +6576,7 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
     /** 对话落地文件名统一口径: 「序号_对话名_账号_密码」—— 凡 APK 内产出的对话记录 MD/ZIP 皆用此名。
-     *  序号取账号池当前排序(sAcctNo·随出入库实时同步), accJson 里的陈旧 no 仅作兜底;
+     *  序号取账号池稳定永久编号(sAcctNo·号入库即领号·出库不平移不复用), accJson 里的 no 仅作兜底;
      *  对话名缺失时退回 sid; 邮箱/密码缺失则略过该段。 */
     private String convFileBase(String accJson, String sid, String title) {
         String email = "", password = "", id = ""; Integer no = null;
