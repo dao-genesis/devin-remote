@@ -392,6 +392,20 @@ public class TabActivity extends AppCompatActivity {
             // fetch/XHR 强制注入鉴权头 (= DNR 等价物)
             "function isApi(u){try{return /app\\.devin\\.ai\\/api\\//.test(u)||u.indexOf('/api/')===0;}catch(e){return false;}}" +
             "var of=window.fetch;window.fetch=function(input,init){try{var url=(typeof input==='string')?input:(input&&input.url)||'';if(__a1&&isApi(url)){init=init||{};var h=new Headers(init.headers||(typeof input!=='string'&&input.headers)||{});if(!h.has('Authorization'))h.set('Authorization','Bearer '+__a1);if(__org&&!h.has('x-cog-org-id'))h.set('x-cog-org-id',__org);init.headers=h;}}catch(e){}return of.call(this,input,init);};" +
+            // 省流垫片 (本标签私有·单账号无串号面): 稳定重载荷 GET (mcp/servers ~180KB · playbooks ~275KB ·
+            //   integrations) 在 SPA 组件重挂/路由切换时会整份重取。① 同 URL 在飞请求合流 (零陈旧);
+            //   ② 短 TTL 内存缓存 60s (页面重载即清, 不落盘·不跨账号)。其余端点一律直透。
+            "(function(){var f2=window.fetch,inflight={},cache={},TTL=60000;" +
+            "function key(u){try{return u.replace(/^https?:\\/\\/[^/]+/,'');}catch(e){return u;}}" +
+            "function coalescable(u,init,input){if(init&&init.method&&init.method!=='GET')return false;if(typeof input!=='string'&&input&&input.method&&input.method!=='GET')return false;" +
+            "var p=key(u);return /\\/api\\/(mcp\\/servers|org-[^/]+\\/(playbooks|integrations))(\\?|$)/.test(p);}" +
+            "window.fetch=function(input,init){var url=(typeof input==='string')?input:(input&&input.url)||'';" +
+            "try{if(coalescable(url,init,input)){var k=key(url),now=Date.now(),c=cache[k];" +
+            "if(c&&(now-c.t)<TTL)return c.res.then(function(r){return r.clone();});" +
+            "if(inflight[k])return inflight[k].then(function(r){return r.clone();});" +
+            "var p=f2.call(this,input,init).then(function(r){if(r&&r.ok){cache[k]={t:Date.now(),res:Promise.resolve(r.clone())};}delete inflight[k];return r;},function(e){delete inflight[k];throw e;});" +
+            "inflight[k]=p.then(function(r){return r.clone();});return p;}}catch(e){}" +
+            "return f2.call(this,input,init);};})();" +
             "var oo=XMLHttpRequest.prototype.open,osd=XMLHttpRequest.prototype.send;" +
             "XMLHttpRequest.prototype.open=function(m,u){this.__api=isApi(u);return oo.apply(this,arguments);};" +
             "XMLHttpRequest.prototype.send=function(b){try{if(__a1&&this.__api){this.setRequestHeader('Authorization','Bearer '+__a1);if(__org)this.setRequestHeader('x-cog-org-id',__org);}}catch(e){}return osd.apply(this,arguments);};" +
