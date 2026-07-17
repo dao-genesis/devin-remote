@@ -1,6 +1,6 @@
 {
-  "versionCode": 346,
-  "versionName": "0.37.241",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.241/DevinCloud-mobile-v0.37.241.apk",
-  "notes": "v0.37.241 · 额度通知归静: 『额度已耗尽/即将耗尽』系统通知默认全关(用户要求·根本不用提示), 账本/恢复撤销照常运转; 如需恢复可置 localStorage rtflow.notify.quota=1。配套插件端(dao-vsix 3.57.0) 反向注入单会话上限改为每条新消息按『当前余额−预留3』动态封顶(70→67、40→37), 根治凭空冒出的『$4』上限。"
+  "versionCode": 347,
+  "versionName": "0.37.242",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.242/DevinCloud-mobile-v0.37.242.apk",
+  "notes": "v0.37.242 · 额度读取正本清源: overage_credits 双符号实证归一(负值=以负号记账的 Remaining balance·幅值即美金, 仅伴 billing_error 才计 0) — 根治『账号明明有 $60-70 余额, 单话上限却被钉成 $4』: 旧法把负值账态的真实余额抹 0, 余额被读成小残值(如 $7) → 上限 7−3=$4。桌面端(dao-vsix 3.57.1/rt-flow 4.30.2)同源修复, limit-probe 透视端点新增 overage_balance 字段可见解释后的余额。"
 }

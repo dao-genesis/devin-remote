@@ -79,6 +79,26 @@ test("恒 ≥1 且 余额≥1 时恒 ≤ ceil(余额)", () => {
   }
 });
 
+// ── overageBalance · overage_credits 双符号实证归一 (根治「有 $60-70 余额却被限 $4」) ──
+//   病灶: 负值账态(-67 = Remaining balance $67·v3.0 实证)被旧法直接进 max() 当最小值丢弃,
+//   残余小额字段(如 available_acus≈7)接管 → cap=7−3=4 在满额账号上诡异复现。
+assert.ok(typeof S.overageBalance === "function", "__selftest.overageBalance 未暴露");
+const ob = S.overageBalance;
+console.log("\n[overageBalance · 幅值即余额]");
+test("正值账态: +33.27 → 33.27 (rioskolton 实测)", () => assert.strictEqual(ob(33.27, null), 33.27));
+test("负值账态: -67 且无 billing_error → 67 (Remaining balance)", () => assert.strictEqual(ob(-67, null), 67));
+test("负值+billing_error(真欠费) → 0", () => assert.strictEqual(ob(-67, "payment_failed"), 0));
+test("非数/NaN → 0", () => { assert.strictEqual(ob(undefined, null), 0); assert.strictEqual(ob(NaN, null), 0); });
+console.log("\n[端到端: 满额号(-67)+残余 acus 7 · 旧法 cap=4 → 现法 cap=64]");
+test("max(7, overageBalance(-67)) = 67 → cap 64 (「$4」根治)", () => {
+  const best = Math.max(7, ob(-67, null));
+  assert.strictEqual(best, 67);
+  assert.strictEqual(cap(best, 3), 64);
+});
+test("旧病灶复现路径: 丢弃 -67 后 best=7 → cap=4 (对照·说明 $4 从何而来)", () => {
+  assert.strictEqual(cap(7, 3), 4);
+});
+
 console.log("\n" + (failed ? "FAIL" : "PASS") + " " + passed + "  FAIL " + failed);
 if (failed) { for (const [n, e] of fails) console.error("  ✗ " + n + "\n    " + (e && e.stack || e)); }
 try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch {}

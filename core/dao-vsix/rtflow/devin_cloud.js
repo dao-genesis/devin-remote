@@ -822,9 +822,19 @@ async function getMessageLimit(auth) {
 }
 
 // 从 billing 提取「可用余额(美元)」 · 返回 null = 无法判定(调用方禁止据此做破坏性自动清理)
-// 实测 Devin billing/status 字段: available_credits / overage_credits(可负=已欠) /
-//   has_subscription_or_credits(布尔权威) / is_subscription_valid。
+// 实测 Devin billing/status 字段: available_credits / overage_credits /
+//   has_subscription_or_credits(布尔权威) / is_subscription_valid / billing_error。
 // 旧 v4.4.0 读 prompt_credits/flow_credits(后端根本不返回)→ 健康号被误判 $0 → 误触发 wipe。
+//
+// overage_credits 双符号实证归一(正本清源): ① 正值=可用余额(rioskolton +33.27 实测·v4.4.1);
+//   ② 负值=以负号记账的「Remaining balance」(v3.0 实证: <0 且 billing_error 为空 = 有实际额度·幅值即美金)。
+//   旧法 max(0, overage) 把负值账态的真实余额抹 0 → 满额号被读成小残值 → 单话上限被钉成 $4 类诡异小数。
+//   归一: 幅值即余额 — 负值仅当伴 billing_error(真欠费)才计 0。
+function overageBalance(oc, billingError) {
+  if (typeof oc !== "number" || !isFinite(oc)) return 0;
+  if (oc < 0) return billingError ? 0 : -oc;
+  return oc;
+}
 function billingBalance(billing) {
   if (!billing) return null;
   const b = billing.billing || billing;
@@ -837,7 +847,7 @@ function billingBalance(billing) {
   };
   const avail = num("available_credits", "availableCredits");
   const overage = num("overage_credits", "overageCredits");
-  const dollars = (avail || 0) + Math.max(0, overage || 0);
+  const dollars = (avail || 0) + (overage === null ? 0 : overageBalance(overage, b.billing_error));
   // 权威布尔: 明确有订阅/有额度 → 视为充足, 绝不当作低额触发清理
   if (b.has_subscription_or_credits === true || b.is_subscription_valid === true) {
     return dollars > 0 ? dollars : 9999;
@@ -2988,6 +2998,7 @@ module.exports = {
   getGitConnections,
   getBilling,
   billingBalance,
+  overageBalance,
   classifyEvent,
   accountOverview,
   classifySession,

@@ -263,13 +263,20 @@
     return null;
   }
 
-  // 美金额度 (复刻桌面 billingBalance · devin_cloud.js): 可用余额 = available_credits + max(0, overage_credits)
-  //   overage_credits 正值=可用 Extra Usage 余额; 负值=已欠/耗尽(计 0)。
+  // 美金额度 (复刻桌面 billingBalance · devin_cloud.js): 可用余额 = available_credits + overageBalance(overage_credits)
+  //   overage_credits 双符号实证归一(正本清源·根治「满额号被限 $4」): ① 正值=可用 Extra Usage 余额;
+  //   ② 负值=以负号记账的「Remaining balance」(v3.0 实证: <0 且 billing_error 为空 = 有实际额度·幅值即美金)。
+  //   旧法 max(0, ovg) 把负值账态真实余额抹 0 → 余额被读成小残值(如 $7) → 单话上限被钉 7−3=$4。
+  //   幅值即余额 — 负值仅当伴 billing_error(真欠费)才计 0。
+  function overageBalance(oc, billingError) {
+    if (typeof oc !== "number" || !isFinite(oc)) return 0;
+    if (oc < 0) return billingError ? 0 : -oc;
+    return oc;
+  }
   function billingDollars(b) {
     if (!b) return 0;
     var avail = (typeof b.available_credits === "number" && isFinite(b.available_credits)) ? b.available_credits : 0;
-    var ovg = (typeof b.overage_credits === "number" && isFinite(b.overage_credits)) ? b.overage_credits : 0;
-    var d = Math.max(0, avail) + Math.max(0, ovg);
+    var d = Math.max(0, avail) + overageBalance(b.overage_credits, b.billing_error);
     return Math.min(1000, Math.round(d * 100) / 100);
   }
 
