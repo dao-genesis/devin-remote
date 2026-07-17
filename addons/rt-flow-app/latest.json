@@ -1,6 +1,6 @@
 {
-  "versionCode": 349,
-  "versionName": "0.37.244",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.244/DevinCloud-mobile-v0.37.244.apk",
-  "notes": "v0.37.244 · 两套屏幕·完全隔离(类多RDP/虚拟机·从源头修): 远程/Agent 通道恒在后台影子屏(常驻 INVISIBLE autoHost)开页与操作, 结构上不可能抢占用户物理前台屏。修掉病灶 —— browseOpen 的 foreground:true 会 appToFront()+browseActivateTab() 把 Agent 页(如 CF 登录)拽上用户屏、与用户互斥打断操作; 现 browseOpen 忽略 foreground 恒后台, appToFront/browseActivateTab 两命令对远程恒 no-op。Agent 页的所见经 screenshot/mirror 从影子屏取帧, 用户屏与 Agent 屏彻底分离、同机而互不干扰。源级护栏 test/screen-isolation.test.js。"
+  "versionCode": 350,
+  "versionName": "0.37.245",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.245/DevinCloud-mobile-v0.37.245.apk",
+  "notes": "v0.37.245 · 自动发版"
 }
