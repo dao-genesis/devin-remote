@@ -311,13 +311,24 @@ function _inputBusy(){ return (Date.now() - _lastInputTs) < 1500; }
 ["touchstart","keydown"].forEach(function(ev){ document.addEventListener(ev, function(){ _lastInputTs = Date.now(); }, {passive:true, capture:true}); });
 function _vib(ms){ try{ if(N.vibrate){ N.vibrate(ms||30); return; } }catch(e){} try{ if(navigator.vibrate) navigator.vibrate(ms||30); }catch(e){} }
 function _esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
-function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
-function saveAcc(a){ var s=JSON.stringify(a||[]); localStorage.setItem("rtflow.accounts", s); try{ if(N.vaultSave) N.vaultSave("accounts", s); }catch(e){} }
+// 稳定序号(本源): 号一入库即领永久编号(发号器 rtflow.accNoSeq 只增不减·移出库也不复用),
+//   他号移出库时序号绝不平移 —— 近期对话/备份网页/页签/对话文件名凭序号永远命中同一号。
+//   存量号首次迁移按当前排序领 i+1 (与用户已熟悉的编号无缝接替)。读即修(幂等)。
+function ensureAccNos(accs){
+  var seq=0; try{ seq=parseInt(localStorage.getItem("rtflow.accNoSeq")||"0",10)||0; }catch(e){}
+  var max=seq, ch=false;
+  accs.forEach(function(a){ if(a&&typeof a.no==="number"&&a.no>max) max=a.no; });
+  accs.forEach(function(a){ if(a&&!(typeof a.no==="number"&&a.no>0)){ a.no=++max; ch=true; } });
+  if(max>seq){ try{ localStorage.setItem("rtflow.accNoSeq",String(max)); }catch(e){} }
+  return ch;
+}
+function loadAcc(){ try{ var a=JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); if(ensureAccNos(a)) saveAcc(a); return a; }catch(e){ return []; } }
+function saveAcc(a){ ensureAccNos(a||[]); var s=JSON.stringify(a||[]); localStorage.setItem("rtflow.accounts", s); try{ if(N.vaultSave) N.vaultSave("accounts", s); }catch(e){} }
 function getActive(){ return localStorage.getItem("rtflow.active")||""; }
 function setActive(id){ localStorage.setItem("rtflow.active", id||""); }
 function toast(msg,bad){ var t=document.getElementById("toast"); t.textContent=msg; t.className="toast show"+(bad?" fail":" ok"); setTimeout(function(){t.className="toast";},2200); }
 function hasAuth(a){ return !!(a.auth1 && a.orgId); }
-function accNo(a){ var accs=loadAcc(); for(var i=0;i<accs.length;i++){ if(accs[i].id===a.id) return i+1; } return 0; }
+function accNo(a){ if(a&&typeof a.no==="number"&&a.no>0) return a.no; var accs=loadAcc(); for(var i=0;i<accs.length;i++){ if(accs[i].id===a.id) return accs[i].no||(i+1); } return 0; }
 function domBadge(email){
   var d=(String(email||"").split("@")[1]||"").toLowerCase();
   if(/gmail/.test(d)) return ["gm","gmail"];
@@ -386,7 +397,7 @@ function rowHtml(a,i){
   '<div class="row'+(active?" act":"")+(auth?"":" expired-row")+(_selIds.has(a.id)?" sel":"")+'" data-i="'+i+'" data-id="'+_esc(a.id)+'" data-email="'+_esc((a.email||"").toLowerCase())+'">'+
     '<div class="row-r1" onclick="rowClick('+i+',event)">'+
       '<input type="checkbox" class="chk" data-i="'+i+'" data-id="'+_esc(a.id)+'"'+(_selIds.has(a.id)?" checked":"")+' onclick="onChk(this)" />'+
-      '<span class="acc-no" title="编号 '+(i+1)+'">'+(i+1)+'</span>'+
+      '<span class="acc-no" title="永久编号 '+(a.no||i+1)+' · 移出库不平移">'+(a.no||i+1)+'</span>'+
       '<span class="dm '+db[0]+'" title="'+_esc(db[1])+'">'+db[0]+'</span>'+
       '<span class="em" title="'+_esc(a.email||a.id)+'">'+_esc(emailShort)+'</span>'+
       '<span class="eua-big" id="eua'+i+'"></span>'+
@@ -491,7 +502,7 @@ function sw(i){
   if(_mode==="official"){ try{ N.openUrlTab&&N.openUrlTab(DEVIN); }catch(e){} toast("官方模式·已打开 app.devin.ai"); return; }
   if(!hasAuth(a)){ toast("此号无 auth1, 需先登录(点 🔑)", true); return; }
   setActive(a.id);
-  try{ var a2={}; for(var k in a){ if(Object.prototype.hasOwnProperty.call(a,k)) a2[k]=a[k]; } a2.no=i+1; N.openAccountTab(JSON.stringify(a2)); toast("已打开 "+(a.email||a.id)); }
+  try{ var a2={}; for(var k in a){ if(Object.prototype.hasOwnProperty.call(a,k)) a2[k]=a[k]; } a2.no=a.no||i+1; N.openAccountTab(JSON.stringify(a2)); toast("已打开 "+(a.email||a.id)); }
   catch(e){ toast("打开失败 "+e, true); }
   render();
 }
@@ -1217,7 +1228,7 @@ async function pollTrk(force){
   var dot=document.getElementById("monDot"), mstat=document.getElementById("monStat");
   try{
     var full=loadAcc();                       // 全量列表(编号基准): 真正编号=在全量列表中的位置, 不受"是否已登录"影响
-    var _noOf={}; full.forEach(function(x,ix){ _noOf[x.id]=ix+1; });   // id → 真实编号(与账号行显示一致), 加号后动态跟随
+    var _noOf={}; full.forEach(function(x,ix){ _noOf[x.id]=x.no||ix+1; });   // id → 稳定永久编号(与账号行显示一致·出库不平移)
     // 性能×省流 · 四象限优先级调度 (前台已开页 × 对话活跃):
     //   ① 前台+活跃 = 重中之重(≤7~8 个) → 每轮必扫 (另有 refreshOpenAccts ~6s 专线, 5s 内扫过则去重跳过)
     //   ② 后台+活跃 → 中等: 每 2 轮错峰 (~16s; 板块不可见 lite 时 ~60s)
@@ -1309,7 +1320,7 @@ function dvExportMd(){
   var accs=loadAcc();
   var md=["# Devin Cloud 手机版 · 账号操作 MD","","共 "+accs.length+" 个账号 ("+accs.filter(hasAuth).length+" 个已登录)。","",
     "| # | 账号 | 状态 | 美金额度 |","|---|---|---|---|"]
-    .concat(accs.map(function(a,i){return "| "+(i+1)+" | "+(a.email||a.id)+" | "+(hasAuth(a)?"可注入":"需登录")+" | $"+ovDollars(a.quota||{}).toFixed(2)+" |";}))
+    .concat(accs.map(function(a,i){return "| "+(a.no||i+1)+" | "+(a.email||a.id)+" | "+(hasAuth(a)?"可注入":"需登录")+" | $"+ovDollars(a.quota||{}).toFixed(2)+" |";}))
     .join("\n");
   try{N.clip&&N.clip(md);}catch(e){} try{N.openText&&N.openText("账号操作 MD",md);}catch(e){}
   toast("MD 已复制并打开");
