@@ -1,6 +1,6 @@
 {
-  "versionCode": 347,
-  "versionName": "0.37.242",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.242/DevinCloud-mobile-v0.37.242.apk",
-  "notes": "v0.37.242 · 额度读取正本清源: overage_credits 双符号实证归一(负值=以负号记账的 Remaining balance·幅值即美金, 仅伴 billing_error 才计 0) — 根治『账号明明有 $60-70 余额, 单话上限却被钉成 $4』: 旧法把负值账态的真实余额抹 0, 余额被读成小残值(如 $7) → 上限 7−3=$4。桌面端(dao-vsix 3.57.1/rt-flow 4.30.2)同源修复, limit-probe 透视端点新增 overage_balance 字段可见解释后的余额。流量处理: 累计流量改为按 UID 级开机单调计数器跨面板追平(面板关闭期间/重启后的消耗不再漏计, 根治『累计≈单次会话』); 自动低流量默认开(仅计费网络降自动轮询频率·手动操作永远即时全量·体感不变)。"
+  "versionCode": 348,
+  "versionName": "0.37.243",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.243/DevinCloud-mobile-v0.37.243.apk",
+  "notes": "v0.37.243 · 全局省流(体感零变化): 账号标签注入层新增稳定重载荷 GET 省流垫片 — mcp/servers(~180KB)/playbooks(~275KB)/integrations 这类每次开话/组件重挂都整份重取的稳定接口, 同 URL 在飞请求自动合流 + 60s 短 TTL 标签内缓存(内存态·页面重载即清·单账号标签内不跨号), 对话事件流/会话列表等动态端点一律直透不缓存。真机实测定位: 渲染 bundle 已有磁盘资产缓存, 后台/空闲标签 SPA 自身已静默(5min 零请求), 耗流大头=每次开话整份重取的事件史+稳定接口 → 本版先归一稳定接口这部分。"
 }
