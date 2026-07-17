@@ -1487,6 +1487,10 @@ public class RelayService extends Service {
         @JavascriptInterface public void notifyGlobal(String tag, String title, String text) {
             main.post(() -> postConvNotification(tag, title, text));
         }
+        /** 带精准跳转目标的通知: target=JSON {email, sid, no} → 点按精准落到该账号该对话页(不重载 APK)。 */
+        @JavascriptInterface public void notifyGlobalT(String tag, String title, String text, String target) {
+            main.post(() -> postConvNotification(tag, title, text, target));
+        }
         /** 状态解除即撤通知 (会话重新活跃 / 额度恢复时, 引擎按同一 tag 主动抹掉通知栏里的旧条目·不残留)。 */
         @JavascriptInterface public void cancelConv(String tag) {
             main.post(() -> cancelConvNotification(tag));
@@ -2051,7 +2055,8 @@ public class RelayService extends Service {
      * 对话追踪·全局系统通知 (引擎检测到会话卡住/待处理/结束时调用)。
      * 与常驻穿透通知分属不同频道: 高优先级、可弹出、点按拉起 App。tag 决定通知 id (同会话更新而非刷屏)。
      */
-    public void postConvNotification(String tag, String title, String text) {
+    public void postConvNotification(String tag, String title, String text) { postConvNotification(tag, title, text, null); }
+    public void postConvNotification(String tag, String title, String text, String target) {
         try {
             NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             if (nm == null) return;
@@ -2078,7 +2083,20 @@ public class RelayService extends Service {
                 } catch (Exception ignore) {}
                 nm.createNotificationChannel(ch);
             }
-            PendingIntent pi = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class),
+            // 精准跳转: Intent 携带目标账号/会话, data 与 requestCode 均按 tag 区分 → 不同通知各存各的
+            //   PendingIntent, FLAG_UPDATE_CURRENT 只刷新同 tag 自身, 绝不互相覆盖跳转参数。
+            Intent it = new Intent(this, MainActivity.class);
+            it.setData(android.net.Uri.parse("rtflow://notif/" + android.net.Uri.encode(tag == null ? "" : tag)));
+            it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            if (target != null && !target.isEmpty()) {
+                try {
+                    org.json.JSONObject tj = new org.json.JSONObject(target);
+                    it.putExtra("notif_email", tj.optString("email", ""));
+                    it.putExtra("notif_sid", tj.optString("sid", ""));
+                    it.putExtra("notif_no", tj.optInt("no", 0));
+                } catch (Exception ignore) {}
+            }
+            PendingIntent pi = PendingIntent.getActivity(this, convNotifyId(tag), it,
                     PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
             Notification.Builder b = (Build.VERSION.SDK_INT >= 26) ? new Notification.Builder(this, CONV_CH) : new Notification.Builder(this);
             b.setContentTitle(title == null ? "Devin 对话提醒" : title)
