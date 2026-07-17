@@ -11858,13 +11858,20 @@ function devinJsonPost(targetUrl: string, headers: any, body: any, timeoutMs?: n
             req.end();
         };
         const reqHeaders = Object.assign({ 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': DEVIN_UA, 'Content-Length': data.length }, headers || {});
-        // 帛书·「反者道之动」— 直连优先，失败时降级走本地代理
+        // 帛书·「反者道之动」— 直连优先, 直连瞬断(status 0)先短退避重试直连 ≤2 次, 仍不通且有代理才降级
         const direct = () => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders);
         const viaProxy = () => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }));
         const origResolve = resolve;
-        if (needsProxy && detectedProxyPort) {
-            resolve = ((r: any) => { if (r && r.status === 0) { resolve = origResolve; viaProxy(); } else { origResolve(r); } }) as any;
-            direct();
+        if (needsProxy) {
+            const attemptDirect = (tries: number) => {
+                resolve = ((r: any) => {
+                    if (r && r.status === 0 && u.hostname === 'app.devin.ai' && tries < 2) { setTimeout(() => attemptDirect(tries + 1), 300 * (tries + 1)); return; }
+                    if (r && r.status === 0 && detectedProxyPort) { resolve = origResolve; viaProxy(); return; }
+                    origResolve(r);
+                }) as any;
+                direct();
+            };
+            attemptDirect(0);
         } else {
             direct();
         }
@@ -11893,9 +11900,16 @@ function devinJsonPatch(targetUrl: string, headers: any, body: any, timeoutMs?: 
         const direct = () => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders);
         const viaProxy = () => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }));
         const origResolve = resolve;
-        if (needsProxy && detectedProxyPort) {
-            resolve = ((r: any) => { if (r && r.status === 0) { resolve = origResolve; viaProxy(); } else { origResolve(r); } }) as any;
-            direct();
+        if (needsProxy) {
+            const attemptDirect = (tries: number) => {
+                resolve = ((r: any) => {
+                    if (r && r.status === 0 && u.hostname === 'app.devin.ai' && tries < 2) { setTimeout(() => attemptDirect(tries + 1), 300 * (tries + 1)); return; }
+                    if (r && r.status === 0 && detectedProxyPort) { resolve = origResolve; viaProxy(); return; }
+                    origResolve(r);
+                }) as any;
+                direct();
+            };
+            attemptDirect(0);
         } else {
             direct();
         }
@@ -11967,11 +11981,14 @@ function _devinJsonGetRaw(targetUrl: string, headers: any, timeoutMs?: number, _
         const u = new URL(targetUrl);
         const needsProxy = u.hostname === 'app.devin.ai' || u.hostname.endsWith('windsurf.com');
         // 自愈闸: app.devin.ai 上持 auth1 而遭 401/403 → 重登换鲜活 auth1, 原请求重试一次
-        const settle = (r: any) => {
+        const settle = (r: any, fromProxy?: boolean) => {
             // 网关抖动自愈: app.devin.ai 对并发突刺常回 502/503/504(实测同请求隔秒即 200)
-            //   → GET 幂等, 退避重试 ≤3 次 (1s·2s·4s)
+            //   → GET 幂等, 退避重试 ≤3 次 (1s·2s·4s)。
+            // ⚠️ 仅对「直连」拿到的真·上游网关 5xx 才退避重试。经本地代理降级返回的 5xx 不入此环——
+            //   破代理(如 Clash 混合端口无法转发 app.devin.ai, 恒回 502)若也退避重试, 会把一次直连
+            //   瞬断放大成整页数十秒雪崩(主页十板齐发 → 永久「加载中」)。实测直连可用而代理坏时即此病灶。
             const nRetry = _retry || 0;
-            if (r && (r.status === 502 || r.status === 503 || r.status === 504)
+            if (!fromProxy && r && (r.status === 502 || r.status === 503 || r.status === 504)
                 && u.hostname === 'app.devin.ai' && nRetry < 3) {
                 setTimeout(() => {
                     _devinJsonGetRaw(targetUrl, headers, timeoutMs, _noReauth, nRetry + 1).then(resolve);
@@ -12007,10 +12024,23 @@ function _devinJsonGetRaw(targetUrl: string, headers: any, timeoutMs?: number, _
         const reqHeaders = Object.assign({ 'Accept': 'application/json', 'User-Agent': DEVIN_UA }, headers || {});
         const direct = (cb: (r: any) => void) => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders, cb);
         const viaProxy = (cb: (r: any) => void) => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }), cb);
-        if (needsProxy && detectedProxyPort) {
-            direct((r: any) => { if (r && r.status === 0) { viaProxy(settle); } else { settle(r); } });
+        if (needsProxy) {
+            // 反者道之动·直连优先: 直连拿到任何真·HTTP 响应即采信。仅当直连「连都连不上」(status 0:
+            //   并发压力下 socket hang up / timeout)时才降级。且 status 0 多为瞬断 → 先短退避重试直连
+            //   ≤2 次(直连是本网可用路径, 重拨即通), 仍不通且有本地代理才末路走代理(GFW 网络唯一出路)。
+            const attemptDirect = (tries: number) => {
+                direct((r: any) => {
+                    if (r && r.status === 0 && u.hostname === 'app.devin.ai' && tries < 2) {
+                        setTimeout(() => attemptDirect(tries + 1), 300 * (tries + 1));
+                        return;
+                    }
+                    if (r && r.status === 0 && detectedProxyPort) { viaProxy((pr: any) => settle(pr, true)); return; }
+                    settle(r, false);
+                });
+            };
+            attemptDirect(0);
         } else {
-            direct(settle);
+            direct((r: any) => settle(r, false));
         }
     });
 }
