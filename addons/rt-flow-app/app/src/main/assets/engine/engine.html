@@ -1147,6 +1147,8 @@
     // ── 在线自动更新: 云端经中继可查/可推 (安装仍需用户点一次「安装」) ──
     appCheckUpdate: async function(){ try{ return JSON.parse(N.appCheckUpdate?N.appCheckUpdate():"{\"ok\":false,\"error\":\"bridge unavailable\"}"); }catch(e){ return {ok:false,error:String(e)}; } },
     keepAliveStatus: async function(){ try{ return {ok:true, keepAlive: _pjo(N.keepAliveStatus?N.keepAliveStatus():"")}; }catch(e){ return {ok:false,error:String(e)}; } },
+    // 主线程卡顿黑匣子: 卡死(打字/键盘冻结)现场的主线程堆栈+内存水位 JSON 行 (远程取证·根因不靠猜)。
+    jankLog: async function(){ try{ return {ok:true, log: N.jankLog?N.jankLog():""}; }catch(e){ return {ok:false,error:String(e)}; } },
     appInstallUpdate: async function(a){ try{ return JSON.parse(N.appInstallUpdate?N.appInstallUpdate((a&&a.url)||""):"{\"ok\":false,\"error\":\"bridge unavailable\"}"); }catch(e){ return {ok:false,error:String(e)}; } },
     deviceInfo: async function(){ var N=window.Native||{}; return {ok:true, ua:navigator.userAgent, platform:navigator.platform, lang:navigator.language, screen:{w:screen.width,h:screen.height,dpr:window.devicePixelRatio,orient:(screen.orientation||{}).type}, relay:typeof DaoRelayApp!=="undefined"?DaoRelayApp.status():{}, tabs:N.listTabs?(function(){try{return JSON.parse(N.listTabs()||"[]");}catch(e){return[];}})():[], conn:N.getConn?(function(){try{return JSON.parse(N.getConn()||"{}");}catch(e){return{};}})():{}, ts:Date.now()}; },
     listTabs: async function(){ var N=window.Native||{}; if(!N.listTabs)return{ok:false,error:"listTabs bridge unavailable"}; try{return{ok:true,tabs:JSON.parse(N.listTabs()||"[]")};}catch(e){return{ok:false,error:String(e)};} },

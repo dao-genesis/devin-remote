@@ -92,6 +92,7 @@ public class RelayService extends Service {
         //   (ForegroundServiceStartNotAllowedException) —— 不接住会崩溃循环("keeps stopping")。
         //   降级为普通后台服务继续跑, 下次进前台再由 startRelay 正常提权。
         try { startForeground(1, buildNotification("内网穿透服务启动中…")); } catch (Exception ignored) {}
+        JankWatch.start(getFilesDir());   // 主线程卡顿黑匣子: 卡死即抓主线程堆栈落盘, 远程可取证
         acquireWake();
         main.post(this::initEngine);
         // 去中心化直连默认开启: 服务一起即拉起本地 server (绑 0.0.0.0), 同一局域网的控制端可零中继/零隧道直连本机。
@@ -1731,6 +1732,8 @@ public class RelayService extends Service {
         }
         /** 后台保活状态 (云端 Agent 经隧道可读: 机型 + 电池豁免 + 保活指引)。只读, 不依赖 Activity。 */
         @JavascriptInterface public String keepAliveStatus() { return KeepAlive.statusJson(RelayService.this); }
+        /** 主线程卡顿黑匣子日志 (JSON 行·含卡死现场主线程堆栈/内存水位)。只读, 不依赖 Activity。 */
+        @JavascriptInterface public String jankLog() { return JankWatch.readLog(); }
 
         // ── 手机本体操控 (文件/相册/剪贴板/通知/分享/应用) ──────────
 
