@@ -1409,6 +1409,7 @@ class WorkspaceServer {
         user: si.username || a.user || "?",
         capabilities: a.capabilities || ["shell"],
         last_seen: typeof a.lastSeen === "number" ? new Date(a.lastSeen).toISOString() : (a.lastSeen || ""),
+        url: a.url || si.url || "",
         pending: (a.queue && a.queue.length) || 0,
       });
     }

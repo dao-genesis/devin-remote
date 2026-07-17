@@ -415,6 +415,7 @@ class DaoHub {
                 connected_at: new Date(a.connectedAt || 0).toISOString(),
                 last_seen: new Date(a.lastSeen || 0).toISOString(),
                 last_seen_ago: Math.round((Date.now() - (a.lastSeen || 0)) / 1000),
+                url: a.url || si.url || '',
                 pending: a.queue.length, results: a.results.size,
             });
         }
