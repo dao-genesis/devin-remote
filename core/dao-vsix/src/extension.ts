@@ -5593,14 +5593,25 @@ async function daoGhFleetAdd(lines: string[], defaultRole: string): Promise<{ ok
     saveInjectProfile(prof);
     return { ok: results.some(x => x.ok), results };
 }
+// 账号级 GitHub 状态判定(纯函数·可测): 给定 /users/{login} 的 HTTP 状态码, 判定账号状态。
+function ghAcctStateDecide(httpStatus: number, hasPat: boolean): 'active' | 'suspended' | 'bad_pat' | 'no_pat' | 'offline' {
+    if (!hasPat) return 'no_pat';
+    if (httpStatus === 0) return 'offline';
+    if (httpStatus === 200) return 'active';
+    if (httpStatus === 404) return 'suspended';
+    if (httpStatus === 401 || httpStatus === 403) return 'bad_pat';
+    return 'offline';
+}
 // 舰队清单 + 组织在线角色核对(用本体组织 admin PAT 查每人 membership state/role)。
-async function daoGhFleetList(orgPat: string, org: string): Promise<{ login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string; pending?: boolean }[]> {
+// acctState: 账号级 GitHub 状态探测(active/suspended/bad_pat/no_pat/offline), 10 分钟 TTL 缓存。
+async function daoGhFleetList(orgPat: string, org: string): Promise<{ login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string; pending?: boolean; acctState?: string }[]> {
     const prof = loadInjectProfile();
     const fleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
     orgPat = String(orgPat || '').trim(); org = String(org || '').trim();
-    type FleetRow = { login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string; pending?: boolean };
+    type FleetRow = { login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string; pending?: boolean; acctState?: string };
     const out: FleetRow[] = [];
     let dirty = false;
+    const ACCT_TTL = 10 * 60 * 1000; // 10 分钟缓存
     for (const a of fleet) {
         // 自愈: 断网入队(verify='pending')的成员 PAT 在刷新时重新校验 — 网络恢复且 PAT 有效即自动清除 pending;
         // 仍不可达则守柔保留 pending, PAT 明确失效才留待用户处理(不擅自删档)。绝不再让「一次断网」永久卡 pending。
@@ -5614,6 +5625,24 @@ async function daoGhFleetList(orgPat: string, org: string): Promise<{ login: str
             const r = await ghApiRequest('GET', '/orgs/' + encodeURIComponent(org) + '/memberships/' + encodeURIComponent(a.login), orgPat);
             if (r.status === 200 && r.json) { row.orgState = r.json.state; row.orgRole = r.json.role; }
             else row.orgState = (r.status === 404) ? 'none' : (r.status === 0 ? 'offline' : ('HTTP ' + r.status));
+        }
+        // 账号级状态探测(TTL 缓存): 用管理 PAT 探 /users/{login}, 区分 active/suspended/bad_pat。
+        const rowHasPat = !!row.hasPat;
+        const cached = (a as any).acctState as string | undefined;
+        const cachedAt = (a as any).acctCheckedAt as string | undefined;
+        const cacheValid = cached && cachedAt && (Date.now() - new Date(cachedAt).getTime()) < ACCT_TTL;
+        if (cacheValid) {
+            row.acctState = cached;
+        } else if (orgPat && rowHasPat) {
+            const r = await ghApiRequest('GET', '/users/' + encodeURIComponent(a.login), orgPat);
+            const st = ghAcctStateDecide(r.status, true);
+            row.acctState = st;
+            (a as any).acctState = st;
+            (a as any).acctCheckedAt = new Date().toISOString();
+            dirty = true;
+            await _ghSleep(200);
+        } else {
+            row.acctState = ghAcctStateDecide(0, rowHasPat);
         }
         out.push(row);
     }
@@ -8771,8 +8800,9 @@ function ghRenderGhFleet(){var st=_ghState();var v=document.getElementById('ghGh
   var patBadge=a.hasPat?'<span style="color:var(--success)" title="有 PAT·全功能">🔑</span>':(a.hasCred?'<span style="color:var(--warn)" title="半登录·账密已存·待续登建 PAT">🔓</span>':'<span style="color:var(--warn)" title="仅账密·待建 PAT">🔒</span>');
   if(a.pending)patBadge+='<span style="color:var(--warn)" title="断网入队·PAT 待验证(网络恢复后重新添加或刷新即核)">⏳</span>';
   var os='';if(a.orgState){var isOff=(a.orgState==='offline');var col=(a.orgState==='active')?'var(--success)':((a.orgState==='pending'||isOff)?'var(--warn)':'var(--muted)');os=' · <span style="color:'+col+'" '+(isOff?'title="GitHub 不可达(本机网络/代理断)·非账号问题"':'')+'>org:'+(isOff?'🌐断网':esc(a.orgState)+(a.orgRole?('/'+esc(a.orgRole)):''))+'</span>'}
+  var as='';if(a.acctState){var ac=a.acctState;var acCol=(ac==='active')?'var(--success)':((ac==='suspended')?'var(--danger)':((ac==='bad_pat')?'var(--warn)':'var(--muted)'));var acTxt=(ac==='active')?'✓正常':((ac==='suspended')?'⛔封号':((ac==='bad_pat')?'⚠凭证失效':((ac==='no_pat')?'·无PAT':'·离线')));as=' · <span style="color:'+acCol+'" title="GitHub 账号状态: '+esc(ac)+'">'+acTxt+'</span>'}
   h+='<div class="card" style="padding:8px 9px'+(a.active?';border-left:3px solid var(--success)':'')+'">';
-  h+='<div class="cr"><span class="l" style="font-size:12px">'+patBadge+' <b>'+lg+'</b> · '+roleBadge+bodyBadge+os+'</span></div>';
+  h+='<div class="cr"><span class="l" style="font-size:12px">'+patBadge+' <b>'+lg+'</b> · '+roleBadge+bodyBadge+os+as+'</span></div>';
   // 操作行 1: 查看
   h+='<div class="br" style="margin-top:4px">';
   h+='<button class="btn sm" onclick="ghAcctDetail(&#39;'+lg+'&#39;)" title="下拉查看账号数据(login/名字/scopes/组织)">🔍 详情</button>';
@@ -15346,6 +15376,8 @@ function loadInjectProfile(): InjectProfile {
                 addedAt: String((a && a.addedAt) || ''),
                 ...(a && a.verify === 'pending' ? { verify: 'pending' } : {}),
                 cred: (a && a.cred && typeof a.cred === 'object') ? { user: String(a.cred.user || ''), pass: String(a.cred.pass || ''), otp: String(a.cred.otp || '') } : undefined,
+                ...(a && a.acctState ? { acctState: String(a.acctState) } : {}),
+                ...(a && a.acctCheckedAt ? { acctCheckedAt: String(a.acctCheckedAt) } : {}),
             })).filter((a: any) => a.login) : undefined,
             // GitHub 建 PAT 账号池通用配置(scope + 有效期): 保存经 saveInjectProfile 落档, 读取须原样带回,
             // 否则 daoGhGetPatCfg 恒见 undefined → 永远回退默认(全 scope + 30 天), 通用配置形同虚设。
@@ -18196,6 +18228,7 @@ if (process.env.DAO_SELFTEST === '1') {
         daoHeadlessExec,
         quotaCapFromAvail,
         overageBalance,
+        ghAcctStateDecide,
         setState(s: { ws?: any; bridgeUrl?: string; bridgeToken?: string }) {
             if (s.ws) ws = s.ws;
             if (typeof s.bridgeUrl === 'string') bridgeUrl = s.bridgeUrl;
