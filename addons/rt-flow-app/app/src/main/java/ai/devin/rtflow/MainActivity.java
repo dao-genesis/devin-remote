@@ -4047,12 +4047,13 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void setLowDataMode(boolean on) {
             try { getSharedPreferences("rtflow", MODE_PRIVATE).edit().putBoolean("lowDataMode", on).apply(); } catch (Exception ignored) {}
         }
-        /** 自动低流量: 开启后引擎按当前网络自动选策略 (计费网络=低流量档, WiFi=全速档); 手动开关优先。 */
+        /** 自动低流量: 开启后引擎按当前网络自动选策略 (计费网络=低流量档, WiFi=全速档); 手动开关优先。
+         *  默认开: 只影响计费网络下的自动后台轮询频率, 手动操作永远即时全量 — 体感不变, 移动数据下自动省流。 */
         @JavascriptInterface public void setLowDataAuto(boolean on) {
             try { getSharedPreferences("rtflow", MODE_PRIVATE).edit().putBoolean("lowDataAuto", on).apply(); } catch (Exception ignored) {}
         }
         @JavascriptInterface public boolean isLowDataAuto() {
-            try { return getSharedPreferences("rtflow", MODE_PRIVATE).getBoolean("lowDataAuto", false); } catch (Exception e) { return false; }
+            try { return getSharedPreferences("rtflow", MODE_PRIVATE).getBoolean("lowDataAuto", true); } catch (Exception e) { return true; }
         }
         @JavascriptInterface public boolean isLowDataMode() {
             try { return getSharedPreferences("rtflow", MODE_PRIVATE).getBoolean("lowDataMode", false); } catch (Exception e) { return false; }
