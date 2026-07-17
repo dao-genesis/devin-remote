@@ -21,18 +21,50 @@ function ok(cond, msg) { if (cond) { console.log("  ok  - " + msg); } else { fai
 // ── engine.html 源级护栏: 已提示账本(持久化) + 状态解除主动撤通知 ──
 ok(/var ALERTED_KEY = "rtflow\.convwatch\.alerted"/.test(engineSrc),
    "源级: engine 持久已提示账本 rtflow.convwatch.alerted");
-ok(/if \(!alertedOnce\(led, sid, "stuck-" \+ \(c\.reason\|\|""\), now\)\) return;/.test(engineSrc),
+ok(/&& alertedOnce\(led, sid, "stuck-" \+ \(c\.reason\|\|""\), now\)\) \{/.test(engineSrc),
    "源级: 卡住/待处理通知经 alertedOnce 去重(同一卡住状态只报一次)");
 ok((engineSrc.match(/if \(!alertedOnce\(led, sid, "end", now\)\) return;/g)||[]).length === 2,
    "源级: 终态(已挂起/已完成等)与兜底已结束均经 alertedOnce(sid|end) 去重");
 ok(/function cancelNotify\(tag\)\{ try \{ if \(N\.cancelConv\) N\.cancelConv\(String\(tag\)\); \} catch\(e\)\{\} \}/.test(engineSrc),
    "源级: engine 具 cancelNotify → 原生 N.cancelConv(状态解除撤通知)");
-ok(/if \(c\.phase === "active"\) \{ if \(alertedClear\(led, sid, ""\)\) \{ ledCh = true; cancelNotify\("conv-" \+ sid\); \} return; \}/.test(engineSrc),
-   "源级: 会话重新活跃 → 剪账本 + 主动撤掉该会话残留通知");
+ok(/if \(!c\.unread && \(hadStuck \|\| \(p && p\.unread\)\)\) cancelNotify\("conv-" \+ sid\);/.test(engineSrc),
+   "源级: 会话重新活跃且已读 → 剪账本 + 主动撤通知; 未读新消息的横幅保留待用户处理");
+ok(/if \(ma\.fire\) notify\("conv-" \+ sid, "\ud83d\udcac " \+ c\.title/.test(engineSrc),
+   "源级: 微信式新消息横幅 — unread+msgId 跃迁才弹, 走原生 HIGH 渠道(heads-up+震动)");
+ok(/next\[sid\]\.notifiedMsgId = c\.msgId;   \/\/ 本条卡住通知已覆盖此消息/.test(engineSrc),
+   "源级: 卡住通知与消息横幅同条消息不双发(卡住已报即记账)");
 ok(/function alertedPrune\(led, now\)/.test(engineSrc) && /30\*864e5/.test(engineSrc),
    "源级: 账本 30 天自然过期防无限增长");
 ok(!/QUOTA_THROTTLE/.test(engineSrc),
    "源级: quotaWatch 已无 30min 超窗定时重推(同一耗尽状态绝不重刷)");
+
+// ── 功能实测: msgAlertDecide (微信式新消息判定·纯函数) ──
+{
+  const mseg = engineSrc.match(/function msgAlertDecide\(c, p, coldStart\)\{[\s\S]*?\n    \}/);
+  ok(!!mseg, "源级: engine 具 msgAlertDecide 纯函数");
+  const dec = new Function(mseg[0] + "\n return msgAlertDecide;")();
+  // 新未读消息 → 弹一次
+  let r = dec({ phase:"active", msgId:"m1", unread:true }, { notifiedMsgId:"m0" }, false);
+  ok(r.fire === true && r.mid === "m1", "新未读消息(msgId 跃迁) → 弹一次并记账");
+  // 同一条消息再次轮询 → 绝不重弹
+  r = dec({ phase:"active", msgId:"m1", unread:true }, { notifiedMsgId:"m1" }, false);
+  ok(r.fire === false && r.mid === "m1", "同一条消息再轮询/重连/重载 → 绝不重弹");
+  // 又来一条新消息 → 再弹一次
+  r = dec({ phase:"stuck", msgId:"m2", unread:true }, { notifiedMsgId:"m1" }, false);
+  ok(r.fire === true && r.mid === "m2", "同会话又来新消息 → 再弹一次(该提必提)");
+  // 冷启只播种不刷屏
+  r = dec({ phase:"active", msgId:"m9", unread:true }, undefined, true);
+  ok(r.fire === false && r.mid === "m9", "冷启(prev 空) → 只播种不刷屏");
+  // 已读 → 不弹且播种为已提示
+  r = dec({ phase:"active", msgId:"m3", unread:false }, { notifiedMsgId:"m1" }, false);
+  ok(r.fire === false && r.mid === "m3", "已读(unread=false) → 静默播种(视为已消费)");
+  // quota 会话不走消息横幅
+  r = dec({ phase:"quota", msgId:"m4", unread:true }, { notifiedMsgId:"m1" }, false);
+  ok(r.fire === false && r.mid === "m1", "quota 会话 → 不走消息横幅(额度轨专管)");
+  // 无 msgId → 不弹
+  r = dec({ phase:"active", msgId:"", unread:true }, { notifiedMsgId:"m1" }, false);
+  ok(r.fire === false && r.mid === "m1", "无稳定消息 id → 不弹(宁静勿误)");
+}
 
 // ── switch.html 源级护栏: 切号板只展示状态·不再自行发通知 ──
 ok(/var SA_KEY="rtflow\.alert\.state", QA_KEY="rtflow\.alert\.quota"/.test(switchSrc),

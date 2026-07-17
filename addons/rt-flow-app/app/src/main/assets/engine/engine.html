@@ -1284,6 +1284,19 @@
       Object.keys(led).forEach(function(k){ if (now - (led[k]||0) > 30*864e5) delete led[k]; });
     }
     function watchEnabled(){ try { var v = localStorage.getItem("rtflow.convwatch.off"); return v !== "1"; } catch(e){ return true; } }
+    // 微信式新消息判定(纯函数·可单测): 「该有消息就提示到底, 已提示过的绝不重提」——
+    //   · 触发条件 = 该会话有未读新内容(unread) 且 最新消息 id(msgId) 相对上次已提示的发生跃迁;
+    //   · 去重锚 = 稳定消息 id(persisted 于 prev 账本·notifiedMsgId), 轮询/重连/页面重载均不重弹;
+    //   · 冷启(prev 空)只播种不刷屏; 已读(unread=false)视为该消息已被消费·播种为已提示;
+    //   · quota 会话不走消息横幅(由额度轨专管)。返回 {fire, mid}: fire=本次是否弹, mid=应记账的消息 id。
+    function msgAlertDecide(c, p, coldStart){
+      var last = (p && p.notifiedMsgId) || "";
+      if (!c || c.phase === "quota" || !c.msgId) return { fire:false, mid:last };
+      if (coldStart && !p) return { fire:false, mid:c.msgId };
+      if (!c.unread) return { fire:false, mid:c.msgId };
+      if (c.msgId === last) return { fire:false, mid:last };
+      return { fire:true, mid:c.msgId };
+    }
     // ── 额度通知·真·系统推送 (与对话卡座同款 notifyGlobal: 锁屏/切后台亦达; 来源精确·按账号节流·不刷屏) ──
     var QKEY = "rtflow.convwatch.quota";          // email -> {ts, cnt}  额度耗尽节流
     var QNOTIFY_KEY = "rtflow.notify.quota";      // "1" 才推额度类通知; 默认关(用户要求: 额度耗尽根本不用提示·账本/撤销仍照常运转)
@@ -1567,20 +1580,30 @@
         cur[sid] = { phase: phase, title: ttl || sid, email: s.email || "", reason: s.reason, label: s.actionLabel, msgId: s.msgId||"", unread: !!s.unread };
       });
       _updLatest(titleByAcct, now);   // 更新最近对话名缓存(供额度类通知优先显示对话名)
-      // 跃迁判定: 新对话/续跑/新内容 → 仅实时反映「追踪状态 + 标签变绿」, 不发消息提示(按用户要求·
-      //   开播/续跑/新内容皆静默, 只让账号页标签变绿·网页镜像同步); 仅「需你关注」(卡住/待处理/等待输入)才通知。
-      //   绿灯与续跑复活的状态反映由 next[sid] 登记 + _mirrorTickToVault 复活剪枝承担, 与通知解耦。
+      // 跃迁判定(道·该有消息就提示到底, 不该有的绝不重提):
+      //   · 「需你关注」(卡住/待处理/等待输入)首次进入该态 → 通知一次(账本去重);
+      //   · 「有未读新消息」(unread + msgId 跃迁) → 微信式横幅弹一次(heads-up+震动·msgId 去重·同一条绝不重弹);
+      //   · 纯运行/续跑且无未读新内容 → 静默, 只亮绿灯(标签/网页镜像), 不刷屏。
       Object.keys(cur).forEach(function(sid){
         var c = cur[sid], p = prev[sid];
-        next[sid] = { phase: c.phase, title: c.title, email: c.email, ts: now, msgId: c.msgId, reason: c.reason };
-        // 重新活跃 → 剪已提示账本(未来真再次卡住/终态才重新提示一次) + 主动撤掉该会话残留通知
-        if (c.phase === "active") { if (alertedClear(led, sid, "")) { ledCh = true; cancelNotify("conv-" + sid); } return; }
-        if (c.phase === "stuck" && (!p || p.phase !== "stuck")) {
-          if (!alertedOnce(led, sid, "stuck-" + (c.reason||""), now)) return;
+        next[sid] = { phase: c.phase, title: c.title, email: c.email, ts: now, msgId: c.msgId, reason: c.reason, unread: !!c.unread };
+        var ma = msgAlertDecide(c, p, coldStart);
+        next[sid].notifiedMsgId = ma.mid;
+        // 重新活跃 → 剪已提示账本(未来真再次卡住/终态才重新提示一次); 已读才撤通知(未读新消息的横幅留待用户处理)
+        if (c.phase === "active") {
+          var hadStuck = alertedClear(led, sid, "");
+          if (hadStuck) ledCh = true;
+          if (!c.unread && (hadStuck || (p && p.unread))) cancelNotify("conv-" + sid);
+        }
+        if (c.phase === "stuck" && (!p || p.phase !== "stuck") && alertedOnce(led, sid, "stuck-" + (c.reason||""), now)) {
           ledCh = true;
           var head = c.reason === "action_required" ? "⚠️ 待你处理" : (c.reason === "blocked" ? "⛔ 卡住/失败" : "⏳ 等待输入");
           notify("conv-" + sid, head + ": " + c.title, (c.email ? c.email + " · " : "") + (c.label || "Devin 需要你回应") );
+          if (c.msgId) next[sid].notifiedMsgId = c.msgId;   // 本条卡住通知已覆盖此消息 → 消息横幅不再双发
+          return;
         }
+        // 微信式新消息横幅: 弹一次(原生 HIGH 渠道 → heads-up + 震动 + 声音), 同一条消息绝不重弹
+        if (ma.fire) notify("conv-" + sid, "💬 " + c.title, (c.email ? c.email + " · " : "") + "有新消息 · 点开即回");
       });
       // 结束闭环①·精确终态: trackStuck 已观测到「曾追踪→已终态」的会话, 按 中断/过期/挂起/停止/归档/完成 分流文案。
       var endedSid = Object.create(null), TERM = {
@@ -1611,7 +1634,7 @@
           ledCh = true;
           notify("conv-" + sid, "✅ 已结束: " + (p.title || sid), (p.email ? p.email + " · " : "") + "对话已完成/停止");
         } else {
-          next[sid] = { phase: p.phase, title: p.title, email: p.email, ts: p.ts || now, msgId: p.msgId, reason: p.reason, carried: true };
+          next[sid] = { phase: p.phase, title: p.title, email: p.email, ts: p.ts || now, msgId: p.msgId, reason: p.reason, unread: p.unread, notifiedMsgId: p.notifiedMsgId, carried: true };
         }
       });
       if (ledCh) saveAlerted(led);
