@@ -8550,8 +8550,15 @@ function daoOverviewManualHtml(){
     +'<div class="st" style="font-size:11px;text-transform:none">🧩 MCP 服务器</div><div class="card"><div class="cr"><span class="l" style="font-size:11px;color:var(--muted)">MCP 在专用面板集中管理(浏览市场·安装·卸载·钉住)</span><span class="v"><button class="btn sm primary" onclick="sw(&#39;mcp&#39;)">打开 MCP 面板</button></span></div></div>';
 }
 function daoLoadOverviewManual(){
-  if(!S.auth.loggedIn||!S.auth.canUseApi)return;
-  ['profile','customization','apikeys','knowledge','playbooks','secrets','integrations','automations','schedules'].forEach(function(t){
+  var secs=['profile','customization','apikeys','knowledge','playbooks','secrets','integrations','automations','schedules'];
+  // 未登录/无 API 凭证: 不能让各区块永久停在「加载中…」(登录坏/断网时正是此情形) —
+  //   立即把每个区块渲成显式空态(带登录/官方入口按钮), 由 rT 的 err 分支统一呈现。
+  if(!S.auth.loggedIn||!S.auth.canUseApi){
+    secs.forEach(function(t){var id=(t==='integrations')?'ov-git':'ov-'+t;if(document.getElementById(id))rT(t,[],'未登录 · 登录后查看或手动打开');});
+    var bp=document.getElementById('ov-blueprints');if(bp)bp.innerHTML='<div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">未登录 · 登录后查看环境蓝图</p></div>';
+    return;
+  }
+  secs.forEach(function(t){
     var id=(t==='integrations')?'ov-git':'ov-'+t;
     if(!document.getElementById(id))return;
     loadTab(t);
