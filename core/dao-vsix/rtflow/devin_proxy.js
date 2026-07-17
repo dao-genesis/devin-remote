@@ -120,7 +120,9 @@ function upstreamRequest(reqOpts, bodyBuf, onRes, onFail, log) {
     pr.on("timeout", () => { try { pr.destroy(new Error("upstream timeout")); } catch {} });
     pr.on("error", (e) => {
       if (!_isTransientNetErr(e)) return onFail(e);
-      if (n === 0) { if (log) try { log("[proxy] direct " + (e && e.message) + " → fresh-socket retry(v4)"); } catch {} return direct(1, { agent: false, family: 4 }); }
+      // 瞬断自愈: 池化 socket 可能半闭 → 换新 socket(默认族) → 再换新 socket(IPv4) → 仍死才回落本机代理。
+      if (n === 0) { if (log) try { log("[proxy] direct " + (e && e.message) + " → fresh-socket retry"); } catch {} return direct(1, { agent: false }); }
+      if (n === 1) { if (log) try { log("[proxy] fresh " + (e && e.message) + " → fresh-socket retry(v4)"); } catch {} return direct(2, { agent: false, family: 4 }); }
       _probeProxyPort(host, (pp) => { if (!pp) return onFail(e); if (log) try { log("[proxy] direct dead → local proxy :" + pp); } catch {} viaProxy(pp, e); });
     });
     if (bodyBuf && bodyBuf.length) pr.write(bodyBuf);
@@ -1005,7 +1007,8 @@ async function handleRequest(req, res, auth, opts, _log) {
       headers: fwdHeaders,
       timeout: 20000,
       rejectUnauthorized: false,
-      agent: _httpsAgent,
+      // 顶层页面导航不走共享 keep-alive 池 (半闭池化 socket 会把整页打成 502); 资产仍复用池提速。
+      agent: isPage ? false : _httpsAgent,
     },
     reqBody,
     (proxyRes) => {
