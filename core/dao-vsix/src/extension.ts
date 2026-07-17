@@ -11177,8 +11177,10 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             // 一行接入 · 复制把另一台设备接进本中枢的 PowerShell 一行命令(irm .../bootstrap.ps1 | iex)。
             case 'copyBridgeJoin': {
                 const c = readBridgeConn();
-                // 主口公网 URL 优先(主口已直通 bootstrap/connect/poll/result 全链); 其次常驻进程自己的公网 URL
-                const url = (ws.publicUrl ? String(ws.publicUrl).replace(/\/$/, '') : '') || ((c && c.url) ? String(c.url).replace(/\/$/, '') : '');
+                // 一行接入须走「透明快速隧道」(cloudflared·公网免鉴权 GET 可达) — 即常驻进程 conn.url;
+                //   持久 relay 是鉴权 POST-RPC 通道, 不承载公网裸 GET 拉脚本(实测 relay 对 GET 回 405),
+                //   故此处只认 conn.url; 缺失才回落主口公网(仅在主口本身为透明隧道时有效)。道并行而不相悖。
+                const url = ((c && c.url) ? String(c.url).replace(/\/$/, '') : '') || (ws.publicUrl ? String(ws.publicUrl).replace(/\/$/, '') : '');
                 const line = url ? ('irm ' + url + '/api/bootstrap.ps1 | iex') : '';
                 if (line) await vscode.env.clipboard.writeText(line);
                 if (line) vscode.window.showInformationMessage('已复制一行接入命令 · 在另一台 Windows 的 PowerShell 运行即接入本中枢');
