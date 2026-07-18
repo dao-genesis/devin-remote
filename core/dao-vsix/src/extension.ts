@@ -4490,16 +4490,36 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         }
         case '/api/devin/mcp/verify': {
             // 实测使用: 逐本机 STDIO MCP 真起进程(initialize+tools/list)返回真实工具数; HTTP 走 initialize 接测。
-            //   body: {source?:'Devin Desktop'(默认), all?:bool} — 默认仅实测 Devin Desktop, 并行执行。
+            //   body: {source?:'Devin Desktop'(默认), all?:bool} — 默认仅实测 Devin Desktop。
+            //   道·「反者道之动」: 同一 spec(命令+参数/URL)在多个 IDE 里重复出现时(如 context7/github 同装
+            //   Devin Desktop 与 Cursor), 若无界并发地各自真起进程, 同名 npx 包会争用 npm 缓存/资源锁 → 后到者
+            //   15s 超时被误报离线(实测台式机 Cursor 侧 4 个重名 MCP 全 timeout)。故: 按 spec 去重·每 spec 只实测
+            //   一次, 结果回填所有同 spec 条目; 并有界并发(≤4)避免一次拉起十余个 node/npx 冷启动互相拖垮。
             const vfb = await readBody(req); let vfo: any = {}; try { vfo = JSON.parse(vfb || '{}'); } catch { /* 守柔 */ }
             const want = vfo.all ? null : String(vfo.source || daoHostIdeSource());
             let ideV = (() => { try { return scanIdeMcps(); } catch { return []; } })();
             if (want) ideV = ideV.filter((e) => e.source === want);
-            const vres = await Promise.all(ideV.map(async (e) => {
-                if (e.transport === 'HTTP') { const r = await daoProbeMcp({ transport: 'HTTP', url: e.url, headers: e.headers }); return { name: e.name, source: e.source, transport: 'HTTP', ok: r.ok, toolCount: 0, detail: r.detail }; }
-                const r = await daoVerifyMcpStdio({ command: e.command, args: e.args, env: e.env }, 15000);
-                return { name: e.name, source: e.source, transport: 'STDIO', ok: r.ok, toolCount: r.toolCount, tools: r.tools, error: r.error };
+            const _specKey = (e: any) => e.transport === 'HTTP'
+                ? ('H|' + String(e.url || '') + '|' + JSON.stringify(e.headers || {}))
+                : ('S|' + String(e.command || '') + '|' + JSON.stringify(e.args || []));
+            const uniq = new Map<string, any>();
+            for (const e of ideV) if (!uniq.has(_specKey(e))) uniq.set(_specKey(e), e);
+            const uniqEntries = Array.from(uniq.entries());
+            const verified = new Map<string, any>();
+            const CONC = 4;
+            await Promise.all(Array.from({ length: Math.min(CONC, uniqEntries.length) }, async () => {
+                for (;;) {
+                    const next = uniqEntries.shift();
+                    if (!next) return;
+                    const [k, e] = next;
+                    if (e.transport === 'HTTP') { const r = await daoProbeMcp({ transport: 'HTTP', url: e.url, headers: e.headers }); verified.set(k, { ok: r.ok, toolCount: 0, detail: r.detail }); }
+                    else { const r = await daoVerifyMcpStdio({ command: e.command, args: e.args, env: e.env }, 20000); verified.set(k, { ok: r.ok, toolCount: r.toolCount, tools: r.tools, error: r.error }); }
+                }
             }));
+            const vres = ideV.map((e) => {
+                const r = verified.get(_specKey(e)) || { ok: false, toolCount: 0, error: 'not verified' };
+                return { name: e.name, source: e.source, transport: e.transport, ok: r.ok, toolCount: r.toolCount || 0, tools: r.tools, detail: r.detail, error: r.error };
+            });
             return { ok: true, count: vres.length, results: vres };
         }
         case '/api/devin/mcp/install': {
