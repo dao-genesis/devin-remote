@@ -1,0 +1,19 @@
+{
+  "name": "node-rdpjs",
+  "author": "Sylvain Peyrefitte",
+  "version": "0.3.0",
+  "engines": [
+    "node = 0.10.x"
+  ],
+  "description": "Remote Desktop Protocol in Node.js",
+  "license": "AGPL v3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/citronneur/node-rdpjs"
+  },
+  "main": "lib/index.js",
+  "dependencies": {
+    "starttls": "^1.0.0",
+    "lodash": "3.3.0"
+  }
+}

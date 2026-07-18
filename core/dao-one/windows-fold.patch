@@ -153,34 +153,48 @@
 +    const r = await vmHostApi('/vms', 'GET');
 +    try { const j = JSON.parse(r.text || '{}'); const vv = j.vms || {}; return Object.keys(vv).map((k) => Object.assign({ name: (vv[k].session_user || k) }, vv[k])); } catch { return []; }
 +}
-+// IDE 内多实例复制品桌面页(仿 rt-flow daoMultiInstance·单 webview=一分身): 截图流实时渲染 + 鼠键回传, 你与 AI 同源共控同一 RDP 会话。
-+const _vmDeskPanels: { [k: string]: any } = {};
-+function openVmDesktopPanel(vm: string) {
-+    const key = String(vm || 'vm01');
-+    if (_vmDeskPanels[key]) { try { _vmDeskPanels[key].panel.reveal(); return; } catch { /* 守柔 */ } }
-+    const panel = vscode.window.createWebviewPanel('daoVmDesktop', '\uD83E\uDE9F ' + key + ' · 复制品桌面', vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true });
-+    panel.webview.html = vmDesktopHtml(key);
-+    const timer = setInterval(async () => {
-+        const r = await vmHostApi('/', 'POST', { action: 'vm.screenshot', vm: key });
-+        try { const j = JSON.parse(r.text || '{}'); const img = j.image_base64 || j.image || ''; if (img) panel.webview.postMessage({ t: 'frame', img, w: j.width || 0, h: j.height || 0 }); else panel.webview.postMessage({ t: 'err', msg: (j.error || ('HTTP ' + r.status)) }); } catch { panel.webview.postMessage({ t: 'err', msg: 'HTTP ' + r.status }); }
-+    }, 900);
-+    panel.webview.onDidReceiveMessage(async (m: any) => {
-+        if (!m || !m.t) return;
-+        try {
-+            if (m.t === 'click') await vmHostApi('/', 'POST', { action: 'vm.click', vm: key, x: m.x, y: m.y });
-+            else if (m.t === 'right') await vmHostApi('/', 'POST', { action: 'vm.right_click', vm: key, x: m.x, y: m.y });
-+            else if (m.t === 'double') await vmHostApi('/', 'POST', { action: 'vm.double_click', vm: key, x: m.x, y: m.y });
-+            else if (m.t === 'move') await vmHostApi('/', 'POST', { action: 'vm.mouse_move', vm: key, x: m.x, y: m.y });
-+            else if (m.t === 'scroll') await vmHostApi('/', 'POST', { action: 'vm.scroll', vm: key, x: m.x, y: m.y, clicks: m.clicks });
-+            else if (m.t === 'type') await vmHostApi('/', 'POST', { action: 'vm.type', vm: key, text: m.text });
-+            else if (m.t === 'key') await vmHostApi('/', 'POST', { action: 'vm.key', vm: key, key: m.key });
-+        } catch { /* 守柔 */ }
++// IDE 内多实例复制品桌面页(仿 rt-flow daoMultiInstance·单 webview=一分身): 直接内嵌官方 RDP 前端(mstsc.js·canvas/rle/keyboard)经 rdp-web 网关实时渲染同一 RDP 会话——你与 AI 同源共控。
++// rdp-web 网关(官方 RDP 线协议 node-rdpjs <-> 浏览器 WebSocket · 环回 · 零 GUI)按需拉起: 根路由探活通即用, 否则以扩展宿主 node 运行时 spawn media/rdp-web/gateway.js(永不注册开机自启)。
++const RDP_WEB_PORT = 9040;
++let _rdpWebSpawned = false;
++function rdpWebProbe(): Promise<number> {
++    return new Promise((resolve) => {
++        const http = require('http');
++        const req = http.request({ host: '127.0.0.1', port: RDP_WEB_PORT, path: '/', method: 'GET' }, (res: any) => { res.resume(); resolve(res.statusCode || 0); });
++        req.on('error', () => resolve(0));
++        req.setTimeout(3000, () => { req.destroy(); resolve(0); });
++        req.end();
 +    });
-+    panel.onDidDispose(() => { clearInterval(timer); delete _vmDeskPanels[key]; });
-+    _vmDeskPanels[key] = { panel, timer };
 +}
-+function vmDesktopHtml(vm: string): string {
-+    return '<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;height:100%;background:#111;overflow:hidden}#wrap{position:fixed;inset:0;display:flex;flex-direction:column}#bar{font:12px system-ui;color:#bbb;padding:4px 8px;background:#1b1b1b;border-bottom:1px solid #333;flex:none}#s{flex:1;object-fit:contain;width:100%;height:100%;min-height:0;cursor:crosshair;background:#000}#e{position:fixed;top:6px;right:8px;color:#f88;font:12px system-ui}</style></head><body><div id="wrap"><div id="bar">\uD83E\uDE9F ' + vm + ' · 复制品桌面 · 实时截图流 + 鼠键回传(你与 AI 同源共控) · 点击/滚轮/键盘直达该 RDP 会话</div><img id="s" tabindex="0" draggable="false"/><div id="e"></div></div><script>const vscode=acquireVsCodeApi();const img=document.getElementById("s");const e=document.getElementById("e");let NW=0,NH=0;function map(ev){const r=img.getBoundingClientRect();const iw=NW||img.naturalWidth||r.width,ih=NH||img.naturalHeight||r.height;const sc=Math.min(r.width/iw,r.height/ih)||1;const ox=(r.width-iw*sc)/2,oy=(r.height-ih*sc)/2;return{x:Math.round((ev.clientX-r.left-ox)/sc),y:Math.round((ev.clientY-r.top-oy)/sc)}}img.addEventListener("click",ev=>{const p=map(ev);vscode.postMessage({t:"click",x:p.x,y:p.y});img.focus()});img.addEventListener("dblclick",ev=>{const p=map(ev);vscode.postMessage({t:"double",x:p.x,y:p.y})});img.addEventListener("contextmenu",ev=>{ev.preventDefault();const p=map(ev);vscode.postMessage({t:"right",x:p.x,y:p.y})});img.addEventListener("wheel",ev=>{ev.preventDefault();const p=map(ev);vscode.postMessage({t:"scroll",x:p.x,y:p.y,clicks:ev.deltaY<0?3:-3})},{passive:false});img.addEventListener("keydown",ev=>{ev.preventDefault();const mod=[];if(ev.ctrlKey)mod.push("ctrl");if(ev.altKey)mod.push("alt");if(ev.shiftKey&&ev.key.length>1)mod.push("shift");if(ev.key.length===1&&!ev.ctrlKey&&!ev.altKey&&!ev.metaKey){vscode.postMessage({t:"type",text:ev.key});return}const km={Enter:"enter",Backspace:"backspace",Tab:"tab",Escape:"esc",Delete:"delete"," ":"space",ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right",Home:"home",End:"end",PageUp:"pageup",PageDown:"pagedown"};const k=km[ev.key]||ev.key.toLowerCase();vscode.postMessage({t:"key",key:mod.concat(k).join("+")})});window.addEventListener("message",m=>{const d=m.data;if(d.t==="frame"){NW=d.w||NW;NH=d.h||NH;img.src="data:image/png;base64,"+d.img;e.textContent=""}else if(d.t==="err"){e.textContent=d.msg||"截图失败"}});img.focus();</script></body></html>';
++async function ensureRdpWeb(): Promise<boolean> {
++    if ((await rdpWebProbe()) === 200) return true;
++    try {
++        const cp = require('child_process');
++        const gw = path.join(__dirname, '..', 'media', 'rdp-web', 'gateway.js');
++        if (fs.existsSync(gw) && !_rdpWebSpawned) {
++            _rdpWebSpawned = true;
++            const env = Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1', RDP_WEB_PORT: String(RDP_WEB_PORT) });
++            const ch = cp.spawn(process.execPath, [gw], { cwd: path.dirname(gw), detached: true, stdio: 'ignore', env });
++            ch.unref();
++        }
++    } catch (e) { /* 守柔 */ }
++    for (let i = 0; i < 20; i++) { await new Promise((r) => setTimeout(r, 500)); if ((await rdpWebProbe()) === 200) return true; }
++    return false;
++}
++const _vmDeskPanels: { [k: string]: any } = {};
++async function openVmDesktopPanel(vm: string) {
++    const key = String(vm || 'vm01');
++    if (_vmDeskPanels[key]) { try { _vmDeskPanels[key].panel.reveal(); return; } catch (e) { /* 守柔 */ } }
++    const ok = await ensureRdpWeb();
++    const panel = vscode.window.createWebviewPanel('daoVmDesktop', '\uD83E\uDE9F ' + key + ' · 复制品桌面', vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true });
++    panel.webview.html = vmDesktopHtml(key, ok, RDP_WEB_PORT);
++    panel.onDidDispose(() => { delete _vmDeskPanels[key]; });
++    _vmDeskPanels[key] = { panel };
++}
++function vmDesktopHtml(vm: string, ok: boolean, port: number): string {
++    const src = 'http://127.0.0.1:' + port + '/?vm=' + encodeURIComponent(vm);
++    if (!ok) return '<!doctype html><meta charset="utf-8"><body style="font:13px system-ui;color:#f88;background:#111;padding:16px">RDP 网关(rdp-web gateway)未就绪。请确认宿主守护(vm_host_daemon)与 node 运行时可用后重开桌面。</body>';
++    return '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; frame-src http://127.0.0.1:*; style-src \'unsafe-inline\'"><style>html,body{margin:0;height:100%;background:#111;overflow:hidden}iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style></head><body><iframe src="' + src + '" allow="clipboard-read; clipboard-write"></iframe></body></html>';
 +}
  // 在线设备 · 查询中枢(dao-bridge)代理注册表 — 走 conn.json 的本地端口 + 令牌(整机直连, 免公网往返)。
 @@ -11203,0 +11363,29 @@
@@ -234,7 +248,7 @@
 +            }
 +            case 'winOpenDesktop': {
 +                const e1 = await ensureVmHost(true);
-+                if (e1.ok) { await vmHostApi('/', 'POST', { action: 'vm.ensure', name: String(msg.vm || 'vm01') }); openVmDesktopPanel(String(msg.vm || 'vm01')); }
++                if (e1.ok) { await vmHostApi('/', 'POST', { action: 'vm.ensure', name: String(msg.vm || 'vm01') }); await openVmDesktopPanel(String(msg.vm || 'vm01')); }
 +                reply({ type: 'winData', kind: 'vms', hostOk: e1.ok, list: e1.ok ? await vmHostList() : [] });
 +                break;
 +            }

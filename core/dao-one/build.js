@@ -124,6 +124,14 @@ function buildVsix() {
       if (fs.existsSync(path.join(vmSrc, f))) copyFile(path.join(vmSrc, f), path.join(vmDst, f));
     log("vendor-vsix: bundled cloud/vm-replica 后端 → media/vm-replica (复制品桌面底座)");
   } else log("vendor-vsix: SKIP vm-replica bundle (源缺失 " + vmSrc + ")");
+  // 归一·③ 复制品桌面前端: 随插件分发 rdp-web 网关(官方 RDP 线协议 node-rdpjs<->WebSocket)
+  //   + 官方 mstsc.js 前端(canvas/rle/keyboard)。IDE 内桌面页直接内嵌官方 RDP 前端实时渲染同一会话,
+  //   零重造、零 GUI 依赖(网关全程 127.0.0.1 环回)。
+  const rdpWebSrc = path.join(path.dirname(plugins), "cloud", "vm-replica", "rdp-web");
+  if (fs.existsSync(path.join(rdpWebSrc, "gateway.js"))) {
+    copyDir(rdpWebSrc, path.join(dst, "media", "rdp-web"));
+    log("vendor-vsix: bundled cloud/vm-replica/rdp-web 前端 → media/rdp-web (官方 RDP 网关+mstsc.js)");
+  } else log("vendor-vsix: SKIP rdp-web bundle (源缺失 " + rdpWebSrc + ")");
   log("vendor-vsix: transpiled " + n + " ts file(s)");
 }
 
@@ -261,7 +269,8 @@ function verifyFolds() {
     "case 'winExec'",               // 后端 · 整机执行
     "case 'winScreenshot'",         // 后端 · 整机截屏
     "function vmHostApi",           // 复制品桌面 · 宿主守护(vm_host_daemon)直连
-    "function openVmDesktopPanel",  // 复制品桌面 · IDE 内多实例桌面页(截图流+鼠键回传)
+    "function ensureRdpWeb",        // 复制品桌面 · rdp-web 网关(官方 RDP<->WebSocket)按需拉起
+    "function openVmDesktopPanel",  // 复制品桌面 · IDE 内多实例桌面页(内嵌官方 mstsc.js RDP 前端)
     "case 'winVmList'",             // 后端 · 分身列表
     "case 'winVmCreate'",           // 后端 · 新建/连接分身(RDP 多会话)
     "case 'winOpenDesktop'",        // 后端 · 打开复制品桌面页

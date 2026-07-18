@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<!--
+  rdp-web 内页 · 官方 mstsc.js 前端(canvas/rle/keyboard)原样嵌入 IDE Webview iframe。
+  用户体感与原生「远程桌面连接」一致: 全屏画布 + 实时位图 + 鼠键滚轮回传。
+  凭据由网关服务端从守护 config.json 解析, 前端只带 ?vm= 自动连接。
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>复制品桌面 · RDP</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #1e1e1e; overflow: hidden; height: 100%; }
+    #status { position: fixed; top: 8px; left: 8px; color: #9cdcfe; font: 12px/1.4 "Segoe UI", sans-serif;
+              background: rgba(0,0,0,.55); padding: 4px 10px; border-radius: 4px; z-index: 10; }
+    #myCanvas { display: block; background: #000; cursor: default; }
+  </style>
+</head>
+<body>
+  <div id="status">连接复制品会话…</div>
+  <canvas id="myCanvas" tabindex="0"></canvas>
+  <script src="./js/mstsc.js"></script>
+  <script src="./js/keyboard.js"></script>
+  <script src="./js/rle.js"></script>
+  <script src="./js/canvas.js"></script>
+  <script src="./js/wsclient.js"></script>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var vm = params.get('vm') || 'vm01';
+      var canvas = document.getElementById('myCanvas');
+      canvas.width = 1280; canvas.height = 800;
+      var client = Mstsc.wsclient.create(canvas, document.getElementById('status'));
+      client.connect(vm);
+      canvas.focus();
+    })();
+  </script>
+</body>
+</html>
