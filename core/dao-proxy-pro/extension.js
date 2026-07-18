@@ -2715,6 +2715,8 @@ class EssenceProvider {
           await this._handleResetCustomSP();
         else if (msg.command === "setCanon")
           await this._handleSetCanon(msg.canon);
+        else if (msg.command === "setToolset")
+          await this._handleSetToolset(msg.toolset);
       } catch {}
     });
     // v9.4.2 · SSR 道魂直嵌 · webview 一加载就见帛书全文 · 零 fetch/postMessage 依赖
@@ -3028,6 +3030,23 @@ class EssenceProvider {
           ok: false,
         });
       } catch {}
+    }
+  }
+
+  // 工具轴切换 · webview 下拉 -> proxy /origin/toolset -> 热切(与经藏轴正交)
+  async _handleSetToolset(toolset) {
+    if (!this._view) return;
+    try {
+      const r = await httpPostJson(
+        `http://127.0.0.1:${_cachedPort}/origin/toolset`,
+        { toolset: String(toolset || "default") },
+        2000,
+      );
+      log(`toolset -> ${toolset} (ok=${r && r.ok}, chars=${r && r.toolset_chars})`);
+      this._lastSig = "";
+      setTimeout(() => this.forceRefresh().catch(() => {}), 300);
+    } catch (e) {
+      log(`toolset set fail: ${e && e.message}`);
     }
   }
 
@@ -3405,6 +3424,9 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
   #canonSelect { font-size: 10px; padding: 1px 2px; border: 1px solid rgba(128,128,128,0.3); background: var(--vscode-dropdown-background, rgba(0,0,0,0.2)); color: var(--vscode-dropdown-foreground, var(--vscode-foreground)); border-radius: 3px; cursor: pointer; outline: none; font-family: inherit; max-width: 96px; margin-left: 4px; }
   #canonSelect:focus { border-color: var(--vscode-focusBorder, #007fd4); }
   #canonSelect option { background: var(--vscode-dropdown-listBackground, #252526); color: var(--vscode-dropdown-foreground, #ccc); }
+  #toolSelect { font-size: 10px; padding: 1px 2px; border: 1px solid rgba(128,128,128,0.3); background: var(--vscode-dropdown-background, rgba(0,0,0,0.2)); color: var(--vscode-dropdown-foreground, var(--vscode-foreground)); border-radius: 3px; cursor: pointer; outline: none; font-family: inherit; max-width: 96px; margin-left: 4px; }
+  #toolSelect:focus { border-color: var(--vscode-focusBorder, #007fd4); }
+  #toolSelect option { background: var(--vscode-dropdown-listBackground, #252526); color: var(--vscode-dropdown-foreground, #ccc); }
 </style>
 </head>
 <body data-port="${proxyPort}">
@@ -3417,6 +3439,11 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
       <option value="laozi+yinfu">\u5e1b\u4e66\u8001\u5b50+\u9053\u85cf\u9634\u7b26\u7ecf</option>
       <option value="laozi">\u5e1b\u4e66\u300a\u8001\u5b50\u300b</option>
       <option value="yinfu">\u9053\u85cf\u300a\u9634\u7b26\u7ecf\u300b</option>
+    </select>
+    <select id="toolSelect" title="\u5de5\u5177\u8f74\u5207\u6362 \u00b7 \u5de5\u5177\u63d0\u793a\u8bcd(\u4e0e\u7ecf\u85cf\u8f74\u6b63\u4ea4)">
+      <option value="default">\u9ed8\u8ba4\u5de5\u5177</option>
+      <option value="windows">+Windows(65)</option>
+      <option value="freecad">+FreeCAD</option>
     </select>
     <span id="customBadge"></span>
   </div>
@@ -3491,6 +3518,7 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
   var $editCount = document.getElementById('editCount');
   var $customBadge = document.getElementById('customBadge');
   var $canonSelect = document.getElementById('canonSelect');
+  var $toolSelect = document.getElementById('toolSelect');
   var lastText = '';
   var lastSP = '';
   var lastEntry = null;
@@ -3604,6 +3632,14 @@ function getEssenceHtml(port, nonce, initialSP, webview, extensionUri) {
     var c = $canonSelect.value;
     vsc.postMessage({ command: 'setCanon', canon: c });
   });
+
+  // ─── 工具轴切换 · 工具提示词(与经藏轴正交) ───
+  if ($toolSelect) {
+    $toolSelect.addEventListener('change', function() {
+      vsc.postMessage({ command: 'setToolset', toolset: $toolSelect.value });
+    });
+    fJson('/origin/toolset').then(function(d) { if (d && d.toolset && $toolSelect.value !== d.toolset) $toolSelect.value = d.toolset; }).catch(function() {});
+  }
 
   // ─── 编辑模式 ───
   function _closeEditMode() {
@@ -5061,6 +5097,11 @@ function getEaConfigHtml(port, nonce, opts) {
         <option value="laozi+yinfu">帛书老子+道藏阴符经</option>
         <option value="laozi">帛书《老子》</option>
         <option value="yinfu">道藏《阴符经》</option>
+      </select>
+      <select id="e1Tool" title="工具轴切换·工具提示词(与经藏轴正交)·默认/Windows/FreeCAD" style="font-size:11px;padding:2px 4px;border:1px solid rgba(128,128,128,0.3);border-radius:3px;background:var(--vscode-dropdown-background,rgba(0,0,0,0.2));color:var(--vscode-dropdown-foreground,var(--vscode-foreground));outline:none;font-family:inherit">
+        <option value="default">默认工具</option>
+        <option value="windows">+Windows 工具(65)</option>
+        <option value="freecad">+FreeCAD 工具</option>
       </select>
       <span id="e1Badge" style="font-size:10px;opacity:0.6"></span>
       <button class="btn" id="e1Open" style="margin-left:auto" title="在侧栏展开完整本源观照">↗ 侧栏</button>
@@ -6722,6 +6763,7 @@ function getEaConfigHtml(port, nonce, opts) {
   function _e1LoadState() {
     fJson('/origin/mode').then(function(d) { if (d && d.mode) _e1SetMode(d.mode); }).catch(function() {});
     fJson('/origin/canon').then(function(d) { if (d && d.canon) { var s = _e1El('e1Canon'); if (s) s.value = d.canon; } }).catch(function() {});
+    fJson('/origin/toolset').then(function(d) { if (d && d.toolset) { var s = _e1El('e1Tool'); if (s) s.value = d.toolset; } }).catch(function() {});
     _e1LoadPreview();
   }
   // v9.9.299 · 「编」兜底稳态: 无 custom 时永以 /origin/custom_sp 的 default_sp 填 textarea
@@ -6743,7 +6785,7 @@ function getEaConfigHtml(port, nonce, opts) {
     }).catch(function() { if (st) st.textContent = '加载经文网络异常'; });
   }
   (function _e1Wire() {
-    var d = _e1El('e1Dao'), o = _e1El('e1Off'), e = _e1El('e1Edit'), c = _e1El('e1Canon');
+    var d = _e1El('e1Dao'), o = _e1El('e1Off'), e = _e1El('e1Edit'), c = _e1El('e1Canon'), tl = _e1El('e1Tool');
     var tx = _e1El('e1EditText'), st = _e1El('e1EditStatus');
     if (d) d.addEventListener('click', function() { _e1SetMode('invert'); fPost('/origin/mode', { mode: 'invert' }).then(_e1LoadPreview).catch(function() {}); });
     if (o) o.addEventListener('click', function() { _e1SetMode('passthrough'); fPost('/origin/mode', { mode: 'passthrough' }).then(_e1LoadPreview).catch(function() {}); });
@@ -6753,6 +6795,9 @@ function getEaConfigHtml(port, nonce, opts) {
         // 切经藏后 · 若正在编辑且未改自定义 · textarea 随经重填新本源 (名实相符)
         if (_e1EditOpen) _e1FillEdit(tx, st, false);
       }).catch(function() {});
+    });
+    if (tl) tl.addEventListener('change', function() {
+      fPost('/origin/toolset', { toolset: tl.value }).then(_e1LoadPreview).catch(function() {});
     });
     if (e) e.addEventListener('click', function() {
       _e1EditOpen = !_e1EditOpen;
