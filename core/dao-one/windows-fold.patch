@@ -72,6 +72,7 @@
 +  h+='<div class="st" style="margin-top:12px">🖥️ 复制品桌面 · 账号/分身 <button class="btn sm ghost" style="float:right;margin-top:-3px;padding:2px 8px" onclick="cmd(&#39;winVmList&#39;)">⟳ 刷新</button>'+(vms.length>1?'<button class="btn sm ghost" style="float:right;margin:-3px 6px 0 0;padding:2px 8px" onclick="cmd(&#39;winOpenAllDesktops&#39;)" title="把全部分身桌面并行折入归一外壳同级标签(各自隔离会话·共享同一宿主)——一屏多标签并行实测">🖥️ 全部打开(并行)</button>':'')+'</div>';
 +  h+='<div class="card" style="font-size:11px;color:var(--muted)">复用官方 RDP 多会话(环回·boot-safe·不挂 rdpwrap)把本机另一 Windows 账号当隔离复制品桌面——道并行而不相悖: 资源共享、会话隔离。点「打开桌面」在 IDE 内以多实例页面实时操作(你与 AI 同源共控·同一后端会话)。</div>';
 +  h+='<div class="card"><div class="cr"><span class="l">宿主守护</span><span class="v" style="color:'+(hostOk?'var(--success)':'var(--warn)')+'">'+(hostOk?'✓ 就绪 (vm_host_daemon)':(ws.vms?'未运行':'点「刷新」探活'))+'</span></div>';
++  h+='<div class="cr" style="font-size:11px"><span class="l">共享目录 · 鸡犬相闻</span><span class="v" style="font-family:monospace;color:var(--success)" title="资源共享·会话隔离: 各复制品账号与控制台同读写此目录, 但各自身份/桌面/操作互不干扰(道并行而不相悖)">'+esc((ws.vms&&ws.vms.daoshare)||'C:\\daoshare')+' ↔ 共享·隔离</span></div>';
 +  if(!hostOk)h+='<div class="br" style="margin-top:4px"><button class="btn sm primary" onclick="cmd(&#39;winHostEnsure&#39;)">▶ 启动宿主守护</button></div>';
 +  h+='<div style="display:flex;gap:6px;margin-top:6px"><input id="winVmName" placeholder="分身名(如 vm01)" style="flex:1" value="'+esc(ws.vmName||'vm01')+'"/><button class="btn sm primary" onclick="winVmCreate()">＋ 新建/连接分身</button></div>';
 +  if(vms.length){for(var vi=0;vi<vms.length;vi++){var vm=vms[vi];
@@ -93,7 +94,7 @@
 +  if(d.kind==='status'){ws.checked=true;ws.healthOk=!!d.ok;ws.health=d.health||null;ws.sysinfo=d.sysinfo||'';}
 +  else if(d.kind==='exec'){ws.out=d.text||'';}
 +  else if(d.kind==='screenshot'){if(d.ok){ws.shot=d.image||'';ws.shotErr='';}else{ws.shot='';ws.shotErr=d.error||'未知错误';}}
-+  else if(d.kind==='vms'){ws.vms={hostOk:!!d.hostOk,list:d.list||[]};}
++  else if(d.kind==='vms'){ws.vms={hostOk:!!d.hostOk,list:d.list||[],daoshare:(d.daoshare!=null?d.daoshare:(ws.vms&&ws.vms.daoshare)||'')};}
 +  if(S.tab==='windows')rWindowsFull();
 +}
 +window.addEventListener('message',function(e){var d=e.data;if(d&&d.type==='winData')rWindowsResult(d);});
@@ -119,6 +120,10 @@
 +// 读 %ProgramData%\dao_vm\config.json 取环回端口/令牌(守护为独立进程·仅 127.0.0.1·Bearer 鉴权)。
 +function vmHostConf(): { port: number; token: string } {
 +    try { const pd = process.env.ProgramData || 'C:\\ProgramData'; const c = JSON.parse(fs.readFileSync(path.join(pd, 'dao_vm', 'config.json'), 'utf8')); return { port: Number(c.host_port) || 9000, token: String(c.token || '') }; } catch { return { port: 9000, token: '' }; }
++}
++// 鸡犬相闻·数据共享目录: 各复制品账号与控制台同读写此目录(资源共享), 而各自身份/桌面/操作互不干扰(会话隔离·道并行而不相悖)。守护开机即 provision(BUILTIN\\Users 全控·继承)。
++function vmDaoshareDir(): string {
++    try { const pd = process.env.ProgramData || 'C:\\ProgramData'; const c = JSON.parse(fs.readFileSync(path.join(pd, 'dao_vm', 'config.json'), 'utf8')); return String(c.daoshare_dir || 'C:\\daoshare'); } catch { return 'C:\\daoshare'; }
 +}
 +function vmHostApi(p: string, method: string, body?: any): Promise<{ status: number; text: string }> {
 +    const cf = vmHostConf();
@@ -239,12 +244,12 @@
 +            // ═══ 复制品桌面 · Windows 账号/分身生命周期(经 vm_host_daemon·官方 RDP 多会话) ═══
 +            case 'winVmList': {
 +                const r = await ensureVmHost(false);
-+                reply({ type: 'winData', kind: 'vms', hostOk: r.ok, list: r.ok ? await vmHostList() : [] });
++                reply({ type: 'winData', kind: 'vms', hostOk: r.ok, list: r.ok ? await vmHostList() : [], daoshare: vmDaoshareDir() });
 +                break;
 +            }
 +            case 'winHostEnsure': {
 +                const r = await ensureVmHost(true);
-+                reply({ type: 'winData', kind: 'vms', hostOk: r.ok, list: r.ok ? await vmHostList() : [], note: r.note || '' });
++                reply({ type: 'winData', kind: 'vms', hostOk: r.ok, list: r.ok ? await vmHostList() : [], daoshare: vmDaoshareDir(), note: r.note || '' });
 +                break;
 +            }
 +            case 'winVmCreate': {
