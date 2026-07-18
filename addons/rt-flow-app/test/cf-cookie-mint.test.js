@@ -125,8 +125,40 @@ const GROUPS = [
   const m11 = await CF.mintViaCookie({ accountId: "ACC1" });
   ok(m11.token === "NATIVE_FALLBACK_TOK", "web mint 非语义错误 → 落原生 HTTP 兜底建 Token 成功");
 
+  // 待 cfProv 单例状态从 running 落定 (前面异步 mint 会把 phase 置 running·避免后续路由被判 already)。
+  async function settle() { for (let i = 0; i < 200; i++) { const s = await rpc("/api/cf-status"); if (!s.body || s.body.phase !== "running") return; await new Promise((r) => setTimeout(r, 5)); } }
+
+  // ── 12) 自包含离屏「代登录→建 Token」桥 (cfWebAuto·本源: 用户只提供账号·离屏真 Chromium 自己登录) ──
+  let waCfg = null;
+  DaoRelayApp.setCfWebAutoFn(function (id, c) { waCfg = JSON.parse(c); setImmediate(() => global.__cfWebMintCb(id, JSON.stringify({ token: "WEBAUTO_TOK_7777", accountId: "ACCA" }))); });
+  const m12 = await CF.webAuto({ cf: { user: "u@e.com", pass: "pw", otp: "" }, accountId: "ACCA" });
+  ok(m12.token === "WEBAUTO_TOK_7777" && m12.accountId === "ACCA", "cfWebAuto: 返回 token+accountId");
+  ok(waCfg && waCfg.cf && waCfg.cf.user === "u@e.com" && waCfg.accountId === "ACCA", "cfWebAuto: 账密+accountId 原样透传给离屏桥 (凭证不过中继)");
+
+  // ── 13) 命中人机验证/硬件密钥 → cf_challenge 语义错误上抛 (不代按·由 UI 提示前台过一次) ──
+  DaoRelayApp.setCfWebAutoFn(function (id) { setImmediate(() => global.__cfWebMintCb(id, JSON.stringify({ error: "cf_challenge" }))); });
+  let e13 = null; try { await CF.webAuto({ cf: { user: "u@e.com", pass: "pw" } }); } catch (e) { e13 = e; }
+  ok(e13 && /cf_challenge/.test(e13.message), "cfWebAuto 命中人机验证 → cf_challenge 上抛");
+
+  // ── 14) /api/cf-autoprovision 路由: 带 email+password → mode=web-auto (用户只提供账号即启动) ──
+  //   (先于「直调 autoProvisionRun」测·后者会把 cfProv 单例状态留在 running·避免污染本路由判定。)
+  await settle();
+  DaoRelayApp.setCfWebAutoFn(function (id) { setImmediate(() => global.__cfWebMintCb(id, JSON.stringify({ error: "test_stop" }))); });
+  const r14 = await rpc("/api/cf-autoprovision", { email: "u@e.com", password: "pw" });
+  ok(r14.status === 200 && r14.body.started === true && r14.body.mode === "web-auto", "cf-autoprovision 带账密 → started + mode=web-auto");
+  await settle();
+
+  // ── 15) autoProvisionRun 路由: 有账密走离屏 web-auto (不读会话 cookie); token 秘密性不泄漏到错误 ──
+  let waUsed = false, ckRead = false;
+  DaoRelayApp.setCfWebAutoFn(function (id) { waUsed = true; setImmediate(() => global.__cfWebMintCb(id, JSON.stringify({ error: "test_stop_after_mint" }))); });
+  DaoRelayApp.setCfCookieFn(() => { ckRead = true; return "cf_clearance=x"; });
+  let e15 = null; try { await CF.autoProvisionRun({ cf: { user: "u@e.com", pass: "pw" } }); } catch (e) { e15 = e; }
+  ok(waUsed && !ckRead, "autoProvisionRun 有账密 → 走离屏 web-auto·完全不读会话 cookie");
+  ok(e15 && e15.message.indexOf("WEBAUTO_TOK") < 0 && e15.message.indexOf("pw") < 0, "错误信息不含 token/密码明文");
+
   // 复位注入, 不污染同进程其它测试
   DaoRelayApp.setCfWebMintFn(null);
+  DaoRelayApp.setCfWebAutoFn(null);
   DaoRelayApp.setCfCookieFn(null);
   DaoRelayApp.setCfDashFn(null);
 

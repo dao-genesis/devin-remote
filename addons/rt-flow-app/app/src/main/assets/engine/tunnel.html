@@ -1490,15 +1490,14 @@ async function cfPoolBuild(i){
       if(!(r&&(r.started||r.already))){ cfPoolMark(key,{phase:'error',msg:(r&&r.error)||'启动失败'}); _cfBuildingKey=null; return; }
       _result('cf',true,'已为 '+(e.email||'该号')+' 启动纯后端部署 (零浏览器)…');
     } else {
-      // login 闭环: arm cf-auto 用该号凭证代登录→同源建Token→部署 (登录页人机验证需用户点一次)
-      var c=_conn();
-      var cfg={ active:true, bases:_hubBases(), session:c.session||'local', relayToken:c.token||'',
-                cf:{ user:e.email, pass:e.password||'', otp:(e.otp||'') } };
-      if(!N.cfAutoArm){ cfPoolMark(key,{phase:'error',msg:'本机版本不支持全自动编排(需0.37.226+)'}); _cfBuildingKey=null; return; }
-      try{ N.cfAutoArm(JSON.stringify(cfg)); }catch(x){ cfPoolMark(key,{phase:'error',msg:'武装失败:'+(x&&x.message||x)}); _cfBuildingKey=null; return; }
-      var u=_cfTokenDeepLink('dao-relay');
-      try{ if(N.openTab){N.openTab(u);} else window.open(u,'_blank'); }catch(x){}
-      _result('cf',true,'已为 '+(e.email||'该号')+' 启动全自动: 登录→建Token→部署; 命中登录页人机验证/硬件密钥会停下等你点一次后自动续跑。');
+      // login 闭环 (自包含·零可见页·零点击): 把账密交给后端离屏真 Chromium 自己代登录→同源建Token→部署。
+      //   用户只提供账号即可, 全程无需开 CF 网页、无需停留任何页面; 仅当命中登录页人机验证/硬件密钥时,
+      //   后端回 cf_challenge, 此时才提示用户前台过一次那道关 (住宅 IP 基本不弹)。
+      var payload={ email:e.email, password:(e.password||''), otp:(e.otp||'') };
+      if(e.accountId) payload.accountId=e.accountId;
+      var r=await _hubRpc("/api/cf-autoprovision", payload);
+      if(!(r&&(r.started||r.already))){ cfPoolMark(key,{phase:'error',msg:(r&&r.error)||'启动失败'}); _cfBuildingKey=null; return; }
+      _result('cf',true,'已为 '+(e.email||'该号')+' 启动自包含全自动 (离屏代登录→建Token→部署·零可见页·零点击)…');
     }
     cfPollStatus();
   }catch(x){ cfPoolMark(key,{phase:'error',msg:String(x&&x.message||x)}); _cfBuildingKey=null; }

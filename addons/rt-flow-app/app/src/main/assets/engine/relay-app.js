@@ -472,6 +472,30 @@ const DaoRelayApp = (function () {
       try { fn(id, accountId || ""); } catch (e) { clearTimeout(to); delete reg[id]; reject(e); }
     });
   }
+  // 自包含·离屏「代登录→同源建 Token」桥 (Native.cfWebAuto → 同一 window.__cfWebMintCb 回灌)。
+  //   不依赖 App 内已有 CF 登录态: 离屏真 Chromium 用 cfg.cf 账密自己登录取会话再同源建 Token。
+  //   用户只需提供账号 → 全程无可见网页·零点击。命中人机验证回 {error:cf_challenge}(不代按)。
+  var cfWebAutoFn = null;   // 测试注入; 运行时默认 Native.cfWebAuto
+  function cfWebAuto(cfg) {
+    return new Promise(function (resolve, reject) {
+      var fn = cfWebAutoFn;
+      if (!fn) { try { var Nx = (typeof Native !== "undefined") ? Native : {}; fn = Nx.cfWebAuto ? function (id, c) { Nx.cfWebAuto(id, c); } : null; } catch (e) { fn = null; } }
+      if (!fn) { reject(new Error("no_webauto_bridge")); return; }
+      var id = "cfa" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+      var reg = (_G.__cfWebMintReg = _G.__cfWebMintReg || {});
+      _G.__cfWebMintCb = _G.__cfWebMintCb || function (rid, js) { try { var f = (_G.__cfWebMintReg || {})[rid]; if (f) f(js); } catch (e) {} };
+      var to = setTimeout(function () { if (reg[id]) { delete reg[id]; reject(new Error("cf_webauto_timeout")); } }, 95000);
+      reg[id] = function (js) {
+        clearTimeout(to); delete reg[id];
+        var o = null; try { o = (typeof js === "string") ? JSON.parse(js) : js; } catch (e) { o = null; }
+        if (!o) { reject(new Error("cf_webauto_bad_result")); return; }
+        if (o.error) { reject(new Error(o.error)); return; }
+        if (!o.token) { reject(new Error("cf_webauto_no_token")); return; }
+        resolve({ token: o.token, accountId: o.accountId || "" });
+      };
+      try { fn(id, JSON.stringify(cfg || {})); } catch (e) { clearTimeout(to); delete reg[id]; reject(e); }
+    });
+  }
   // 会话态直建 Token: 首选离屏真 Chromium 同源(过机管·冻结免疫); 桥不可用/超时才落原生 HTTP 兜底。
   async function cfMintViaCookie(opts) {
     opts = opts || {};
@@ -504,8 +528,17 @@ const DaoRelayApp = (function () {
     return { token: tok, accountId: acct.id };
   }
   async function cfAutoProvisionRun(opts) {
-    cfSet("running", 1, "① 会话态直建 Token (零浏览器·冻结免疫)…", { error: "", url: "" });
-    var minted = await cfMintViaCookie(opts || {});
+    opts = opts || {};
+    var minted;
+    // 有账密 → 自包含离屏代登录+建 Token (用户只提供账号·无可见网页·零点击);
+    // 无账密 → 会话态直建 (需 App 内已登录过 CF)。两路都收敛到同一条部署链。
+    if (opts.cf && opts.cf.user) {
+      cfSet("running", 1, "① 离屏代登录 CF·同源直建 Token (零可见页·零点击·冻结免疫)…", { error: "", url: "" });
+      minted = await cfWebAuto({ cf: opts.cf, accountId: opts.accountId || "" });
+    } else {
+      cfSet("running", 1, "① 会话态直建 Token (零浏览器·冻结免疫)…", { error: "", url: "" });
+      minted = await cfMintViaCookie(opts);
+    }
     cfSet("running", 2, "② Token 已建·转入部署…", { accountId: minted.accountId });
     return await cfProvisionRun({ token: minted.token });
   }
@@ -602,9 +635,15 @@ const DaoRelayApp = (function () {
     if (path === "/api/cf-autoprovision") {
       var ab = (m && m.body) || {};
       if (cfProv.phase === "running") return { status: 200, body: Object.assign({ already: true }, cfProv) };
-      cfAutoProvisionRun({ accountId: String((ab && ab.accountId) || "").trim() || null })
+      var apEmail = String((ab && ab.email) || "").trim();
+      var apPass = String((ab && ab.password) || "");
+      var apOtp = String((ab && ab.otp) || "").trim();
+      var apAcct = String((ab && ab.accountId) || "").trim() || null;
+      // 有账密 → 自包含离屏代登录 (用户只提供账号); 无账密 → 会话态直建 (需 App 内已登录过 CF)。
+      var apOpts = (apEmail && apPass) ? { cf: { user: apEmail, pass: apPass, otp: apOtp }, accountId: apAcct } : { accountId: apAcct };
+      cfAutoProvisionRun(apOpts)
         .catch(function (e) { cfSet("error", cfProv.step, "✗ " + String((e && e.message) || e), { error: String((e && e.message) || e) }); });
-      return { status: 200, body: { started: true, poll: "/api/cf-status", mode: "cookie-session" } };
+      return { status: 200, body: { started: true, poll: "/api/cf-status", mode: (apEmail && apPass) ? "web-auto" : "cookie-session" } };
     }
     if (path === "/api/result-fetch") {
       const a = hubGetAgent(m.body && m.body.agent_id);
@@ -803,9 +842,10 @@ const DaoRelayApp = (function () {
     setCfCookieFn(fn) { cfCookieFn = fn; },   // 测试注入 会话态 cookie 读取 (原生 Native.cookiesFor 替身)
     setCfDashFn(fn) { cfDashFn = fn; },        // 测试注入 dashboard 原生 HTTP (DaoCore.httpReq 替身)
     setCfWebMintFn(fn) { cfWebMintFn = fn; },   // 测试注入 离屏真 Chromium 同源建 Token (Native.cfWebMint 替身)
+    setCfWebAutoFn(fn) { cfWebAutoFn = fn; },    // 测试注入 离屏代登录+建 Token (Native.cfWebAuto 替身)
     // 纯函数·供单测直取 (会话态建 Token 编排的可验证切片)
     _cf: { pickGroups: cfPickGroups, missingGroups: cfMissingGroups, buildTokenPayload: cfBuildTokenPayload,
-           pickAccount: cfPickAccount, mintViaCookie: cfMintViaCookie, autoProvisionRun: cfAutoProvisionRun },
+           pickAccount: cfPickAccount, mintViaCookie: cfMintViaCookie, autoProvisionRun: cfAutoProvisionRun, webAuto: cfWebAuto },
     setStatusCb(fn) { onStatus = fn; },
     serveLocal: serveLocal,
     start(config) {

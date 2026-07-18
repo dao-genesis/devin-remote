@@ -164,5 +164,30 @@ function ts(name, fn) { return t(name, async () => fn()); }
     assert.ok(src.includes("X-Cross-Site-Security") && src.includes("dash"), "RelayService.java cfMintJs 缺少 X-Cross-Site-Security:dash 头");
   });
 
+  // ── 自包含·离屏「代登录→建 Token」源码护栏 (本源: 用户只提供账号·零可见页·零点击) ──
+  await ts("cf-auto.js 支持 deliver 模式 (离屏回灌 __CFM) + 尊重 accountId 隔离", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/cf-auto.js"), "utf-8");
+    assert.ok(/CFG\.deliver/.test(src), "cf-auto.js 缺少 deliver 模式分支");
+    assert.ok(src.includes("__CFM") && src.includes("cf_challenge"), "cf-auto.js deliver 模式缺少 __CFM 回灌 / cf_challenge 挑战信号");
+    assert.ok(src.includes("CFG.accountId") && /account_not_found|multi_account/.test(src), "cfMintToken 未按 accountId 精确隔离 (防多账号串号)");
+  });
+  await ts("RelayService.java cfStartWebAuto 离屏代登录 (注入 cf-auto.js·deliver·loadUrl /login)", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/java/ai/devin/rtflow/RelayService.java"), "utf-8");
+    assert.ok(src.includes("cfStartWebAuto") && src.includes("cfWebAuto"), "RelayService.java 缺少 cfStartWebAuto/cfWebAuto");
+    assert.ok(src.includes("engine/cf-auto.js") && src.includes("deliver:true"), "cfStartWebAuto 未注入 cf-auto.js / 未开 deliver 模式");
+    assert.ok(src.includes("dash.cloudflare.com/login"), "cfStartWebAuto 未从登录页起步 (自包含代登录)");
+  });
+  await ts("relay-app.js /api/cf-autoprovision 支持账密 web-auto (用户只提供账号)", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/relay-app.js"), "utf-8");
+    assert.ok(src.includes("cfWebAuto") && src.includes("web-auto"), "relay-app.js 缺少 cfWebAuto / web-auto 模式");
+    assert.ok(/opts\.cf\s*&&\s*opts\.cf\.user/.test(src), "autoProvisionRun 未按账密分流到离屏 web-auto");
+  });
+  await ts("tunnel.html 池行 login 建 Worker 走后端离屏 (无 openTab·无 cfAutoArm·零点击)", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/tunnel.html"), "utf-8");
+    const build = src.slice(src.indexOf("async function cfPoolBuild("), src.indexOf("async function cfPoolBuildAll("));
+    assert.ok(build.includes("/api/cf-autoprovision"), "cfPoolBuild login 分支未改走 /api/cf-autoprovision");
+    assert.ok(!build.includes("cfAutoArm") && !build.includes("_cfTokenDeepLink") && !build.includes("openTab"), "cfPoolBuild login 分支仍在开可见页/武装 (未做到零点击)");
+  });
+
   console.log("\ncf-auto.test.js: " + pass + " assertions passed");
 })();

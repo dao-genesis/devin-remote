@@ -1,6 +1,6 @@
 {
-  "versionCode": 361,
-  "versionName": "0.37.256",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.256/DevinCloud-mobile-v0.37.256.apk",
-  "notes": "v0.37.256 · CF dashboard CSRF 头修复 (X-Cross-Site-Security:dash·实测 POST /api/v4 必带·缺则 403)"
+  "versionCode": 362,
+  "versionName": "0.37.257",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.257/DevinCloud-mobile-v0.37.257.apk",
+  "notes": "v0.37.257 · CF 账号池自包含离屏代登录 (只加账号→后端离屏真Chromium自动登录→同源建Token→部署Worker·零可见页·零点击; 命中人机验证回 cf_challenge 不代按)"
 }
