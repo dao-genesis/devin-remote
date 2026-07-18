@@ -94,7 +94,7 @@ powershell -ExecutionPolicy Bypass -File $env:USERPROFILE\repos\devin-remote\clo
 <!-- DAO-MODULE-INDEX:START -->
 | 模块 | 版本 | 扩展 id | 说明 | Release / 下载 |
 |---|---|---|---|---|
-| **dao-one** | `2.26.10` | `dao.dao-one` | 最终主交付：dao-vsix 二合一本源基座 + Proxy Pro 三面板子模块（折入 Devin Cloud 全功能面板），其余与 dao-vsix 完全一致。 | [Release](https://github.com/dao-genesis/devin-remote/releases/tag/dao-one-v2.26.10) · [⬇ VSIX](https://github.com/dao-genesis/devin-remote/releases/download/dao-one-v2.26.10/dao-one-2.26.10.vsix) |
+| **dao-one** | `2.26.11` | `dao.dao-one` | 最终主交付：dao-vsix 二合一本源基座 + Proxy Pro 三面板子模块（折入 Devin Cloud 全功能面板），其余与 dao-vsix 完全一致。 | [Release](https://github.com/dao-genesis/devin-remote/releases/tag/dao-one-v2.26.11) · [⬇ VSIX](https://github.com/dao-genesis/devin-remote/releases/download/dao-one-v2.26.11/dao-one-2.26.11.vsix) |
 | **dao-vsix** | `3.58.18` | `dao.dao-vsix` | 本源基座：rt-flow 切号视图 + Devin Cloud 全功能面板 + 本地 HTTP API（含多账号反向注入）。可单独安装。 | [Release](https://github.com/dao-genesis/devin-remote/releases/tag/dao-vsix-v3.58.18) · [⬇ VSIX](https://github.com/dao-genesis/devin-remote/releases/download/dao-vsix-v3.58.18/dao-vsix-3.58.18.vsix) |
 | **rt-flow** | `4.30.6` | `devaid.rt-flow` | Devin Cloud 接入本体：对话备份 / 全量快照 / 一键回归本源 wipe / 对话额度上限。 | [Release](https://github.com/dao-genesis/devin-remote/releases/tag/rt-flow-v4.30.6) · [⬇ VSIX](https://github.com/dao-genesis/devin-remote/releases/download/rt-flow-v4.30.6/rt-flow-4.30.6.vsix) |
 | **dao-proxy-pro** | `9.9.355` | `dao-agi.dao-proxy-pro` | 底层提示词隔离替换 + 外接第三方模型路由。三面板：本源观照 / 渠道配置 / 模型路由。 | [Release](https://github.com/dao-genesis/devin-remote/releases/tag/dao-proxy-pro-v9.9.355) · [⬇ VSIX](https://github.com/dao-genesis/devin-remote/releases/download/dao-proxy-pro-v9.9.355/dao-proxy-pro-9.9.355.vsix) |
