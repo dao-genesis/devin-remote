@@ -8026,7 +8026,7 @@ function sw(t){
     }
   }
 }
-function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull()}
+function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull();if(S.tab==='inject')rInject()}
 // 帛书·「见小曰明」: 凭证就绪后(login/autoAcquire 使 canUseApi 转真), 当前数据 tab 仍停在「获取凭证」占位
 // (该占位故意不标记 loaded) — 此处自动重载, 拉取真实数据, 用户无需再次点击。
 function reloadActiveDataTab(){
