@@ -5410,6 +5410,63 @@ function bridgeCfApiRequest(method: string, apiPath: string, token: string, body
     });
 }
 
+// ── CF Token/Worker 统管 (移植手机 APK 的 cf-list-tokens / cf-revoke-token / cf-delete-worker) ──
+// 本源: 打通持久通道后, 用户要能在同一板块「管理那个 token 这些东西」—— 列/撤 API Token、列/删 Worker,
+//   不必另开一两个页面。凭据源恒为 provision 落盘的 relay.json.token(用户自己的 CF Bearer);
+//   只回非密元数据(id/name/status/时间), 绝不回令牌密文。守柔: 当前通道 Worker(dao-relay-do)打标防误删。
+const RELAY_WORKER_NAME = 'dao-relay-do'; // 与 addons/dao-relay/provision.mjs 的 WORKER_NAME 一致
+function bridgeReadRelayCf(): { token: string; accountId: string; url: string } | null {
+    try {
+        const s = JSON.parse(fs.readFileSync(RELAY_STATE_FILE, 'utf8'));
+        const token = String(s.token || '');
+        if (!token || token.length < 20) return null; // OAuth-only(无 API Token)或未打通 → 无可管理凭据
+        return { token, accountId: String(s.accountId || ''), url: String(s.url || '') };
+    } catch { return null; }
+}
+async function bridgeCfListResources(): Promise<{ ok: boolean; tokens?: any[]; workers?: any[]; accountId?: string; activeUrl?: string; error?: string }> {
+    const cf = bridgeReadRelayCf();
+    if (!cf) return { ok: false, error: '暂无可管理的 Cloudflare 凭证 — 先用账号密码/API Token 打通持久通道(OAuth 登录不含可列举的 API Token)。' };
+    const out: any = { ok: true, accountId: cf.accountId, activeUrl: cf.url, tokens: [], workers: [] };
+    const tr = await bridgeCfApiRequest('GET', '/user/tokens?per_page=50', cf.token);
+    if (tr.status === 200 && tr.json && tr.json.success && Array.isArray(tr.json.result)) {
+        out.tokens = tr.json.result.map((t: any) => ({
+            id: String(t.id || ''), name: String(t.name || ''), status: String(t.status || ''),
+            issuedOn: t.issued_on || '', lastUsed: t.last_used_on || '', expiresOn: t.expires_on || '',
+        }));
+    } else if (tr.status && tr.status !== 200) {
+        out.tokensErr = 'HTTP ' + tr.status + (tr.json && tr.json.errors ? (' ' + JSON.stringify(tr.json.errors).slice(0, 120)) : '');
+    }
+    if (cf.accountId) {
+        const wr = await bridgeCfApiRequest('GET', '/accounts/' + cf.accountId + '/workers/scripts', cf.token);
+        if (wr.status === 200 && wr.json && wr.json.success && Array.isArray(wr.json.result)) {
+            out.workers = wr.json.result.map((w: any) => {
+                const nm = String(w.id || w.name || '');
+                return { name: nm, modified: w.modified_on || '', active: nm === RELAY_WORKER_NAME };
+            });
+        } else if (wr.status && wr.status !== 200) {
+            out.workersErr = 'HTTP ' + wr.status;
+        }
+    }
+    return out;
+}
+async function bridgeCfRevokeToken(id: string): Promise<{ ok: boolean; error?: string }> {
+    const cf = bridgeReadRelayCf();
+    if (!cf) return { ok: false, error: '无凭证' };
+    if (!id) return { ok: false, error: '缺少 tokenId' };
+    const r = await bridgeCfApiRequest('DELETE', '/user/tokens/' + encodeURIComponent(id), cf.token);
+    const ok = r.status === 200 && r.json && r.json.success;
+    return ok ? { ok: true } : { ok: false, error: 'HTTP ' + r.status + (r.error ? (' ' + r.error) : '') };
+}
+async function bridgeCfDeleteWorker(name: string): Promise<{ ok: boolean; error?: string }> {
+    const cf = bridgeReadRelayCf();
+    if (!cf || !cf.accountId) return { ok: false, error: '无凭证/账号' };
+    if (!name) return { ok: false, error: '缺少 worker 名' };
+    // ?force=true 连带删除其绑定的路由/域, 避免残留
+    const r = await bridgeCfApiRequest('DELETE', '/accounts/' + cf.accountId + '/workers/scripts/' + encodeURIComponent(name) + '?force=true', cf.token);
+    const ok = r.status === 200 && r.json && r.json.success;
+    return ok ? { ok: true } : { ok: false, error: 'HTTP ' + r.status + (r.error ? (' ' + r.error) : '') };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 组织管理 · body/glove 批量入组 (通用 · 任意用户只需一枚自己的 PAT)
 // ───────────────────────────────────────────────────────────────────────────
@@ -8275,6 +8332,34 @@ function daoBridgeModuleCard(n,ic,title,desc,how){
 }
 // 顶层持久通道卡片 · 一次登录全自动打通(自动注册 CF Token·PKCE, 免手搓)。
 // r={active,url,connected,healthy,auth,oauth,expiry,deployedAt,subdomain}
+// 🗂️ CF Token/Worker 统管渲染(移植手机 APK): 读 S.cfResources → 列 API Token(可撤)+ Worker(可删·当前通道打标)。
+function rCfResources(){
+  var d=S.cfResources;
+  if(d===undefined)return '<div style="font-size:10px;color:var(--muted)">点「加载/刷新」列出本 Cloudflare 账号下的 API Token 与 Worker，可直接撤销 / 删除，一页管理一切。</div>';
+  if(d.loading)return '<div style="font-size:10px;color:var(--muted)">加载中…</div>';
+  if(!d.ok)return '<div style="font-size:10px;color:var(--warn)">'+esc(d.error||'加载失败')+'</div>';
+  var h='';
+  var tks=d.tokens||[];
+  h+='<div style="font-size:11px;color:var(--fg);margin:0 0 3px"><b>API Token</b> <span style="color:var(--muted)">('+tks.length+')</span></div>';
+  if(d.tokensErr)h+='<div style="font-size:10px;color:var(--warn);margin-bottom:3px">列 Token 失败: '+esc(d.tokensErr)+'(可能凭证权限不足)</div>';
+  if(!tks.length&&!d.tokensErr)h+='<div style="font-size:10px;color:var(--muted)">无</div>';
+  for(var i=0;i<tks.length;i++){var t=tks[i];
+    var meta=[t.status||''];if(t.lastUsed)meta.push('用于 '+String(t.lastUsed).slice(0,10));if(t.expiresOn)meta.push('至 '+String(t.expiresOn).slice(0,10));
+    h+='<div class="cr" style="border-top:1px solid var(--border);padding-top:4px;margin-top:4px"><span class="l" style="font-size:11px">'+esc(t.name||t.id)+' <span style="color:var(--muted);font-size:10px">· '+esc(meta.filter(Boolean).join(' · '))+'</span></span>';
+    h+='<span class="v"><button class="btn sm danger" onclick="cfRevoke(&#39;'+esc(t.id)+'&#39;,&#39;'+esc((t.name||t.id).replace(/&#39;/g,""))+'&#39;)">撤销</button></span></div>';
+  }
+  var wks=d.workers||[];
+  h+='<div style="font-size:11px;color:var(--fg);margin:9px 0 3px"><b>Worker</b> <span style="color:var(--muted)">('+wks.length+')</span></div>';
+  if(d.workersErr)h+='<div style="font-size:10px;color:var(--warn);margin-bottom:3px">列 Worker 失败: '+esc(d.workersErr)+'</div>';
+  if(!wks.length&&!d.workersErr)h+='<div style="font-size:10px;color:var(--muted)">无</div>';
+  for(var j=0;j<wks.length;j++){var w=wks[j];
+    h+='<div class="cr" style="border-top:1px solid var(--border);padding-top:4px;margin-top:4px"><span class="l" style="font-size:11px">'+esc(w.name)+(w.active?' <span style="color:var(--success);font-size:10px">· 当前通道</span>':'')+(w.modified?' <span style="color:var(--muted);font-size:10px">· '+esc(String(w.modified).slice(0,10))+'</span>':'')+'</span>';
+    h+='<span class="v"><button class="btn sm '+(w.active?'':'danger')+'" onclick="cfDelWorker(&#39;'+esc(w.name)+'&#39;,'+(w.active?'true':'false')+')">删除</button></span></div>';
+  }
+  return h;
+}
+function cfRevoke(id,name){if(!id)return;if(!confirm('撤销 API Token「'+name+'」？此操作不可逆。'))return;if(S.cfResources)S.cfResources.loading=true;var b=document.getElementById('cfResBox');if(b)b.innerHTML=rCfResources();cmd('cfRevokeToken',{id:id});}
+function cfDelWorker(name,active){if(!name)return;var m=active?'「'+name+'」是当前持久通道 Worker，删除后公网穿透会断开（可重建）。确定删除？':'删除 Worker「'+name+'」？此操作不可逆。';if(!confirm(m))return;if(S.cfResources)S.cfResources.loading=true;var b=document.getElementById('cfResBox');if(b)b.innerHTML=rCfResources();cmd('cfDeleteWorker',{name:name});}
 function rBridgeRelayCard(r){
   var h='<div class="st" style="margin-top:2px">⭐ 持久通道 · 一次登录全自动打通<span style="font-size:10px;color:var(--muted);font-weight:normal"> · 你自己的固定 Worker 地址·永不漂</span></div>';
   if(r&&r.active&&r.url){
@@ -8292,6 +8377,9 @@ function rBridgeRelayCard(r){
     h+='<button class="btn sm" onclick="cmd(&#39;relayOAuthRefresh&#39;)" title="刷新 Token: 用 refresh_token 续期并重部署 Worker(自愈·轮换令牌)"'+(r.oauth?'':' disabled style="opacity:.5"')+'>↻ 刷新 Token</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;relayRestart&#39;)" title="重启 Worker 通道(断开重连); 连不上则自动升级为从零重建·后端自愈">🔄 重启 Worker</button>';
     h+='<button class="btn sm danger" onclick="if(confirm(&#39;撤销 Cloudflare 授权并删除本持久通道，回退到快速隧道/mesh？&#39;))cmd(&#39;relayOAuthLogout&#39;)">🗑 删除通道/切号</button></div>';
+    // 🗂️ 管理 Token / Worker(移植手机 APK 统管): 列/撤该 CF 账号的 API Token、列/删 Worker, 一页解决, 不另开页面。
+    h+='<div class="st" style="margin-top:10px;font-size:12px">🗂️ 管理 Token / Worker<span style="font-size:10px;color:var(--muted);font-weight:normal"> · 本账号下的凭证与部署</span><button class="btn sm ghost" style="float:right;margin-top:-2px;padding:2px 8px" onclick="cmd(&#39;cfListResources&#39;)">⟳ 加载/刷新</button></div>';
+    h+='<div id="cfResBox" class="card">'+rCfResources()+'</div>';
   } else {
     // ① 纯凭证·零点击全自动(承担一切负担): 只填 CF 账号密码(+可选 2FA) → 后端 CDP 驱动登录+授权+部署。
     h+='<div class="card"><div style="font-size:11px;color:var(--muted);margin-bottom:6px">想要<b style="color:var(--fg)">永不漂的固定公网地址</b>？<b style="color:var(--fg)">只填 Cloudflare 账号密码</b>，后端<b style="color:var(--fg)">全自动</b>登录→授权→注册 Token→部署你自己的固定 Worker→落盘置顶接管，令牌到期自动续期、出问题自愈。<b style="color:var(--warn)">遇验证码/两步验证挡住时自动回退</b>为下方「一次授权」链接(点一次即可)。凭证仅用于本次登录，<b style="color:var(--fg)">不落盘、日志不出明文</b>。</div>';
@@ -8749,7 +8837,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){if(_tabWatch[d.tab]){clearTimeout(_tabWatch[d.tab]);_tabWatch[d.tab]=0;}S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='bridgeGhAccounts'){S.bridgeGhAccts=d.accounts||[];try{rBridgeFull()}catch(e){}}else if(d.type==='actionResult'){if(d.command==='setCleanupCooldown'){var _m=document.getElementById('swCdMsg');if(_m){_m.textContent=d.ok?('✓ 已保存 '+(d.hours!=null?d.hours+'h':'')):('✗ '+(d.error||'保存失败'));_m.style.color=d.ok?'var(--success)':'var(--danger)'}if(d.ok&&typeof d.hours==='number')S.cooldownH=d.hours;}else if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='devinAutoAcquire'&&d.ok&&d.canUseApi===false){toast('已获取 Session Token, 但完整 API(cog_ key)不可用',false);renderCredLimited()}else if(d.command==='copyBackupCred'){toast(d.ok?(d.hasPw?'已复制账号+密码':'已复制邮箱(本地无密码)'):'复制失败',d.ok&&d.hasPw)}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){if(_tabWatch[d.tab]){clearTimeout(_tabWatch[d.tab]);_tabWatch[d.tab]=0;}S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='bridgeGhAccounts'){S.bridgeGhAccts=d.accounts||[];try{rBridgeFull()}catch(e){}}else if(d.type==='bridgeCfResources'){S.cfResources=d;var _cb=document.getElementById('cfResBox');if(_cb)_cb.innerHTML=rCfResources();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='actionResult'){if(d.command==='setCleanupCooldown'){var _m=document.getElementById('swCdMsg');if(_m){_m.textContent=d.ok?('✓ 已保存 '+(d.hours!=null?d.hours+'h':'')):('✗ '+(d.error||'保存失败'));_m.style.color=d.ok?'var(--success)':'var(--danger)'}if(d.ok&&typeof d.hours==='number')S.cooldownH=d.hours;}else if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='devinAutoAcquire'&&d.ok&&d.canUseApi===false){toast('已获取 Session Token, 但完整 API(cog_ key)不可用',false);renderCredLimited()}else if(d.command==='copyBackupCred'){toast(d.ok?(d.hasPw?'已复制账号+密码':'已复制邮箱(本地无密码)'):'复制失败',d.ok&&d.hasPw)}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -9601,7 +9689,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'relayCredLogin', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'relayCredLogin', 'cfListResources', 'cfRevokeToken', 'cfDeleteWorker', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
     // GitHub 纵向板块独立于 Devin 账号池(自带 PAT 鉴权) — daoGh* 一律免 Devin 登录
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command) && !/^daoGh/.test(String(msg.command || ''))) {
         reply({ type: 'error', msg: 'Not logged in' });
@@ -11375,6 +11463,27 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 if (r.ok && r.url) { try { await vscode.env.clipboard.writeText(r.url); } catch { /* 守柔 */ } vscode.window.showInformationMessage('重建: 登录链接已打开(并复制)。授权后后端将全自动重新部署并置顶接管。'); }
                 else vscode.window.showErrorMessage('DAO 持久通道重建失败: ' + (r.error || '未知错误'));
                 refreshReply({ type: 'actionResult', command: 'relayRebuild', ok: !!r.ok, url: r.url, error: r.error });
+                break;
+            }
+            case 'cfListResources': {
+                // 列出当前持久通道凭证下的 API Token 与 Worker(移植手机 APK 的账号/Token/Worker 统管)。
+                const r = await bridgeCfListResources();
+                reply({ type: 'bridgeCfResources', ...r });
+                break;
+            }
+            case 'cfRevokeToken': {
+                const r = await bridgeCfRevokeToken(String(msg.id || ''));
+                vscode.window[r.ok ? 'showInformationMessage' : 'showErrorMessage']('Cloudflare API Token 撤销: ' + (r.ok ? '✓ 已撤销' : ('失败 ' + (r.error || ''))));
+                const list = await bridgeCfListResources();
+                reply({ type: 'bridgeCfResources', ...list, toast: r.ok ? '已撤销 Token' : ('撤销失败: ' + (r.error || '')), toastOk: !!r.ok });
+                break;
+            }
+            case 'cfDeleteWorker': {
+                const nm = String(msg.name || '');
+                const r = await bridgeCfDeleteWorker(nm);
+                vscode.window[r.ok ? 'showInformationMessage' : 'showErrorMessage']('Cloudflare Worker 删除: ' + (r.ok ? ('✓ 已删除 ' + nm) : ('失败 ' + (r.error || ''))));
+                const list = await bridgeCfListResources();
+                reply({ type: 'bridgeCfResources', ...list, toast: r.ok ? ('已删除 Worker ' + nm) : ('删除失败: ' + (r.error || '')), toastOk: !!r.ok });
                 break;
             }
             case 'bridgeHealth': {
