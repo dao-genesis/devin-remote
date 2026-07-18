@@ -89,7 +89,7 @@ function buildVsix() {
       code = code.replace(
         /(const\s+noAuthNeeded\s*=\s*\[[^\]]*?)(\s*\]\s*;)/,
         (m, head, tail) =>
-          head.includes("'winStatus'") ? m : head + ", 'winStatus', 'winExec', 'winScreenshot'" + tail,
+          head.includes("'winStatus'") ? m : head + ", 'winStatus', 'winExec', 'winScreenshot', 'winVmList', 'winHostEnsure', 'winVmCreate', 'winVmDestroy', 'winOpenDesktop'" + tail,
       );
       // 'windows' 折入 solo 白名单 (汉堡列表点开即独立子网页·隐左导航)。
       code = code.replace(
@@ -114,6 +114,16 @@ function buildVsix() {
     copyDir(path.join(srcRoot, "media"), path.join(dst, "media"));
   // package.json (供子模块自身按需读取版本) — 放 vendor-vsix 根,使 __dirname/../package.json 命中
   copyFile(path.join(srcRoot, "package.json"), path.join(dst, "package.json"));
+  // 归一·③ 复制品桌面: 随插件分发 cloud/vm-replica 后端(宿主守护/会话内代理/多会话使能/部署),
+  //   使 Windows 总控可按需 spawn 官方 RDP 多会话底座(boot-safe·不生产新体系·只搬运既有)。
+  const vmSrc = path.join(path.dirname(plugins), "cloud", "vm-replica", "agent-vm");
+  if (fs.existsSync(vmSrc)) {
+    const vmDst = path.join(dst, "media", "vm-replica");
+    fs.mkdirSync(vmDst, { recursive: true });
+    for (const f of ["vm_host_daemon.py", "vm_inner_agent.py", "ts_multifix.py", "deploy_host.py", "config.sample.json"])
+      if (fs.existsSync(path.join(vmSrc, f))) copyFile(path.join(vmSrc, f), path.join(vmDst, f));
+    log("vendor-vsix: bundled cloud/vm-replica 后端 → media/vm-replica (复制品桌面底座)");
+  } else log("vendor-vsix: SKIP vm-replica bundle (源缺失 " + vmSrc + ")");
   log("vendor-vsix: transpiled " + n + " ts file(s)");
 }
 
@@ -250,6 +260,11 @@ function verifyFolds() {
     "case 'winStatus'",             // 后端 · 整机信息(桥 /api/health + sysinfo)
     "case 'winExec'",               // 后端 · 整机执行
     "case 'winScreenshot'",         // 后端 · 整机截屏
+    "function vmHostApi",           // 复制品桌面 · 宿主守护(vm_host_daemon)直连
+    "function openVmDesktopPanel",  // 复制品桌面 · IDE 内多实例桌面页(截图流+鼠键回传)
+    "case 'winVmList'",             // 后端 · 分身列表
+    "case 'winVmCreate'",           // 后端 · 新建/连接分身(RDP 多会话)
+    "case 'winOpenDesktop'",        // 后端 · 打开复制品桌面页
     "'winStatus'",                  // 免登白名单
     "'windows'",                    // _solo 白名单 / 早退清单
     "t==='windows')return;",        // reloadActiveDataTab/renderCredLimited 面板板块早退
