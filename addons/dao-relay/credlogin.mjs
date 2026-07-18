@@ -71,21 +71,51 @@ export function pickGroups(all, names) {
   }).filter(Boolean);
 }
 
+// ── 纯逻辑: 按 scope 归类权限组(账号级 / 用户级 / zone 级) ──
+//   CF /user/tokens/permission_groups 每组带 scopes(如 ["com.cloudflare.api.account"]);
+//   缺 scopes 时按名兜底归类(仅用于测试/老形态), 默认落账号级。
+export function partitionGroupsByScope(groups) {
+  const account = [], user = [], zone = [];
+  for (const g of (groups || [])) {
+    if (!g || !g.id) continue;
+    const scopes = Array.isArray(g.scopes) ? g.scopes : [];
+    const s = scopes[0] || "";
+    let bucket;
+    if (s === "com.cloudflare.api.user") bucket = user;
+    else if (s === "com.cloudflare.api.account.zone") bucket = zone;
+    else if (s === "com.cloudflare.api.account") bucket = account;
+    else {
+      // 无 scopes: 按名兜底(用户级/zone 级关键词, 其余归账号级)。
+      const n = String(g.name || "");
+      if (/^(User|Memberships|API Tokens)\b/.test(n)) bucket = user;
+      else if (/^(Zone|DNS|SSL|Firewall|Page Rules|Cache|Load Balanc|Logs|Analytics)\b/.test(n)) bucket = zone;
+      else bucket = account;
+    }
+    bucket.push({ id: g.id });
+  }
+  return { account, user, zone };
+}
+
 // ── 纯逻辑: 构造 POST /api/v4/user/tokens 的请求体(与手机端 cf-auto.js 同源·可测) ──
-//   最小权限: 账号级 Workers 脚本写 + 账号设置读; 用户级 用户详情读 + 成员读(供 verify/accounts)。
+//   本源(用户「Token 权限全部拉满」): 默认把该账号可授予的**全部**权限组按 scope 一次拉满 ——
+//   账号级(含 Workers 脚本读写 / 账号设置读写)、用户级(含 API Tokens 读写→令牌可自管理)、zone 级
+//   (含 Zone 读 / DNS·供绑自定义域)。这样常驻 token 既能部署 Worker, 又能自列/自撤 Token、列/删 Worker,
+//   并承接后续一切需求。缺 accountId/userId 或对应组为空时不产该策略。
+//   min:true 时回退最小权限集(仅供 CF 拒绝全量策略时的兜底)。
 export function buildTokenPayload(o) {
   o = o || {};
-  const acctG = pickGroups(o.groups, ["Workers Scripts Write", "Account Settings Read"]);
-  const userG = pickGroups(o.groups, ["User Details Read", "Memberships Read"]);
   const policies = [];
-  if (acctG.length && o.accountId) {
-    const ar = {}; ar["com.cloudflare.api.account." + o.accountId] = "*";
-    policies.push({ effect: "allow", resources: ar, permission_groups: acctG });
+  if (o.min) {
+    const acctG = pickGroups(o.groups, ["Workers Scripts Write", "Account Settings Read"]);
+    const userG = pickGroups(o.groups, ["User Details Read", "Memberships Read"]);
+    if (acctG.length && o.accountId) { const ar = {}; ar["com.cloudflare.api.account." + o.accountId] = "*"; policies.push({ effect: "allow", resources: ar, permission_groups: acctG }); }
+    if (userG.length && o.userId) { const ur = {}; ur["com.cloudflare.api.user." + o.userId] = "*"; policies.push({ effect: "allow", resources: ur, permission_groups: userG }); }
+    return { name: o.name || ("dao-relay " + Date.now()), policies };
   }
-  if (userG.length && o.userId) {
-    const ur = {}; ur["com.cloudflare.api.user." + o.userId] = "*";
-    policies.push({ effect: "allow", resources: ur, permission_groups: userG });
-  }
+  const part = partitionGroupsByScope(o.groups);
+  if (part.account.length && o.accountId) { const ar = {}; ar["com.cloudflare.api.account." + o.accountId] = "*"; policies.push({ effect: "allow", resources: ar, permission_groups: part.account }); }
+  if (part.user.length && o.userId) { const ur = {}; ur["com.cloudflare.api.user." + o.userId] = "*"; policies.push({ effect: "allow", resources: ur, permission_groups: part.user }); }
+  if (part.zone.length && o.accountId) { const zr = {}; zr["com.cloudflare.api.account.zone.*"] = "*"; policies.push({ effect: "allow", resources: zr, permission_groups: part.zone }); }
   return { name: o.name || ("dao-relay " + Date.now()), policies };
 }
 
@@ -164,14 +194,38 @@ export async function cfMintTokenViaSession(page, { log = console.log, name } = 
       const accts = await api("/api/v4/accounts?per_page=50");
       if (!accts || !accts.length) throw new Error("no_account");
       const groups = await api("/api/v4/user/tokens/permission_groups");
-      const acctG = pick(groups, ["Workers Scripts Write", "Account Settings Read"]);
-      const userG = pick(groups, ["User Details Read", "Memberships Read"]);
-      const policies = [];
-      if (acctG.length && accts[0].id) { const ar = {}; ar["com.cloudflare.api.account." + accts[0].id] = "*"; policies.push({ effect: "allow", resources: ar, permission_groups: acctG }); }
-      if (userG.length && user.id) { const ur = {}; ur["com.cloudflare.api.user." + user.id] = "*"; policies.push({ effect: "allow", resources: ur, permission_groups: userG }); }
-      if (!policies.length) throw new Error("no_permission_groups_matched");
-      const res = await api("/api/v4/user/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nm, policies }) });
-      return res && res.value;
+      // ★拉满: 按 scope 归类全部权限组, 账号级/用户级/zone 级各建一条 allow=* 策略。
+      const buildFull = () => {
+        const acct = [], usr = [], zone = [];
+        for (const g of (groups || [])) {
+          if (!g || !g.id) continue;
+          const s = (Array.isArray(g.scopes) && g.scopes[0]) || "";
+          if (s === "com.cloudflare.api.user") usr.push({ id: g.id });
+          else if (s === "com.cloudflare.api.account.zone") zone.push({ id: g.id });
+          else acct.push({ id: g.id }); // 账号级 + 无 scopes 兜底
+        }
+        const pol = [];
+        if (acct.length && accts[0].id) { const ar = {}; ar["com.cloudflare.api.account." + accts[0].id] = "*"; pol.push({ effect: "allow", resources: ar, permission_groups: acct }); }
+        if (usr.length && user.id) { const ur = {}; ur["com.cloudflare.api.user." + user.id] = "*"; pol.push({ effect: "allow", resources: ur, permission_groups: usr }); }
+        if (zone.length && accts[0].id) { const zr = {}; zr["com.cloudflare.api.account.zone.*"] = "*"; pol.push({ effect: "allow", resources: zr, permission_groups: zone }); }
+        return pol;
+      };
+      // 兜底最小集(CF 拒绝全量策略时): 仅够部署 + 基础读。
+      const buildMin = () => {
+        const acctG = pick(groups, ["Workers Scripts Write", "Account Settings Read"]);
+        const userG = pick(groups, ["User Details Read", "Memberships Read"]);
+        const pol = [];
+        if (acctG.length && accts[0].id) { const ar = {}; ar["com.cloudflare.api.account." + accts[0].id] = "*"; pol.push({ effect: "allow", resources: ar, permission_groups: acctG }); }
+        if (userG.length && user.id) { const ur = {}; ur["com.cloudflare.api.user." + user.id] = "*"; pol.push({ effect: "allow", resources: ur, permission_groups: userG }); }
+        return pol;
+      };
+      const post = async (policies) => {
+        if (!policies.length) throw new Error("no_permission_groups_matched");
+        const res = await api("/api/v4/user/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nm, policies }) });
+        return res && res.value;
+      };
+      try { return await post(buildFull()); }
+      catch (e) { return await post(buildMin()); } // 全量被拒 → 最小集兜底(至少能部署)
     }, tokenName);
     return tk || null;
   } catch (e) {
