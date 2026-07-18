@@ -385,6 +385,7 @@
             var actionReq=(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null");
             var en=String((o&&o.enum)||s.status_enum||s.status||"").toLowerCase();
             hits.push({email:acc.email,sid:sid,title:(s.title||"").slice(0,50),status:en,reason:reason,
+              ts:(DaoCloud.sessTs?DaoCloud.sessTs(s):0),   // 会话活跃时间戳 → 供页签「最新对话」择取(而非高优先级老对话)
               actionRequired:actionReq,actionLabel:(actionReq&&typeof uar==="string")?uar:undefined,
               msgId:String(s.latest_message_event_id||s.latest_message_event_at||""),
               unread:(s.is_unread===true||s.is_unread==="true")});
@@ -1449,8 +1450,9 @@
     function _pushTabConvStatus(a, sess){
       try{
         if(!a || typeof N.setTabStatus!=="function" || !sess || !sess.length) return;
-        var pri={quota:4,blocked:3,action_required:3,awaiting:2,running:1}, top=null;
-        sess.forEach(function(s){ if(!top || (pri[s.reason]||0)>(pri[top.reason]||0)) top=s; });
+        // 页签恒随该账号「最新对话」(按活跃时间戳择取), 而非残留的高优先级老对话: 老对话中断/结束、
+        //   新对话已开跑时, 页签须立即切到新对话的名称与状态 (道法自然·实时追踪账号下最新对话)。
+        var top=null; sess.forEach(function(s){ if(!top || (s.ts||0)>=(top.ts||0)) top=s; });
         if(!top) return;
         var stt = top.reason==="running" ? "running" : "blocked";   // 与 switch.html _pollOneAcc 同映射
         N.setTabStatus(a.id||"", top.title||"", stt); if(a.email) N.setTabStatus(a.email, top.title||"", stt);

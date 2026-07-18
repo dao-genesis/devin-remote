@@ -143,21 +143,37 @@
     return "manual";
   }
 
+  // ── 本通道所需最小权限组 (账号级为部署/读账号硬需求; 用户级供 verify/accounts) ──
+  var ACCT_GROUPS = ["Workers Scripts Write", "Account Settings Read"];
+  var USER_GROUPS = ["User Details Read", "Memberships Read"];
+
   // ── 从 CF 内部接口的权限组全集里按名挑出所需组 (纯函数·可测) ──
+  //   先精确匹配, 再退到「去空白·不分大小写」匹配 —— 容忍不同账号/语言环境下 CF 回传的
+  //   权限组名大小写或首尾空白差异, 提升「任意用户」可复现性 (语义名不变即命中)。
   function pickGroups(all, names) {
     all = Array.isArray(all) ? all : [];
+    var norm = function (s) { return String(s == null ? "" : s).trim().toLowerCase(); };
     return (names || []).map(function (n) {
       for (var i = 0; i < all.length; i++) { if (all[i] && all[i].name === n) return { id: all[i].id }; }
+      for (var j = 0; j < all.length; j++) { if (all[j] && norm(all[j].name) === norm(n)) return { id: all[j].id }; }
       return null;
     }).filter(Boolean);
+  }
+
+  // ── 诊断: 从权限组全集里找出「缺失的必需组名」(纯函数·可测) ──
+  //   返回给定 names 中在 all 里匹配不到 id 的那些名字。cfMintToken 用它在铸 Token 前
+  //   就明确报错(而非静默铸出欠权 Token 到后续「读不到账号」才炸·难排查)。
+  function missingGroups(all, names) {
+    all = Array.isArray(all) ? all : [];
+    return (names || []).filter(function (n) { return pickGroups(all, [n]).length === 0; });
   }
 
   // ── 构造 POST /api/v4/user/tokens 的请求体 (纯函数·可测) ──
   //   最小权限: 账号级 Workers 脚本写 + 账号设置读; 用户级 用户详情读 + 成员读 (供 verify/accounts)。
   function buildTokenPayload(o) {
     o = o || {};
-    var acctG = pickGroups(o.groups, ["Workers Scripts Write", "Account Settings Read"]);
-    var userG = pickGroups(o.groups, ["User Details Read", "Memberships Read"]);
+    var acctG = pickGroups(o.groups, ACCT_GROUPS);
+    var userG = pickGroups(o.groups, USER_GROUPS);
     var policies = [];
     if (acctG.length && o.accountId) {
       var ar = {}; ar["com.cloudflare.api.account." + o.accountId] = "*";
@@ -177,8 +193,11 @@
   CFAUTO.feedToken = feedToken;
   CFAUTO.hostOf = hostOf;
   CFAUTO.pickGroups = pickGroups;
+  CFAUTO.missingGroups = missingGroups;
   CFAUTO.buildTokenPayload = buildTokenPayload;
   CFAUTO.loginMode = loginMode;
+  CFAUTO.ACCT_GROUPS = ACCT_GROUPS;
+  CFAUTO.USER_GROUPS = USER_GROUPS;
 
   // ═══ DOM 驱动 (仅浏览器·测试环境不跑) ═══════════════════════════════════
   //__CFAUTO_RUN_START__
@@ -263,6 +282,13 @@
         var accts = await api("/api/v4/accounts?per_page=50");
         if (!accts || !accts.length) throw new Error("no_account");
         var groups = await api("/api/v4/user/tokens/permission_groups");
+        // 部署/读账号硬需求账号级两组; 缺任一即明确报错(列出 CF 实际回传的组名·便于任意用户排查),
+        // 不静默铸出欠权 Token 拖到后续「读不到账号」才炸。
+        var acctMiss = missingGroups(groups, ACCT_GROUPS);
+        if (acctMiss.length) {
+          var names = (Array.isArray(groups) ? groups : []).map(function (g) { return g && g.name; }).filter(Boolean);
+          throw new Error("missing_perm_groups: " + acctMiss.join(", ") + " (CF 回传 " + names.length + " 组·此账号权限组名与预期不符)");
+        }
         var payload = buildTokenPayload({ name: "dao-relay " + Date.now(), accountId: accts[0].id, userId: user.id, groups: groups });
         if (!payload.policies.length) throw new Error("no_permission_groups_matched");
         var res = await api("/api/v4/user/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });

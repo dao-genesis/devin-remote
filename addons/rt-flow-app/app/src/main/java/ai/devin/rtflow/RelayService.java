@@ -1484,6 +1484,20 @@ public class RelayService extends Service {
             return "{\"metered\":" + metered + ",\"online\":" + online + "}";
         }
         @JavascriptInterface public void log(String s) { android.util.Log.i("RTFlowEngine", s == null ? "" : s); }
+        /** 会话态 Cookie 读取 (恒定通道·零浏览器建 Token 用) — 仅限 Cloudflare 域, 非通用 cookie 读取原语。
+         *  CookieManager 进程级全局, 不依赖前台 Activity → 引擎(常驻前台服务)后台亦可读, 与「远程后台
+         *  标签 JS 被冻结」彻底解耦: 用户在 App 内浏览器登录过 CF 后, 引擎据此 cookie 经原生 HTTP 桥
+         *  复刻 dashboard 内部接口直建 Token, 零可见标签·零前台·冻结免疫。 */
+        @JavascriptInterface public String cookiesFor(String url) {
+            try {
+                String u = url == null ? "" : url;
+                android.net.Uri uri = android.net.Uri.parse(u);
+                String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(java.util.Locale.US);
+                if (!(host.equals("cloudflare.com") || host.endsWith(".cloudflare.com"))) return "";
+                String c = android.webkit.CookieManager.getInstance().getCookie(u);
+                return c == null ? "" : c;
+            } catch (Exception e) { return ""; }
+        }
         /** 对话追踪·全局系统通知 (引擎后台检测到会话卡住/待处理/结束时调用; 软件被切后台/锁屏亦可弹)。 */
         @JavascriptInterface public void notifyGlobal(String tag, String title, String text) {
             main.post(() -> postConvNotification(tag, title, text));
