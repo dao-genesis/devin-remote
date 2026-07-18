@@ -266,20 +266,38 @@
       // ── ★会话态·经 CF 内部接口纯 HTTP 直建 Token (同源带 cookie·零 UI·零抓取) ──
       //   与 dashboard 前端调的同一批 /api/v4 接口: 读用户/账号/权限组 → POST 建 Token → 取 value。
       var cfMintToken = async function () {
+        // 网络级瞬断可重试判定: fetch 抛 TypeError (Failed to fetch / Load failed / NetworkError) —
+        //   经 VPN/代理 (本机走 Clash 出口) 时首包偶发瞬断, 或代登录成功后 SPA 跳转中途相对 fetch 命中
+        //   跨源重定向。这类非语义错误重试即可; cf_challenge / HTTP xxx 等语义错误绝不重试。
+        var isNetErr = function (m) { return /failed to fetch|load failed|networkerror|network error|network request failed/i.test(String(m || "")); };
+        var sleep = function (ms) { return new Promise(function (res) { setTimeout(res, ms); }); };
         var api = async function (path, init) {
           init = init || {};
-          var r = await fetch(path, {
-            method: init.method || "GET",
-            credentials: "include",
-            headers: Object.assign({ Accept: "application/json", "X-Cross-Site-Security": "dash", "X-Requested-With": "XMLHttpRequest" }, init.headers || {}),
-            body: init.body
-          });
-          // CF bot-management: 403 + text/html (managed challenge) vs JSON API error
-          var ct = (r.headers.get("content-type") || "").toLowerCase();
-          if (!r.ok && ct.indexOf("text/html") >= 0) throw new Error("cf_challenge");
-          var t = null; try { t = await r.json(); } catch (e) { t = {}; }
-          if (!r.ok || t.success === false) throw new Error("cf " + path + " HTTP " + r.status);
-          return t.result;
+          var lastErr = null;
+          for (var attempt = 0; attempt < 4; attempt++) {
+            try {
+              // 与会话态 cfMintJs 同源建 Token 完全对齐的请求头 (不加 X-Requested-With: 该头在跳转成
+              //   跨源时会触发 CORS 预检并直接 Failed to fetch; 会话态路径无此头且长期实测可用)。
+              var r = await fetch(path, {
+                method: init.method || "GET",
+                credentials: "include",
+                headers: Object.assign({ Accept: "application/json", "X-Cross-Site-Security": "dash" }, init.headers || {}),
+                body: init.body
+              });
+              // CF bot-management: 403 + text/html (managed challenge) vs JSON API error
+              var ct = (r.headers.get("content-type") || "").toLowerCase();
+              if (!r.ok && ct.indexOf("text/html") >= 0) throw new Error("cf_challenge");
+              var t = null; try { t = await r.json(); } catch (e) { t = {}; }
+              if (!r.ok || t.success === false) throw new Error("cf " + path + " HTTP " + r.status);
+              return t.result;
+            } catch (e) {
+              var em = String(e && e.message || e);
+              if (!isNetErr(em)) throw e;   // 语义错误 (cf_challenge/HTTP/…) 立即上抛·不重试
+              lastErr = e;
+              if (attempt < 3) await sleep(1200 + attempt * 800);   // 网络瞬断: 退避重试
+            }
+          }
+          throw lastErr || new Error("Failed to fetch");
         };
         var user = await api("/api/v4/user");
         var accts = await api("/api/v4/accounts?per_page=50");
@@ -378,6 +396,13 @@
           } catch (e) {
             root.__cfMinted = 0;
             var emsg = String(e && e.message || e);
+            // 网络瞬断 (VPN/代理出口首包偶断): 已在 api() 内退避重试仍失败 → 不当致命错, 复位让主循环下一拍再试
+            //   (主循环 ~40 拍/60s + 原生 90s 兜底超时封顶), 避免一次瞬断就把整条链判死。
+            if (/failed to fetch|load failed|networkerror|network error|network request failed/i.test(emsg)) {
+              root.__cfNetRetries = (root.__cfNetRetries || 0) + 1;
+              if (root.__cfNetRetries <= 6) { status("wait", "网络瞬断·重试建 Token (" + root.__cfNetRetries + ")"); return; }
+              emsg = "网络多次瞬断建 Token 失败 (可能出口代理不稳): " + emsg;
+            }
             // cf_challenge = bot-management 拦截(非 API 报错): 降级到 UI 建 Token 流
             if (emsg === "cf_challenge") {
               status("fallback", "内部接口被 bot 管理拦截·降级到 UI 建 Token…");
@@ -385,8 +410,9 @@
               try { location.href = tkUrl; } catch (x) {}
               return;
             }
-            status("error", "建 Token 失败: " + emsg);
-            if (CFG.deliver && !root.__cfDelivered) { root.__cfDelivered = 1; try { root.__CFM && root.__CFM.done(JSON.stringify({ error: emsg })); } catch (x) {} }
+            var _loc = ""; try { _loc = String(location.href || "").split("?")[0]; } catch (x) {}
+            status("error", "建 Token 失败: " + emsg + (_loc ? " @" + _loc : ""));
+            if (CFG.deliver && !root.__cfDelivered) { root.__cfDelivered = 1; try { root.__CFM && root.__CFM.done(JSON.stringify({ error: emsg, at: _loc })); } catch (x) {} }
           }
           return;
         }
