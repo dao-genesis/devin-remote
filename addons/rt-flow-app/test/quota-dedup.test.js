@@ -50,12 +50,12 @@ ok(!!D && typeof D.devinFetchQuota === "function", "DaoCore.devinFetchQuota 装�
 
 (async function () {
   const A = ["ak_test", "ws_test", "auth1_test", "org-abc", ""];   // 单号取额度参数 (statusKey=apiKey)
-  const RAW = 2;   // 一次真取 = GetUserStatus(1) + billing/status(1)
+  const RAW = 3;   // 一次真取 = GetUserStatus(1) + billing/status(1) + billing/usage/stats(1·余额双端点归一)
 
   // 情形1: 三路并发同号 → 在途去重, 只穿透一发
   reqCount = 0;
   const r = await Promise.all([D.devinFetchQuota.apply(null, A), D.devinFetchQuota.apply(null, A), D.devinFetchQuota.apply(null, A)]);
-  ok(reqCount === RAW, "并发同号: 在途去重 → 仅 1 发额度(2 次穿透), 实测=" + reqCount);
+  ok(reqCount === RAW, "并发同号: 在途去重 → 仅 1 发额度(3 次穿透), 实测=" + reqCount);
   ok(r[0] && r[0].overageDollars === 6.42, "并发同号: 结果正确 ($6.42)");
   ok(r[0] !== r[1] && r[1] !== r[2], "并发同号: 各调用得独立克隆 (互不串改)");
 
@@ -68,7 +68,7 @@ ok(!!D && typeof D.devinFetchQuota === "function", "DaoCore.devinFetchQuota 装�
   // 情形3: force=true → 绕过缓存, 真取 (手动刷新语义)
   reqCount = 0;
   await D.devinFetchQuota("ak_test", "ws_test", "auth1_test", "org-abc", "", true);
-  ok(reqCount === RAW, "force 绕过缓存: 真取(2 次穿透), 实测=" + reqCount);
+  ok(reqCount === RAW, "force 绕过缓存: 真取(3 次穿透), 实测=" + reqCount);
 
   // 情形4: 克隆隔离 — 改写一次返回值不污染后续缓存
   const c1 = await D.devinFetchQuota.apply(null, A);   // 命中缓存(force 刚回填)

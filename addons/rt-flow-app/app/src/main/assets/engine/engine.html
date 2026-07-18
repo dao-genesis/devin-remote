@@ -96,8 +96,17 @@
   var NET_DUMP_JS = "(function(){var net=window.__cdpNet||[];var perf=[];try{perf=performance.getEntriesByType('resource').map(function(e){return {url:e.name,type:e.initiatorType,duration:Math.round(e.duration),transferSize:e.transferSize||0,startTime:Math.round(e.startTime),responseEnd:Math.round(e.responseEnd)};});}catch(e){}return JSON.stringify({hooked:net.slice(-200),resources:perf.slice(-200),hookedCount:net.length,resourceCount:perf.length});})()";
 
   // ── 账号存储 (localStorage) ──────────────────────────────────────────────
-  function loadAcc(){ try{ return JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); }catch(e){ return []; } }
-  function saveAcc(a){ var s=JSON.stringify(a||[]); localStorage.setItem("rtflow.accounts", s); try{ var N=window.Native||{}; if(N.vaultSave) N.vaultSave("accounts", s); }catch(e){} }
+  // 稳定序号读即修(与 switch.html 同源同序·幂等): 号一入库领永久编号, 移出库不平移不复用。
+  function ensureAccNos(accs){
+    var seq=0; try{ seq=parseInt(localStorage.getItem("rtflow.accNoSeq")||"0",10)||0; }catch(e){}
+    var max=seq, ch=false;
+    accs.forEach(function(a){ if(a&&typeof a.no==="number"&&a.no>max) max=a.no; });
+    accs.forEach(function(a){ if(a&&!(typeof a.no==="number"&&a.no>0)){ a.no=++max; ch=true; } });
+    if(max>seq){ try{ localStorage.setItem("rtflow.accNoSeq",String(max)); }catch(e){} }
+    return ch;
+  }
+  function loadAcc(){ try{ var a=JSON.parse(localStorage.getItem("rtflow.accounts")||"[]"); if(ensureAccNos(a)) saveAcc(a); return a; }catch(e){ return []; } }
+  function saveAcc(a){ ensureAccNos(a||[]); var s=JSON.stringify(a||[]); localStorage.setItem("rtflow.accounts", s); try{ var N=window.Native||{}; if(N.vaultSave) N.vaultSave("accounts", s); }catch(e){} }
   function getActive(){ return localStorage.getItem("rtflow.active")||""; }
   function setActive(id){ localStorage.setItem("rtflow.active", id||""); }
   function findAcc(id){ var a=loadAcc(); for(var i=0;i<a.length;i++){ if(a[i].id===id||a[i].email===id) return a[i]; } return null; }
@@ -376,6 +385,7 @@
             var actionReq=(uar!==undefined&&uar!==null&&uar!==""&&uar!==false&&uar!=="null");
             var en=String((o&&o.enum)||s.status_enum||s.status||"").toLowerCase();
             hits.push({email:acc.email,sid:sid,title:(s.title||"").slice(0,50),status:en,reason:reason,
+              ts:(DaoCloud.sessTs?DaoCloud.sessTs(s):0),   // 会话活跃时间戳 → 供页签「最新对话」择取(而非高优先级老对话)
               actionRequired:actionReq,actionLabel:(actionReq&&typeof uar==="string")?uar:undefined,
               msgId:String(s.latest_message_event_id||s.latest_message_event_at||""),
               unread:(s.is_unread===true||s.is_unread==="true")});
@@ -400,7 +410,7 @@
     recentConvAll: async function(a){
       a=a||{}; var perAcc=a.perAcc||6, max=a.max||40, conc=Math.max(1, a.conc||6);
       var accs=loadAcc(), unlocked=[];
-      for(var i=0;i<accs.length;i++){ if(accs[i].auth1&&accs[i].orgId) unlocked.push({a:accs[i],no:i+1}); }
+      for(var i=0;i<accs.length;i++){ if(accs[i].auth1&&accs[i].orgId) unlocked.push({a:accs[i],no:accs[i].no||i+1}); }
       // 道法自然·轻则通: 早退机制 — 已收集足够活跃对话即停(max×2 为安全余量含去重),
       //   避免 200+ 账号全遍历(每号一次 API 调用, conc:4 → 50+ 轮 → 远超中继 15s 超时)。
       var all=[], idx=0, _stop=false;
@@ -474,20 +484,26 @@
     // ══════════════════════════════════════════════════════════════════════
     browseListTabs: async function(){ return {ok:true, tabs: JSON.parse(N.browseListTabs?N.browseListTabs():"[]")}; },
     browseOpen: async function(a){
-      // 默认后台静默开页, 不抢占用户当前前台页 (道并行而不相悖)。仅 foreground:true 时提到前台让前端同步反映。
-      // foreground:true 先把软件本体唤回前台 (后台/被杀态也能让前端真正可见, 并保证开页落到活的外壳),
-      // 开页经 main.post 异步建标签, 故稍候再读 listTabs 取真实新标签下标。
-      if(a.foreground && N.appToFront){ try{ N.appToFront(); }catch(e){} await new Promise(function(r){ setTimeout(r,600); }); }
+      a = a || {};
+      // ── 两套屏幕·完全隔离 (类 多RDP/虚拟机·道并行而不相悖) ──────────────────────────
+      //   远程/Agent 通道恒在「后台影子屏 autoHost(常驻 INVISIBLE 容器)」开页与操作 —— 结构上
+      //   不可能抢占用户的物理前台屏。历史病灶: foreground:true 会 appToFront()+browseActivateTab()
+      //   把 Agent 的页拽上用户物理屏, 与用户互斥(用户正操作被打断) —— 违背「你操作你的、我操作我的、
+      //   同机而互不干扰」本源。故此处**忽略 foreground**: Agent 开的页一律落在影子屏后台, 其「所见」
+      //   经 browseScreenshot / mirrorFrame 从 autoHost 取帧(取帧前 resumeWeb 唤醒·仍不上前台), 页内
+      //   JS/fetch 经 touchRemoteDrive 影子驱动照常运行。用户若想亲见某页, 自行在标签栏点开即可(那是
+      //   用户屏的主动行为, 非 Agent 抢占)。
       N.browseOpenTab(a.url||"https://app.devin.ai/", a.account||"");
       await new Promise(function(r){ setTimeout(r,350); });
       var idx = -1;
       try{ var tabs=JSON.parse(N.browseListTabs?N.browseListTabs():"[]"); if(tabs.length) idx=tabs[tabs.length-1].index; }catch(e){}
-      if(a.foreground && idx>=0 && N.browseActivateTab){ try{ N.browseActivateTab(idx); }catch(e){} }
-      return {ok:true, tabIndex: idx, background: !a.foreground};
+      return {ok:true, tabIndex: idx, background: true, isolated: true};
     },
-    // 把软件本体(浏览器外壳)提到前台; 已被系统杀掉则冷启动拉起 (远程操控/后台态唤回前端)。
-    appToFront: async function(){ var ok=false; try{ ok=!!(N.appToFront&&N.appToFront()); }catch(e){} return {ok:ok}; },
-    browseActivateTab: async function(a){ if(N.browseActivateTab) N.browseActivateTab(a.tabIndex|0); return {ok:true, tabIndex:a.tabIndex|0}; },
+    // 两套屏幕·完全隔离: 远程通道禁止把软件本体拽上用户物理前台屏(会打断用户) → 恒 no-op。
+    appToFront: async function(){ return {ok:false, isolated:true, note:"两套屏幕隔离·远程不抢用户前台"}; },
+    // 两套屏幕·完全隔离: 远程通道禁止把某标签提为物理前台活动页 → 恒 no-op。Agent 页经 screenshot/
+    // mirror 从影子屏取帧即可, 无需上前台; 用户页的切换由用户自己在标签栏完成。
+    browseActivateTab: async function(a){ return {ok:false, isolated:true, tabIndex:((a&&a.tabIndex)|0), note:"两套屏幕隔离·远程不抢用户前台(用 screenshot/mirror 取帧)"}; },
     // 道法自然·联控在场登记: 控台声明「本设备(clientId)正看/控标签 id(vid)」→ 供 browseListTabs 回传 viewers (橙色标记·点数联控设备)。
     browseClaimView: async function(a){ if(N.browseClaimView){ try{ N.browseClaimView(Number(a.id)||0, String(a.clientId||"")); }catch(e){} } return {ok:true}; },
     browseClose: async function(a){ N.browseCloseTab(a.tabIndex|0); return {ok:true}; },
@@ -1132,6 +1148,8 @@
     // ── 在线自动更新: 云端经中继可查/可推 (安装仍需用户点一次「安装」) ──
     appCheckUpdate: async function(){ try{ return JSON.parse(N.appCheckUpdate?N.appCheckUpdate():"{\"ok\":false,\"error\":\"bridge unavailable\"}"); }catch(e){ return {ok:false,error:String(e)}; } },
     keepAliveStatus: async function(){ try{ return {ok:true, keepAlive: _pjo(N.keepAliveStatus?N.keepAliveStatus():"")}; }catch(e){ return {ok:false,error:String(e)}; } },
+    // 主线程卡顿黑匣子: 卡死(打字/键盘冻结)现场的主线程堆栈+内存水位 JSON 行 (远程取证·根因不靠猜)。
+    jankLog: async function(){ try{ return {ok:true, log: N.jankLog?N.jankLog():""}; }catch(e){ return {ok:false,error:String(e)}; } },
     appInstallUpdate: async function(a){ try{ return JSON.parse(N.appInstallUpdate?N.appInstallUpdate((a&&a.url)||""):"{\"ok\":false,\"error\":\"bridge unavailable\"}"); }catch(e){ return {ok:false,error:String(e)}; } },
     deviceInfo: async function(){ var N=window.Native||{}; return {ok:true, ua:navigator.userAgent, platform:navigator.platform, lang:navigator.language, screen:{w:screen.width,h:screen.height,dpr:window.devicePixelRatio,orient:(screen.orientation||{}).type}, relay:typeof DaoRelayApp!=="undefined"?DaoRelayApp.status():{}, tabs:N.listTabs?(function(){try{return JSON.parse(N.listTabs()||"[]");}catch(e){return[];}})():[], conn:N.getConn?(function(){try{return JSON.parse(N.getConn()||"{}");}catch(e){return{};}})():{}, ts:Date.now()}; },
     listTabs: async function(){ var N=window.Native||{}; if(!N.listTabs)return{ok:false,error:"listTabs bridge unavailable"}; try{return{ok:true,tabs:JSON.parse(N.listTabs()||"[]")};}catch(e){return{ok:false,error:String(e)};} },
@@ -1247,7 +1265,8 @@
   //__SIGSERVE_END__
 
   // ── 对话追踪·全局通知 (常驻引擎后台轮询, 软件被切后台/锁屏也能弹系统通知)。──
-  //   仅在「状态跃迁」时通知, 不刷屏: active→卡住/待处理 弹一次; →结束 弹一次。
+  //   仅在「真需你介入」时通知, 不刷屏: →卡住/待处理/等待输入 弹一次; →结束 弹一次。
+  //   用户发新消息 / 纯运行中产生新消息 一律不提示(不存在「有新消息就弹」)——只亮绿灯, 静默追踪。
   //   复用 CMDS.trackStuck 的判定 (latest_status_contents.user_action_required 等真信号)。
   (function startConvWatch(){
     var PREV_KEY = "rtflow.convwatch";            // sid → {phase, title, email, ts}
@@ -1255,7 +1274,24 @@
     var POLL_MS = 30000, MAINT_MIN_MS = 60000, FIRST_DELAY = 15000;
     function loadPrev(){ try { return JSON.parse(localStorage.getItem(PREV_KEY)||"{}")||{}; } catch(e){ return {}; } }
     function savePrev(o){ try { localStorage.setItem(PREV_KEY, JSON.stringify(o)); } catch(e){} }
-    function notify(tag, title, text){ try { if (N.notifyGlobal) N.notifyGlobal(String(tag), String(title), String(text)); } catch(e){} }
+    // 通知统一出口: 标题冠稳定永久序号【N】(账号终身身份·与切号板/页签同源), target 携带精准跳转目标
+    //   {email, sid, no} → 原生 PendingIntent 按 tag 独立存放, 点按经 onNewIntent 精准落到该账号该对话页(不重载 APK)。
+    function _accNoOf(email){
+      try { var e = String(email||"").toLowerCase(); if (!e) return 0;
+        var L = loadAcc();
+        for (var i = 0; i < L.length; i++){ var x = L[i]; if (String((x && (x.email||x.id))||"").toLowerCase() === e) return (x.no|0) || (i+1); }
+      } catch(err){}
+      return 0;
+    }
+    function notify(tag, title, text, target){ try {
+      var t = String(title==null?"":title), tgt = target || null;
+      if (tgt && tgt.email) { var no = _accNoOf(tgt.email); if (no > 0) { t = "\u3010" + no + "\u3011" + t; tgt.no = no; } }
+      if (N.notifyGlobalT) N.notifyGlobalT(String(tag), t, String(text), tgt ? JSON.stringify(tgt) : "");
+      else if (N.notifyGlobal) N.notifyGlobal(String(tag), t, String(text));
+    } catch(e){} }
+    // 状态解除即主动撤掉已推的手机通知(道·反者道之动): 会话重新活跃 / 额度恢复时, 把旧通知从通知栏抹掉,
+    //   杜绝「对话早已结束/恢复, 通知却残留栏中」。原生按同一 tag 的稳定 id cancel。
+    function cancelNotify(tag){ try { if (N.cancelConv) N.cancelConv(String(tag)); } catch(e){} }
     // 已提示账本(持久化·同一事件只提示一次): sid|kind → ts。状态解除(会话重新活跃)即剪,
     //   未来真再次进入该状态才重新提示一次; 30 天自然过期防账本无限增长。
     var ALERTED_KEY = "rtflow.convwatch.alerted";
@@ -1277,6 +1313,8 @@
     function watchEnabled(){ try { var v = localStorage.getItem("rtflow.convwatch.off"); return v !== "1"; } catch(e){ return true; } }
     // ── 额度通知·真·系统推送 (与对话卡座同款 notifyGlobal: 锁屏/切后台亦达; 来源精确·按账号节流·不刷屏) ──
     var QKEY = "rtflow.convwatch.quota";          // email -> {ts, cnt}  额度耗尽节流
+    var QNOTIFY_KEY = "rtflow.notify.quota";      // "1" 才推额度类通知; 默认关(用户要求: 额度耗尽根本不用提示·账本/撤销仍照常运转)
+    function quotaNotifyOn(){ try{ return localStorage.getItem(QNOTIFY_KEY)==="1"; }catch(e){ return false; } }
     var QLKEY = "rtflow.convwatch.qlow";          // email -> {ts}       额度即将耗尽节流
     var QLOW_THROTTLE = 6*3600*1000;              // 同账号「即将耗尽」预警 >=6 小时一次
     var QLOW_PCT = 10;                            // 日额度剩余 <= 此值且无 extra usage 缓冲 -> 即将耗尽
@@ -1299,8 +1337,8 @@
       nm = _latestName(email); if(nm) return nm;
       return String(email||"").split("@")[0];
     }
-    // 额度耗尽: 按账号聚合 N 个休眠对话, 仅跃迁(从无到有/数目增加)才推送一次; 同一耗尽状态绝不到时重推
-    //   (删了不再回来); 恢复(本轮真扫到且无耗尽)即清, 下次再耗尽立报。
+    // 额度耗尽: 按账号聚合休眠对话, 仅首次进入耗尽态推送一次(只报一遍·数目增加也不重推); 同一耗尽状态绝不重推
+    //   (删了不再回来); 恢复(本轮真扫到且无耗尽)即清账本并主动撤旧通知, 下次再耗尽才立报一次。
     function quotaWatch(byAcct, titleByAcct, now, scanned){
       var q = _ls(QKEY), nq = {};
       // 扫描失败门控: 本轮未扫到的账号(网络抖动/单号失败)不等于已恢复 → 原样保留节流账本,
@@ -1308,13 +1346,19 @@
       if(scanned){ Object.keys(q).forEach(function(email){ if(!(email in byAcct) && !scanned[String(email).toLowerCase()]) nq[email]=q[email]; }); }
       Object.keys(byAcct).forEach(function(email){
         var cnt = byAcct[email]|0; if(cnt<=0) return;
-        var p = q[email], transition = !p || (p.cnt|0) < cnt;
-        if (transition) {
-          var subj = _acctConvName(email, titleByAcct && titleByAcct[email]);   // 主体优先用该号额度耗尽对话名(用户要求: 有对话即显示对话名, 不再显示账号名)
-          notify("quota-" + email, "\uD83D\uDED1 " + subj + " \u989d\u5ea6\u5df2\u8017\u5c3d", cnt + " \u4e2a\u5bf9\u8bdd\u56e0\u914d\u989d\u8017\u5c3d\u4f11\u7720, \u8bf7\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
+        var p = q[email];
+        // 只报一遍(用户要求): 同号首次进入耗尽态推一次; 之后即使耗尽对话数增加也绝不重推,
+        //   直到恢复(本轮真扫到且无耗尽)清账本, 下次再耗尽才重新提示一次。
+        if (!p) {
+          if (quotaNotifyOn()) {
+            var subj = _acctConvName(email, titleByAcct && titleByAcct[email]);   // 主体优先用该号额度耗尽对话名(有对话即显示对话名, 不再显示账号名)
+            notify("quota-" + email, "\uD83D\uDED1 " + subj + " \u989d\u5ea6\u5df2\u8017\u5c3d", cnt + " \u4e2a\u5bf9\u8bdd\u56e0\u914d\u989d\u8017\u5c3d\u4f11\u7720, \u8bf7\u5c3d\u5feb\u5145\u503c/\u5207\u53f7", {email:email});
+          }
           nq[email] = { ts: now, cnt: cnt };
-        } else { nq[email] = { ts: (p&&p.ts)||now, cnt: cnt }; }
+        } else { nq[email] = { ts: p.ts||now, cnt: cnt }; }
       });
+      // 恢复(上轮耗尽·本轮扫到且无耗尽)→ 主动撤掉该号残留的额度通知
+      Object.keys(q).forEach(function(email){ if(!(email in nq)) cancelNotify("quota-" + email); });
       _ss(QKEY, nq);   // 未出现在本轮的账号自动清出 -> 视为恢复
     }
     // 额度即将耗尽: 主动预警 (仅当 quota.dPct 为数值且 ∈(0,阈值] 且无 extra usage 美金缓冲 -> 杜绝 stale/未知误报)。
@@ -1324,14 +1368,19 @@
         var qd = a.quota; if(!qd || typeof qd.dPct !== "number") return;
         var pct = qd.dPct, ovg = (typeof qd.overageDollars === "number") ? qd.overageDollars : 0;
         if(pct>0 && pct<=QLOW_PCT && ovg<=0){
-          var p = s[a.email], last = (p&&p.ts)||0;
-          if(now-last >= QLOW_THROTTLE){
-            var subj = _acctConvName(a.email, titleByAcct && titleByAcct[a.email]);   // 主体优先用该号最近对话名, 仅全新无对话账号才回退账号名
-            notify("qlow-" + a.email, "\u26a0\ufe0f " + subj + " \u989d\u5ea6\u5373\u5c06\u8017\u5c3d", "\u65e5\u989d\u5ea6\u4ec5\u5269 " + pct + "%, \u5efa\u8bae\u5c3d\u5feb\u5145\u503c/\u5207\u53f7");
+          var p = s[a.email];
+          // 只报一遍(用户要求): 同号首次进入「即将耗尽」推一次; 之后绝不到时重推, 直到恢复清账本才再报。
+          if(!p){
+            if (quotaNotifyOn()) {
+              var subjL = _acctConvName(a.email, titleByAcct && titleByAcct[a.email]);   // 主体优先用该号最近对话名, 仅全新无对话账号才回退账号名
+              notify("qlow-" + a.email, "\u26a0\ufe0f " + subjL + " \u989d\u5ea6\u5373\u5c06\u8017\u5c3d", "\u65e5\u989d\u5ea6\u4ec5\u5269 " + pct + "%, \u5efa\u8bae\u5c3d\u5feb\u5145\u503c/\u5207\u53f7", {email:a.email});
+            }
             ns[a.email] = { ts: now };
-          } else ns[a.email] = { ts: last };
+          } else ns[a.email] = { ts: p.ts||now };
         }
       });
+      // 恢复(不再「即将耗尽」)→ 主动撤掉该号残留的预警通知
+      Object.keys(s).forEach(function(email){ if(!(email in ns)) cancelNotify("qlow-" + email); });
       _ss(QLKEY, ns);
     }
     // ── 常驻后台·权威金库刷新 (道法自然·正本清源·一号不漏) ──────────────────────────────
@@ -1345,7 +1394,7 @@
       try{
         if(!N.vaultSave) return;
         var full=[]; try{ full=loadAcc(); }catch(e){ return; }
-        var noOf=Object.create(null); full.forEach(function(x,ix){ var k=String((x&&(x.email||x.id))||"").toLowerCase(); if(k) noOf[k]=ix+1; });
+        var noOf=Object.create(null); full.forEach(function(x,ix){ var k=String((x&&(x.email||x.id))||"").toLowerCase(); if(k) noOf[k]=(x&&x.no)||ix+1; });
         var unlocked=Object.create(null);
         full.forEach(function(x){ if(x&&x.auth1&&x.orgId){ var k=String((x.email||x.id)||"").toLowerCase(); if(k) unlocked[k]=1; } });
         var agg=Object.create(null);
@@ -1401,8 +1450,9 @@
     function _pushTabConvStatus(a, sess){
       try{
         if(!a || typeof N.setTabStatus!=="function" || !sess || !sess.length) return;
-        var pri={quota:4,blocked:3,action_required:3,awaiting:2,running:1}, top=null;
-        sess.forEach(function(s){ if(!top || (pri[s.reason]||0)>(pri[top.reason]||0)) top=s; });
+        // 页签恒随该账号「最新对话」(按活跃时间戳择取), 而非残留的高优先级老对话: 老对话中断/结束、
+        //   新对话已开跑时, 页签须立即切到新对话的名称与状态 (道法自然·实时追踪账号下最新对话)。
+        var top=null; sess.forEach(function(s){ if(!top || (s.ts||0)>=(top.ts||0)) top=s; });
         if(!top) return;
         var stt = top.reason==="running" ? "running" : "blocked";   // 与 switch.html _pollOneAcc 同映射
         N.setTabStatus(a.id||"", top.title||"", stt); if(a.email) N.setTabStatus(a.email, top.title||"", stt);
@@ -1442,7 +1492,7 @@
       },
       onRemoved: function(a){
         try{ if(N.setTabStatus){ N.setTabStatus(a.id||"","",""); if(a.email) N.setTabStatus(a.email,"",""); } }catch(e){}
-        notify("clean-"+(a.id||a.email), "\u2713 \u5f52\u96f6\u8d26\u53f7\u5df2\u5907\u4efd\u5e76\u79fb\u51fa\u8d26\u53f7\u5e93", String(a.email||a.id||""));
+        notify("clean-"+(a.id||a.email), "\u2713 \u5f52\u96f6\u8d26\u53f7\u5df2\u5907\u4efd\u5e76\u79fb\u51fa\u8d26\u53f7\u5e93", String(a.email||a.id||""), {email:(a.email||a.id||"")});
       },
       // auth1 过期自愈: 用账密重登一次(autoclean 内部 10min 节流), 归零号不再因登录态过期永滞库中
       relogin: async function(a){
@@ -1531,7 +1581,6 @@
     function _convTrack(r){
       var prev = loadPrev(), next = {}, now = Date.now();
       var led = loadAlerted(), ledCh = false; alertedPrune(led, now);
-      var coldStart = !prev || !Object.keys(prev).length;   // 冷启(prev 空): 只播种, 不对全部既有活跃会话刷屏「新对话」
       var scanned = Object.create(null); (r.scanned||[]).forEach(function(e){ scanned[String(e).toLowerCase()]=1; });   // 本轮扫描成功的账号(门控结束判定)
       // 本轮 active(running/awaiting) 与 attention(action_required/blocked) 集合
       var cur = Object.create(null), quotaByAcct = Object.create(null), quotaTitleByAcct = Object.create(null), titleByAcct = Object.create(null);
@@ -1545,19 +1594,21 @@
         cur[sid] = { phase: phase, title: ttl || sid, email: s.email || "", reason: s.reason, label: s.actionLabel, msgId: s.msgId||"", unread: !!s.unread };
       });
       _updLatest(titleByAcct, now);   // 更新最近对话名缓存(供额度类通知优先显示对话名)
-      // 跃迁判定: 新对话/续跑/新内容 → 仅实时反映「追踪状态 + 标签变绿」, 不发消息提示(按用户要求·
-      //   开播/续跑/新内容皆静默, 只让账号页标签变绿·网页镜像同步); 仅「需你关注」(卡住/待处理/等待输入)才通知。
-      //   绿灯与续跑复活的状态反映由 next[sid] 登记 + _mirrorTickToVault 复活剪枝承担, 与通知解耦。
+      // 跃迁判定(道·只在真需你介入时提示, 其余一律静默):
+      //   · 「需你关注」(卡住/待处理/等待输入)首次进入该态 → 通知一次(账本去重);
+      //   · 「结束」(终态)→ 通知一次(见下方结束闭环);
+      //   · 纯运行/续跑 / 用户发新消息 / 运行中产生新消息 → 一律静默, 只亮绿灯(标签/网页镜像), 绝不刷屏。
       Object.keys(cur).forEach(function(sid){
         var c = cur[sid], p = prev[sid];
-        next[sid] = { phase: c.phase, title: c.title, email: c.email, ts: now, msgId: c.msgId, reason: c.reason };
-        // 重新活跃 → 剪已提示账本(未来真再次卡住/终态才重新提示一次)
-        if (c.phase === "active") { if (alertedClear(led, sid, "")) ledCh = true; return; }
-        if (c.phase === "stuck" && (!p || p.phase !== "stuck")) {
-          if (!alertedOnce(led, sid, "stuck-" + (c.reason||""), now)) return;
+        next[sid] = { phase: c.phase, title: c.title, email: c.email, ts: now, msgId: c.msgId, reason: c.reason, unread: !!c.unread };
+        // 重新活跃 → 剪已提示账本(未来真再次卡住/终态才重新提示一次)并主动撤掉栏中残留的卡住通知
+        if (c.phase === "active") {
+          if (alertedClear(led, sid, "")) { ledCh = true; cancelNotify("conv-" + sid); }
+        }
+        if (c.phase === "stuck" && (!p || p.phase !== "stuck") && alertedOnce(led, sid, "stuck-" + (c.reason||""), now)) {
           ledCh = true;
           var head = c.reason === "action_required" ? "⚠️ 待你处理" : (c.reason === "blocked" ? "⛔ 卡住/失败" : "⏳ 等待输入");
-          notify("conv-" + sid, head + ": " + c.title, (c.email ? c.email + " · " : "") + (c.label || "Devin 需要你回应") );
+          notify("conv-" + sid, head + ": " + c.title, (c.email ? c.email + " · " : "") + (c.label || "Devin 需要你回应"), {email:c.email, sid:sid});
         }
       });
       // 结束闭环①·精确终态: trackStuck 已观测到「曾追踪→已终态」的会话, 按 中断/过期/挂起/停止/归档/完成 分流文案。
@@ -1576,7 +1627,7 @@
         if (!alertedOnce(led, sid, "end", now)) return;
         ledCh = true;
         var m = TERM[ev.term] || TERM.finished;
-        notify("conv-" + sid, m[0] + ": " + (ev.title || p.title || sid), (p.email ? p.email + " · " : "") + m[1]);
+        notify("conv-" + sid, m[0] + ": " + (ev.title || p.title || sid), (p.email ? p.email + " · " : "") + m[1], {email:(ev.email||p.email), sid:sid});
       });
       // 结束闭环②·兜底: 上轮在追踪、本轮既不在活跃也未登记终态 → 仅当其账号本轮扫描成功才判「已结束」;
       //   账号本轮扫描失败(不在 scanned) → 不判结束·原样保留追踪态(根治个别号扫描失败误报「已结束」)。
@@ -1587,9 +1638,9 @@
         if (scanned[em]) {
           if (!alertedOnce(led, sid, "end", now)) return;
           ledCh = true;
-          notify("conv-" + sid, "✅ 已结束: " + (p.title || sid), (p.email ? p.email + " · " : "") + "对话已完成/停止");
+          notify("conv-" + sid, "✅ 已结束: " + (p.title || sid), (p.email ? p.email + " · " : "") + "对话已完成/停止", {email:p.email, sid:sid});
         } else {
-          next[sid] = { phase: p.phase, title: p.title, email: p.email, ts: p.ts || now, msgId: p.msgId, reason: p.reason, carried: true };
+          next[sid] = { phase: p.phase, title: p.title, email: p.email, ts: p.ts || now, msgId: p.msgId, reason: p.reason, unread: p.unread, carried: true };
         }
       });
       if (ledCh) saveAlerted(led);

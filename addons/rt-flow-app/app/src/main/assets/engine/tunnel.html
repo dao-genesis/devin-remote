@@ -96,32 +96,72 @@ details.adv[open]>summary{color:var(--vscode-textLink-foreground)}
   <div id="hubList" class="val"><span class="muted">（暂无 · 复制上方指令到电脑运行即出现）</span></div>
 </div>
 
-<!-- Cloudflare 固定域名 (可选·一键建 Worker·唯一真正需要用户配置的东西) -->
+<!-- Cloudflare 账号池 · 万法识号·多号统管·闭环建 Worker (可选·固定公网地址) -->
 <div class="card">
-  <div class="lbl">☁️ 固定域名 · Cloudflare 一键建 Worker（可选）</div>
-  <div class="muted" style="font-size:11px;margin-top:4px">默认零账号通道已全自动, <b>无需任何配置</b>。仅当你想要<b>恒定不变的公网地址</b>时: ① 点下方按钮到 Cloudflare 创建 API Token（模板选「编辑 Workers」, 可用 GitHub 或 Cloudflare 账号登录）② 粘贴回来一键部署, 其余全自动。Token 只在本机内存用一次, 不落盘不上传。</div>
-  <button onclick="cfAutoStart()" style="margin-top:6px;background:#8957e5">🤖 全自动建 Worker（代登录→建Token→部署·一键到底）</button>
-  <details class="adv cfgh" style="margin-top:6px"><summary style="font-size:11px">可选·填账号让「登录/2FA」也自动完成（GitHub 或 Cloudflare 账号任选其一。不填则命中登录页时等你手点一次）</summary>
-    <div class="muted" style="font-size:10px;margin-top:2px">① GitHub 账号（经 OAuth 登 Cloudflare）</div>
-    <input id="cfGhUser" placeholder="GitHub 用户名/邮箱（可选）">
-    <input id="cfGhPass" type="password" placeholder="GitHub 密码（可选·仅本机内存注入登录页, 不落盘不上传）">
-    <input id="cfGhOtp" placeholder="GitHub 2FA TOTP 密钥 base32（可选·本机算码, 不上传）">
-    <div class="muted" style="font-size:10px;margin-top:4px">② 或 Cloudflare 账号（直登 CF）</div>
-    <input id="cfCfUser" placeholder="Cloudflare 邮箱（可选）">
-    <input id="cfCfPass" type="password" placeholder="Cloudflare 密码（可选·仅本机内存注入登录页, 不落盘不上传）">
-    <input id="cfCfOtp" placeholder="Cloudflare 2FA TOTP 密钥 base32（可选·本机算码, 不上传）">
-    <div class="muted" style="font-size:10px">留空即「辅助到极致」：非验证步骤自动跑, 仅登录/2FA/人机验证等你点一次后自动续跑。填了则连登录/2FA 也代办。人机验证/硬件密钥永不代按。</div>
-  </details>
-  <div class="muted" style="font-size:11px;margin-top:8px"><b>⭐ 推荐·纯后端一条龙（零浏览器·零人机验证·零点击）</b>：填下方 Cloudflare 邮箱 + Global API Key（在 dash → 我的个人资料 → API 令牌 → Global API Key 一次取回），后端直接建 Worker→回填穿透，全自动。凭证仅本机内存用一次，不落盘不上传。</div>
-  <input id="cfProvEmail" placeholder="Cloudflare 邮箱（用 Global API Key 时填）">
-  <input id="cfProvKey" type="password" placeholder="Global API Key（纯后端·零浏览器·一次即全自动）">
-  <button onclick="cfOpenTokenPage()" style="margin-top:6px">🌐 或开取 Token 页（手动）</button>
-  <input id="cfProvTok" type="password" placeholder="或手动粘贴 Cloudflare API Token">
-  <div class="row">
-    <button onclick="cfProvision()" style="background:#238636">⚡ 一键部署专属 Worker</button>
-    <button onclick="cfProvReset()" style="background:#a33">重置·回零账号通道</button>
+  <div class="lbl">☁️ Cloudflare 账号池 · 一键建 Worker（万法识号·多号统管·恒定公网地址）</div>
+  <div class="muted" style="font-size:11px;margin-top:4px">默认零账号通道已全自动, <b>无需任何配置</b>。仅当你要<b>恒定不变的公网地址</b>时: 像切号一样把 Cloudflare <b>账号 密码</b>粘进来（任意格式自动识号·每行一个）→ 入池 → 每号一键「建 Worker」自动完成 <b>登录→建Token→部署</b>, 全程只需你在登录页过一次人机验证。<b>只要账号+密码即可, 无需任何令牌/凭证。</b>已建的 Worker/Token/账号在下方统一管理。</div>
+
+  <!-- 已在本机登录过 CF 的号: 零凭证一键直建 (最省事·推荐) -->
+  <button onclick="cfCookieAuto()" style="margin-top:8px;background:#1f6feb">⚡ 会话态直建（本机已登录 CF·零凭证·一键到底·推荐）</button>
+  <div class="muted" style="font-size:10px;margin-top:2px">若已在 App 内浏览器登录过 Cloudflare（含 GitHub 登 CF）: 引擎起<b>离屏真 Chromium 同源</b>建 Token→部署（过 CF 机管·零可见标签·后台冻结免疫）, 无需填任何凭证。</div>
+
+  <!-- 万法识号·添加 CF 账号入池 (切号板块同款) -->
+  <div id="cfAddHeader" onclick="cfToggleAdd()" style="cursor:pointer;margin-top:10px;padding:7px 9px;background:#161b22;border:1px solid #30363d;border-radius:5px;display:flex;justify-content:space-between;align-items:center">
+    <span>＋ 添加 Cloudflare 账号（账号+密码入池）</span><span id="cfAddArrow">▼</span>
   </div>
-  <div id="cfProvStat" class="muted" style="font-size:11px;margin-top:4px">未配置（零账号通道已全自动运行）</div>
+  <div id="cfAddBody" style="display:none;margin-top:6px">
+    <textarea id="cfPoolInput" placeholder="万法识号·任意格式自动识别：&#10;email password&#10;email:password&#10;（Global API Key / API Token 一行也可直接粘贴）" style="width:100%;height:66px;font-size:12px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,#3334);border-radius:5px;padding:7px 9px"></textarea>
+    <div class="row" style="margin-top:4px">
+      <button onclick="cfPoolAdd(false)">添加入池</button>
+      <button onclick="cfPoolAdd(true)" style="background:#238636">添加并全部建 Worker</button>
+    </div>
+    <div class="muted" style="font-size:10px;margin-top:2px">凭证仅本机保存（供自动登录/重建·卸载即失）, <b>不上传·不过中继</b>。</div>
+  </div>
+
+  <!-- 账号池列表 (每号一行·状态+一键建+复制+删) -->
+  <div id="cfPoolList" style="margin-top:8px"><span class="muted" style="font-size:12px">账号池为空 · 在上方「添加」粘贴账号密码</span></div>
+  <div class="row" style="margin-top:6px">
+    <button onclick="cfPoolBuildAll()">⚡ 全部建 Worker</button>
+    <button onclick="cfPoolRefresh()">🔄 刷新状态</button>
+  </div>
+
+  <!-- 已建资源统管: Worker / Token / 账号 -->
+  <div class="lbl" style="margin-top:10px">🔗 已建资源 · Worker/Token/账号统管</div>
+  <div id="cfResList" class="val" style="font-size:12px"><span class="muted">（暂无 · 建成后在此统一管理并可设为生效通道）</span></div>
+
+  <div id="cfProvStat" class="muted" style="font-size:11px;margin-top:6px">未配置（零账号通道已全自动运行）</div>
+
+  <!-- 其它建法 (手动 Token / Global API Key / 浏览器代登录) · 非 class=adv 以免影响主界面护栏切片 -->
+  <details style="margin-top:8px;border-top:1px solid var(--vscode-input-border,#3334);padding-top:6px">
+    <summary style="cursor:pointer;font-size:12px;color:var(--vscode-descriptionForeground)">⚙️ 其它建法（手动 Token / Global API Key / 浏览器代登录）</summary>
+    <button onclick="cfAutoStart()" style="margin-top:6px;background:#8957e5">🤖 全自动建 Worker（浏览器代登录→建Token→部署·一键到底）</button>
+    <div class="muted" style="font-size:11px;margin-top:8px"><b>两种登录方式·任选其一（完全分离）</b>：填哪一套就走哪一套，底层同归一（登进 CF → 建 Token → 部署 Worker）。</div>
+    <div class="row" style="margin-top:4px">
+      <label style="font-size:11px"><input type="radio" name="cfMode" value="cf" checked onchange="cfModeSwitch()"> ① Cloudflare 账号</label>
+      <label style="font-size:11px"><input type="radio" name="cfMode" value="gh" onchange="cfModeSwitch()"> ② GitHub 账号</label>
+    </div>
+    <div id="cfModeCf" style="margin-top:4px">
+      <div class="muted" style="font-size:10px">Cloudflare 直登（邮箱+密码，有 2FA 再填种子）</div>
+      <input id="cfCfUser" placeholder="Cloudflare 邮箱">
+      <input id="cfCfPass" type="password" placeholder="Cloudflare 密码（仅本机内存注入登录页, 不落盘不上传）">
+      <input id="cfCfOtp" placeholder="Cloudflare 2FA TOTP 密钥 base32（无 2FA 免填·本机算码不上传）">
+    </div>
+    <div id="cfModeGh" style="margin-top:4px;display:none">
+      <div class="muted" style="font-size:10px">GitHub 登 Cloudflare（账号+密码+2FA 种子，经「用 GitHub 登录」入口）</div>
+      <input id="cfGhUser" placeholder="GitHub 用户名/邮箱">
+      <input id="cfGhPass" type="password" placeholder="GitHub 密码（仅本机内存注入登录页, 不落盘不上传）">
+      <input id="cfGhOtp" placeholder="GitHub 2FA TOTP 密钥 base32（本机算码, 不上传）">
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:8px"><b>⭐ 纯后端一条龙（零浏览器·零人机验证·零点击）</b>：填 Cloudflare 邮箱 + Global API Key（dash → 个人资料 → API 令牌 → Global API Key），后端直接建 Worker。凭证仅本机内存用一次。</div>
+    <input id="cfProvEmail" placeholder="Cloudflare 邮箱（用 Global API Key 时填）">
+    <input id="cfProvKey" type="password" placeholder="Global API Key（纯后端·零浏览器·一次即全自动）">
+    <button onclick="cfOpenTokenPage()" style="margin-top:6px">🌐 或开取 Token 页（手动）</button>
+    <input id="cfProvTok" type="password" placeholder="或手动粘贴 Cloudflare API Token">
+    <div class="row">
+      <button onclick="cfProvision()" style="background:#238636">⚡ 一键部署专属 Worker</button>
+      <button onclick="cfProvReset()" style="background:#a33">重置·回零账号通道</button>
+    </div>
+  </details>
 </div>
 
 <pre id="out" class="muted">（操作结果）</pre>
@@ -191,7 +231,7 @@ details.adv[open]>summary{color:var(--vscode-textLink-foreground)}
   </label>
   <span id="lanLabel" style="font-size:12px;color:var(--vscode-descriptionForeground)">已关闭</span>
 </div>
-<div class="lbl">局域网直连 URL（同网控制端直接使用）</div>
+<div class="lbl">局域网直连 URL（网页直开=同网浏览器满血 APK 同款操作 · RPC=程序调用）</div>
 <div id="lanUrls" class="url">—</div>
 <div class="row" style="margin-top:6px">
   <button onclick="copyLanAccess()">📋 复制局域网直连接入信息</button>
@@ -285,6 +325,8 @@ details.adv[open]>summary{color:var(--vscode-textLink-foreground)}
 
 </details>
 
+<script src="rtflow-parse.js"></script>
+<script src="cf-pool.js"></script>
 <script>
 // ── Native 桥 shim: 把 dao-bridge 的 vscode.postMessage 协议映射到手机版中继 ──
 var N = window.Native || {};
@@ -849,7 +891,9 @@ function refreshLan(){
   var lb=document.getElementById('lanLabel'); if(lb) lb.textContent=on?((l.urls&&l.urls.length)?('已开启 🟢 · '+l.urls.length+' 个地址'):'已开启 · 等待局域网地址…'):'已关闭';
   var u=document.getElementById('lanUrls');
   if(u){ var c=_conn(); var urls=(l.urls||[]);
-    u.textContent = (on&&urls.length)? urls.map(function(x){return x+"/relay/"+(c.session||"");}).join("\n") : (on?'(未取得局域网地址·请确认已连 Wi-Fi)':'—'); }
+    // 同网浏览器直开 = 满血 APK 同款 (单网页传输一切·同源直连本机·零中继零隧道); 另附裸 RPC 入口给程序调用。
+    u.textContent = (on&&urls.length)? urls.map(function(x){var b=String(x).replace(/\/$/,'');
+      return "网页直开(同网浏览器·满血 APK 同款操作): "+_webConsoleUrl(b,true)+"\nRPC 直连(程序/curl): "+b+"/relay/"+(c.session||"");}).join("\n\n") : (on?'(未取得局域网地址·请确认已连 Wi-Fi)':'—'); }
 }
 // ── 网页控制台 (手机=中枢, 浏览器全功能接入) ──
 //   控制台网址 = <本机入口>/?session=&token= → 浏览器打开即自动连通本机 RPC。
@@ -943,6 +987,10 @@ function copyLanAccess(){
   var l=_lan(), c=_conn(); var urls=(l.urls||[]);
   if(!urls.length){ _result('copyLan', false, '暂无局域网地址 (请确认已连 Wi-Fi 且局域网直连已开)'); return; }
   var lines=["═══ Devin Cloud 手机版 · 局域网直连 (零中继·零隧道·直连本机) ═══"];
+  lines.push("【网页直开·同网任意浏览器打开即与 APK 同款满血操作 (单网页传输一切·同源直连本机·零中继零隧道)】");
+  urls.forEach(function(x){ lines.push("  "+_webConsoleUrl(String(x).replace(/\/$/,''),true)); });
+  lines.push("");
+  lines.push("【RPC·给云端 Agent / 程序 (非浏览器直开)】");
   urls.forEach(function(x){ lines.push("直连入口: "+x+"/relay/"+(c.session||"")); });
   lines.push("Token: "+(c.token||l.token||""));
   lines.push("Session: "+(c.session||l.session||""));
@@ -1272,13 +1320,24 @@ function cfOpenTokenPage(){
 }
 // 全自动: 武装 cf-auto 编排器 (代登录/2FA/授权/建Token/抓取→灌入既有部署) + 打开预填权限深链。
 // bases = 本机中继回环/隧道地址 (供编排器抓到 Token 后经中继灌入 /api/cf-provision)。
+function cfModeSwitch(){
+  var m='cf'; try{ var r=document.querySelector('input[name=cfMode]:checked'); if(r) m=r.value; }catch(e){}
+  var cfBox=document.getElementById('cfModeCf'), ghBox=document.getElementById('cfModeGh');
+  if(cfBox) cfBox.style.display=(m==='cf')?'':'none';
+  if(ghBox) ghBox.style.display=(m==='gh')?'':'none';
+}
 function cfAutoStart(){
   var c=_conn();
-  var gh={ user:(v('cfGhUser')||'').trim(), pass:v('cfGhPass')||'', otp:(v('cfGhOtp')||'').trim().replace(/\s+/g,'') };
-  var cf={ user:(v('cfCfUser')||'').trim(), pass:v('cfCfPass')||'', otp:(v('cfCfOtp')||'').trim().replace(/\s+/g,'') };
+  var mode='cf'; try{ var r=document.querySelector('input[name=cfMode]:checked'); if(r) mode=r.value; }catch(e){}
   var cfg={ active:true, bases:_hubBases(), session:c.session||'local', relayToken:c.token||'' };
-  if(gh.user||gh.otp) cfg.gh=gh;
-  if(cf.user||cf.otp) cfg.cf=cf;
+  // 两种模式完全分离·只透传所选那一套凭证 (CF 就是 CF·GitHub 就是 GitHub·互不混)
+  if(mode==='gh'){
+    var gh={ user:(v('cfGhUser')||'').trim(), pass:v('cfGhPass')||'', otp:(v('cfGhOtp')||'').trim().replace(/\s+/g,'') };
+    if(gh.user||gh.otp) cfg.gh=gh;
+  } else {
+    var cf={ user:(v('cfCfUser')||'').trim(), pass:v('cfCfPass')||'', otp:(v('cfCfOtp')||'').trim().replace(/\s+/g,'') };
+    if(cf.user||cf.otp) cfg.cf=cf;
+  }
   try{
     if(N.cfAutoArm) N.cfAutoArm(JSON.stringify(cfg));
     else { _result('cf',false,'本机版本不支持全自动编排(需 0.37.226+), 请用上方手动流程'); return; }
@@ -1290,6 +1349,19 @@ function cfAutoStart(){
 }
 //__CFDEEPLINK_END__
 var _cfPollTimer=null;
+// 会话态·零浏览器·冻结免疫: 引擎用 App 内已登录的 CF cookie 经原生 HTTP 直建 Token→部署。只透传可选 accountId。
+async function cfCookieAuto(acctId){
+  try{
+    var r=await _hubRpc("/api/cf-autoprovision", acctId?{accountId:acctId}:{});
+    if(r&&(r.started||r.already)){ _result('cf',true,'会话态直建已启动 (零浏览器·冻结免疫)…进度看下方状态栏'); cfPollStatus(); return; }
+    var err=(r&&r.error)||'启动失败';
+    // 多账号 → 让用户选一个再重试 (道法自然·不隐式冒名选第一个)
+    var mm=/multi_account:[^:]*:\s*([a-f0-9,]+)/i.exec(err)||/([a-f0-9]{20,}(?:,[a-f0-9]{20,})+)/i.exec(err);
+    if(mm){ var pick=prompt('检测到多个 Cloudflare 账号, 请粘贴要用的 accountId:\n'+mm[1].split(',').join('\n')); if(pick&&pick.trim()) return cfCookieAuto(pick.trim()); return; }
+    if(/no_cf_session/.test(err)){ _result('cf',false,'未检测到 Cloudflare 登录态: 请先在 App 内浏览器登录一次 CF (人机验证同一道关手动过一次), 之后本按钮全自动。'); return; }
+    _result('cf',false,err);
+  }catch(e){ _result('cf',false,String(e&&e.message||e)); }
+}
 async function cfProvision(){
   var tok=(v('cfProvTok')||"").trim();
   var email=(v('cfProvEmail')||"").trim();
@@ -1313,6 +1385,16 @@ async function cfPollStatus(){
   if(!s||!s.phase||s.phase==='idle') return;
   st.textContent=(s.msg||('阶段 '+s.step))+(s.url&&s.phase==='done'?'':'');
   st.style.color= s.phase==='done'?'#3fb950':(s.phase==='error'?'#f85149':'#e8c84a');
+  // 状态归属回写到「正在建」的池记录 → 账号池行实时翻牌、已建资源自动登记 (多号统管本源)。
+  if(_cfBuildingKey){
+    cfPoolMark(_cfBuildingKey, {
+      phase:s.phase, step:s.step, msg:s.msg,
+      workerUrl:(s.phase==='done'&&s.url)?s.url:undefined,
+      subdomain:s.subdomain||undefined, accountId:s.accountId||undefined,
+      healthy:s.healthy, ts:Date.now()
+    });
+    if(s.phase==='done'||s.phase==='error') _cfBuildingKey=null;
+  }
   if(s.phase==='running') _cfPollTimer=setTimeout(cfPollStatus, 3000);
 }
 function cfProvReset(){
@@ -1320,7 +1402,126 @@ function cfProvReset(){
   clearRelayCfg();
   var st=document.getElementById('cfProvStat'); if(st){ st.textContent='未配置（零账号通道已全自动运行）'; st.style.color=''; }
 }
+
+// ═══ Cloudflare 账号池 (万法识号·多号统管·闭环建 Worker) · 借鉴切号板块账号池哲学 ═══
+//   本源: 用户只需粘贴「账号 密码」入池, 每号一键「登录→建Token→部署Worker」闭环, 并统管
+//   所有已建 Worker/Token/账号资源。凭证仅本机 localStorage (卸载即失), 不上传·不过中继。
+var CFP = window.CFPOOL || {};
+var _CFPOOL_KEY = "rtflow.cf.pool";
+var _cfBuildingKey = null;   // 正在建的记录键 (cf-status 单例状态的归属)
+function cfPoolLoad(){ try{ var a=JSON.parse(localStorage.getItem(_CFPOOL_KEY)||"[]"); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+function cfPoolSave(pool){ try{ localStorage.setItem(_CFPOOL_KEY, JSON.stringify(pool||[])); }catch(e){} }
+function cfPoolEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+function cfToggleAdd(){ var b=document.getElementById('cfAddBody'); if(!b)return; var open=b.style.display==='none'; b.style.display=open?'':'none'; var ar=document.getElementById('cfAddArrow'); if(ar) ar.textContent=open?'▲':'▼'; }
+function cfPoolAdd(alsoBuild){
+  var el=document.getElementById('cfPoolInput'); var raw=(el&&el.value)||"";
+  if(!raw.trim()){ _result('cf',false,'请粘贴 Cloudflare 账号密码'); return; }
+  var incoming = CFP.parsePool ? CFP.parsePool(raw) : [];
+  if(!incoming.length){ _result('cf',false,'未识别到有效账号 (需 邮箱 密码, 或 Global API Key / API Token)'); return; }
+  var res = CFP.mergePool(cfPoolLoad(), incoming);
+  cfPoolSave(res.pool);
+  if(el) el.value="";
+  _result('cf',true,'识号完成 · 新增 '+res.added+' · 更新 '+res.updated);
+  cfPoolRender();
+  if(alsoBuild) cfPoolBuildAll();
+}
+function cfPoolRender(){
+  var box=document.getElementById('cfPoolList'); if(!box) return;
+  var pool=cfPoolLoad();
+  if(!pool.length){ box.innerHTML='<span class="muted" style="font-size:12px">账号池为空 · 在上方「添加」粘贴账号密码</span>'; cfResRender(); return; }
+  box.innerHTML=pool.map(function(e,i){
+    var label=cfPoolEsc(e.email||(e.token?('token '+CFP.maskSecret(e.token)):(e.key?('key '+CFP.maskSecret(e.key)):('号 '+(i+1)))));
+    var stt=CFP.statusLabel(e);
+    var col= /已就绪|已建/.test(stt)?'#3fb950':(/失败/.test(stt)?'#f85149':(/⏳/.test(stt)?'#e8c84a':'#8b949e'));
+    var busy=(e.phase==='running');
+    var m=CFP.buildMethod(e);
+    return '<div style="border:1px solid #30363d;border-radius:5px;padding:7px 9px;margin-bottom:5px;background:#0d1117">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+      +'<b style="font-size:12px;word-break:break-all">'+label+'</b>'
+      +'<span style="font-size:11px;white-space:nowrap;color:'+col+'">'+cfPoolEsc(stt)+'</span></div>'
+      +(e.workerUrl?('<div class="muted" style="font-size:10px;word-break:break-all;margin-top:2px">'+cfPoolEsc(e.workerUrl)+'</div>'):'')
+      +'<div class="row" style="margin-top:5px">'
+      +'<button '+(busy?'disabled ':'')+'onclick="cfPoolBuild('+i+')" style="background:'+(m==='none'?'#555':'#238636')+';font-size:11px">⚡ '+(e.workerUrl?'重建':'建 Worker')+'</button>'
+      +(e.workerUrl?('<button onclick="cfPoolUse('+i+')" style="font-size:11px">设为生效</button><button onclick="cfPoolCopy('+i+')" style="font-size:11px">复制URL</button>'):'')
+      +'<button onclick="cfPoolDel('+i+')" style="background:#a33;font-size:11px">删</button>'
+      +'</div></div>';
+  }).join("");
+  cfResRender();
+}
+function cfResRender(){
+  var box=document.getElementById('cfResList'); if(!box) return;
+  var res=CFP.builtResources?CFP.builtResources(cfPoolLoad()):[];
+  if(!res.length){ box.innerHTML='<span class="muted">（暂无 · 建成后在此统一管理并可设为生效通道）</span>'; return; }
+  box.innerHTML=res.map(function(r){
+    return '<div style="margin-bottom:5px;border-bottom:1px solid #21262d;padding-bottom:4px">'
+      +'<div style="font-size:11px;word-break:break-all">'+(r.healthy?'✅':'⚠')+' '+cfPoolEsc(r.workerUrl)+'</div>'
+      +'<div class="muted" style="font-size:10px">'+cfPoolEsc(r.email||'')+(r.accountId?(' · acct '+cfPoolEsc(r.accountId)):'')+' · Token 已建(仅本机·不回显)</div>'
+      +'</div>';
+  }).join("");
+}
+function cfPoolMark(key, patch){
+  var pool=cfPoolLoad(), changed=false;
+  for(var i=0;i<pool.length;i++){ if(CFP.keyOf(pool[i])===key){ var t=pool[i];
+    Object.keys(patch).forEach(function(k){ if(patch[k]!==undefined) t[k]=patch[k]; }); changed=true; break; } }
+  if(changed) cfPoolSave(pool);
+  cfPoolRender();
+}
+function cfPoolDel(i){ var pool=cfPoolLoad(); var e=pool[i]; if(!e)return;
+  if(!confirm('删除 '+(e.email||'此号')+'? (只从本机池删除, 不会删除 Cloudflare 上已建的 Worker)'))return;
+  pool.splice(i,1); cfPoolSave(pool); cfPoolRender(); }
+function cfPoolCopy(i){ var e=cfPoolLoad()[i]; if(!e||!e.workerUrl)return;
+  var ok=_doClip(e.workerUrl); _result('cf',ok,ok?'已复制 Worker URL':'复制失败'); }
+function cfPoolUse(i){ var e=cfPoolLoad()[i]; if(!e||!e.workerUrl)return;
+  var c=_conn(); var cfg={url:e.workerUrl, token:c.token||"", session:c.session||""};
+  try{ N.saveRelayConfig&&N.saveRelayConfig(JSON.stringify(cfg)); }catch(x){}
+  try{ N.relayRestart&&N.relayRestart(); }catch(x){}
+  _result('cf',true,'已把生效通道切到 '+(e.email||'该号')+' 的 Worker: '+e.workerUrl);
+  setTimeout(_push,800); }
+async function cfPoolBuild(i){
+  var pool=cfPoolLoad(); var e=pool[i]; if(!e)return;
+  var method=CFP.buildMethod(e);
+  if(method==='none'){ _result('cf',false,'此号缺密码, 请在「添加」补 邮箱 密码 (或 Global API Key / API Token)'); return; }
+  var key=CFP.keyOf(e); _cfBuildingKey=key;
+  cfPoolMark(key, {phase:'running', step:0, msg:'启动中…', ts:Date.now()});
+  try{
+    if(method==='key'||method==='token'){
+      var payload=CFP.provisionPayload(e);
+      var r=await _hubRpc("/api/cf-provision", payload);
+      if(!(r&&(r.started||r.already))){ cfPoolMark(key,{phase:'error',msg:(r&&r.error)||'启动失败'}); _cfBuildingKey=null; return; }
+      _result('cf',true,'已为 '+(e.email||'该号')+' 启动纯后端部署 (零浏览器)…');
+    } else {
+      // login 闭环: arm cf-auto 用该号凭证代登录→同源建Token→部署 (登录页人机验证需用户点一次)
+      var c=_conn();
+      var cfg={ active:true, bases:_hubBases(), session:c.session||'local', relayToken:c.token||'',
+                cf:{ user:e.email, pass:e.password||'', otp:(e.otp||'') } };
+      if(!N.cfAutoArm){ cfPoolMark(key,{phase:'error',msg:'本机版本不支持全自动编排(需0.37.226+)'}); _cfBuildingKey=null; return; }
+      try{ N.cfAutoArm(JSON.stringify(cfg)); }catch(x){ cfPoolMark(key,{phase:'error',msg:'武装失败:'+(x&&x.message||x)}); _cfBuildingKey=null; return; }
+      var u=_cfTokenDeepLink('dao-relay');
+      try{ if(N.openTab){N.openTab(u);} else window.open(u,'_blank'); }catch(x){}
+      _result('cf',true,'已为 '+(e.email||'该号')+' 启动全自动: 登录→建Token→部署; 命中登录页人机验证/硬件密钥会停下等你点一次后自动续跑。');
+    }
+    cfPollStatus();
+  }catch(x){ cfPoolMark(key,{phase:'error',msg:String(x&&x.message||x)}); _cfBuildingKey=null; }
+}
+// 串行建 (cf-status 为单例状态·并行会串号) → 逐个建、每个等到 done/error 再建下一个。
+async function cfPoolBuildAll(){
+  var pool=cfPoolLoad(), idxs=[];
+  for(var i=0;i<pool.length;i++){ if(CFP.buildMethod(pool[i])!=='none' && !pool[i].workerUrl) idxs.push(i); }
+  if(!idxs.length){ _result('cf',false,'池中无可建的号 (缺凭证或都已建成)'); return; }
+  _result('cf',true,'开始串行建 '+idxs.length+' 个 Worker…');
+  for(var j=0;j<idxs.length;j++){ await cfPoolBuild(idxs[j]); await cfWaitBuildEnd(); }
+}
+function cfWaitBuildEnd(){ return new Promise(function(resolve){ var n=0;
+  (function chk(){ _hubRpc("/api/cf-status").then(function(s){
+      var p=s&&s.phase;
+      if(!p||p==='done'||p==='error'||p==='idle'||n>60){ resolve(); }
+      else { n++; setTimeout(chk,2000); }
+    }).catch(function(){ if(n>60){resolve();}else{n++;setTimeout(chk,2000);} });
+  })(); }); }
+function cfPoolRefresh(){ cfPollStatus(); cfPoolRender(); }
+
 cfPollStatus();
+cfPoolRender();
 //__HUBUI_END__
 setInterval(_push, 1500); _push();
 </script>

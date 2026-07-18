@@ -206,12 +206,16 @@ ok(/function _sessTs\(s\)/.test(switchSrc),
    "源级: 存在 _sessTs 会话活跃时间戳解析(择取最新对话)");
 ok(/var latestName="", latestTs=-1/.test(switchSrc),
    "源级: _pollOneAcc 计算该账号最新对话名 latestName");
-ok(/var nm = top \? \(top\.title\|\|""\) : latestName/.test(switchSrc),
-   "源级: 无需关注对话时标签回退「最新对话名」而非空(空才由原生回退账号名)");
-ok(/items:items,latest:latestName/.test(switchSrc) && /items:\[\],latest:latestName/.test(switchSrc),
-   "源级: _trk 持久化 latest(活跃与墓碑两态皆带最新对话名)");
-ok(/else \{ nm=st\.latest\|\|""; stt="finished"; if\(!nm\) return; \}/.test(switchSrc),
-   "源级: _repushTabsFromTrk 空闲账号即刻重显缓存最新对话名");
+ok(/var nm = latestName;/.test(switchSrc) && /var stt = latestStt;/.test(switchSrc),
+   "源级: 页签恒随该账号「最新对话」名称+状态(而非残留的高优先级老对话)");
+ok(/latestStt=_clsToStt\(cls\)/.test(switchSrc),
+   "源级: _pollOneAcc 记录最新对话的真实状态 latestStt");
+ok(/if\(latestUuid\)\{ for\(var q=0;q<items\.length;q\+\+\)\{ if\(items\[q\]\.uuid===latestUuid\)/.test(switchSrc),
+   "源级: 最新对话被逆流兜底改判后同步 latestStt (页签状态恒等最新对话真实态)");
+ok(/items:items,latest:latestName,latestStt:latestStt/.test(switchSrc) && /items:\[\],latest:latestName,latestStt:latestStt/.test(switchSrc),
+   "源级: _trk 持久化 latest+latestStt(活跃与墓碑两态皆带最新对话名与其状态)");
+ok(/var nm=st\.latest\|\|""; if\(!nm\) return;/.test(switchSrc) && /var stt=st\.latestStt\|\|"finished";/.test(switchSrc),
+   "源级: _repushTabsFromTrk 用缓存 latest+latestStt 重显最新对话(与 _pollOneAcc 同源)");
 ok(/function _convNameOf\(a\)/.test(switchSrc),
    "源级: 存在 _convNameOf 统一取「对话名为消息主体」");
 ok(/_bigAlert\("⚠ "\+_convNameOf\(a\)\+" 额度仅/.test(switchSrc),
@@ -424,15 +428,15 @@ ok(/return \{ok:true, count:hits\.length, actionRequired:need\.length, needAtten
    "源级: trackStuck 返回 sessions + ended + scanned");
 
 // ── 源级护栏: tick 闭环 (新对话/新内容/精确终态/扫描门控) ──
-ok(/var coldStart = !prev \|\| !Object\.keys\(prev\)\.length/.test(engineSrc),
-   "源级: tick 冷启判定(prev 空只播种·不刷屏「新对话」)");
+ok(!/coldStart/.test(engineSrc),
+   "源级: 冷启播种判定已随新消息横幅一并移除(无残留 coldStart)");
 ok(/CMDS\.trackStuck\(\{ watchSids: Object\.keys\(_pv\), priorityEmails: Object\.keys\(_pe\) \}\)/.test(engineSrc),
    "源级: tick 把上轮 sid 集作为 watchSids 传入 trackStuck(并附上轮账号优先扫描)");
 ok(/\(r\.scanned\|\|\[\]\)\.forEach\(function\(e\)\{ scanned\[String\(e\)\.toLowerCase\(\)\]=1; \}\)/.test(engineSrc),
    "源级: tick 提取 r.scanned 成功账号集(门控结束判定)");
-// 新对话/续跑/新内容 → 仅追踪+标签变绿·不发消息提示(用户要求·静默)。next[sid] 登记状态供金库/网页镜像。
-ok(/next\[sid\] = \{ phase: c\.phase, title: c\.title, email: c\.email, ts: now, msgId: c\.msgId, reason: c\.reason \}/.test(engineSrc),
-   "源级: tick 仍登记 next[sid] 状态(驱动标签变绿·与通知解耦)");
+// 新对话/续跑/新消息 → 仅追踪+标签变绿·一律不发提示(只卡住/终态才弹·notify-dedup.test 专测)。
+ok(/next\[sid\] = \{ phase: c\.phase, title: c\.title, email: c\.email, ts: now, msgId: c\.msgId, reason: c\.reason, unread: !!c\.unread \}/.test(engineSrc),
+   "源级: tick 仍登记 next[sid] 状态(含 unread·驱动标签变绿·与通知解耦)");
 ok(!/🆕 新对话/.test(engineSrc),
    "源级: 新对话静默·不发 🆕 通知(用户要求·只追踪+变绿)");
 ok(!/🟢 对话继续/.test(engineSrc),

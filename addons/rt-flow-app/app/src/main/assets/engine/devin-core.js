@@ -255,6 +255,7 @@
         var br = await devinJsonGet(APP + "/api/org-" + bare + "/billing/status", { Authorization: "Bearer " + auth1, "x-cog-org-id": orgId });
         if (br.status === 200 && br.json) {
           var d = billingDollars(br.json);
+          try { var od2 = await fetchOverageDollars(auth1, orgId); if (od2 != null && od2 > d) d = od2; } catch (e2) {}
           var has = br.json.has_subscription_or_credits === true || br.json.is_subscription_valid === true || d > 0;
           return { planName: "Trial", dPct: has ? 100 : 0, wPct: has ? 100 : 0, overageActive: d > 0, overageDollars: d, overageKnown: true, overageTs: Date.now(), _source: "devin_billing" };
         }
@@ -263,13 +264,20 @@
     return null;
   }
 
-  // 美金额度 (复刻桌面 billingBalance · devin_cloud.js): 可用余额 = available_credits + max(0, overage_credits)
-  //   overage_credits 正值=可用 Extra Usage 余额; 负值=已欠/耗尽(计 0)。
+  // 美金额度 (复刻桌面 billingBalance · devin_cloud.js): 可用余额 = available_credits + overageBalance(overage_credits)
+  //   overage_credits 双符号实证归一(正本清源·根治「满额号被限 $4」): ① 正值=可用 Extra Usage 余额;
+  //   ② 负值=以负号记账的「Remaining balance」(v3.0 实证: <0 且 billing_error 为空 = 有实际额度·幅值即美金)。
+  //   旧法 max(0, ovg) 把负值账态真实余额抹 0 → 余额被读成小残值(如 $7) → 单话上限被钉 7−3=$4。
+  //   幅值即余额 — 负值仅当伴 billing_error(真欠费)才计 0。
+  function overageBalance(oc, billingError) {
+    if (typeof oc !== "number" || !isFinite(oc)) return 0;
+    if (oc < 0) return billingError ? 0 : -oc;
+    return oc;
+  }
   function billingDollars(b) {
     if (!b) return 0;
     var avail = (typeof b.available_credits === "number" && isFinite(b.available_credits)) ? b.available_credits : 0;
-    var ovg = (typeof b.overage_credits === "number" && isFinite(b.overage_credits)) ? b.overage_credits : 0;
-    var d = Math.max(0, avail) + Math.max(0, ovg);
+    var d = Math.max(0, avail) + overageBalance(b.overage_credits, b.billing_error);
     return Math.min(1000, Math.round(d * 100) / 100);
   }
 
@@ -292,14 +300,23 @@
     };
   }
 
+  // 余额双端点归一 (与桌面 devinFetchAvailDetail 同源·取各处观测的最大值):
+  //   部分账号(如 KiCad/嘉立创 org)的真实余额挂在 usage/stats 的 available_acus/balance(≈$68),
+  //   而 billing/status 只见小残值(≈$4) —— 旧法只读 status → 余额误读 $4 → 单话上限被钉 4−3=$1。
+  //   两端点并取、最大者为准; 双双失败/无数值才回 null(上游沿用上次已知值, 绝不抹 0)。
   async function fetchOverageDollars(auth1, orgId) {
     if (!auth1 || !orgId) return null;
-    try {
-      var bare = orgId.replace(/^org-/, "");
-      var br = await devinJsonGet(APP + "/api/org-" + bare + "/billing/status", { Authorization: "Bearer " + auth1, "x-cog-org-id": orgId });
-      if (br.status === 200 && br.json) return billingDollars(br.json);
-    } catch (e) {}
-    return null;
+    var bare = orgId.replace(/^org-/, ""), h = { Authorization: "Bearer " + auth1, "x-cog-org-id": orgId };
+    var best = null;
+    function take(v) { if (typeof v === "number" && isFinite(v)) best = (best === null) ? v : Math.max(best, v); }
+    var rs = await Promise.all([
+      devinJsonGet(APP + "/api/org-" + bare + "/billing/status", h).catch(function () { return null; }),
+      devinJsonGet(APP + "/api/org-" + bare + "/billing/usage/stats", h).catch(function () { return null; })
+    ]);
+    try { var br = rs[0]; if (br && br.status === 200 && br.json) take(billingDollars(br.json)); } catch (e) {}
+    try { var sr = rs[1]; if (sr && sr.status === 200 && sr.json) { take(sr.json.available_acus); take(sr.json.balance); } } catch (e) {}
+    if (best === null) return null;
+    return Math.min(1000, Math.round(best * 100) / 100);
   }
 
   // ── 账号存储 (localStorage, 两 WebView 同源共享) ──────────────────────────

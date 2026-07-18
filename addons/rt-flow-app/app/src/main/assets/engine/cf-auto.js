@@ -10,11 +10,17 @@
  *   OAuth 授权页   → 点 Authorize
  *   CF 登录页      → 填 Cloudflare 邮箱/密码并提交 (直登 CF 账号·GitHub 之外的另一路)
  *   CF 2FA 页      → 用 TOTP 密钥本地算 6 位码并提交
- *   CF 建 Token 页 → 逐步点 Continue → Create Token
- *   CF 结果页      → 抓取新 Token → 经本机中继灌入 /api/cf-provision (既有全自动部署)
+ *   CF 已登录(dash) → ★内部接口直建 Token (POST /api/v4/user/tokens·同 dashboard 前端调的
+ *                      同一 HTTP 接口·同源带 cookie·零 UI 点击·零抓取)→ 灌入 /api/cf-provision
+ *   [兜底] CF 建 Token 页 → 逐步点 Continue → Create Token → 结果页抓 Token (内部接口不可用时)
  *
- * 一条龙: 无论用户给的是 GitHub 账号(经 OAuth 登 CF)还是 Cloudflare 账号(直登),
- *   都收敛到「登 CF → 建 Token → 部署 Worker」同一条链, 用户各点一次「允许」即长期有效。
+ * 两种登录模式·完全分离·用户二选一 (底层归一):
+ *   模式A · Cloudflare 直登  = 只填 Cloudflare 邮箱+密码(+2FA) → CF 登录页直接填表提交。
+ *   模式B · GitHub 登 CF     = 只填 GitHub 账号+密码+2FA 种子 → CF 登录页点「用 GitHub 登录」
+ *                              → GitHub 登录/2FA/OAuth 授权 → 落回 CF dash。
+ *   两条各自独立(CF 就是 CF·GitHub 就是 GitHub·互不混), 登进 CF 之后完全一模一样:
+ *   都收敛到「登 CF → (会话态)内部接口建 Token → 部署 Worker」同一条链。登录一次(含其
+ *   Turnstile 人机验证·用户本来手动也要过的同一道关)之后, 建 Token+部署全程纯接口自动化。
  *
  * 守一条不可代之界: 提供商人机验证/硬件密钥/新设备验证 (CAPTCHA/WebAuthn) 命中即停手,
  *   置状态交用户点一下, 随后自动续跑 —— 不静默绕过任何安全控制。
@@ -79,6 +85,8 @@
       if (facts.cfContinue) return "cf_continue";
       if (facts.cf2fa) return "cf_2fa";
       if (facts.cfLogin) return "cf_login";
+      // 已登录 dash 且无登录/2FA/建token 表单 → 直接走内部接口建 Token (首选·零 UI)
+      if (/(^|\.)dash\.cloudflare\.com$/i.test(hostOf(url))) return "cf_authed";
     }
     return "unknown";
   }
@@ -121,12 +129,75 @@
     return tryNext();
   }
 
+  // ── 判定用户选定的登录模式 (纯函数·可测): 两种模式完全分离·二选一 ──
+  //   github     = 只给了 GitHub 账号 → 经 CF 登录页的「用 GitHub 登录」入口
+  //   cloudflare = 只给了 Cloudflare 账号 → CF 登录页直接填邮箱密码
+  //   manual     = 都没给 → 命中登录页时等用户手动登一次
+  function loginMode(cfg) {
+    cfg = cfg || {};
+    var gh = !!(cfg.gh && (cfg.gh.user || cfg.gh.otp));
+    var cf = !!(cfg.cf && (cfg.cf.user || cfg.cf.otp));
+    if (gh && !cf) return "github";
+    if (cf && !gh) return "cloudflare";
+    if (gh && cf) return "github";   // 都填则以 GitHub 优先(两链仍各自独立)
+    return "manual";
+  }
+
+  // ── 本通道所需最小权限组 (账号级为部署/读账号硬需求; 用户级供 verify/accounts) ──
+  var ACCT_GROUPS = ["Workers Scripts Write", "Account Settings Read"];
+  var USER_GROUPS = ["User Details Read", "Memberships Read"];
+
+  // ── 从 CF 内部接口的权限组全集里按名挑出所需组 (纯函数·可测) ──
+  //   先精确匹配, 再退到「去空白·不分大小写」匹配 —— 容忍不同账号/语言环境下 CF 回传的
+  //   权限组名大小写或首尾空白差异, 提升「任意用户」可复现性 (语义名不变即命中)。
+  function pickGroups(all, names) {
+    all = Array.isArray(all) ? all : [];
+    var norm = function (s) { return String(s == null ? "" : s).trim().toLowerCase(); };
+    return (names || []).map(function (n) {
+      for (var i = 0; i < all.length; i++) { if (all[i] && all[i].name === n) return { id: all[i].id }; }
+      for (var j = 0; j < all.length; j++) { if (all[j] && norm(all[j].name) === norm(n)) return { id: all[j].id }; }
+      return null;
+    }).filter(Boolean);
+  }
+
+  // ── 诊断: 从权限组全集里找出「缺失的必需组名」(纯函数·可测) ──
+  //   返回给定 names 中在 all 里匹配不到 id 的那些名字。cfMintToken 用它在铸 Token 前
+  //   就明确报错(而非静默铸出欠权 Token 到后续「读不到账号」才炸·难排查)。
+  function missingGroups(all, names) {
+    all = Array.isArray(all) ? all : [];
+    return (names || []).filter(function (n) { return pickGroups(all, [n]).length === 0; });
+  }
+
+  // ── 构造 POST /api/v4/user/tokens 的请求体 (纯函数·可测) ──
+  //   最小权限: 账号级 Workers 脚本写 + 账号设置读; 用户级 用户详情读 + 成员读 (供 verify/accounts)。
+  function buildTokenPayload(o) {
+    o = o || {};
+    var acctG = pickGroups(o.groups, ACCT_GROUPS);
+    var userG = pickGroups(o.groups, USER_GROUPS);
+    var policies = [];
+    if (acctG.length && o.accountId) {
+      var ar = {}; ar["com.cloudflare.api.account." + o.accountId] = "*";
+      policies.push({ effect: "allow", resources: ar, permission_groups: acctG });
+    }
+    if (userG.length && o.userId) {
+      var ur = {}; ur["com.cloudflare.api.user." + o.userId] = "*";
+      policies.push({ effect: "allow", resources: ur, permission_groups: userG });
+    }
+    return { name: o.name || ("dao-relay " + Date.now()), policies: policies };
+  }
+
   CFAUTO.base32Decode = base32Decode;
   CFAUTO.totp = totp;
   CFAUTO.classifyPage = classifyPage;
   CFAUTO.scrapeToken = scrapeToken;
   CFAUTO.feedToken = feedToken;
   CFAUTO.hostOf = hostOf;
+  CFAUTO.pickGroups = pickGroups;
+  CFAUTO.missingGroups = missingGroups;
+  CFAUTO.buildTokenPayload = buildTokenPayload;
+  CFAUTO.loginMode = loginMode;
+  CFAUTO.ACCT_GROUPS = ACCT_GROUPS;
+  CFAUTO.USER_GROUPS = USER_GROUPS;
 
   // ═══ DOM 驱动 (仅浏览器·测试环境不跑) ═══════════════════════════════════
   //__CFAUTO_RUN_START__
@@ -192,6 +263,38 @@
         };
       };
 
+      // ── ★会话态·经 CF 内部接口纯 HTTP 直建 Token (同源带 cookie·零 UI·零抓取) ──
+      //   与 dashboard 前端调的同一批 /api/v4 接口: 读用户/账号/权限组 → POST 建 Token → 取 value。
+      var cfMintToken = async function () {
+        var api = async function (path, init) {
+          init = init || {};
+          var r = await fetch(path, {
+            method: init.method || "GET",
+            credentials: "include",
+            headers: Object.assign({ Accept: "application/json" }, init.headers || {}),
+            body: init.body
+          });
+          var t = null; try { t = await r.json(); } catch (e) { t = {}; }
+          if (!r.ok || t.success === false) throw new Error("cf " + path + " HTTP " + r.status);
+          return t.result;
+        };
+        var user = await api("/api/v4/user");
+        var accts = await api("/api/v4/accounts?per_page=50");
+        if (!accts || !accts.length) throw new Error("no_account");
+        var groups = await api("/api/v4/user/tokens/permission_groups");
+        // 部署/读账号硬需求账号级两组; 缺任一即明确报错(列出 CF 实际回传的组名·便于任意用户排查),
+        // 不静默铸出欠权 Token 拖到后续「读不到账号」才炸。
+        var acctMiss = missingGroups(groups, ACCT_GROUPS);
+        if (acctMiss.length) {
+          var names = (Array.isArray(groups) ? groups : []).map(function (g) { return g && g.name; }).filter(Boolean);
+          throw new Error("missing_perm_groups: " + acctMiss.join(", ") + " (CF 回传 " + names.length + " 组·此账号权限组名与预期不符)");
+        }
+        var payload = buildTokenPayload({ name: "dao-relay " + Date.now(), accountId: accts[0].id, userId: user.id, groups: groups });
+        if (!payload.policies.length) throw new Error("no_permission_groups_matched");
+        var res = await api("/api/v4/user/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        return res && res.value;
+      };
+
       var act = async function () {
         var f = facts();
         var cat = classifyPage(location.href, f);
@@ -209,7 +312,15 @@
         }
         if (cat === "gh_oauth") { var b = q("#js-oauth-authorize-btn") || q("button[name=authorize][value='1']") || btnByText(/^authorize\b|授权/i); if (b) b.click(); return; }
         if (cat === "cf_login") {
-          if (CFG.cf && CFG.cf.user) {
+          var mode = loginMode(CFG);
+          if (mode === "github") {
+            // 模式B: 在 CF 登录页点「用 GitHub 登录」入口 → 跳 github.com 走 gh_login/gh_2fa/gh_oauth
+            var ghBtn = q("a[href*='github'], a[data-provider='github'], button[data-provider='github']") || btnByText(/github/i);
+            if (ghBtn) { status("oauth", "CF 登录页·点「用 GitHub 登录」"); ghBtn.click(); }
+            else status("wait", "CF 登录页·未见 GitHub 登录入口, 等你手动点一次");
+            return;
+          }
+          if (mode === "cloudflare" && CFG.cf && CFG.cf.user) {
             var cem = q("input[type=email]") || q("input[name=email]") || q("input[name=identity]");
             var cpw = q("input[type=password]") || q("input[name=password]");
             if (cem) setVal(cem, CFG.cf.user);
@@ -227,6 +338,20 @@
             var cf2 = cinp && cinp.form; var csb2 = (cf2 && cf2.querySelector("button[type=submit], input[type=submit]")) || btnByText(/verify|confirm|验证|确认/i);
             if (csb2) csb2.click();
           } else status("wait", "Cloudflare 2FA·未提供 TOTP 密钥, 等你手动输入");
+          return;
+        }
+        if (cat === "cf_authed") {
+          if (root.__cfMinted) return;
+          root.__cfMinted = 1;
+          status("mint", "已登录 CF·经内部接口直建 Token…");
+          try {
+            var mtk = await cfMintToken();
+            if (mtk) {
+              status("token", "内部接口已建 Token, 灌入部署…");
+              var mr = await feedToken(CFG.bases || [], CFG.session, CFG.relayToken, mtk, xhr);
+              status("done", mr.ok ? "Token 已建·全自动部署 Worker 中" : "灌入失败");
+            } else { root.__cfMinted = 0; status("wait", "未取到 Token, 重试中"); }
+          } catch (e) { root.__cfMinted = 0; status("error", "建 Token 失败: " + (e && e.message || e)); }
           return;
         }
         if (cat === "cf_continue") { var c = btnByText(/continue to summary|继续.*(摘要|以显示)/i); if (c) c.click(); return; }

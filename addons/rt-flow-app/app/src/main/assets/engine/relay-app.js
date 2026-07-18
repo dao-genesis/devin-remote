@@ -376,6 +376,139 @@ const DaoRelayApp = (function () {
     try { if (N.relayRestart) N.relayRestart(); } catch (e) {}
     return cfProv;
   }
+
+  // ═══ 会话态·零浏览器·冻结免疫「自动建 Token→部署」(道法自然·操作分离·本源突破) ═══
+  //   缘起: 远程从 VM 驱动手机后台标签建 Token 会卡死——后台标签的 JS event loop 被 OS 冻结
+  //   (fetch/setTimeout 均不推进)。破法: 用户在 App 内浏览器登录过 Cloudflare 后, 其 dashboard
+  //   会话 cookie 落在全局 CookieManager; 引擎页跑在常驻前台服务里 (永不冻结·原生 convPump 外驱),
+  //   经原生 HTTP 桥 (DaoCore.httpReq·无 CORS·可设 Cookie/Origin·冻结免疫) 复刻 dashboard 前端
+  //   调的同一批 /api/v4 内部接口直建 Token → 全程零可见标签·零前台·零浏览器自动化, 远程 RPC
+  //   亦可后台安全跑通。与 cf-auto.js (页内注入·前台活动页) 互为两条独立路, 都收敛到 cfProvisionRun。
+  //   纯函数 (cfPickGroups/cfMissingGroups/cfBuildTokenPayload/cfPickAccount) 经 cf-provision.test.js 实测。
+  var CF_DASH = "https://dash.cloudflare.com";
+  var CF_ACCT_GROUPS = ["Workers Scripts Write", "Account Settings Read"];
+  var CF_USER_GROUPS = ["User Details Read", "Memberships Read"];
+  var cfCookieFn = null;   // 测试注入; 运行时默认 Native.cookiesFor
+  var cfDashFn = null;     // 测试注入; 运行时默认 DaoCore.httpReq (原生·无 CORS·冻结免疫)
+  function cfNorm(s) { return String(s == null ? "" : s).trim().toLowerCase(); }
+  // 按名从权限组全集挑 id: 先精确, 再退「去空白·不分大小写」→ 容忍任意账号/语言环境的组名差异。
+  function cfPickGroups(all, names) {
+    all = Array.isArray(all) ? all : [];
+    return (names || []).map(function (n) {
+      for (var i = 0; i < all.length; i++) { if (all[i] && all[i].name === n) return { id: all[i].id }; }
+      for (var j = 0; j < all.length; j++) { if (all[j] && cfNorm(all[j].name) === cfNorm(n)) return { id: all[j].id }; }
+      return null;
+    }).filter(Boolean);
+  }
+  function cfMissingGroups(all, names) {
+    all = Array.isArray(all) ? all : [];
+    return (names || []).filter(function (n) { return cfPickGroups(all, [n]).length === 0; });
+  }
+  // 最小权限: 账号级 Workers 脚本写 + 账号设置读; 用户级 用户详情读 + 成员读 (供 verify/accounts)。
+  function cfBuildTokenPayload(o) {
+    o = o || {};
+    var acctG = cfPickGroups(o.groups, CF_ACCT_GROUPS);
+    var userG = cfPickGroups(o.groups, CF_USER_GROUPS);
+    var policies = [];
+    if (acctG.length && o.accountId) { var ar = {}; ar["com.cloudflare.api.account." + o.accountId] = "*"; policies.push({ effect: "allow", resources: ar, permission_groups: acctG }); }
+    if (userG.length && o.userId) { var ur = {}; ur["com.cloudflare.api.user." + o.userId] = "*"; policies.push({ effect: "allow", resources: ur, permission_groups: userG }); }
+    return { name: o.name || ("dao-relay " + Date.now()), policies: policies };
+  }
+  // 多账号选择: 指定即取指定; 单账号自动; 多账号未指定 → 明确报错列出(不隐式冒名选第一个·道法自然)。
+  function cfPickAccount(accts, wanted) {
+    accts = Array.isArray(accts) ? accts : [];
+    wanted = String(wanted == null ? "" : wanted).trim();
+    if (wanted) {
+      for (var i = 0; i < accts.length; i++) { if (accts[i] && accts[i].id === wanted) return accts[i]; }
+      throw new Error("account_not_found: 指定 accountId 不在此登录态可见账号内");
+    }
+    if (accts.length === 1) return accts[0];
+    if (!accts.length) throw new Error("no_account: 会话态读不到任何账号");
+    throw new Error("multi_account: 检测到 " + accts.length + " 个账号, 请在 body.accountId 指定其一: " + accts.map(function (a) { return a && a.id; }).filter(Boolean).join(","));
+  }
+  function cfReadCookie(url) {
+    if (cfCookieFn) return cfCookieFn(url);
+    try { var Nx = (typeof Native !== "undefined") ? Native : {}; return Nx.cookiesFor ? Nx.cookiesFor(url) : ""; } catch (e) { return ""; }
+  }
+  // 经原生 HTTP 桥调 dashboard 同源内部接口 (带会话 cookie + Origin/Referer·无 CORS·冻结免疫)。
+  async function cfDashHttp(method, apiPath, cookie, body) {
+    var headers = { "Cookie": cookie, "Origin": CF_DASH, "Referer": CF_DASH + "/", "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" };
+    if (body != null) headers["Content-Type"] = "application/json";
+    var httpFn = cfDashFn || ((typeof DaoCore !== "undefined" && DaoCore.httpReq) ? DaoCore.httpReq : null);
+    if (!httpFn) throw new Error("原生 HTTP 桥不可用 (需引擎上下文·DaoCore.httpReq)");
+    var res = await httpFn(method, CF_DASH + apiPath, headers, body || "");
+    var status = (res && res.status) || 0;
+    var j = null; try { j = JSON.parse((res && res.text) || "null"); } catch (e) { j = null; }
+    if (status < 200 || status >= 400 || (j && j.success === false)) {
+      var msg = (j && j.errors && j.errors.map && j.errors.map(function (e) { return e && e.message; }).filter(Boolean).join("; ")) || ("HTTP " + status);
+      var err = new Error("CF dash " + apiPath + ": " + msg); err.cfStatus = status; throw err;
+    }
+    return j && j.result;
+  }
+  // 离屏真 Chromium 同源建 Token 桥 (Native.cfWebMint → window.__cfWebMintCb 回灌)。
+  //   CF 机管把 dash /api/v4 与浏览器指纹 + cf_clearance + SameSite cookie 强绑; 原生 HTTP / file:// 跨站
+  //   fetch 都会 403/丢 cookie。此路在常驻服务里起离屏真 Chromium 导航 dash 成同源, 页内 fetch 带齐全部
+  //   cookie 过机管, 又冻结免疫。返回 {token, accountId} 或抛语义化错误 (no_cf_session/multi_account/…)。
+  var cfWebMintFn = null;   // 测试注入; 运行时默认 Native.cfWebMint
+  // 全局句柄: WebView 里 = window (native evaluateJavascript 回灌 window.__cfWebMintCb); node 测试里 = globalThis。
+  var _G = (typeof window !== "undefined") ? window : ((typeof globalThis !== "undefined") ? globalThis : {});
+  function cfWebMint(accountId) {
+    return new Promise(function (resolve, reject) {
+      var fn = cfWebMintFn;
+      if (!fn) { try { var Nx = (typeof Native !== "undefined") ? Native : {}; fn = Nx.cfWebMint ? function (id, a) { Nx.cfWebMint(id, a); } : null; } catch (e) { fn = null; } }
+      if (!fn) { reject(new Error("no_webmint_bridge")); return; }
+      var id = "cfm" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+      var reg = (_G.__cfWebMintReg = _G.__cfWebMintReg || {});
+      _G.__cfWebMintCb = _G.__cfWebMintCb || function (rid, js) { try { var f = (_G.__cfWebMintReg || {})[rid]; if (f) f(js); } catch (e) {} };
+      var to = setTimeout(function () { if (reg[id]) { delete reg[id]; reject(new Error("cf_webmint_timeout")); } }, 50000);
+      reg[id] = function (js) {
+        clearTimeout(to); delete reg[id];
+        var o = null; try { o = (typeof js === "string") ? JSON.parse(js) : js; } catch (e) { o = null; }
+        if (!o) { reject(new Error("cf_webmint_bad_result")); return; }
+        if (o.error) { reject(new Error(o.error)); return; }
+        if (!o.token) { reject(new Error("cf_webmint_no_token")); return; }
+        resolve({ token: o.token, accountId: o.accountId || "" });
+      };
+      try { fn(id, accountId || ""); } catch (e) { clearTimeout(to); delete reg[id]; reject(e); }
+    });
+  }
+  // 会话态直建 Token: 首选离屏真 Chromium 同源(过机管·冻结免疫); 桥不可用/超时才落原生 HTTP 兜底。
+  async function cfMintViaCookie(opts) {
+    opts = opts || {};
+    var root2 = (typeof Native !== "undefined") ? Native : {};
+    if (cfWebMintFn || root2.cfWebMint) {
+      try { return await cfWebMint(opts.accountId || ""); }
+      catch (e) {
+        var msg = String(e && e.message || e);
+        // 语义化业务错误直接上抛(供 UI 精准提示); 仅「桥不可用/超时/坏结果」才落原生兜底。
+        if (/no_cf_session|multi_account|account_not_found|missing_perm_groups|no_account|no_token_value/.test(msg)) throw e;
+      }
+    }
+    var cookie = String(cfReadCookie(CF_DASH) || "").trim();
+    if (!cookie) throw new Error("no_cf_session: 未检测到 Cloudflare 登录态 (请先在 App 内浏览器登录一次 CF·人机验证同一道关手动过, 之后建 Token 全自动)");
+    var user = await cfDashHttp("GET", "/api/v4/user", cookie);
+    if (!user || !user.id) throw new Error("会话态读用户失败 (登录态可能过期, 请重新登录 CF)");
+    var accts = await cfDashHttp("GET", "/api/v4/accounts?per_page=50", cookie);
+    var acct = cfPickAccount(accts, opts.accountId);
+    var groups = await cfDashHttp("GET", "/api/v4/user/tokens/permission_groups", cookie);
+    var acctMiss = cfMissingGroups(groups, CF_ACCT_GROUPS);
+    if (acctMiss.length) {
+      var gn = (Array.isArray(groups) ? groups : []).map(function (g) { return g && g.name; }).filter(Boolean);
+      throw new Error("missing_perm_groups: " + acctMiss.join(", ") + " (CF 回传 " + gn.length + " 组·此账号权限组名与预期不符)");
+    }
+    var payload = cfBuildTokenPayload({ name: "dao-relay " + Date.now(), accountId: acct.id, userId: user.id, groups: groups });
+    if (!payload.policies.length) throw new Error("no_permission_groups_matched");
+    var res = await cfDashHttp("POST", "/api/v4/user/tokens", cookie, JSON.stringify(payload));
+    var tok = res && res.value;
+    if (!tok) throw new Error("会话态建 Token 未返回 value");
+    return { token: tok, accountId: acct.id };
+  }
+  async function cfAutoProvisionRun(opts) {
+    cfSet("running", 1, "① 会话态直建 Token (零浏览器·冻结免疫)…", { error: "", url: "" });
+    var minted = await cfMintViaCookie(opts || {});
+    cfSet("running", 2, "② Token 已建·转入部署…", { accountId: minted.accountId });
+    return await cfProvisionRun({ token: minted.token });
+  }
   //__CFPROV_END__
 
   async function handleFrame(m) {
@@ -463,6 +596,15 @@ const DaoRelayApp = (function () {
       if (cfProv.phase === "running") return { status: 200, body: Object.assign({ already: true }, cfProv) };
       cfProvisionRun(cfAuth).catch(function (e) { cfSet("error", cfProv.step, "✗ " + String((e && e.message) || e), { error: String((e && e.message) || e) }); });
       return { status: 200, body: { started: true, poll: "/api/cf-status" } };
+    }
+    // 会话态·零浏览器·冻结免疫「全自动建 Token→部署」: 无需用户提供 Token, 只要 App 内浏览器登录过 CF。
+    //   body.accountId 可选 (多账号时必填其一)。远程 RPC 亦可后台安全触发 (引擎常驻前台服务·不冻结)。
+    if (path === "/api/cf-autoprovision") {
+      var ab = (m && m.body) || {};
+      if (cfProv.phase === "running") return { status: 200, body: Object.assign({ already: true }, cfProv) };
+      cfAutoProvisionRun({ accountId: String((ab && ab.accountId) || "").trim() || null })
+        .catch(function (e) { cfSet("error", cfProv.step, "✗ " + String((e && e.message) || e), { error: String((e && e.message) || e) }); });
+      return { status: 200, body: { started: true, poll: "/api/cf-status", mode: "cookie-session" } };
     }
     if (path === "/api/result-fetch") {
       const a = hubGetAgent(m.body && m.body.agent_id);
@@ -558,7 +700,7 @@ const DaoRelayApp = (function () {
       var p = (m.path || "");
       // 门禁例外: 无账号敏感数据的存活探测 + 中枢管理/接入元数据面 (本身已受 Bearer Token 门禁,
       // 且供本机前端在开启强制 E2E 时仍能读电脑列表/取接入脚本/驱动 Cloudflare 部署)。
-      var _e2eExempt = { "/api/health":1, "/api/agents":1, "/api/revoke":1, "/api/bootstrap.ps1":1, "/bootstrap.ps1":1, "/api/cf-status":1, "/api/cf-provision":1 };
+      var _e2eExempt = { "/api/health":1, "/api/agents":1, "/api/revoke":1, "/api/bootstrap.ps1":1, "/bootstrap.ps1":1, "/api/cf-status":1, "/api/cf-provision":1, "/api/cf-autoprovision":1 };
       if (!_e2eExempt[p]) {
         return { status: 403, body: { error: "e2e_required", hint: "本机已开启强制端到端加密: 请用 E2E Key 加密 RPC 载荷 ({__e2e__:1,c:seal(...)}) 后再发送 (明文请求已拒绝以防账号泄露)" }, enc: false };
       }
@@ -658,6 +800,12 @@ const DaoRelayApp = (function () {
   return {
     register(map) { Object.assign(COMMANDS, map || {}); },
     setNetFn(fn) { cfNet = fn; },   // 测试注入 fetch (CF provisioning 切片实测用)
+    setCfCookieFn(fn) { cfCookieFn = fn; },   // 测试注入 会话态 cookie 读取 (原生 Native.cookiesFor 替身)
+    setCfDashFn(fn) { cfDashFn = fn; },        // 测试注入 dashboard 原生 HTTP (DaoCore.httpReq 替身)
+    setCfWebMintFn(fn) { cfWebMintFn = fn; },   // 测试注入 离屏真 Chromium 同源建 Token (Native.cfWebMint 替身)
+    // 纯函数·供单测直取 (会话态建 Token 编排的可验证切片)
+    _cf: { pickGroups: cfPickGroups, missingGroups: cfMissingGroups, buildTokenPayload: cfBuildTokenPayload,
+           pickAccount: cfPickAccount, mintViaCookie: cfMintViaCookie, autoProvisionRun: cfAutoProvisionRun },
     setStatusCb(fn) { onStatus = fn; },
     serveLocal: serveLocal,
     start(config) {

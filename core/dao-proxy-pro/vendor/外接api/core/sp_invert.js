@@ -73,9 +73,43 @@ const _CANON_MAP = {
   },
 };
 
+// ── 工具轴配置 · 工具提示词(与经藏提示词轴正交) ────────────────
+//   default: 不注入(官方原生工具已自带) · windows: DAO Bridge 四模块 65 工具
+//   freecad: FreeCAD 建模工具 · 道化最小描述(只告知有何工具, 不教用法)
+const _TOOLSET_MAP = {
+  default: { files: [], name: "\u9ED8\u8A8D\u5DE5\u5177" }, // 默認工具
+  windows: { files: ["_tools_windows.txt"], name: "Windows \u5DE5\u5177" },
+  freecad: { files: ["_tools_freecad.txt"], name: "FreeCAD \u5DE5\u5177" },
+};
+const TOOLSET_VALID = new Set(Object.keys(_TOOLSET_MAP));
+
 // ── 模式/经藏持久化 ────────────────────────────────────────
 const _CANON_FILE = path.join(_BUNDLED_DIR, "_origin_canon.txt");
 const _MODE_FILE = path.join(_BUNDLED_DIR, "_origin_mode.txt");
+const _TOOLSET_FILE = path.join(_BUNDLED_DIR, "_origin_toolset.txt");
+
+function _readToolsetFile() {
+  try {
+    if (fs.existsSync(_TOOLSET_FILE)) {
+      const v = fs.readFileSync(_TOOLSET_FILE, "utf8").trim();
+      if (v && TOOLSET_VALID.has(v)) return v;
+    }
+  } catch {}
+  return "default";
+}
+
+function _loadToolsetText(name) {
+  const entry = _TOOLSET_MAP[name];
+  if (!entry || !entry.files.length) return "";
+  const texts = [];
+  for (const f of entry.files) {
+    try {
+      const fp = path.join(_BUNDLED_DIR, f);
+      if (fs.existsSync(fp)) texts.push(fs.readFileSync(fp, "utf8").trim());
+    } catch {}
+  }
+  return texts.join("\n\n");
+}
 
 function _readCanonFile() {
   try {
@@ -115,6 +149,8 @@ function _loadCanonText(canonName) {
 const SP_MODE_VALID = new Set(["invert", "passthrough", "custom"]);
 let SP_MODE = _readModeFile();
 let _activeCanon = _readCanonFile();
+let _activeToolset = _readToolsetFile();
+let _activeToolsetText = _loadToolsetText(_activeToolset);
 let _activeCanonText =
   _activeCanon === "laozi" ? DAO_DE_JING_81 : _loadCanonText(_activeCanon);
 if (!_activeCanonText) {
@@ -143,6 +179,22 @@ function hotReloadCanon() {
   return false;
 }
 
+// ── 工具轴热切 · 与经藏同法(文件即唯一真源 · 多 ext-host 亦不漂) ──
+function setToolset(name) {
+  if (!name || !TOOLSET_VALID.has(name)) return false;
+  _activeToolset = name;
+  _activeToolsetText = _loadToolsetText(name);
+  return true;
+}
+
+function hotReloadToolset() {
+  const fresh = _readToolsetFile();
+  if (fresh && fresh !== _activeToolset) {
+    return setToolset(fresh);
+  }
+  return false;
+}
+
 // ★ 经藏热切真生效 · 注入前以持久化 _origin_canon.txt 为准 · 执一
 //   根因: setCanon 仅同步「处理 /origin/canon 之进程」· 多窗口/多 ext-host 时
 //         实际注入之进程从不更新 → 切经藏无效(恒为启动时之 laozi+yinfu)
@@ -155,6 +207,9 @@ function _maybeHotReloadCanon() {
   _lastCanonCheck = now;
   try {
     hotReloadCanon();
+  } catch {}
+  try {
+    hotReloadToolset();
   } catch {}
 }
 
@@ -190,6 +245,12 @@ function _canonHeader(canon) {
     bookRef +
     "\uFF1A\n\n"
   );
+}
+
+// ── 工具轴后缀 · 道化最小描述附于经文/保留块之末 ─────────────
+function _toolsetSuffix() {
+  if (_activeToolset === "default" || !_activeToolsetText) return "";
+  return TAO_TRAILER + _activeToolsetText;
 }
 
 function isAlreadyInverted(s) {
@@ -615,7 +676,7 @@ function invertAnySP(spText) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// invertSP · 主路全置换 · 反者道之动
+// invertSP · 主路全置换 · 反者道之动 · 主路 chat 末附工具轴描述
 // ═══════════════════════════════════════════════════════════
 function invertSP(spText) {
   try {
@@ -634,7 +695,8 @@ function invertSP(spText) {
     const keeps = extractKeepBlocks(s);
     const base = _canonHeader(_activeCanon) + _activeCanonText + TAO_FOOTER;
     // v9.9.60 · 损之又损 · 去嘱留经 · 经文自足 · 无末锚
-    return keeps ? base + TAO_TRAILER + keeps : base;
+    // 工具轴(windows/freecad)描述附于末 · 只告知有何工具 · 不教用法
+    return (keeps ? base + TAO_TRAILER + keeps : base) + _toolsetSuffix();
   } catch (e) {
     return null;
   }
@@ -754,6 +816,18 @@ module.exports = {
   getMode: () => SP_MODE,
   getCanon: () => _activeCanon,
   getCanonChars: () => (_activeCanonText ? _activeCanonText.length : 0),
+
+  // ★ 工具轴 · 工具提示词(与经藏轴正交)
+  getToolset: () => _activeToolset,
+  getToolsetChars: () => (_activeToolsetText ? _activeToolsetText.length : 0),
+  getToolsetText: () => _activeToolsetText || "",
+  getToolsetMap: () =>
+    Object.fromEntries(
+      Object.entries(_TOOLSET_MAP).map(([k, v]) => [k, v.name]),
+    ),
+  setToolset,
+  hotReloadToolset,
+  TOOLSET_VALID,
   isLoaded: () => !!_activeCanonText && _activeCanonText.length > 0,
 
   // ★ v9.9.101 · 太上下知有之 · 增强模式所需导出

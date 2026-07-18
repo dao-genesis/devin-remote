@@ -54,10 +54,77 @@ function ts(name, fn) { return t(name, async () => fn()); }
     // 人机验证仍优先于 CF 直登
     assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/login", { cfLogin: true, captcha: true }), "captcha");
   });
+  await ts("classify CF 已登录 dash → cf_authed (首选·内部接口建 Token)", () => {
+    // 已登录 dash 且无登录/2FA/建token 表单 → 走内部接口
+    assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/", {}), "cf_authed");
+    assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/profile/api-tokens", {}), "cf_authed");
+    // 登录/2FA/建token 表单在场时不误判为 cf_authed
+    assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/login", { cfLogin: true }), "cf_login");
+    assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/x", { cf2fa: true }), "cf_2fa");
+    // 非 dash 的 cloudflare.com 页不触发 cf_authed
+    assert.strictEqual(CFAUTO.classifyPage("https://www.cloudflare.com/", {}), "unknown");
+  });
+
+  // ── pickGroups / buildTokenPayload (内部接口建 Token 请求体·纯函数) ──
+  const PG = [
+    { id: "gW", name: "Workers Scripts Write" },
+    { id: "gA", name: "Account Settings Read" },
+    { id: "gU", name: "User Details Read" },
+    { id: "gM", name: "Memberships Read" },
+    { id: "gX", name: "Unrelated Group" }
+  ];
+  await ts("pickGroups 按名精确挑出并去 name 只留 id", () => {
+    assert.deepStrictEqual(CFAUTO.pickGroups(PG, ["Workers Scripts Write", "Account Settings Read"]), [{ id: "gW" }, { id: "gA" }]);
+    assert.deepStrictEqual(CFAUTO.pickGroups(PG, ["Nope"]), []);
+    assert.deepStrictEqual(CFAUTO.pickGroups(null, ["x"]), []);
+  });
+  await ts("buildTokenPayload 生成账号+用户两条 policy·作用域正确", () => {
+    const p = CFAUTO.buildTokenPayload({ name: "t1", accountId: "ACC", userId: "USR", groups: PG });
+    assert.strictEqual(p.name, "t1");
+    assert.strictEqual(p.policies.length, 2);
+    const acc = p.policies[0], usr = p.policies[1];
+    assert.strictEqual(acc.effect, "allow");
+    assert.deepStrictEqual(acc.resources, { "com.cloudflare.api.account.ACC": "*" });
+    assert.deepStrictEqual(acc.permission_groups, [{ id: "gW" }, { id: "gA" }]);
+    assert.deepStrictEqual(usr.resources, { "com.cloudflare.api.user.USR": "*" });
+    assert.deepStrictEqual(usr.permission_groups, [{ id: "gU" }, { id: "gM" }]);
+  });
+  await ts("buildTokenPayload 权限组缺失/缺 id 时不产出空作用域 policy", () => {
+    const p = CFAUTO.buildTokenPayload({ name: "t2", accountId: "ACC", userId: "USR", groups: [] });
+    assert.strictEqual(p.policies.length, 0);
+    const p2 = CFAUTO.buildTokenPayload({ groups: PG });   // 无 accountId/userId
+    assert.strictEqual(p2.policies.length, 0);
+    assert.ok(/^dao-relay /.test(p2.name));   // 默认名
+  });
+  // 任意用户健壮性: CF 不同账号/语言环境回传的组名大小写/首尾空白可能不同 → 语义名一致即命中
+  await ts("pickGroups 大小写/空白不敏感回退命中 (任意用户可复现)", () => {
+    const PG2 = [{ id: "gW", name: " workers scripts WRITE " }, { id: "gA", name: "Account Settings Read" }];
+    assert.deepStrictEqual(CFAUTO.pickGroups(PG2, ["Workers Scripts Write", "Account Settings Read"]), [{ id: "gW" }, { id: "gA" }]);
+  });
+  await ts("missingGroups 找出缺失的必需组名 (缺权即明确诊断·非静默铸欠权 Token)", () => {
+    assert.deepStrictEqual(CFAUTO.missingGroups(PG, CFAUTO.ACCT_GROUPS), []);              // 全在
+    const partial = [{ id: "gW", name: "Workers Scripts Write" }];
+    assert.deepStrictEqual(CFAUTO.missingGroups(partial, CFAUTO.ACCT_GROUPS), ["Account Settings Read"]);
+    assert.deepStrictEqual(CFAUTO.missingGroups([], CFAUTO.ACCT_GROUPS), CFAUTO.ACCT_GROUPS.slice());
+    assert.deepStrictEqual(CFAUTO.missingGroups(null, ["x"]), ["x"]);
+  });
+
   await ts("classify 人机验证/硬件密钥优先停手", () => {
     assert.strictEqual(CFAUTO.classifyPage("https://github.com/login", { ghLogin: true, captcha: true }), "captcha");
     assert.strictEqual(CFAUTO.classifyPage("https://github.com/x", { webauthn: true }), "webauthn");
     assert.strictEqual(CFAUTO.classifyPage("https://example.com", {}), "unknown");
+  });
+
+  // ── loginMode: 两种模式完全分离·二选一 ──
+  await ts("loginMode 二选一: CF 直登 / GitHub 登 CF / 手动", () => {
+    assert.strictEqual(CFAUTO.loginMode({ cf: { user: "a@b.c", pass: "x" } }), "cloudflare");
+    assert.strictEqual(CFAUTO.loginMode({ gh: { user: "u", pass: "x", otp: "K" } }), "github");
+    assert.strictEqual(CFAUTO.loginMode({ gh: { otp: "K" } }), "github");        // 仅种子也算 github
+    assert.strictEqual(CFAUTO.loginMode({ cf: { otp: "K" } }), "cloudflare");
+    assert.strictEqual(CFAUTO.loginMode({}), "manual");
+    assert.strictEqual(CFAUTO.loginMode(null), "manual");
+    assert.strictEqual(CFAUTO.loginMode({ gh: {}, cf: {} }), "manual");          // 空对象不算填
+    assert.strictEqual(CFAUTO.loginMode({ gh: { user: "u" }, cf: { user: "a" } }), "github"); // 都填以 GitHub 优先
   });
 
   // ── scrapeToken ──

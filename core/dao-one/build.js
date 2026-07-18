@@ -39,10 +39,16 @@ function buildVsix() {
   // 在构建期把 proxy-fold.patch 叠到 extension.ts 副本上再转译 → vendor-vsix 含 Proxy 板。
   // 帛·「巧拙可伏藏」: 源洁, 合于 dao-one 时方现第三板。
   const overlayPatch = path.join(root, "proxy-fold.patch");
-  let patchText = null, applyOverlay = null;
+  // 归一·③ Windows 总控: 同理另叠 windows-fold.patch (汉堡面板单页 Windows 板块 + 后端 win* 处理器)。
+  const winPatch = path.join(root, "windows-fold.patch");
+  let patchText = null, applyOverlay = null, winPatchText = null;
   if (fs.existsSync(overlayPatch)) {
     applyOverlay = require("./apply-overlay").applyUnifiedDiff;
     patchText = fs.readFileSync(overlayPatch, "utf8");
+  }
+  if (fs.existsSync(winPatch)) {
+    applyOverlay = applyOverlay || require("./apply-overlay").applyUnifiedDiff;
+    winPatchText = fs.readFileSync(winPatch, "utf8");
   }
   let n = 0;
   for (const f of fs.readdirSync(srcDir)) {
@@ -76,6 +82,26 @@ function buildVsix() {
       }
       log("vendor-vsix: applied proxy-fold.patch + folded getProxyPanel/noAuthNeeded + 'proxy' into _solo/reloadActiveDataTab (三合一叠加)");
     }
+    // 归一·③ Windows 总控叠加 (在 proxy-fold 之后叠, 上下文级匹配抗行漂移)。
+    if (winPatchText && f === "extension.ts") {
+      code = applyOverlay(code, winPatchText);
+      // win* 命令并入免登白名单 (与 bridgeHealth/bridgeExec 同列, 桥面板命令均免登)。
+      code = code.replace(
+        /(const\s+noAuthNeeded\s*=\s*\[[^\]]*?)(\s*\]\s*;)/,
+        (m, head, tail) =>
+          head.includes("'winStatus'") ? m : head + ", 'winStatus', 'winExec', 'winScreenshot', 'winVmList', 'winHostEnsure', 'winVmCreate', 'winVmDestroy', 'winOpenDesktop', 'winOpenAllDesktops'" + tail,
+      );
+      // 'windows' 折入 solo 白名单 (汉堡列表点开即独立子网页·隐左导航)。
+      code = code.replace(
+        /(const\s+_solo\s*=\s*\[)([^\]]*?)(\]\s*\.includes)/,
+        (m, head, body, tail) =>
+          body.includes("'windows'") ? m : head + body + ", 'windows'" + tail,
+      );
+      // 'windows' 是面板板块而非数据 tab → 折入 reloadActiveDataTab / renderCredLimited 早退清单,
+      //   与 bridge/backups/github 同列, 避免 init 广播触发 loadTab('windows') 被宿主回 'Unknown tab'。
+      code = code.replace(/t==='github'\)return;/g, (m) => m.includes("windows") ? m : "t==='github'||t==='windows')return;");
+      log("vendor-vsix: applied windows-fold.patch + folded win*/noAuthNeeded + 'windows' into _solo/reloadActiveDataTab (Windows 总控叠加)");
+    }
     const res = transform(code, {
       transforms: ["typescript", "imports"],
       filePath: path.join(srcDir, f),
@@ -88,6 +114,24 @@ function buildVsix() {
     copyDir(path.join(srcRoot, "media"), path.join(dst, "media"));
   // package.json (供子模块自身按需读取版本) — 放 vendor-vsix 根,使 __dirname/../package.json 命中
   copyFile(path.join(srcRoot, "package.json"), path.join(dst, "package.json"));
+  // 归一·③ 复制品桌面: 随插件分发 cloud/vm-replica 后端(宿主守护/会话内代理/多会话使能/部署),
+  //   使 Windows 总控可按需 spawn 官方 RDP 多会话底座(boot-safe·不生产新体系·只搬运既有)。
+  const vmSrc = path.join(path.dirname(plugins), "cloud", "vm-replica", "agent-vm");
+  if (fs.existsSync(vmSrc)) {
+    const vmDst = path.join(dst, "media", "vm-replica");
+    fs.mkdirSync(vmDst, { recursive: true });
+    for (const f of ["vm_host_daemon.py", "vm_inner_agent.py", "ts_multifix.py", "deploy_host.py", "config.sample.json"])
+      if (fs.existsSync(path.join(vmSrc, f))) copyFile(path.join(vmSrc, f), path.join(vmDst, f));
+    log("vendor-vsix: bundled cloud/vm-replica 后端 → media/vm-replica (复制品桌面底座)");
+  } else log("vendor-vsix: SKIP vm-replica bundle (源缺失 " + vmSrc + ")");
+  // 归一·③ 复制品桌面前端: 随插件分发 rdp-web 网关(官方 RDP 线协议 node-rdpjs<->WebSocket)
+  //   + 官方 mstsc.js 前端(canvas/rle/keyboard)。IDE 内桌面页直接内嵌官方 RDP 前端实时渲染同一会话,
+  //   零重造、零 GUI 依赖(网关全程 127.0.0.1 环回)。
+  const rdpWebSrc = path.join(path.dirname(plugins), "cloud", "vm-replica", "rdp-web");
+  if (fs.existsSync(path.join(rdpWebSrc, "gateway.js"))) {
+    copyDir(rdpWebSrc, path.join(dst, "media", "rdp-web"));
+    log("vendor-vsix: bundled cloud/vm-replica/rdp-web 前端 → media/rdp-web (官方 RDP 网关+mstsc.js)");
+  } else log("vendor-vsix: SKIP rdp-web bundle (源缺失 " + rdpWebSrc + ")");
   log("vendor-vsix: transpiled " + n + " ts file(s)");
 }
 
@@ -151,8 +195,21 @@ function buildFlow() {
         (m) => (touched = true, m + "['🔀','Proxy Pro · 本源观照 / 渠道配置 / 模型路由','board:proxy'],"),
       );
     }
+    // 归一·③ Windows 总控: 同法折入汉堡 PAGES + BOARD_META (源纯净·仅 dao-one 构建期幂等注入)。
+    if (!/windows:\[/.test(flow)) {
+      flow = flow.replace(
+        /(var BOARD_META=\{[^}]*?)(\};)/,
+        (m, head, tail) => head.includes("windows:") ? m : (touched = true, head + ",windows:['🪟','Windows 总控']" + tail),
+      );
+    }
+    if (!flow.includes("board:windows")) {
+      flow = flow.replace(
+        /(\['🌐','公网穿透 · DAO Bridge','board:bridge'\],)/,
+        (m) => (touched = true, m + "['🪟','Windows 总控 · 整机信息/工具清单/桥·MCP/密钥·资源/截屏·执行','board:windows'],"),
+      );
+    }
     if (touched) fs.writeFileSync(flowExt, flow);
-    log("vendor-flow: folded Proxy Pro into PAGES(汉堡)+BOARD_META (三合一叠加·源纯净)" + (touched ? "" : " · 已存在跳过"));
+    log("vendor-flow: folded Proxy Pro + Windows 总控 into PAGES(汉堡)+BOARD_META (叠加·源纯净)" + (touched ? "" : " · 已存在跳过"));
   }
   log("vendor-flow: copied extension.js + devin_cloud/proxy/web/git/stuck + py helpers + media");
 }
@@ -202,12 +259,36 @@ function verifyFolds() {
     "'proxy'",                      // _solo 白名单 (独立子网页模式)
     "t==='proxy'||",                // reloadActiveDataTab 面板板块早退
   ]);
+  must("vendor-vsix/out/extension.js", [
+    "data-tab=\"windows\"",        // 归一·③ Windows 总控 · 左栏第8板块入口
+    "id=\"v-windows\"",            // Windows 单页容器
+    "function rWindowsFull",        // Windows 单页渲染
+    "function rWindowsResult",
+    "function winBridgeApi",        // 后端 · 桥直连(cf-hub-conn.json 端口/令牌)
+    "case 'winStatus'",             // 后端 · 整机信息(桥 /api/health + sysinfo)
+    "case 'winExec'",               // 后端 · 整机执行
+    "case 'winScreenshot'",         // 后端 · 整机截屏
+    "function vmHostApi",           // 复制品桌面 · 宿主守护(vm_host_daemon)直连
+    "function ensureRdpWeb",        // 复制品桌面 · rdp-web 网关(官方 RDP<->WebSocket)按需拉起
+    "function openVmDesktopPanel",  // 复制品桌面 · IDE 内多实例桌面页(内嵌官方 mstsc.js RDP 前端)
+    "int.openDesktopTab",           // 复制品桌面 · 优先折入 rt-flow 多实例外壳当同级标签(单壳一切)
+    "case 'winVmList'",             // 后端 · 分身列表
+    "case 'winVmCreate'",           // 后端 · 新建/连接分身(RDP 多会话)
+    "case 'winOpenDesktop'",        // 后端 · 打开复制品桌面页
+    "case 'winOpenAllDesktops'",    // 后端 · 并行全开(全部分身各折一张同级标签)
+    "'winStatus'",                  // 免登白名单
+    "'windows'",                    // _solo 白名单 / 早退清单
+    "t==='windows')return;",        // reloadActiveDataTab/renderCredLimited 面板板块早退
+  ]);
   must("vendor-flow/extension.js", [
     "board:proxy",                  // 汉堡菜单 PAGES 入口
     "proxy:['🔀','Proxy Pro']",     // BOARD_META 标签
+    "board:windows",                // 归一·③ Windows 汉堡菜单入口
+    "windows:['🪟','Windows 总控']", // BOARD_META 标签
+    "async function openDesktopTab", // 归一 · 复制品桌面标签入口(dao-vsix 经 _internals 注入)
   ]);
   must("vendor-proxy/extension.js", ["getEaConfigHtml"]);
-  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×8 · vendor-flow ×2 · vendor-proxy ×1)");
+  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×20 · vendor-flow ×4 · vendor-proxy ×1)");
 }
 
 buildVsix();

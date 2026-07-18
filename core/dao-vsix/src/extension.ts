@@ -3855,8 +3855,14 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         && !route.startsWith('/shell') && !route.startsWith('/api/shell')
         && !route.startsWith('/i/')
         && !route.startsWith('/__web')
+        && !BRIDGE_DAEMON_ROUTES.has(route)
         && !isAppProxyPassthrough(route);
     if (needAuth && !checkAuth(req)) throw new Error('unauthorized');
+
+    // 一行接入协议 → 直通 dao-bridge 常驻进程(其自理鉴权); 主口即公网入口, 设备注册/轮询全链闭环
+    if (BRIDGE_DAEMON_ROUTES.has(route)) {
+        return await daoBridgeDaemonProxy(route, url, req);
+    }
 
     // ── 归一 · 公网整机投屏控制台 (任意环境浏览器登录即操控本机 · 参照手机 APK mirror) ──
     //   知其雄守其雌: 渲染层(解帧绘制)与输入捕获全在访问者设备浏览器, 隧道只搬帧字节+输入 JSON。
@@ -3990,7 +3996,10 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         try { body = JSON.parse(await readBody(req) || '{}'); } catch (e) { body = {}; }
         const sid = String((body && body.sid) || '');
         const msg = body && body.msg;
-        try { if (rtint && typeof rtint.shellHandleMessage === 'function') await rtint.shellHandleMessage(sid, msg); } catch (e) { /* 守柔 */ }
+        // 火后即忘: 回包一律走 SSE/长轮询, HTTP 响应不等宿主处理完 —
+        //   否则串行队列被慢任务(上游 API 卡顿)拖住时, 页面的 POST 悬挂会耗尽浏览器
+        //   同源连接池, 连长轮询都被饿死 → 六大板块永远「加载中」(真机实证)。
+        try { if (rtint && typeof rtint.shellHandleMessage === 'function') { Promise.resolve(rtint.shellHandleMessage(sid, msg)).catch(() => { /* 守柔 */ }); } } catch (e) { /* 守柔 */ }
         return { ok: true };
     }
 
@@ -4388,6 +4397,14 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
             if (typeof maxCredits !== 'number') return { ok: false, error: 'maxCredits (number) required' };
             return await devinSetMessageLimit(ws.devinOrgId, maxCredits, ws.devinAuth1);
+        }
+        case '/api/devin/usage/limit-probe': {
+            // 额度跟随透视 — 返回活动号四处余额字段原值 + 当前将回写的 cap, 供排查「上限从何而来」。
+            if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
+            const d = await devinFetchAvailDetail(ws.devinOrgId, ws.devinAuth1);
+            const pp = loadInjectProfile();
+            const poff = (typeof pp.messageLimitOffset === 'number') ? pp.messageLimitOffset : 3;
+            return { ok: true, orgId: ws.devinOrgId, fields: d.fields, avail: d.best, offset: poff, cap: (d.best == null ? null : quotaCapFromAvail(d.best, poff)) };
         }
         case '/api/devin/mcp/installations': {
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
@@ -4899,13 +4916,18 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                         // ★ v1.0.1 · 帛书·「反者道之动」— API可用则直取数据，否则simpleBrowser
                         const tab = msg.tab as string;
                         if (devinCanUseApi() && ws.devinOrgId) {
+                            // 归一: 前端只消费 type:'tabData' — 成功/失败/异常全走同一协议, 绝不回 {ok,data}(会被静默丢弃 → 永久「加载中」)
+                            const send = (result: any, items: any[]) => {
+                                if (result && result.ok) reply({ type: 'tabData', tab, items: items || [] });
+                                else reply({ type: 'tabData', tab, items: [], error: 'API失败: ' + ((result && (result.error || ('HTTP ' + result.status))) || '未知') });
+                            };
                             try {
                                 let result: any = { ok: false };
-                                if (tab === 'sessions') { result = await devinListSessions(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.sessions : [] }); }
-                                else if (tab === 'knowledge') { result = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.learnings : [] }); }
-                                else if (tab === 'playbooks') { result = await devinListPlaybooks(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.playbooks : [] }); }
-                                else if (tab === 'secrets') { result = await devinListSecrets(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.secrets : [] }); }
-                                else if (tab === 'integrations') { result = await devinListIntegrations(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.connections : [] }); }
+                                if (tab === 'sessions') { result = await devinListSessions(ws.devinOrgId, ws.devinAuth1); send(result, result.sessions); }
+                                else if (tab === 'knowledge') { result = await devinListKnowledge(ws.devinOrgId, ws.devinAuth1); send(result, result.learnings); }
+                                else if (tab === 'playbooks') { result = await devinListPlaybooks(ws.devinOrgId, ws.devinAuth1); send(result, result.playbooks); }
+                                else if (tab === 'secrets') { result = await devinListSecrets(ws.devinOrgId, ws.devinAuth1); send(result, result.secrets); }
+                                else if (tab === 'integrations') { result = await devinListIntegrations(ws.devinOrgId, ws.devinAuth1); send(result, result.connections); }
                                 else if (tab === 'automations') {
                                     result = await devinListAutomations(ws.devinOrgId, ws.devinAuth1);
                                     const aitems = (result.ok ? (result.automations || []) : []).map((a: any) => ({
@@ -4913,14 +4935,14 @@ class DaoCloudPanel implements vscode.WebviewViewProvider {
                                         detail: Array.isArray(a.triggers) ? a.triggers.map((t: any) => t.event_type || t.type || '').filter(Boolean).join(', ') : (a.description || ''),
                                         connected: a.enabled !== false,
                                     }));
-                                    reply({ ok: true, data: aitems });
+                                    send(result, aitems);
                                 }
-                                else if (tab === 'schedules') { result = await devinListSchedules(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
-                                else if (tab === 'profile') { result = await devinGetProfile(ws.devinOrgId, ws.devinUserId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
-                                else if (tab === 'customization') { result = await devinGetCustomization(ws.devinOrgId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
-                                else if (tab === 'apikeys') { result = await devinGetApiKeyStatus(ws.devinOrgId, ws.devinUserId, ws.devinAuth1); reply({ ok: true, data: result.ok ? result.items : [] }); }
-                                else reply({ ok: false, error: 'unknown tab' });
-                            } catch (e: any) { reply({ ok: false, error: e.message }); }
+                                else if (tab === 'schedules') { result = await devinListSchedules(ws.devinOrgId, ws.devinAuth1); send(result, result.items); }
+                                else if (tab === 'profile') { result = await devinGetProfile(ws.devinOrgId, ws.devinUserId, ws.devinAuth1); send(result, result.items); }
+                                else if (tab === 'customization') { result = await devinGetCustomization(ws.devinOrgId, ws.devinAuth1); send(result, result.items); }
+                                else if (tab === 'apikeys') { result = await devinGetApiKeyStatus(ws.devinOrgId, ws.devinUserId, ws.devinAuth1); send(result, result.items); }
+                                else reply({ type: 'tabData', tab, items: [], error: 'unknown tab' });
+                            } catch (e: any) { reply({ type: 'tabData', tab, items: [], error: e.message || 'API error' }); }
                         } else {
                             // 道法自然 · 零自动打开: 未登录/无凭证绝不自动弹页 (杜绝首启弹一堆坏页),
                             // 仅回错误态 → UI 渲染「重试 / 🌐 在 Devin Cloud 中打开」按钮, 由用户手动开页。
@@ -5116,6 +5138,57 @@ function readBridgeConn(): any {
         const c = JSON.parse(fs.readFileSync(p, 'utf8'));
         return { url: c.url || '', workspace: c.workspace || '', root: c.root || '', host: c.host || '', updated: c.updated || '', port: c.port || 0 };
     } catch { return null; }
+}
+
+// 设备接入协议路由 — 一行 PowerShell 接入(irm <url>/api/bootstrap.ps1|iex)及其后续注册/轮询帧,
+//   经主口直通 dao-bridge 常驻进程(真正实现 connect/poll/result 的中枢), 鉴权由常驻进程自理。
+const BRIDGE_DAEMON_ROUTES = new Set(['/api/bootstrap.ps1', '/bootstrap.ps1', '/api/bootstrap.sh', '/bootstrap.sh', '/api/connect', '/api/poll', '/api/result', '/api/heartbeat', '/api/result-fetch']);
+function daoBridgeDaemonProxy(route: string, urlObj: any, req: any): Promise<any> {
+    return new Promise((resolve) => {
+        let dport = 0; let dtoken = '';
+        try {
+            const c = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.dao', 'bridge', 'conn.json'), 'utf8'));
+            dport = c.port || 0; dtoken = c.token || '';
+        } catch { /* 守柔 */ }
+        if (!dport) {
+            resolve({ _proxy: true, status: 503, contentType: 'text/plain; charset=utf-8', body: '# dao-bridge daemon not running on this machine (no ~/.dao/bridge/conn.json)' });
+            return;
+        }
+        const finish = (status: number, ctype: string, body: string) => {
+            if (route.indexOf('bootstrap.ps1') >= 0 && status === 200) {
+                // 重写脚本内中枢地址 = 用户实际访问的公网地址(主口), 注册/轮询帧经主口直通回常驻进程
+                const xfHost = String(req.headers?.['x-forwarded-host'] || req.headers?.host || '');
+                if (xfHost && !/^127\.0\.0\.1|^localhost/i.test(xfHost)) {
+                    const proto = String(req.headers?.['x-forwarded-proto'] || 'https');
+                    body = body.replace(/\$U='[^']*'/, "$U='" + proto + '://' + xfHost + "'");
+                } else {
+                    try {
+                        const c = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.dao', 'bridge', 'conn.json'), 'utf8'));
+                        const u = c && c.url ? String(c.url).replace(/\/$/, '') : '';
+                        if (u) body = body.replace(/\$U='[^']*'/, "$U='" + u + "'");
+                        else if (ws.publicUrl) body = body.replace(/\$U='[^']*'/, "$U='" + ws.publicUrl.replace(/\/$/, '') + "'");
+                    } catch {
+                        if (ws.publicUrl) body = body.replace(/\$U='[^']*'/, "$U='" + ws.publicUrl.replace(/\/$/, '') + "'");
+                    }
+                }
+            }
+            resolve({ _proxy: true, status, contentType: ctype, body });
+        };
+        (async () => {
+            let bodyStr = '';
+            try { bodyStr = (req && req._relayBody !== undefined) ? String(req._relayBody) : await readBody(req); } catch { /* 守柔 */ }
+            const h: any = { 'Content-Type': 'application/json', Authorization: String(req.headers?.['authorization'] || ('Bearer ' + dtoken)) };
+            const dreq = http.request({ host: '127.0.0.1', port: dport, path: (urlObj && urlObj.pathname ? urlObj.pathname + (urlObj.search || '') : route), method: req.method || 'GET', headers: h, timeout: 20000 }, (r: any) => {
+                let d = '';
+                r.on('data', (c: any) => d += c);
+                r.on('end', () => finish(r.statusCode || 502, String(r.headers['content-type'] || 'text/plain; charset=utf-8'), d));
+            });
+            dreq.on('error', (e: any) => resolve({ _proxy: true, status: 502, contentType: 'text/plain; charset=utf-8', body: '# bridge daemon unreachable: ' + e.message }));
+            dreq.on('timeout', () => { dreq.destroy(); resolve({ _proxy: true, status: 504, contentType: 'text/plain; charset=utf-8', body: '# bridge daemon timeout' }); });
+            if (bodyStr) dreq.write(bodyStr);
+            dreq.end();
+        })();
+    });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -5585,14 +5658,25 @@ async function daoGhFleetAdd(lines: string[], defaultRole: string): Promise<{ ok
     saveInjectProfile(prof);
     return { ok: results.some(x => x.ok), results };
 }
+// 账号级 GitHub 状态判定(纯函数·可测): 给定 /users/{login} 的 HTTP 状态码, 判定账号状态。
+function ghAcctStateDecide(httpStatus: number, hasPat: boolean): 'active' | 'suspended' | 'bad_pat' | 'no_pat' | 'offline' {
+    if (!hasPat) return 'no_pat';
+    if (httpStatus === 0) return 'offline';
+    if (httpStatus === 200) return 'active';
+    if (httpStatus === 404) return 'suspended';
+    if (httpStatus === 401 || httpStatus === 403) return 'bad_pat';
+    return 'offline';
+}
 // 舰队清单 + 组织在线角色核对(用本体组织 admin PAT 查每人 membership state/role)。
-async function daoGhFleetList(orgPat: string, org: string): Promise<{ login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string; pending?: boolean }[]> {
+// acctState: 账号级 GitHub 状态探测(active/suspended/bad_pat/no_pat/offline), 10 分钟 TTL 缓存。
+async function daoGhFleetList(orgPat: string, org: string): Promise<{ login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string; pending?: boolean; acctState?: string }[]> {
     const prof = loadInjectProfile();
     const fleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
     orgPat = String(orgPat || '').trim(); org = String(org || '').trim();
-    type FleetRow = { login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string; pending?: boolean };
+    type FleetRow = { login: string; role: string; note?: string; addedAt?: string; hasPat?: boolean; hasCred?: boolean; active?: boolean; orgState?: string; orgRole?: string; pending?: boolean; acctState?: string };
     const out: FleetRow[] = [];
     let dirty = false;
+    const ACCT_TTL = 10 * 60 * 1000; // 10 分钟缓存
     for (const a of fleet) {
         // 自愈: 断网入队(verify='pending')的成员 PAT 在刷新时重新校验 — 网络恢复且 PAT 有效即自动清除 pending;
         // 仍不可达则守柔保留 pending, PAT 明确失效才留待用户处理(不擅自删档)。绝不再让「一次断网」永久卡 pending。
@@ -5606,6 +5690,24 @@ async function daoGhFleetList(orgPat: string, org: string): Promise<{ login: str
             const r = await ghApiRequest('GET', '/orgs/' + encodeURIComponent(org) + '/memberships/' + encodeURIComponent(a.login), orgPat);
             if (r.status === 200 && r.json) { row.orgState = r.json.state; row.orgRole = r.json.role; }
             else row.orgState = (r.status === 404) ? 'none' : (r.status === 0 ? 'offline' : ('HTTP ' + r.status));
+        }
+        // 账号级状态探测(TTL 缓存): 用管理 PAT 探 /users/{login}, 区分 active/suspended/bad_pat。
+        const rowHasPat = !!row.hasPat;
+        const cached = (a as any).acctState as string | undefined;
+        const cachedAt = (a as any).acctCheckedAt as string | undefined;
+        const cacheValid = cached && cachedAt && (Date.now() - new Date(cachedAt).getTime()) < ACCT_TTL;
+        if (cacheValid) {
+            row.acctState = cached;
+        } else if (orgPat && rowHasPat) {
+            const r = await ghApiRequest('GET', '/users/' + encodeURIComponent(a.login), orgPat);
+            const st = ghAcctStateDecide(r.status, true);
+            row.acctState = st;
+            (a as any).acctState = st;
+            (a as any).acctCheckedAt = new Date().toISOString();
+            dirty = true;
+            await _ghSleep(200);
+        } else {
+            row.acctState = ghAcctStateDecide(0, rowHasPat);
         }
         out.push(row);
     }
@@ -5776,6 +5878,45 @@ function daoGhFleetOpenPat(login: string): { ok: boolean; login: string; launche
     const launched = daoLaunchChromiumIsolated(url, safeKey, fp, proxy, profileDir, patExt ? [patExt] : []);
     return { ok: !!launched, login, launched: !!launched, scopes: cfg.scopes, expDays: cfg.expDays };
 }
+// 全自动建 PAT: 用该号账密+TOTP 在【专属隔离档】走 GitHub 官方登录 → 官网建经典 PAT → 回吐并落舰队。
+//   与 daoGhFleetOpenPat 同 profileDir(不张冠李戴)。守柔: 撞真·人机/设备/硬件密钥挑战即 needUser 交回
+//   (前端引导用户改走「续登助手」半自动)。TOTP 是号主自有第二因子(本地 RFC6238), 非绕过安全挑战。
+async function daoGhCredMint(login: string, opts?: { headless?: boolean }): Promise<{ ok: boolean; login: string; role?: string; needUser?: boolean; error?: string }> {
+    login = String(login || '').trim().replace(/^@/, '');
+    const prof = loadInjectProfile();
+    const a = (prof.ghFleet || []).find(x => x.login.toLowerCase() === login.toLowerCase());
+    if (!a) return { ok: false, login, error: '账号不在池中' };
+    if (a.pat) { const v = await daoGhAccountVerify(a.pat); if (v.ok) return { ok: true, login, role: a.role }; }
+    const cred = a.cred;
+    if (!cred || !cred.user || !cred.pass) return { ok: false, login, error: '该账号无「账密+2FA」存号 — 用「③ 账密+2FA」模式添号后再自动建 PAT' };
+    let mod: any;
+    try { mod = await daoRelayLoadMod('gh-credmint.mjs'); } catch (e: any) { return { ok: false, login, error: '建 PAT 模块缺失: ' + String(e && e.message || e) }; }
+    const cfg = daoGhGetPatCfg();
+    const safeKey = ('gh:' + login).replace(/[^a-zA-Z0-9._@-]/g, '_');
+    const profileDir = path.join(DAO_DIR, 'browser-profiles', safeKey);
+    try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* 守柔 */ }
+    const proxy = daoAcctProxy(safeKey);
+    let res: any;
+    try {
+        res = await mod.mintPat({
+            login, pass: cred.pass, otp: cred.otp || '',
+            role: a.role === 'admin' ? 'admin' : 'member',
+            scopes: cfg.scopes, profileDir,
+            proxy: proxy && proxy.server ? proxy.server : (typeof proxy === 'string' ? proxy : undefined),
+            headless: opts && opts.headless === false ? false : true,
+            log: (m: string) => { try { console.log('[gh-credmint] ' + login + ' ' + m); } catch { /* 守柔 */ } },
+        });
+    } catch (e: any) { return { ok: false, login, error: String(e && e.message || e) }; }
+    if (!res || !res.ok) return { ok: false, login, needUser: !!(res && res.needUser), error: (res && res.error) || '建 PAT 失败' };
+    // 落舰队(经 loadInjectProfile/saveInjectProfile 串行写, 不与后台 reconcile 抢写)
+    const p2 = loadInjectProfile();
+    if (!Array.isArray(p2.ghFleet)) p2.ghFleet = [];
+    const ex = p2.ghFleet.find(x => x.login.toLowerCase() === login.toLowerCase());
+    if (ex) { ex.pat = res.token; if ((ex as any).verify) delete (ex as any).verify; if (ex.note) delete ex.note; }
+    else p2.ghFleet.push({ login, pat: res.token, role: a.role === 'admin' ? 'admin' : 'member', addedAt: new Date().toISOString() });
+    saveInjectProfile(p2);
+    return { ok: true, login, role: a.role };
+}
 // ═══════════════════════════════════════════════════════════
 // 持久化 Worker · 后端代登助手(用 GitHub 账号登 Cloudflare → 建 API Token → provision)
 //   本源: 内网穿透默认走零账号 dao-relay(无需任何账号·见 AGENTS.md 三)。仅当用户要「固定不漂公网
@@ -5892,7 +6033,7 @@ function ghGenerateMgmtMd(): string {
         '',
         '- 板块状态源 = `~/.dao/dao-inject-profile.json` 的 `ghFleet` / `orgBody` / `mcps`(⚠ 含明文 PAT — 读取后禁止外传/打印)。',
         '- 热查看: `POST /api/exec` 读上述文件; 热修复: `POST /api/write` + `POST /api/command` (`workbench.action.reloadWindow`) 重载生效。',
-        '- 面板命令(webview cmd → 后端): `daoGhAccountAdd` `daoGhAccountDetail` `daoGhAccountRepos` `daoGhSetActive` `daoGhFleetList` `daoGhFleetRole` `daoGhFleetRemoveOrg` `daoGhFleetForget` `daoGhFleetAssistLogin`(半登录续登·隔离档自动填充不提交) `daoGhFleetOpenPat`(该号隔离档建 PAT·按通用配置预勾·不张冠李戴) `daoGhGetPatCfg`/`daoGhSavePatCfg`(账号池通用 PAT 权限/有效期配置) `daoGhForkRepos` `daoGhSyncRepos` `daoGhCreateOrg` `daoGhInvite` `daoGhCopyMd`。',
+        '- 面板命令(webview cmd → 后端): `daoGhAccountAdd` `daoGhAccountDetail` `daoGhAccountRepos` `daoGhSetActive` `daoGhFleetList` `daoGhFleetRole` `daoGhFleetRemoveOrg` `daoGhFleetForget` `daoGhFleetAssistLogin`(半登录续登·隔离档自动填充不提交) `daoGhFleetOpenPat`(该号隔离档建 PAT·按通用配置预勾·不张冠李戴) `daoGhFleetMintPat`(全自动: 隔离档账密+TOTP 官方登录→官网建经典 PAT→落舰队·守柔撞挑战交回) `daoGhGetPatCfg`/`daoGhSavePatCfg`(账号池通用 PAT 权限/有效期配置) `daoGhForkRepos` `daoGhSyncRepos` `daoGhCreateOrg` `daoGhInvite` `daoGhCopyMd`。',
         '- GitHub REST 直调: 后端 `ghApiRequest(method, path, pat)` → api.github.com(限速自守)。',
         '',
         '## AI 守则',
@@ -5919,7 +6060,7 @@ function _ghParseCredLine(line: string): { user: string; pass: string; otp: stri
     if (!user) return null;
     return { user, pass: rest[0] || '', otp };
 }
-// 统一添号入口: mode=pat 复用舰队 PAT 校验; mode=cred 账密+2FA 本地存号(不做无头登录·引导官网换 PAT)。
+// 统一添号入口: mode=pat 复用舰队 PAT 校验; mode=cred 账密+2FA 本地存号(随后可点「⚡ 自动建 PAT」隔离档官方登录建 PAT)。
 async function daoGhAccountAdd(text: string, role: string, mode: string): Promise<{ ok: boolean; results: { login: string; ok: boolean; role?: string; note?: string; error?: string }[] }> {
     const lines = String(text || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     if (mode !== 'cred') return daoGhFleetAdd(lines, role);
@@ -5934,7 +6075,7 @@ async function daoGhAccountAdd(text: string, role: string, mode: string): Promis
         const ex = prof.ghFleet.find(a => a.login.toLowerCase() === login.toLowerCase());
         if (ex) { ex.cred = c; if (!ex.note) ex.note = '账密存号'; }
         else prof.ghFleet.push({ login, pat: '', role: prof.ghFleet.length === 0 ? 'admin' : r, note: '账密存号·待官网换 PAT', addedAt: new Date().toISOString(), cred: c });
-        results.push({ login, ok: true, role: (ex ? ex.role : r), note: '已本地存号 · 点「建 PAT」跳官网换 PAT 后贴回①' });
+        results.push({ login, ok: true, role: (ex ? ex.role : r), note: '已本地存号 · 点「⚡ 自动建 PAT」隔离档官方登录→官网建经典 PAT→自动落舰队(撞人机/设备验证则改点「🚀 续登」半自动)' });
     }
     saveInjectProfile(prof);
     return { ok: results.some(x => x.ok), results };
@@ -6244,6 +6385,22 @@ function bridgeHubApi(p: string): Promise<{ status: number; text: string }> {
         });
         req.on('error', (e: any) => resolve({ status: 0, text: String(e.message) }));
         req.setTimeout(12000, () => { req.destroy(); resolve({ status: 0, text: 'timeout' }); });
+        req.end();
+    });
+}
+
+// 设备活性以 /api/health 为准(心跳只证明曾经活过): 直探该设备已发布通道的 /api/health, 2xx 即在线。
+function bridgeProbeDeviceHealth(base: string, timeoutMs = 6000): Promise<boolean> {
+    return new Promise((resolve) => {
+        let u: URL;
+        try { u = new URL(String(base).replace(/\/$/, '') + '/api/health'); } catch { resolve(false); return; }
+        const mod = u.protocol === 'https:' ? require('https') : require('http');
+        const req = mod.request({ hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80), path: u.pathname, method: 'GET', rejectUnauthorized: false }, (res: any) => {
+            res.resume();
+            resolve(res.statusCode >= 200 && res.statusCode < 300);
+        });
+        req.on('error', () => resolve(false));
+        req.setTimeout(timeoutMs, () => { req.destroy(); resolve(false); });
         req.end();
     });
 }
@@ -7504,14 +7661,14 @@ function startBridgeLivenessLoop(context: vscode.ExtensionContext): void {
 //   账号切换/批量注入时另由 applyInjectProfileToOrg 即刻据本号算注; 此环负责活动号「额度刷新即跟随」。
 //
 // 单会话上限计算 — 帛书·「大盈若盅·其用不窘」:
-//   余额充裕 → 留余量 off, cap = floor(余额 − off)(如 69 → 66);
-//   余额不足 off(最后一点小钱) → 不再钉死 1(那样残额永远花不掉, 此前根本错误),
-//     反而抬到 off+1(>off, 默认 4), 让最后一点能在一次对话里全部消耗完;
-//   负余额(欠费)同样收敛到 off+1。故 cap = max(floor(余额 − off), off + 1) — 恒 > off, 单调随余额增。
+//   余额充裕 → 留足预留 off, cap = floor(余额 − off)(如 70 → 67, 40 → 37) — 每条新消息按「当前余额−预留」封顶;
+//   余额不足以留预留(最后一点小钱) → 不再钉死 off+1(旧法: 余额 <7 一律回写 4, 凭空冒出与真实余额
+//     无关的「$4」且可高于实际余额·用户莫名) — 改为 min(floor(余额), off)(≤真实余额, 残额仍可花),
+//     最低 1(服务端 max_credits ≥1)。三支取 max 保单调随余额增, 且 余额≥1 时恒 ≤ 余额。
 function quotaCapFromAvail(avail: number, off: number): number {
-    return Math.max(Math.floor(avail - off), off + 1);
+    return Math.max(1, Math.floor(avail - off), Math.min(Math.floor(avail), off));
 }
-const QUOTA_AUTO_LIMIT_INTERVAL_MS = 60 * 1000;
+const QUOTA_AUTO_LIMIT_INTERVAL_MS = 30 * 1000;
 let _quotaAutoLimitTimer: ReturnType<typeof setInterval> | null = null;
 let _lastAutoLimitSig = '';
 async function quotaAutoLimitTick(): Promise<void> {
@@ -7543,7 +7700,7 @@ function startQuotaAutoLimitLoop(context: vscode.ExtensionContext): void {
 //     ④ 隔离清理: 删除该号一切「非期望(不在档案 automations) 且 未被用户锁定」的自动化 → 止血·根除每周烧额度残留;
 //     ② 额度跟随: messageLimitAuto 时据本号当前余额重算 cap = 余额 − off, 仅变化才回写(守柔省网)。
 //   守柔: 单账号错误隔离; 仅档案 enabled 时巡; 清理受 injectReset 开关约束; 跳过被 RT Flow 清理/出库的账号。
-const POOL_STEADY_INTERVAL_MS = 5 * 60 * 1000;
+const POOL_STEADY_INTERVAL_MS = 2 * 60 * 1000;
 let _poolSteadyTimer: ReturnType<typeof setInterval> | null = null;
 let _poolSteadyInflight = false;
 const _steadyQuotaSig = new Map<string, number>();
@@ -7859,7 +8016,7 @@ function sw(t){
         v.dataset.loaded='1';
         // ★ 有cog_ key → 尝试API加载
         v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'}[t]||'🌐')+'</div><h3>'+{sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations'}[t]+'</h3><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
-        cmd('loadTabData',{tab:t});
+        loadTab(t);
       } else {
         // ★ 无 auth1 (仅 session-token) → 底层自动获取凭证, 用户无需手动 API Key
         const tabNames={sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时'};
@@ -7869,7 +8026,7 @@ function sw(t){
     }
   }
 }
-function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull()}
+function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull();if(S.tab==='inject')rInject()}
 // 帛书·「见小曰明」: 凭证就绪后(login/autoAcquire 使 canUseApi 转真), 当前数据 tab 仍停在「获取凭证」占位
 // (该占位故意不标记 loaded) — 此处自动重载, 拉取真实数据, 用户无需再次点击。
 function reloadActiveDataTab(){
@@ -7881,7 +8038,7 @@ function reloadActiveDataTab(){
   v.dataset.loaded='1';
   var ic=({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️'}[t])||'🌐';
   v.innerHTML='<div class="empty"><div class="ic">'+ic+'</div><p style="margin:8px 0;color:var(--muted)">正在加载...</p></div>';
-  cmd('loadTabData',{tab:t});
+  loadTab(t);
 }
 
 // 帛书·「知止不殆」: autoAcquire 成功但仅得 Session Token(无 cog_ key) — 数据 tab 不再停在
@@ -8105,7 +8262,7 @@ function rBridgeAgents(){
   var ags=ba.agents||[];
   for(var i=0;i<ags.length;i++){var a=ags[i];var onl=(a.status==='online');
     rows+='<div class="cr" style="border-top:1px solid var(--border);padding-top:5px;margin-top:5px"><span class="l"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;background:'+(onl?'var(--success)':'var(--muted)')+'"></span>'+esc(a.hostname||a.id||'?')+'</span><span class="v" style="color:'+(onl?'var(--success)':'var(--muted)')+';font-size:11px">'+(onl?'● 在线':'○ 离线')+'</span></div>';
-    var meta=[];if(a.user)meta.push('用户 '+a.user);if(a.os)meta.push(String(a.os).slice(0,40));if(a.last_seen)meta.push('心跳 '+bkRel(Date.parse(a.last_seen)));
+    var meta=[];if(a.user)meta.push('用户 '+a.user);if(a.os)meta.push(String(a.os).slice(0,40));if(a.last_seen)meta.push('心跳 '+bkRel(Date.parse(a.last_seen)));if(a.probed_at)meta.push('探活 '+bkRel(Date.parse(a.probed_at))+(a.probe==='health-ok'?' ✓':' ✗'));
     if(meta.length)rows+='<div style="font-size:10px;color:var(--muted);margin:2px 0 0 14px">'+esc(meta.join(' · '))+'</div>';
   }
   if(!ags.length)rows+='<div style="font-size:10px;color:var(--muted);margin-top:6px">暂无其他接入设备 — 用下方「一行接入」命令把更多设备接进来。</div>';
@@ -8396,13 +8553,31 @@ function daoOverviewManualHtml(){
     +'<div class="st" style="font-size:11px;text-transform:none">🧩 MCP 服务器</div><div class="card"><div class="cr"><span class="l" style="font-size:11px;color:var(--muted)">MCP 在专用面板集中管理(浏览市场·安装·卸载·钉住)</span><span class="v"><button class="btn sm primary" onclick="sw(&#39;mcp&#39;)">打开 MCP 面板</button></span></div></div>';
 }
 function daoLoadOverviewManual(){
-  if(!S.auth.loggedIn||!S.auth.canUseApi)return;
-  ['profile','customization','apikeys','knowledge','playbooks','secrets','integrations','automations','schedules'].forEach(function(t){
+  var secs=['profile','customization','apikeys','knowledge','playbooks','secrets','integrations','automations','schedules'];
+  // 未登录/无 API 凭证: 不能让各区块永久停在「加载中…」(登录坏/断网时正是此情形) —
+  //   立即把每个区块渲成显式空态(带登录/官方入口按钮), 由 rT 的 err 分支统一呈现。
+  if(!S.auth.loggedIn||!S.auth.canUseApi){
+    secs.forEach(function(t){var id=(t==='integrations')?'ov-git':'ov-'+t;if(document.getElementById(id))rT(t,[],'未登录 · 登录后查看或手动打开');});
+    var bp=document.getElementById('ov-blueprints');if(bp)bp.innerHTML='<div class="empty" style="padding:10px"><p style="color:var(--muted);font-size:11px;margin:0">未登录 · 登录后查看环境蓝图</p></div>';
+    return;
+  }
+  secs.forEach(function(t){
     var id=(t==='integrations')?'ov-git':'ov-'+t;
     if(!document.getElementById(id))return;
-    cmd('loadTabData',{tab:t});
+    loadTab(t);
   });
   if(document.getElementById('ov-blueprints'))cmd('loadBlueprints');
+}
+// 看门狗: 请求发出后 45s 无 tabData 回包 → 渲染超时错误态(带重试/官方入口), 永不停留「加载中…」
+var _tabWatch={};
+function loadTab(t){
+  cmd('loadTabData',{tab:t});
+  if(_tabWatch[t])clearTimeout(_tabWatch[t]);
+  _tabWatch[t]=setTimeout(function(){
+    _tabWatch[t]=0;
+    if(S.data[t]&&S.data[t].length)return;
+    rT(t,[], '请求超时 · 官方 API 无响应, 请重试或打开官方页面');
+  },45000);
 }
 function rBridge(){
   var b=S.bridge;var head='<div class="st">内网穿透 · DAO Bridge</div>';
@@ -8423,7 +8598,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){if(d.command==='setCleanupCooldown'){var _m=document.getElementById('swCdMsg');if(_m){_m.textContent=d.ok?('✓ 已保存 '+(d.hours!=null?d.hours+'h':'')):('✗ '+(d.error||'保存失败'));_m.style.color=d.ok?'var(--success)':'var(--danger)'}if(d.ok&&typeof d.hours==='number')S.cooldownH=d.hours;}else if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='devinAutoAcquire'&&d.ok&&d.canUseApi===false){toast('已获取 Session Token, 但完整 API(cog_ key)不可用',false);renderCredLimited()}else if(d.command==='copyBackupCred'){toast(d.ok?(d.hasPw?'已复制账号+密码':'已复制邮箱(本地无密码)'):'复制失败',d.ok&&d.hasPw)}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){if(_tabWatch[d.tab]){clearTimeout(_tabWatch[d.tab]);_tabWatch[d.tab]=0;}S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='actionResult'){if(d.command==='setCleanupCooldown'){var _m=document.getElementById('swCdMsg');if(_m){_m.textContent=d.ok?('✓ 已保存 '+(d.hours!=null?d.hours+'h':'')):('✗ '+(d.error||'保存失败'));_m.style.color=d.ok?'var(--success)':'var(--danger)'}if(d.ok&&typeof d.hours==='number')S.cooldownH=d.hours;}else if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='devinAutoAcquire'&&d.ok&&d.canUseApi===false){toast('已获取 Session Token, 但完整 API(cog_ key)不可用',false);renderCredLimited()}else if(d.command==='copyBackupCred'){toast(d.ok?(d.hasPw?'已复制账号+密码':'已复制邮箱(本地无密码)'):'复制失败',d.ok&&d.hasPw)}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -8475,14 +8650,14 @@ function rT(tab,items,err,fallbackProxy){
       v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--muted);font-size:13px">正在从底层自动获取访问凭证…</p><p style="font-size:11px;color:var(--muted);max-width:360px;line-height:1.6">账号凭证随 IDE 登录状态自动同步, 无需手动 API Key。</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn primary" onclick="cmd(&#39;devinAutoAcquire&#39;)">🔄 重试自动获取</button><button class="btn ghost" onclick="cmd(&#39;devinManualLogin&#39;)">👤 手动登录其他账户</button></div></div>';
     } else {
       // 其他错误
-      v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--danger);font-size:12px">Error: '+esc(err||'Unknown')+'</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;'+tab+'&#39;})">⟳ 重试</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 在 Devin Cloud 中打开</button></div></div>';
+      v.innerHTML='<div class="empty"><div class="ic">'+(tabIcons[tab]||'🌐')+'</div><h3>'+tabNames[tab]+'</h3><p style="margin:8px 0;color:var(--danger);font-size:12px">Error: '+esc(err||'Unknown')+'</p><div class="br" style="justify-content:center;margin-top:8px"><button class="btn" onclick="loadTab(&#39;'+tab+'&#39;)">⟳ 重试</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 在 Devin Cloud 中打开</button></div></div>';
     }
     return;
   }
-  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅',profile:'👤',customization:'🎛️',apikeys:'🔐'}[tab]||'🌐')+'</div><h3>'+({sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时',profile:'Profile 身份',customization:'Customization 偏好',apikeys:'API Keys'}[tab]||tab)+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
+  if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅',profile:'👤',customization:'🎛️',apikeys:'🔐'}[tab]||'🌐')+'</div><h3>'+({sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时',profile:'Profile 身份',customization:'Customization 偏好',apikeys:'API Keys'}[tab]||tab)+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn" onclick="loadTab(&#39;'+tab+'&#39;)">⟳ 重试</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
   // ★ v1.0.1 · 各tab添加新建按钮 · 帛书·「道生一·一生二」
   const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>',automations:'<button class="btn sm danger" onclick="if(confirm(&#39;确认清除本账号官网全部自动化?此操作不可撤销&#39;))cmd(&#39;clearAutomations&#39;)">🧹 清除全部</button>'};
-  let h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' items</span><div class="br">'+(createBtns[tab]||'')+'<button class="btn sm" onclick="cmd(&#39;loadTabData&#39;,{tab:&#39;'+tab+'&#39;})">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐</button></div></div>';
+  let h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' items</span><div class="br">'+(createBtns[tab]||'')+'<button class="btn sm" onclick="loadTab(&#39;'+tab+'&#39;)">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐</button></div></div>';
   if(tab==='sessions'){
     items.forEach(s=>{
       const id=s.devin_id||s.id||'';const title=s.title||s.name||'Untitled';const status=s.status||'';const created=s.created_at||'';
@@ -8698,6 +8873,7 @@ function ghFleetRemoveOrg(login){if(!login)return;if(typeof confirm==='function'
 function ghFleetForget(login){if(!login)return;if(typeof confirm==='function'&&!confirm('从本地舰队删除 '+login+'?(不影响其 GitHub 账号)'))return;cmd('daoGhFleetForget',{login:login})}
 function ghAssistLogin(login){if(!login)return;toast('🚀 隔离档续登(自动填充·守柔不提交): '+login,true);cmd('daoGhFleetAssistLogin',{login:login})}
 function ghFleetOpenPat(login){if(!login)return;toast('🔑 该号隔离档打开建 PAT('+((_ghState().patCfg||{}).expDays===0?'永不过期':(((_ghState().patCfg||{}).expDays||30)+'天'))+'): '+login,true);cmd('daoGhFleetOpenPat',{login:login})}
+function ghFleetMintPat(login){if(!login)return;toast('⚡ 全自动建 PAT(隔离档官方登录→建经典 PAT→落舰队·约 1-2 分钟): '+login,true);cmd('daoGhFleetMintPat',{login:login})}
 // PAT 通用配置窗: 先拉当前配置(含全量 scope 清单)再弹窗渲染。
 function ghPatCfgOpen(){_ghState().patCfgWantShow=true;toast('⏳ 载入 PAT 通用配置…',true);cmd('daoGhGetPatCfg',{})}
 function ghPatCfgShow(d){
@@ -8723,13 +8899,15 @@ function ghRenderGhFleet(){var st=_ghState();var v=document.getElementById('ghGh
   var patBadge=a.hasPat?'<span style="color:var(--success)" title="有 PAT·全功能">🔑</span>':(a.hasCred?'<span style="color:var(--warn)" title="半登录·账密已存·待续登建 PAT">🔓</span>':'<span style="color:var(--warn)" title="仅账密·待建 PAT">🔒</span>');
   if(a.pending)patBadge+='<span style="color:var(--warn)" title="断网入队·PAT 待验证(网络恢复后重新添加或刷新即核)">⏳</span>';
   var os='';if(a.orgState){var isOff=(a.orgState==='offline');var col=(a.orgState==='active')?'var(--success)':((a.orgState==='pending'||isOff)?'var(--warn)':'var(--muted)');os=' · <span style="color:'+col+'" '+(isOff?'title="GitHub 不可达(本机网络/代理断)·非账号问题"':'')+'>org:'+(isOff?'🌐断网':esc(a.orgState)+(a.orgRole?('/'+esc(a.orgRole)):''))+'</span>'}
+  var as='';if(a.acctState){var ac=a.acctState;var acCol=(ac==='active')?'var(--success)':((ac==='suspended')?'var(--danger)':((ac==='bad_pat')?'var(--warn)':'var(--muted)'));var acTxt=(ac==='active')?'✓正常':((ac==='suspended')?'⛔封号':((ac==='bad_pat')?'⚠凭证失效':((ac==='no_pat')?'·无PAT':'·离线')));as=' · <span style="color:'+acCol+'" title="GitHub 账号状态: '+esc(ac)+'">'+acTxt+'</span>'}
   h+='<div class="card" style="padding:8px 9px'+(a.active?';border-left:3px solid var(--success)':'')+'">';
-  h+='<div class="cr"><span class="l" style="font-size:12px">'+patBadge+' <b>'+lg+'</b> · '+roleBadge+bodyBadge+os+'</span></div>';
+  h+='<div class="cr"><span class="l" style="font-size:12px">'+patBadge+' <b>'+lg+'</b> · '+roleBadge+bodyBadge+os+as+'</span></div>';
   // 操作行 1: 查看
   h+='<div class="br" style="margin-top:4px">';
   h+='<button class="btn sm" onclick="ghAcctDetail(&#39;'+lg+'&#39;)" title="下拉查看账号数据(login/名字/scopes/组织)">🔍 详情</button>';
   h+='<button class="btn sm" onclick="ghAcctRepos(&#39;'+lg+'&#39;)" title="列该账号当前可管理仓库">📚 仓库</button>';
-  if(!a.hasPat&&a.hasCred)h+='<button class="btn sm primary" onclick="ghAssistLogin(&#39;'+lg+'&#39;)" title="半登录续登: 该号隔离档打开 GitHub 登录页·自动填充账密+当前2FA(守柔不自动提交)">🚀 续登</button>';
+  if(!a.hasPat&&a.hasCred)h+='<button class="btn sm primary" onclick="ghFleetMintPat(&#39;'+lg+'&#39;)" title="全自动建 PAT: 该号隔离档官方登录(账密+本地算 2FA)→官网建经典 PAT→落舰队·守柔撞人机/设备验证即交回">⚡ 自动建 PAT</button>';
+  if(!a.hasPat&&a.hasCred)h+='<button class="btn sm" onclick="ghAssistLogin(&#39;'+lg+'&#39;)" title="半登录续登: 该号隔离档打开 GitHub 登录页·自动填充账密+当前2FA(守柔不自动提交)">🚀 续登</button>';
   h+='<button class="btn sm" onclick="ghFleetOpenPat(&#39;'+lg+'&#39;)" title="该号专属隔离档打开建 PAT 页(不张冠李戴·必为本号建)">🔑 建 PAT</button>';
   h+='<button class="btn sm" onclick="ghOpen(&#39;https://github.com/settings/tokens&#39;)" title="官网查看该账号所有 PAT 状态">📋 PAT 列表</button>';
   h+='</div>';
@@ -8833,6 +9011,7 @@ function ghOnResult(d){
   else if(d.kind==='fleetForget'){if(d.ok){toast('✓ 已从舰队删除 '+d.login,true);cmd('daoGhFleetList',{})}}
   else if(d.kind==='assistLogin'){if(d.ok)toast('✓ 已在 '+d.login+' 隔离档打开 GitHub 登录'+(d.hasOtp?'·2FA已填充':'')+' · 核对后手动登入',true);else toast('✗ '+esc(d.error||'续登失败'),false);}
   else if(d.kind==='fleetOpenPat'){if(d.ok)toast('✓ 已在 '+d.login+' 隔离档打开建 PAT 页(scope '+((d.scopes||[]).length)+' 项·'+(d.expDays===0?'永不过期':((d.expDays==null?30:d.expDays)+'天'))+'·助手已预勾)',true);else toast('✗ 打开建 PAT 页失败',false);}
+  else if(d.kind==='fleetMintPat'){if(d.ok){toast('✓ '+d.login+' 已全自动建 PAT 并落舰队('+(d.role==='admin'?'管理者':'成员')+')',true);cmd('daoGhFleetList',{});}else if(d.needUser){toast('⚠ '+d.login+' 撞人机/设备验证 → 请改点「🚀 续登」半自动登入后再「🔑 建 PAT」: '+(d.error||''),false);}else toast('✗ '+d.login+' 自动建 PAT 失败: '+(d.error||''),false);}
   else if(d.kind==='patCfg'){st.patCfg={scopes:d.scopes||[],expDays:(d.expDays==null?30:d.expDays)};if(st.patCfgWantShow){st.patCfgWantShow=false;ghPatCfgShow(d);}}
   else if(d.kind==='patCfgSaved'){st.patCfg={scopes:d.scopes||[],expDays:(d.expDays==null?30:d.expDays)};toast('✓ PAT 通用配置已保存(scope '+((d.scopes||[]).length)+' 项·'+(d.expDays===0?'永不过期':d.expDays+'天')+')',true);}
   else if(d.kind==='injectPat'){
@@ -8989,7 +9168,16 @@ function rInject(){
   if(!Array.isArray(p.automations))p.automations=[];
   const tgl=(on,fn)=>'<span onclick="'+fn+'" style="cursor:pointer;display:inline-block;width:40px;height:20px;border-radius:10px;background:'+(on?'var(--success)':'var(--muted)')+';position:relative;vertical-align:middle"><span style="position:absolute;top:2px;left:'+(on?'22px':'2px')+';width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s"></span></span>';
   let h='';
-  try{var ist=S.injectStatus||{};var ta=ist.tunnelAlive;var tla=ist.tunnelLastAlive;var tlStr=tla?new Date(tla).toLocaleTimeString():'—';var upH=ist.uptime?Math.floor(ist.uptime/3600)+'h'+Math.floor((ist.uptime%3600)/60)+'m':'—';var inj=S.inject||{};var kC=(inj.knowledge||0);var pC=(inj.playbook||0);var sC=(inj.secret||0);var gC=(inj.git||0);var injT=inj.timestamp?new Date(inj.timestamp).toLocaleTimeString():'—';h+='<div class="card" style="margin-bottom:12px;border-left:3px solid '+(ta?'var(--success)':'var(--danger,#e55)')+'"><div class="cr"><span class="l">隧道状态</span><span class="v" style="color:'+(ta?'var(--success)':'var(--danger,#e55)')+'">●'+(ta?' 在线':' 离线')+'</span></div>'+(ist.tunnelUrl?'<div class="cr"><span class="l">URL</span><span class="v" style="font-size:10px;word-break:break-all">'+esc(ist.tunnelUrl)+'</span></div>':'')+'<div class="cr"><span class="l">本地端口</span><span class="v">:'+(ist.localPort||9920)+'</span></div><div class="cr"><span class="l">探活失败</span><span class="v">'+(ist.tunnelFails||0)+'</span></div><div class="cr"><span class="l">上次探活</span><span class="v">'+tlStr+'</span></div><div class="cr"><span class="l">上次注入</span><span class="v">'+injT+'</span></div><div class="cr"><span class="l">注入内容</span><span class="v">K:'+kC+' P:'+pC+' S:'+sC+' G:'+gC+'</span></div><div class="cr"><span class="l">运行时长</span><span class="v">'+upH+'</span></div><div style="padding:6px 0"><button class="btn sm primary" onclick="V.postMessage({command:&#39;injectDiagnose&#39;})" style="width:100%">🔧 一键诊断修复</button></div></div>';}catch(e){h+='';}
+  try{var ist=S.injectStatus||{};var ta=ist.tunnelAlive;var tla=ist.tunnelLastAlive;var tlStr=tla?new Date(tla).toLocaleTimeString():'—';var upH=ist.uptime?Math.floor(ist.uptime/3600)+'h'+Math.floor((ist.uptime%3600)/60)+'m':'—';var inj=S.inject||{};var kC=(inj.knowledge||0);var pC=(inj.playbook||0);var sC=(inj.secret||0);var gC=(inj.git||0);var injT=inj.timestamp?new Date(inj.timestamp).toLocaleTimeString():'—';
+  // 双通道内网穿透状态(反向注入专用·同步内网穿透板块两条通道): 快速通道 + 持久 Worker 各自健康/角色。
+  var ch=ist.channels||{};var qk=ch.quick||{};var wk=ch.worker||{};var actC=ist.activeChannel||'';
+  var lrStr=ist.lastRefresh?new Date(ist.lastRefresh).toLocaleTimeString():'—';
+  var chRow=function(name,icon,c,isActive){var al=!!c.alive;var badge=isActive?'<span style="font-size:9px;background:var(--success);color:#fff;border-radius:3px;padding:0 4px;margin-left:5px">主</span>':(c.url?'<span style="font-size:9px;background:var(--muted);color:#fff;border-radius:3px;padding:0 4px;margin-left:5px">备</span>':'');return '<div class="cr" style="border-top:1px solid var(--border,#222);padding-top:5px"><span class="l">'+icon+' '+name+badge+'</span><span class="v" style="color:'+(al?'var(--success)':'var(--danger,#e55)')+'">●'+(al?' 在线':(c.url?' 离线':' 未配置'))+'</span></div>'+(c.url?'<div class="cr"><span class="l" style="font-size:10px;color:var(--muted)">URL</span><span class="v" style="font-size:10px;word-break:break-all">'+esc(c.url)+'</span></div>':'');};
+  h+='<div class="card" style="margin-bottom:12px;border-left:3px solid '+(ta?'var(--success)':'var(--danger,#e55)')+'"><div class="cr"><span class="l">内网穿透 · 双通道</span><span class="v" style="color:'+(ta?'var(--success)':'var(--danger,#e55)')+'">●'+(ta?' 在线':' 全部离线')+'</span></div>'
+    +chRow('快速通道 (CloudFlare)','⚡',qk,actC==='quick')
+    +chRow('持久 Worker 中继','🛰️',wk,actC==='worker')
+    +'<div class="cr" style="border-top:1px solid var(--border,#222);padding-top:5px"><span class="l">本地端口</span><span class="v">:'+(ist.localPort||9920)+'</span></div><div class="cr"><span class="l">探活失败</span><span class="v">'+(ist.tunnelFails||0)+'</span></div><div class="cr"><span class="l">上次探活</span><span class="v">'+tlStr+'</span></div><div class="cr"><span class="l">上次刷新</span><span class="v">'+lrStr+'</span></div><div class="cr"><span class="l">上次注入</span><span class="v">'+injT+'</span></div><div class="cr"><span class="l">注入内容</span><span class="v">K:'+kC+' P:'+pC+' S:'+sC+' G:'+gC+'</span></div><div class="cr"><span class="l">运行时长</span><span class="v">'+upH+'</span></div>'
+    +'<div class="br" style="padding:6px 0"><button class="btn sm" onclick="cmd(&#39;getInjectProfile&#39;)" title="重新探活两条通道并刷新状态">⟳ 刷新通道</button><button class="btn sm primary" onclick="V.postMessage({command:&#39;injectDiagnose&#39;})" title="探活失败通道→刷新→通道恢复后重注入全池">🔧 诊断修复 + 重注入</button></div></div>';}catch(e){h+='';}
   h+='<div class="st">反向注入 · 通用自动注入 · 无为而无不为</div>';
   h+='<p style="font-size:11px;color:var(--muted);line-height:1.6;margin:4px 0 10px">通用模块：配置一次，此后账号随 IDE 登录自动切换时，系统按此清单<b>反向注入</b>到每个新账号，并(默认)清理旧账号的同名注入。默认道藏载荷：道法自然准则 · 内网穿透MD · 道德经/阴符经/道法自然 三剧本 · MCP 服务器同步。</p>';
   h+='<div class="card"><div class="cr"><span class="l">启用自动注入</span><span class="v">'+tgl(p.enabled,'ipToggle(&#39;enabled&#39;)')+'</span></div><div class="cr"><span class="l">切账号时清理旧账号</span><span class="v">'+tgl(p.autoCleanup,'ipToggle(&#39;autoCleanup&#39;)')+'</span></div>'+(p.lastInjectedOrg?'<div class="cr"><span class="l">上次注入 org</span><span class="v" style="font-size:10px">'+esc(p.lastInjectedOrg)+'</span></div>':'')+'</div>';
@@ -9225,16 +9413,29 @@ function refreshDaoCloudMiddlePanel() {
             }).catch(() => { _injectStatusProbing = false; });
         }
         // 通道在线 = 快速隧道探活 ∪ 持久 relay(WS 已连即活) — 曾只看隧道探活, 持久通道用户恒被渲成「离线」。
-        let _relayAlive = false; let _relayUrl = '';
-        try { const _rs = bridgeRelayState(); _relayAlive = !!(_rs && _rs.active && (_rs.connected || _rs.healthy)); _relayUrl = (_rs && _rs.url) || ''; } catch { /* 守柔 */ }
+        let _relayAlive = false; let _relayUrl = ''; let _relayHealthy = false;
+        try { const _rs = bridgeRelayState(); _relayAlive = !!(_rs && _rs.active && (_rs.connected || _rs.healthy)); _relayUrl = (_rs && _rs.url) || ''; _relayHealthy = !!(_rs && _rs.healthy); } catch { /* 守柔 */ }
+        // 快速通道(cloudflared quick tunnel)探活: 进程内 bridgeUrl 90s 内探活成功即活。
+        const _quickAlive = _bridgeLastAliveMs > 0 && (Date.now() - _bridgeLastAliveMs) < 90000;
+        // 出站置顶策略(见 connectRelay): 持久 Worker 已登记即置顶接管, 否则走快速通道。active = 实际承载出站的通道。
+        const _activeChannel = _relayAlive ? 'worker' : (_quickAlive ? 'quick' : (_relayUrl ? 'worker' : 'quick'));
         data.injectStatus = {
+            // 兼容旧字段(单通道渲染回退)
             tunnelUrl: bridgeUrl || _relayUrl || '',
-            tunnelAlive: (_bridgeLastAliveMs > 0 && (Date.now() - _bridgeLastAliveMs) < 90000) || _relayAlive,
+            tunnelAlive: _quickAlive || _relayAlive,
             tunnelLastAlive: _bridgeLastAliveMs || 0,
             tunnelFails: _bridgeLivenessFail,
             lastInjectedUrl: _lastInjectedBridgeUrl || '',
             localPort: ws.port || DEFAULT_PORT,
             uptime: process.uptime(),
+            // 双通道明细(反向注入板块专用): 快速通道 + 持久 Worker 各自 URL/健康/角色。
+            channels: {
+                quick: { url: bridgeUrl || '', alive: _quickAlive, lastAlive: _bridgeLastAliveMs || 0, fails: _bridgeLivenessFail },
+                worker: { url: _relayUrl, alive: _relayAlive, healthy: _relayHealthy },
+            },
+            activeChannel: _activeChannel,
+            fallbackChannel: _activeChannel === 'worker' ? 'quick' : 'worker',
+            lastRefresh: Date.now(),
         };
     } catch { data.injectStatus = {}; }
     postMiddle(data);
@@ -9733,7 +9934,8 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                     } catch { /* 守柔 */ }
                     return k;
                 });
-                reply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: knowledgeView, playbooks: p.playbooks, mcps: p.mcps, automations: p.automations, messageLimit: p.messageLimit, messageLimitAuto: p.messageLimitAuto, messageLimitOffset: p.messageLimitOffset, lastInjectedOrg: p.lastInjectedOrg } });
+                // refreshReply: 先重发 init(含双通道 injectStatus 实时探活) 再回 profile → 「⟳ 刷新通道」按钮一键双拉。
+                refreshReply({ type: 'injectProfile', profile: { enabled: p.enabled, autoCleanup: p.autoCleanup, secrets: p.secrets, knowledge: knowledgeView, playbooks: p.playbooks, mcps: p.mcps, automations: p.automations, messageLimit: p.messageLimit, messageLimitAuto: p.messageLimitAuto, messageLimitOffset: p.messageLimitOffset, lastInjectedOrg: p.lastInjectedOrg } });
                 break;
             }
             case 'setInjectProfile': {
@@ -10075,6 +10277,12 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // 隔离建 PAT: 在该号专属隔离档打开建 PAT 页(与续登同 profile · 不张冠李戴)。
                 const r = daoGhFleetOpenPat(String(msg.login || ''));
                 reply({ type: 'daoGhResult', kind: 'fleetOpenPat', ...r });
+                break;
+            }
+            case 'daoGhFleetMintPat': {
+                // 全自动建 PAT: 账密+TOTP 隔离档官方登录 → 官网建经典 PAT → 落舰队。守柔撞挑战 needUser 交回。
+                const r = await daoGhCredMint(String(msg.login || ''), { headless: msg.headless === false ? false : true });
+                reply({ type: 'daoGhResult', kind: 'fleetMintPat', ...r });
                 break;
             }
             case 'daoGhGetPatCfg': {
@@ -11011,17 +11219,32 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const r = await bridgeHubApi('/api/agents');
                 let agents: any[] = [];
                 try { const j = JSON.parse(r.text || '{}'); agents = Array.isArray(j.agents) ? j.agents : []; } catch { /* 守柔 */ }
+                // 心跳只证明过去活过 — 对心跳已陈但登记过可达地址的设备, 直探其 /api/health 定生死
+                //   (relay 直连设备不走中枢心跳, 旧法仅凭 lastSeen 会把在线设备恒判离线)。
+                await Promise.all(agents.filter((a: any) => a && a.status !== 'online' && (a.url || a.publicUrl)).slice(0, 8).map(async (a: any) => {
+                    if (await bridgeProbeDeviceHealth(String(a.url || a.publicUrl))) {
+                        a.status = 'online'; a.probe = 'health-ok'; a.last_seen = new Date().toISOString();
+                    } else { a.probe = 'health-fail'; }
+                    a.probed_at = new Date().toISOString();
+                }));
                 const host = (c && c.host) || os.hostname();
                 // 本机(中枢)在线判定 = 本地桥 API 有应答(整机直连 127.0.0.1 通即活)或已有可达公网 URL。
                 // 旧病灶: 仅凭 `!!c.url` — 快速隧道漂移/未连时 conn.url 为空, 明明本机在跑却恒显「离线」。
                 const hubOnline = r.status === 200 || !!(c && c.url);
-                reply({ type: 'bridgeAgents', ok: r.status === 200, host, online: hubOnline, agents });
+                // 归一: 常驻进程 registry 可能为空(新装/重启), 但插件本体活着就是在线设备 — 合入本机自身, 按主机名去重
+                if (!agents.some((a: any) => String(a.hostname || a.id || '') === os.hostname())) {
+                    agents.unshift({ id: os.hostname(), hostname: os.hostname(), os: os.type() + ' ' + os.release(), user: os.userInfo().username, status: 'online', self: true, connected_at: new Date(ws.startTime).toISOString(), last_heartbeat: new Date().toISOString(), port: ws.port, publicUrl: ws.publicUrl });
+                }
+                reply({ type: 'bridgeAgents', ok: r.status === 200 || agents.length > 0, host, online: hubOnline || agents.length > 0, agents });
                 break;
             }
             // 一行接入 · 复制把另一台设备接进本中枢的 PowerShell 一行命令(irm .../bootstrap.ps1 | iex)。
             case 'copyBridgeJoin': {
                 const c = readBridgeConn();
-                const url = (c && c.url) ? String(c.url).replace(/\/$/, '') : '';
+                // 一行接入须走「透明快速隧道」(cloudflared·公网免鉴权 GET 可达) — 即常驻进程 conn.url;
+                //   持久 relay 是鉴权 POST-RPC 通道, 不承载公网裸 GET 拉脚本(实测 relay 对 GET 回 405),
+                //   故此处只认 conn.url; 缺失才回落主口公网(仅在主口本身为透明隧道时有效)。道并行而不相悖。
+                const url = ((c && c.url) ? String(c.url).replace(/\/$/, '') : '') || (ws.publicUrl ? String(ws.publicUrl).replace(/\/$/, '') : '');
                 const line = url ? ('irm ' + url + '/api/bootstrap.ps1 | iex') : '';
                 if (line) await vscode.env.clipboard.writeText(line);
                 if (line) vscode.window.showInformationMessage('已复制一行接入命令 · 在另一台 Windows 的 PowerShell 运行即接入本中枢');
@@ -11638,13 +11861,20 @@ function devinJsonPost(targetUrl: string, headers: any, body: any, timeoutMs?: n
             req.end();
         };
         const reqHeaders = Object.assign({ 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': DEVIN_UA, 'Content-Length': data.length }, headers || {});
-        // 帛书·「反者道之动」— 直连优先，失败时降级走本地代理
+        // 帛书·「反者道之动」— 直连优先, 直连瞬断(status 0)先短退避重试直连 ≤2 次, 仍不通且有代理才降级
         const direct = () => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders);
         const viaProxy = () => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }));
         const origResolve = resolve;
-        if (needsProxy && detectedProxyPort) {
-            resolve = ((r: any) => { if (r && r.status === 0) { resolve = origResolve; viaProxy(); } else { origResolve(r); } }) as any;
-            direct();
+        if (needsProxy) {
+            const attemptDirect = (tries: number) => {
+                resolve = ((r: any) => {
+                    if (r && r.status === 0 && u.hostname === 'app.devin.ai' && tries < 2) { setTimeout(() => attemptDirect(tries + 1), 300 * (tries + 1)); return; }
+                    if (r && r.status === 0 && detectedProxyPort) { resolve = origResolve; viaProxy(); return; }
+                    origResolve(r);
+                }) as any;
+                direct();
+            };
+            attemptDirect(0);
         } else {
             direct();
         }
@@ -11673,9 +11903,16 @@ function devinJsonPatch(targetUrl: string, headers: any, body: any, timeoutMs?: 
         const direct = () => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders);
         const viaProxy = () => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }));
         const origResolve = resolve;
-        if (needsProxy && detectedProxyPort) {
-            resolve = ((r: any) => { if (r && r.status === 0) { resolve = origResolve; viaProxy(); } else { origResolve(r); } }) as any;
-            direct();
+        if (needsProxy) {
+            const attemptDirect = (tries: number) => {
+                resolve = ((r: any) => {
+                    if (r && r.status === 0 && u.hostname === 'app.devin.ai' && tries < 2) { setTimeout(() => attemptDirect(tries + 1), 300 * (tries + 1)); return; }
+                    if (r && r.status === 0 && detectedProxyPort) { resolve = origResolve; viaProxy(); return; }
+                    origResolve(r);
+                }) as any;
+                direct();
+            };
+            attemptDirect(0);
         } else {
             direct();
         }
@@ -11720,12 +11957,47 @@ async function devinForceReauth(): Promise<boolean> {
     try { return await _reauthInflight; } finally { _reauthInflight = null; }
 }
 
-function devinJsonGet(targetUrl: string, headers: any, timeoutMs?: number, _noReauth?: boolean): Promise<any> {
+// 闸·细水长流: app.devin.ai 并发突刺(主页十板齐发)易触发网关 502 → 同时在途 ≤3, 余者排队
+let _devinGateBusy = 0;
+const _devinGateQueue: Array<() => void> = [];
+function _devinGateAcquire(): Promise<void> {
+    return new Promise((res) => {
+        if (_devinGateBusy < 3) { _devinGateBusy++; res(); }
+        else _devinGateQueue.push(() => { _devinGateBusy++; res(); });
+    });
+}
+function _devinGateRelease() {
+    _devinGateBusy = Math.max(0, _devinGateBusy - 1);
+    const next = _devinGateQueue.shift();
+    if (next) next();
+}
+
+async function devinJsonGet(targetUrl: string, headers: any, timeoutMs?: number, _noReauth?: boolean, _retry?: number): Promise<any> {
+    const gated = targetUrl.indexOf('app.devin.ai') >= 0;
+    if (gated) await _devinGateAcquire();
+    try { return await _devinJsonGetRaw(targetUrl, headers, timeoutMs, _noReauth, _retry); }
+    finally { if (gated) _devinGateRelease(); }
+}
+
+function _devinJsonGetRaw(targetUrl: string, headers: any, timeoutMs?: number, _noReauth?: boolean, _retry?: number): Promise<any> {
     return new Promise((resolve) => {
         const u = new URL(targetUrl);
         const needsProxy = u.hostname === 'app.devin.ai' || u.hostname.endsWith('windsurf.com');
         // 自愈闸: app.devin.ai 上持 auth1 而遭 401/403 → 重登换鲜活 auth1, 原请求重试一次
-        const settle = (r: any) => {
+        const settle = (r: any, fromProxy?: boolean) => {
+            // 网关抖动自愈: app.devin.ai 对并发突刺常回 502/503/504(实测同请求隔秒即 200)
+            //   → GET 幂等, 退避重试 ≤3 次 (1s·2s·4s)。
+            // ⚠️ 仅对「直连」拿到的真·上游网关 5xx 才退避重试。经本地代理降级返回的 5xx 不入此环——
+            //   破代理(如 Clash 混合端口无法转发 app.devin.ai, 恒回 502)若也退避重试, 会把一次直连
+            //   瞬断放大成整页数十秒雪崩(主页十板齐发 → 永久「加载中」)。实测直连可用而代理坏时即此病灶。
+            const nRetry = _retry || 0;
+            if (!fromProxy && r && (r.status === 502 || r.status === 503 || r.status === 504)
+                && u.hostname === 'app.devin.ai' && nRetry < 3) {
+                setTimeout(() => {
+                    _devinJsonGetRaw(targetUrl, headers, timeoutMs, _noReauth, nRetry + 1).then(resolve);
+                }, Math.pow(2, nRetry) * 1000);
+                return;
+            }
             const auth = String((headers || {}).Authorization || '');
             if (!_noReauth && r && (r.status === 401 || r.status === 403)
                 && u.hostname === 'app.devin.ai' && /^Bearer\s+auth1_/.test(auth)) {
@@ -11734,7 +12006,7 @@ function devinJsonGet(targetUrl: string, headers: any, timeoutMs?: number, _noRe
                         const h2 = Object.assign({}, headers, { Authorization: 'Bearer ' + ws.devinAuth1 });
                         if (ws.devinOrgId) h2['x-cog-org-id'] = ws.devinOrgId;
                         const u2 = targetUrl.replace(/\/org-[0-9a-fA-F]+\//, '/org-' + (ws.devinOrgId || '').replace(/^org-/, '') + '/');
-                        devinJsonGet(u2, h2, timeoutMs, true).then(resolve);
+                        _devinJsonGetRaw(u2, h2, timeoutMs, true).then(resolve);
                     } else { resolve(r); }
                 }).catch(() => resolve(r));
                 return;
@@ -11755,10 +12027,23 @@ function devinJsonGet(targetUrl: string, headers: any, timeoutMs?: number, _noRe
         const reqHeaders = Object.assign({ 'Accept': 'application/json', 'User-Agent': DEVIN_UA }, headers || {});
         const direct = (cb: (r: any) => void) => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders, cb);
         const viaProxy = (cb: (r: any) => void) => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }), cb);
-        if (needsProxy && detectedProxyPort) {
-            direct((r: any) => { if (r && r.status === 0) { viaProxy(settle); } else { settle(r); } });
+        if (needsProxy) {
+            // 反者道之动·直连优先: 直连拿到任何真·HTTP 响应即采信。仅当直连「连都连不上」(status 0:
+            //   并发压力下 socket hang up / timeout)时才降级。且 status 0 多为瞬断 → 先短退避重试直连
+            //   ≤2 次(直连是本网可用路径, 重拨即通), 仍不通且有本地代理才末路走代理(GFW 网络唯一出路)。
+            const attemptDirect = (tries: number) => {
+                direct((r: any) => {
+                    if (r && r.status === 0 && u.hostname === 'app.devin.ai' && tries < 2) {
+                        setTimeout(() => attemptDirect(tries + 1), 300 * (tries + 1));
+                        return;
+                    }
+                    if (r && r.status === 0 && detectedProxyPort) { viaProxy((pr: any) => settle(pr, true)); return; }
+                    settle(r, false);
+                });
+            };
+            attemptDirect(0);
         } else {
-            direct(settle);
+            direct((r: any) => settle(r, false));
         }
     });
 }
@@ -14118,20 +14403,46 @@ async function devinSetMessageLimit(orgId: string, maxCredits: number, auth1: st
 //   实测本号池(pro-trial·订阅已取消)真实余额恒在 overage_credits, 其余三者皆 0 → 旧版只读 stats 永远取 0 → cap 被钉 1
 //   (即「$69 余额却上限 $1」之根因)。故四者取最大为「余额」; 全 0 或负(欠费)→ 收敛为 0 → cap=1。
 //   守柔: 两端点皆未给出任一有效数字字段才返回 null(跳过管理, 不误改)。
+//
+// overage_credits 双符号实证归一(正本清源·根治「有 $60-70 余额却被限 $4」):
+//   本仓两处实测记录并存 — ① 正值=可用余额(rioskolton: overage_credits=+33.27·changelog v4.4.1);
+//   ② 负值=以负号记账的「Remaining balance」(v3.0 _tryDevinBillingFallback 实证: overage_credits<0 且
+//   billing_error 为空 = 有实际额度, 幅值即美金)。旧法把原值直接进 max() → 负值账态的真实余额被当最小值
+//   丢弃, 残余小额字段(如 available_acus≈7)接管 → cap=7−3=4, 「$4」在满额账号上诡异复现。
+//   归一: 幅值即余额 — 负值仅当伴 billing_error(真欠费)才计 0。
+function overageBalance(oc: any, billingError: any): number {
+    if (typeof oc !== 'number' || !isFinite(oc)) return 0;
+    if (oc < 0) return billingError ? 0 : -oc;
+    return oc;
+}
 async function devinFetchAvailableAcus(orgId: string, auth1: string): Promise<number | null> {
+    return (await devinFetchAvailDetail(orgId, auth1)).best;
+}
+// 同上·带字段明细(供 /api/devin/usage/limit-probe 透视「上限从何而来」·根治上限值莫名)。
+async function devinFetchAvailDetail(orgId: string, auth1: string): Promise<{ best: number | null; fields: Record<string, number> }> {
     const bareOrgId = orgId.replace(/^org-/, '');
     const h = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
     let best: number | null = null;
-    const take = (v: any) => { if (typeof v === 'number' && isFinite(v)) { best = (best === null) ? v : Math.max(best, v); } };
+    const fields: Record<string, number> = {};
+    const take = (k: string, v: any) => { if (typeof v === 'number' && isFinite(v)) { fields[k] = v; best = (best === null) ? v : Math.max(best, v); } };
     try {
         const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/usage/stats', h);
-        if (r.status === 200 && r.json) { take(r.json.available_acus); take(r.json.balance); }
+        if (r.status === 200 && r.json) { take('available_acus', r.json.available_acus); take('balance', r.json.balance); }
     } catch { /* 守柔 */ }
     try {
         const r = await devinJsonGet(DEVIN_APP + '/api/org-' + bareOrgId + '/billing/status', h);
-        if (r.status === 200 && r.json) { take(r.json.available_credits); take(r.json.overage_credits); }
+        if (r.status === 200 && r.json) {
+            take('available_credits', r.json.available_credits);
+            const oc = r.json.overage_credits;
+            if (typeof oc === 'number' && isFinite(oc)) {
+                fields['overage_credits'] = oc;  // 原值(可负)·供 limit-probe 透视
+                const ob = overageBalance(oc, r.json.billing_error);
+                fields['overage_balance'] = ob;
+                best = (best === null) ? ob : Math.max(best, ob);
+            }
+        }
     } catch { /* 守柔 */ }
-    return best;
+    return { best, fields };
 }
 
 // 列出本组织已安装的自定义 MCP (与官网 Connections 一致)
@@ -15117,15 +15428,20 @@ async function devinBatchInjectRun(accounts: DaoBatchAccount[]): Promise<DaoBatc
                 const wantM = (injectProfile.enabled ? (injectProfile.mcps || []) : []).filter(m => m && m.name);
                 if (!wantM.length) { res.mcp = true; }
                 else {
-                    try {
-                        const inst = await devinListMcpInstallations(orgId, auth1);
-                        const have = new Set<string>();
-                        if (inst.ok && inst.items) for (const it of inst.items) {
-                            const nm = String((it.name || '').replace(/^★ /, '')).toLowerCase();
-                            if (nm) have.add(nm);
-                        }
-                        res.mcp = wantM.every(m => have.has(String(m.name).toLowerCase()) || have.has(mcpSlug(m)));
-                    } catch { /* 守柔 */ }
+                    // MCP 落地同样有写后读延迟(read-after-write lag): 刚 devinAddCustomMcp 的安装可能未即时回读到 →
+                    //   与上面知识库校验同源, 退避重读至多3次(0/400/900ms), 命中即止, 免把「刚 add 未回读」误判 mcp=false。
+                    for (let attempt = 0; attempt < 3 && !res.mcp; attempt++) {
+                        if (attempt > 0) await new Promise(r => setTimeout(r, attempt === 1 ? 400 : 900));
+                        try {
+                            const inst = await devinListMcpInstallations(orgId, auth1);
+                            const have = new Set<string>();
+                            if (inst.ok && inst.items) for (const it of inst.items) {
+                                const nm = String((it.name || '').replace(/^★ /, '')).toLowerCase();
+                                if (nm) have.add(nm);
+                            }
+                            res.mcp = wantM.every(m => have.has(String(m.name).toLowerCase()) || have.has(mcpSlug(m)));
+                        } catch { /* 守柔 */ }
+                    }
                 }
             }
             // 校验: 回读知识库确认「道法自然准则」落地且正文完整(防截断/损坏)
@@ -15259,6 +15575,8 @@ function loadInjectProfile(): InjectProfile {
                 addedAt: String((a && a.addedAt) || ''),
                 ...(a && a.verify === 'pending' ? { verify: 'pending' } : {}),
                 cred: (a && a.cred && typeof a.cred === 'object') ? { user: String(a.cred.user || ''), pass: String(a.cred.pass || ''), otp: String(a.cred.otp || '') } : undefined,
+                ...(a && a.acctState ? { acctState: String(a.acctState) } : {}),
+                ...(a && a.acctCheckedAt ? { acctCheckedAt: String(a.acctCheckedAt) } : {}),
             })).filter((a: any) => a.login) : undefined,
             // GitHub 建 PAT 账号池通用配置(scope + 有效期): 保存经 saveInjectProfile 落档, 读取须原样带回,
             // 否则 daoGhGetPatCfg 恒见 undefined → 永远回退默认(全 scope + 30 天), 通用配置形同虚设。
@@ -17572,7 +17890,15 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
         const u = new URL(targetUrl);
         // 道·直连优先 + 代理兜底: 未被墙站(app.devin.ai 等)直连最快(实测 ~0.3s), 经 Clash 反而 3.7~7.9s 冷开白屏;
         //   仅当直连被 RST/超时(GFW) 才回退本机代理隧道。与 genericWebProxy/#4 同策。两向各只试一次, 不空转。
-        let _triedProxy = false, _triedDirect = false, _attRetried = false;
+        let _triedProxy = false, _triedDirect = false, _attRetried = false, _freshRetries = 0;
+        const pageGet = (req.method || 'GET').toUpperCase() === 'GET' && isPageRequest;
+        const retryFreshDirect = () => {
+            if (!pageGet || _freshRetries >= 3) return false;
+            const retryNo = ++_freshRetries;
+            const delayMs = retryNo === 1 ? 500 : retryNo === 2 ? 1000 : 2000;
+            setTimeout(() => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, fwdHeaders, false), delayMs);
+            return true;
+        };
 
         const makeRequest = (hostname: string, port: number, reqPath: string, h: any, isProxyTunnel: boolean = false) => {
             const options: any = {
@@ -17582,7 +17908,7 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                 timeout: 15000,
             };
             if (!isProxyTunnel) options.rejectUnauthorized = false;
-            options.agent = isProxyTunnel ? upstreamHttpAgent : upstreamHttpsAgent;
+            options.agent = isProxyTunnel ? upstreamHttpAgent : (pageGet ? false : upstreamHttpsAgent);
             // 代理隧道用http.request(127.0.0.1不是TLS!)，直连用https.request
             const proxyReq = (isProxyTunnel ? http.request : https.request)(options, (proxyRes: any) => {
                 // 缺陷4修复: 处理3xx重定向 — 改写Location头指向代理
@@ -17716,8 +18042,10 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
                         } catch { /* 守柔: 重铸失败则按原响应继续 */ }
                     }
                     const rawBody = Buffer.concat(chunks);
+                    const statusCode = proxyRes.statusCode || 200;
+                    if ((statusCode === 502 || statusCode === 503 || statusCode === 504) && retryFreshDirect()) return;
                     // localBase 已在函数顶部按访问者来源(本地/公网隧道)归一计算, 此处复用
-                    const okCache = isImmutableAsset && proxyRes.statusCode === 200;
+                    const okCache = isImmutableAsset && statusCode === 200;
 
                     // 道·「不言之教·无为之益」— 解压改异步, 移出扩展宿主事件循环
                     //   原 gunzipSync/brotliDecompressSync 对数 MB bundle 同步阻塞主线程
@@ -17990,7 +18318,8 @@ async function devinCloudProxyRoute(route: string, url: URL, req: any, mode: str
             });
 
             const _fallback = (errLabel?: string) => {
-                // 直连失败(GFW RST/超时) → 有本机代理则改走代理兜底; 代理失败 → 降级直连。互为兜底, 各只一次。
+                // 直连失败(GFW RST/超时) → 页面导航先换新 socket 分级重试; 仍失败再走代理兜底。
+                if (retryFreshDirect()) return true;
                 if (!isProxyTunnel && detectedProxyPort > 0 && !_triedProxy) {
                     _triedProxy = true;
                     makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, fwdHeaders, { Host: u.hostname }), true);
@@ -18107,6 +18436,9 @@ if (process.env.DAO_SELFTEST === '1') {
         bridgeMachinePort,
         bridgeReadPublishedToken,
         daoHeadlessExec,
+        quotaCapFromAvail,
+        overageBalance,
+        ghAcctStateDecide,
         setState(s: { ws?: any; bridgeUrl?: string; bridgeToken?: string }) {
             if (s.ws) ws = s.ws;
             if (typeof s.bridgeUrl === 'string') bridgeUrl = s.bridgeUrl;

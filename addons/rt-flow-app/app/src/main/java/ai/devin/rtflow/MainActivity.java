@@ -523,6 +523,63 @@ public class MainActivity extends AppCompatActivity {
         new Thread(this::reconcileSystemDownloads).start();   // 认领 App 被杀期间完成的下载(广播漏收) → 补记下载库+同步系统下载
         // 启动即强刷一轮开着的账号(绕过引擎心跳等待) → 页签金额/状态点尽快由「持久化旧值」换成实时值
         main.postDelayed(() -> { pushOpenAcctsToSwitch(); triggerEngineRefresh(""); }, 4000);
+        // 冷启动经通知点入: 标签恢复完成后消费跳转目标 → 精准落到该账号该对话页
+        main.postDelayed(() -> handleNotifTarget(getIntent()), 1200);
+    }
+
+    /** 通知点按 (singleTask·进程已在): 不重建 Activity、不重载任何页, 仅精准路由到目标账号/对话页签。 */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleNotifTarget(intent);
+    }
+
+    /** 消费通知跳转目标 (notif_email/notif_sid): 消费即清, 防旋转/恢复重复路由。 */
+    private void handleNotifTarget(Intent i) {
+        if (i == null) return;
+        String email = i.getStringExtra("notif_email");
+        if (email == null || email.isEmpty()) return;
+        String sid = i.getStringExtra("notif_sid");
+        i.removeExtra("notif_email"); i.removeExtra("notif_sid"); i.removeExtra("notif_no");
+        sid = (sid == null) ? "" : sid.trim();
+        if (sid.startsWith("devin-")) sid = sid.substring(6);
+        routeToAccount(email, sid);
+    }
+
+    /** 精准路由: ① 该对话页已开 → 直接切过去(零重载); ② 该号有页签 → 复用其鉴权开精确对话页;
+     *  ③ 该号无页签(冷启动等) → 经切号板账号库解出账号开页。 */
+    private void routeToAccount(String email, String sid) {
+        String eLc = email.toLowerCase();
+        int acctIdx = -1;
+        for (int idx = 0; idx < tabs.size(); idx++) {
+            Tab t = tabs.get(idx);
+            if (t.accountJson == null) continue;
+            String te = (t.acctEmail == null || t.acctEmail.isEmpty()) ? t.acctId : t.acctEmail;
+            if (te == null || !te.toLowerCase().equals(eLc)) continue;
+            if (!sid.isEmpty() && t.url != null && t.url.contains(sid)) { selectTab(idx); return; }
+            if (acctIdx < 0) acctIdx = idx;
+        }
+        if (acctIdx >= 0) {
+            if (sid.isEmpty()) { selectTab(acctIdx); return; }
+            newTab("https://app.devin.ai/sessions/" + sid, tabs.get(acctIdx).accountJson);
+            return;
+        }
+        openAccountViaSwitch(email, sid);
+    }
+
+    /** 该号无已开页签: 让切号板(账号库属主)按 email 解出完整账号(auth1/no) → openAccountSession/openAccountTab。 */
+    private void openAccountViaSwitch(String email, String sid) {
+        final String js = "(function(){try{var L=JSON.parse(localStorage.getItem('rtflow.accounts')||'[]');"
+                + "var e=" + org.json.JSONObject.quote(email.toLowerCase()) + ",s=" + org.json.JSONObject.quote(sid) + ";"
+                + "for(var i=0;i<L.length;i++){var x=L[i];if(String((x.email||x.id)||'').toLowerCase()===e){"
+                + "var a={};for(var k in x){if(Object.prototype.hasOwnProperty.call(x,k))a[k]=x[k];}if(!a.no)a.no=i+1;"
+                + "if(s)Native.openAccountSession(JSON.stringify(a),s);else Native.openAccountTab(JSON.stringify(a));return 1;}}}catch(err){}return 0;})()";
+        Tab sw = null;
+        for (Tab t : tabs) { if (t.internal && t.url != null && t.url.endsWith("switch.html")) { sw = t; break; } }
+        if (sw != null) { final Tab fsw = sw; try { fsw.web.evaluateJavascript(js, null); } catch (Exception ignored) {} return; }
+        final Tab nsw = newTab(SWITCH, null);
+        main.postDelayed(() -> { try { nsw.web.evaluateJavascript(js, null); } catch (Exception ignored) {} }, 1500);
     }
 
     /** 冷启动后台静默检查更新; 有新版则弹一次确认框, 用户点「立即更新」即下载+唤起安装。 */
@@ -1910,7 +1967,7 @@ public class MainActivity extends AppCompatActivity {
                 // 标签标题优先显示该账号最活跃对话名 + 实时状态点 (运行/卡顿/结束)
                 String emailLc = email.toLowerCase();
                 // 最左账号池序号【N】(切号板块列表同序·紧凑小占位)
-                // 序号真源 = 切号板块账号池当前排序(sAcctNo·随出入库实时同步); accountJson 里的 no 是开标签
+                // 序号真源 = 账号池稳定永久编号(sAcctNo·号入库即领号·他号出库绝不平移); accountJson 里的 no 是开标签
                 // 时的陈旧快照, 只作兜底 —— 否则他号出库后序号平移, 页签仍显旧序号。
                 Integer no = sAcctNo.get(id.toLowerCase());
                 if (no == null) no = sAcctNo.get(emailLc);
@@ -2188,7 +2245,8 @@ public class MainActivity extends AppCompatActivity {
         if (sw == null) return;
         String js = "(function(){try{var a=JSON.parse(localStorage.getItem('rtflow.accounts')||'[]');var o={};"
             + "for(var i=0;i<a.length;i++){var k=(a[i].id||'').toLowerCase(),e=(a[i].email||'').toLowerCase();"
-            + "if(k)o[k]=i+1;if(e)o[e]=i+1;}return JSON.stringify(o);}catch(x){return '{}';}})()";
+            + "var n=(typeof a[i].no==='number'&&a[i].no>0)?a[i].no:(i+1);"
+            + "if(k)o[k]=n;if(e)o[e]=n;}return JSON.stringify(o);}catch(x){return '{}';}})()";
         try {
             sw.evaluateJavascript(js, val -> {
                 try {
@@ -4047,12 +4105,13 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface public void setLowDataMode(boolean on) {
             try { getSharedPreferences("rtflow", MODE_PRIVATE).edit().putBoolean("lowDataMode", on).apply(); } catch (Exception ignored) {}
         }
-        /** 自动低流量: 开启后引擎按当前网络自动选策略 (计费网络=低流量档, WiFi=全速档); 手动开关优先。 */
+        /** 自动低流量: 开启后引擎按当前网络自动选策略 (计费网络=低流量档, WiFi=全速档); 手动开关优先。
+         *  默认开: 只影响计费网络下的自动后台轮询频率, 手动操作永远即时全量 — 体感不变, 移动数据下自动省流。 */
         @JavascriptInterface public void setLowDataAuto(boolean on) {
             try { getSharedPreferences("rtflow", MODE_PRIVATE).edit().putBoolean("lowDataAuto", on).apply(); } catch (Exception ignored) {}
         }
         @JavascriptInterface public boolean isLowDataAuto() {
-            try { return getSharedPreferences("rtflow", MODE_PRIVATE).getBoolean("lowDataAuto", false); } catch (Exception e) { return false; }
+            try { return getSharedPreferences("rtflow", MODE_PRIVATE).getBoolean("lowDataAuto", true); } catch (Exception e) { return true; }
         }
         @JavascriptInterface public boolean isLowDataMode() {
             try { return getSharedPreferences("rtflow", MODE_PRIVATE).getBoolean("lowDataMode", false); } catch (Exception e) { return false; }
@@ -4987,7 +5046,14 @@ public class MainActivity extends AppCompatActivity {
         org.json.JSONArray a = new org.json.JSONArray();
         if (gh == null || gh.isEmpty()) return a;
         a.put(gh);
-        if (gh.startsWith("https://github.com/")) { a.put("https://ghproxy.net/" + gh); a.put("https://gh-proxy.com/" + gh); }
+        if (gh.startsWith("https://github.com/") || gh.contains("githubusercontent.com")) {
+            a.put("https://ghproxy.net/" + gh); a.put("https://gh-proxy.com/" + gh);
+            // 经自有边缘中继代取: Worker 在 CF 全球边缘拉 GitHub 发布资产回传, 手机 DownloadManager
+            //   只连中继(国内可达自有域) → 绕开被墙的 objects.githubusercontent.com, 不再卡「更新下载中」。
+            for (String base : edgeBaseCandidates()) {
+                try { a.put(base + "/fetch?u=" + java.net.URLEncoder.encode(gh, "UTF-8")); } catch (Exception ignored) {}
+            }
+        }
         return a;
     }
     /** 在候选 URL 中挑第一个可达的 (HEAD 探测); 全不通则回退第一个。 */
@@ -5114,8 +5180,42 @@ public class MainActivity extends AppCompatActivity {
             updateDlId = dm.enqueue(req);
             // 持久化任务 id: 进程被杀/Activity 重建后, 仍能据此 (或据文件名) 认领下载完成回调, 不再误当普通下载。
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putLong("updateDlId", updateDlId).apply();
+            watchUpdateDmStall(updateDlId);
             toast("正在下载更新…");
         } catch (Exception e) { toast("更新失败: " + e.getMessage()); }
+    }
+
+    /** 更新包下载「黑洞看门人」(与普通下载 watchDmStall 同理): 国内网络下 DownloadManager 跟 302 到
+     *  被墙的 objects.githubusercontent.com 后会永久停在「已暂停·等待网络」(0 B)——既不失败也不完成,
+     *  完成/失败广播都永不触发 → 更新永远卡在「更新下载中」进度条(用户实测即此病灶)。入队后定时回查:
+     *  若 25s 后仍 0 字节或处于暂停态, 斩 DM 改走下一镜像(ghproxy / 自有边缘中继代取), 直至试遍所有源。 */
+    private void watchUpdateDmStall(final long id) {
+        if (id < 0) return;
+        main.postDelayed(() -> {
+            if (id != updateDlId) return;   // 已换源 / 已完成 / 已认领
+            try {
+                DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                if (dm == null) return;
+                android.database.Cursor cur = dm.query(new DownloadManager.Query().setFilterById(id));
+                if (cur == null) return;
+                long got = -1; int st = -1;
+                try {
+                    if (cur.moveToFirst()) {
+                        got = cur.getLong(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                        st = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                    }
+                } finally { cur.close(); }
+                if (st == DownloadManager.STATUS_SUCCESSFUL || st == DownloadManager.STATUS_FAILED) return;   // 正路广播处理
+                if (st == DownloadManager.STATUS_PAUSED || got <= 0) {
+                    try { dm.remove(id); } catch (Exception ignored) {}
+                    updateDlId = -1;
+                    try { getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove("updateDlId").apply(); } catch (Exception ignored) {}
+                    tryNextUpdateMirror("更新下载卡住(直连被墙)");
+                } else {
+                    watchUpdateDmStall(id);   // 有进度: 继续看护(防中途断流卡死)
+                }
+            } catch (Exception ignored) {}
+        }, 25_000L);
     }
 
     /** 此 id 是否为「更新包」下载: 内存字段 / 持久化 id / 落地文件名 三重判定 (任一命中即是), 进程重建也不漏认。 */
@@ -6533,7 +6633,7 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
     /** 对话落地文件名统一口径: 「序号_对话名_账号_密码」—— 凡 APK 内产出的对话记录 MD/ZIP 皆用此名。
-     *  序号取账号池当前排序(sAcctNo·随出入库实时同步), accJson 里的陈旧 no 仅作兜底;
+     *  序号取账号池稳定永久编号(sAcctNo·号入库即领号·出库不平移不复用), accJson 里的 no 仅作兜底;
      *  对话名缺失时退回 sid; 邮箱/密码缺失则略过该段。 */
     private String convFileBase(String accJson, String sid, String title) {
         String email = "", password = "", id = ""; Integer no = null;

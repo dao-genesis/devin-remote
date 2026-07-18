@@ -207,7 +207,7 @@ function _seedFromCache(){
     var trk=JSON.parse(localStorage.getItem("rtflow.trk")||"{}");
     for(var em in trk){ var rec=trk[em], a=byEmail[em]; if(!a||!rec||!rec.items)continue; var k=_accId(a); var arr=_accSess[k]=_accSess[k]||[];
       rec.items.forEach(function(it){ if(!it.uuid)return; var dup=false; for(var z=0;z<arr.length;z++){ if(arr[z].sid===it.uuid){dup=true;break;} } if(dup)return;
-        arr.push({acc:a,no:rec.no||(accList().indexOf(a)+1),sid:it.uuid,title:it.title||it.uuid,status:it.cls||"running",t:rec.ts||Date.now(),auto:_isAuto(it.title||""),s:{}}); });
+        arr.push({acc:a,no:a.no||rec.no||(accList().indexOf(a)+1),sid:it.uuid,title:it.title||it.uuid,status:it.cls||"running",t:rec.ts||Date.now(),auto:_isAuto(it.title||""),s:{}}); });
     }
   }catch(e){}
   _rebuild();
@@ -327,7 +327,7 @@ async function loadRecent(full){
   if(IS_WEB){ try{ if(await _recentViaDevice()){ _busy=false; return; } }catch(e){} }
   try{
     var all=accList(), unlocked=[];
-    for(var i=0;i<all.length;i++){ if(hasAuth(all[i])) unlocked.push({a:all[i],no:i+1}); }
+    for(var i=0;i<all.length;i++){ if(hasAuth(all[i])) unlocked.push({a:all[i],no:all[i].no||i+1}); }
     var box=document.getElementById("recentList");
     if(!unlocked.length){ box.innerHTML='<div class="empty">无已解锁账号 · 先到切号面板登录</div>'; _busy=false; return; }
     var batch;

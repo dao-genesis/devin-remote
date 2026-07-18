@@ -6,7 +6,7 @@ description: Build the rt-flow-app APK and verify it end-to-end on an Android 34
 # Testing rt-flow-app on an Android emulator (Devin VM)
 
 ## Setup
-- SDK at `~/android-sdk`; blueprint installs JDK17, platform-tools, `system-images;android-34;google_apis;x86_64`, AVD `rtflow`.
+- SDK at `~/android-sdk`; blueprint installs JDK17, platform-tools, `system-images;android-34;google_apis;x86_64`, AVD `rtflow`. If missing, full install from scratch is ~5 min: unzip cmdline-tools into `~/android-sdk/cmdline-tools/latest`, `yes | sdkmanager --licenses`, then `sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "emulator" "system-images;android-34;google_apis;x86_64"` and `avdmanager create avd -n rtflow -k "system-images;android-34;google_apis;x86_64" -d pixel_6`.
 - KVM may be blocked: `sudo gpasswd -a $USER kvm; sudo chmod 666 /dev/kvm` before starting the emulator.
 - Start: `emulator -avd rtflow -no-snapshot -gpu swiftshader_indirect -no-audio &`, wait for `adb devices` → `emulator-5554 device`.
 - Build: `(cd addons/rt-flow-app && ./gradlew assembleDebug)`; needs `local.properties` with `sdk.dir=$HOME/android-sdk`.
@@ -14,6 +14,8 @@ description: Build the rt-flow-app APK and verify it end-to-end on an Android 34
 
 ## Account login (fastest path)
 - Use the app's 切号 tab: paste `email password` lines into the import textarea and 添加; then tap ⚡ on a row to open that account's tab. No Outlook OAuth needed.
+- Passwords may contain `%&$` etc. that get stripped in some attachment *filenames* — if login says "Invalid email or password", grep the attachment *bodies* for the same account; the special-char version is the real one. Host-side keystrokes may not reach the emulator textarea; type via `adb shell input text` (space=`%s`, single-quote the string, escape `$`).
+- A row showing 🔑 (yellow) = not logged in yet; ⚡ = logged, tapping ⚡ opens the account tab. Re-pasting an `email password` line and 添加 updates the stored password idempotently.
 - Isolation check: each account should land on its own org URL (`app.devin.ai/org/<slug>`); comparing slugs across accounts is the cheapest no-leak assertion.
 - Cold page loads can take 1–3 min on the emulator (no GPU, nested virt) — this might look like a hang but usually isn't; wait before declaring failure.
 
@@ -40,3 +42,10 @@ description: Build the rt-flow-app APK and verify it end-to-end on an Android 34
 
 ## Devin Secrets Needed
 - None currently provisioned; account credentials and a GitHub PAT arrive in user-attached MD files. Prefer asking the user to store `DAO_GENESIS_GITHUB_PAT` and the Outlook test-account credentials as permanent secrets.
+
+## Convwatch / notification testing (engine.html)
+- The engine WebView is CDP-inspectable: `adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof ai.devin.rtflow)`, target url `file:///android_asset/engine/engine.html`.
+- To drive notification states without live accounts: seed `localStorage["rtflow.accounts"]` with one `{email,auth1,orgId}` entry (notifyTick early-returns on empty pool), stub `window.CMDS.trackStuck` (CMDS is window-exposed) to return a synthetic `{ok:true,sessions:[...],scanned:[...],ended:[...]}`, then call `window.__convTick()` per tick. This exercises the real `_convTrack → notify → NotificationManager` chain.
+- Assert via `adb shell dumpsys notification --noredact`: rt-flow conv notifications post with `tag=null` (count `NotificationRecord.*pkg=ai.devin.rtflow`, don't grep `tag=conv`); titles carry the account 【N】 prefix.
+- Grant `adb shell pm grant ai.devin.rtflow android.permission.POST_NOTIFICATIONS` on a fresh AVD or nothing will post. `adb shell cmd statusbar expand-notifications` shows the shade for visual/recorded evidence.
+- Ledger keys: `rtflow.convwatch` (prev sid→phase), `rtflow.convwatch.alerted` (dedup ledger); clear them between scenarios to reset dedup.

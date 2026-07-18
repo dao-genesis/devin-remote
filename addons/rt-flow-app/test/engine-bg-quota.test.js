@@ -61,16 +61,21 @@ function makeModule() {
     m.fns.pushTabQuota({ id: "a1", email: "a@x.com", quota: { dPct: 100 } });
     ok(m.dolCalls.length === 0, "无真值 (dPct/overageDollars 非数): 不推任何键");
   }
-  // ── 场景 3: 状态映射与优先级 (quota>blocked/action_required>awaiting>running) ──
+  // ── 场景 3: 页签恒随「最新对话」(按 ts 择取·而非高优先级老对话) + 状态映射 ──
   {
     const m = await makeModule();
     m.fns.pushTabConvStatus({ id: "a1", email: "a@x.com" }, [
-      { reason: "running", title: "跑" }, { reason: "quota", title: "耗尽" }, { reason: "awaiting", title: "等" },
+      { reason: "quota", title: "老·耗尽", ts: 100 }, { reason: "running", title: "新·跑", ts: 300 }, { reason: "awaiting", title: "中·等", ts: 200 },
     ]);
-    ok(m.stCalls.length === 2 && m.stCalls[0][1] === "耗尽" && m.stCalls[0][2] === "blocked", "优先级: quota 置顶 → blocked 映射");
+    ok(m.stCalls.length === 2 && m.stCalls[0][1] === "新·跑" && m.stCalls[0][2] === "running", "最新对话置顶: 老对话卡住/耗尽不再压过新开跑的对话");
     const m2 = await makeModule();
-    m2.fns.pushTabConvStatus({ id: "a1" }, [{ reason: "running", title: "跑" }]);
+    m2.fns.pushTabConvStatus({ id: "a1" }, [{ reason: "running", title: "跑", ts: 1 }]);
     ok(m2.stCalls.length === 1 && m2.stCalls[0][2] === "running", "running → running 映射");
+    const m3 = await makeModule();
+    m3.fns.pushTabConvStatus({ id: "a1" }, [
+      { reason: "running", title: "老·跑", ts: 100 }, { reason: "blocked", title: "新·卡", ts: 200 },
+    ]);
+    ok(m3.stCalls.length === 1 && m3.stCalls[0][1] === "新·卡" && m3.stCalls[0][2] === "blocked", "最新对话若真卡住 → 页签如实显 blocked");
   }
   // ── 场景 4: 活跃号必刷 + 空闲号轮转 ≤10 且光标推进 ──
   {

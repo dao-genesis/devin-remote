@@ -211,7 +211,7 @@
         if (!allBacked) return { state: "cleaned", reason: "归零但备份未齐全·不移出", bal: bal, cleaned: cleaned, kept: kept, backup: bk.count || 0, fresh: fresh };
         if (a.addedAt && now - a.addedAt < staleMs()) return { state: "cleaned", reason: "新加号保护期内·不移出", bal: bal, cleaned: cleaned, kept: kept, backup: bk.count || 0, fresh: fresh };
         // 移出留底(可追溯可恢复): 金库落「移出记录」含完整账号快照 → 重加号直接从 account.json/此文件找回
-        var _snap = { removedAt: now, folder: _acctFolder(a), account: { id: a.id, email: a.email || "", password: a.password || "", auth1: a.auth1 || "", orgId: a.orgId || "" }, sessions: bk.sessions.length, cleaned: cleaned,
+        var _snap = { removedAt: now, folder: _acctFolder(a), account: { id: a.id, email: a.email || "", password: a.password || "", auth1: a.auth1 || "", orgId: a.orgId || "", no: a.no || 0 }, sessions: bk.sessions.length, cleaned: cleaned,
           // 近期对话留底: 移出后「近期对话」仍能看到并凭账密快照登录 (账号库清空 ≠ 近期对话消失)
           sessionList: bk.sessions.map(function (sx) { return { sid: sx.devin_id || sx.session_id || sx.id || "", title: sx.title || sx.name || sx.prompt || "", ts: DaoCloud.sessTs(sx) || 0, status: String(sx.status_enum || sx.status || "") }; }) };
         try { if (N.vaultSaveBackup) N.vaultSaveBackup(_acctFolder(a), "移出记录.json", JSON.stringify(_snap)); } catch (e) {}

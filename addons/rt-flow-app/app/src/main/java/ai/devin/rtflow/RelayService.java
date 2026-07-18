@@ -36,12 +36,14 @@ public class RelayService extends Service {
     // 对话追踪·全局通知频道。⚠️ Android 通知渠道「不可变」: 渠道一旦创建, 其 importance/震动/铃声
     //   无法再被代码升级 (只有用户能在系统设置里改)。早期版本若以低优先级首建了 rtflow-conv,
     //   后续即便写 IMPORTANCE_HIGH 也不弹横幅/不震动。故升 id → 强制重建为 HIGH 渠道, 绕开旧缓存。
-    public static final String CONV_CH = "rtflow-conv-hi2";   // 对话追踪·全局通知频道 (高优先·弹窗 heads-up·震动·锁屏可见)
+    public static final String CONV_CH = "rtflow-conv-hi3";   // 对话追踪·全局通知频道 (高优先·弹窗 heads-up·震动·锁屏可见)
     public static final String CONV_CH_OLD = "rtflow-conv";   // 旧渠道 (低优先残留) — 启动时清除, 防双份/旧设置干扰
+    public static final String CONV_CH_OLD2 = "rtflow-conv-hi2";   // 旧高优渠道 — 若在设备上被降级为静默则无法程序恢复, 一并清除重建
     public static volatile String lastStatus = "{\"connected\":false}";
     public static volatile RelayService instance;
 
     private WebView engine;
+    private WebView cfMintWv;   // 离屏·真 Chromium·导航 dash.cloudflare.com 同源建 Token (冻结免疫·过 CF 机管)
     private final Handler main = new Handler(Looper.getMainLooper());
     private PowerManager.WakeLock wakeLock;   // P2: 持锁防 Doze CPU 节流, 保 WSS 心跳不断
     private WifiManager.WifiLock wifiLock;     // 息屏防 Wi-Fi 休眠/降频, 保出站 WSS 不掉 (移植自 knoop7/Ava WifiWakeLock)
@@ -91,6 +93,7 @@ public class RelayService extends Service {
         //   (ForegroundServiceStartNotAllowedException) —— 不接住会崩溃循环("keeps stopping")。
         //   降级为普通后台服务继续跑, 下次进前台再由 startRelay 正常提权。
         try { startForeground(1, buildNotification("内网穿透服务启动中…")); } catch (Exception ignored) {}
+        JankWatch.start(getFilesDir());   // 主线程卡顿黑匣子: 卡死即抓主线程堆栈落盘, 远程可取证
         acquireWake();
         main.post(this::initEngine);
         // 去中心化直连默认开启: 服务一起即拉起本地 server (绑 0.0.0.0), 同一局域网的控制端可零中继/零隧道直连本机。
@@ -1418,6 +1421,91 @@ public class RelayService extends Service {
         } catch (Exception ignored) {} });
     }
 
+    // ── 会话态·离屏真 Chromium 同源建 CF Token (见 Bridge.cfWebMint 注释) ────────────────
+    private final boolean[] cfMintDone = { false };
+    /** 把离屏建 Token 结果 (JSON 串) 回灌引擎 window.__cfWebMintCb(reqId, jsonStr) 并销毁离屏页 (仅一次)。 */
+    private void cfMintDeliver(String reqId, String resultJson) {
+        main.post(() -> {
+            synchronized (cfMintDone) { if (cfMintDone[0]) return; cfMintDone[0] = true; }
+            String js = resultJson == null || resultJson.isEmpty() ? "{\"error\":\"cf_webmint_empty\"}" : resultJson;
+            if (engine != null) try {
+                engine.evaluateJavascript("window.__cfWebMintCb&&window.__cfWebMintCb(" + HttpBridge.jsonStr(reqId) + "," + HttpBridge.jsonStr(js) + ")", null);
+            } catch (Exception ignored) {}
+            if (cfMintWv != null) try { cfMintWv.destroy(); } catch (Exception ignored) {} finally { cfMintWv = null; }
+        });
+    }
+    @SuppressWarnings({ "SetJavaScriptEnabled", "deprecation" })
+    private void cfStartWebMint(String reqId, String accountId) {
+        try {
+            synchronized (cfMintDone) { cfMintDone[0] = false; }
+            if (cfMintWv != null) { try { cfMintWv.destroy(); } catch (Exception ignored) {} cfMintWv = null; }
+            final WebView wv = new WebView(this);
+            cfMintWv = wv;
+            WebSettings s = wv.getSettings();
+            s.setJavaScriptEnabled(true);
+            s.setDomStorageEnabled(true);
+            s.setDatabaseEnabled(true);
+            // UA 与 App 内浏览器同源(仅去 wv 标记·保真实 Android UA) → 复用登录时取得的同一 cf_clearance。
+            try { s.setUserAgentString(MainActivity.sanitizedUa(s.getUserAgentString())); } catch (Exception ignored) {}
+            if (Build.VERSION.SDK_INT >= 21) s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            if (Build.VERSION.SDK_INT >= 24) wv.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+            android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+            cm.setAcceptCookie(true);
+            if (Build.VERSION.SDK_INT >= 21) cm.setAcceptThirdPartyCookies(wv, true);
+            wv.addJavascriptInterface(new Object() {
+                @JavascriptInterface public void done(String json) { cfMintDeliver(reqId, json); }
+            }, "__CFM");
+            wv.setWebViewClient(new android.webkit.WebViewClient() {
+                @Override public void onPageFinished(WebView view, String url) {
+                    // 页加载完 (dash 同源) → 注入同源 fetch 建 Token。SPA 重定向多次触发亦无妨 (页内 __cfmRan 幂等)。
+                    try { view.evaluateJavascript(cfMintJs(accountId), null); } catch (Exception ignored) {}
+                }
+                @Override public void onReceivedError(WebView view, android.webkit.WebResourceRequest req, android.webkit.WebResourceError err) {
+                    if (Build.VERSION.SDK_INT >= 23 && req != null && req.isForMainFrame())
+                        cfMintDeliver(reqId, "{\"error\":\"cf_dash_unreachable\"}");
+                }
+            });
+            wv.loadUrl("https://dash.cloudflare.com/");
+            // 兜底超时: 页卡在人机验证/长时间无回灌 → 明确报错, 不无限占用离屏页。
+            main.postDelayed(() -> cfMintDeliver(reqId, "{\"error\":\"cf_webmint_timeout\"}"), 45000);
+        } catch (Exception e) {
+            cfMintDeliver(reqId, "{\"error\":\"cf_webmint_init_failed\"}");
+        }
+    }
+    /** 同源建 Token 注入脚本 (真浏览器 fetch·带齐 cookie/cf_clearance)。accountId 空=单账号自动/多账号报错。 */
+    private static String cfMintJs(String accountId) {
+        String want = HttpBridge.jsonStr(accountId == null ? "" : accountId);
+        return "(function(){if(window.__cfmRan)return;window.__cfmRan=1;var WANT=" + want + ";"
+            + "function fin(o){try{__CFM.done(JSON.stringify(o));}catch(e){}}"
+            + "if(/\\/login|\\/sign-?in/i.test(location.href||'')){fin({error:'no_cf_session'});return;}"
+            + "function api(p,init){init=init||{};return fetch(p,{method:init.method||'GET',credentials:'include',"
+            + "headers:Object.assign({Accept:'application/json'},init.headers||{}),body:init.body}).then(function(r){"
+            + "return r.text().then(function(tx){var t={};try{t=JSON.parse(tx);}catch(e){}"
+            + "if(r.status===401||r.status===403){var er=new Error('auth');er.code=r.status;throw er;}"
+            + "if(!r.ok||t.success===false){throw new Error('cf '+p+' HTTP '+r.status);}return t.result;});});}"
+            + "function nm(x){return String(x==null?'':x).trim().toLowerCase();}"
+            + "function pick(all,names){all=all||[];return (names||[]).map(function(n){"
+            + "for(var i=0;i<all.length;i++){if(all[i]&&all[i].name===n)return {id:all[i].id};}"
+            + "for(var j=0;j<all.length;j++){if(all[j]&&nm(all[j].name)===nm(n))return {id:all[j].id};}return null;})"
+            + ".filter(Boolean);}"
+            + "var AG=['Workers Scripts Write','Account Settings Read'],UG=['User Details Read','Memberships Read'];"
+            + "(async function(){var user=await api('/api/v4/user');if(!user||!user.id)return fin({error:'no_cf_session'});"
+            + "var accts=await api('/api/v4/accounts?per_page=50');accts=Array.isArray(accts)?accts:[];var acct=null;"
+            + "if(WANT){for(var i=0;i<accts.length;i++){if(accts[i]&&accts[i].id===WANT){acct=accts[i];break;}}"
+            + "if(!acct)return fin({error:'account_not_found'});}else if(accts.length===1)acct=accts[0];"
+            + "else if(!accts.length)return fin({error:'no_account'});"
+            + "else return fin({error:'multi_account: '+accts.map(function(a){return a&&a.id;}).filter(Boolean).join(',')});"
+            + "var groups=await api('/api/v4/user/tokens/permission_groups');var ag=pick(groups,AG),ug=pick(groups,UG);"
+            + "if(ag.length<AG.length){var gn=(Array.isArray(groups)?groups:[]).map(function(g){return g&&g.name;}).filter(Boolean);"
+            + "return fin({error:'missing_perm_groups: CF 回传 '+gn.length+' 组'});}"
+            + "var pol=[];var ar={};ar['com.cloudflare.api.account.'+acct.id]='*';pol.push({effect:'allow',resources:ar,permission_groups:ag});"
+            + "if(ug.length){var ur={};ur['com.cloudflare.api.user.'+user.id]='*';pol.push({effect:'allow',resources:ur,permission_groups:ug});}"
+            + "var res=await api('/api/v4/user/tokens',{method:'POST',headers:{'Content-Type':'application/json'},"
+            + "body:JSON.stringify({name:'dao-relay '+Date.now(),policies:pol})});"
+            + "if(!res||!res.value)return fin({error:'no_token_value'});fin({token:res.value,accountId:acct.id});})()"
+            + ".catch(function(e){var m=String(e&&e.message||e);if(e&&(e.code===401||e.code===403))m='no_cf_session';fin({error:m});});})();";
+    }
+
     /** JS ↔ 原生桥 (引擎页用 window.Native.*) */
     public class Bridge {
         @JavascriptInterface public String getConn() {
@@ -1482,9 +1570,31 @@ public class RelayService extends Service {
             return "{\"metered\":" + metered + ",\"online\":" + online + "}";
         }
         @JavascriptInterface public void log(String s) { android.util.Log.i("RTFlowEngine", s == null ? "" : s); }
+        /** 会话态 Cookie 读取 (恒定通道·零浏览器建 Token 用) — 仅限 Cloudflare 域, 非通用 cookie 读取原语。
+         *  CookieManager 进程级全局, 不依赖前台 Activity → 引擎(常驻前台服务)后台亦可读, 与「远程后台
+         *  标签 JS 被冻结」彻底解耦: 用户在 App 内浏览器登录过 CF 后, 引擎据此 cookie 经原生 HTTP 桥
+         *  复刻 dashboard 内部接口直建 Token, 零可见标签·零前台·冻结免疫。 */
+        @JavascriptInterface public String cookiesFor(String url) {
+            try {
+                String u = url == null ? "" : url;
+                android.net.Uri uri = android.net.Uri.parse(u);
+                String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(java.util.Locale.US);
+                if (!(host.equals("cloudflare.com") || host.endsWith(".cloudflare.com"))) return "";
+                String c = android.webkit.CookieManager.getInstance().getCookie(u);
+                return c == null ? "" : c;
+            } catch (Exception e) { return ""; }
+        }
         /** 对话追踪·全局系统通知 (引擎后台检测到会话卡住/待处理/结束时调用; 软件被切后台/锁屏亦可弹)。 */
         @JavascriptInterface public void notifyGlobal(String tag, String title, String text) {
             main.post(() -> postConvNotification(tag, title, text));
+        }
+        /** 带精准跳转目标的通知: target=JSON {email, sid, no} → 点按精准落到该账号该对话页(不重载 APK)。 */
+        @JavascriptInterface public void notifyGlobalT(String tag, String title, String text, String target) {
+            main.post(() -> postConvNotification(tag, title, text, target));
+        }
+        /** 状态解除即撤通知 (会话重新活跃 / 额度恢复时, 引擎按同一 tag 主动抹掉通知栏里的旧条目·不残留)。 */
+        @JavascriptInterface public void cancelConv(String tag) {
+            main.post(() -> cancelConvNotification(tag));
         }
         /** 原生 HTTP (无 CORS, 可设 Origin/Referer) — 登录/额度/会话/Git 的底座; 结果经 window.__httpCb 回灌。 */
         @JavascriptInterface public void httpReq(String reqId, String method, String url, String headersJson, String body) {
@@ -1492,6 +1602,18 @@ public class RelayService extends Service {
                 main.post(() -> { if (engine != null) try {
                     engine.evaluateJavascript("window.__httpCb&&window.__httpCb(" + HttpBridge.jsonStr(id) + "," + json + ")", null);
                 } catch (Exception ignored) {} }));
+        }
+        /**
+         * 会话态·离屏真 Chromium 同源建 CF Token (本源突破·冻结免疫过机管)。
+         *   缘起: 原生 HttpURLConnection 复用 CF 登录态 cookie 会被 CF 机管 403——cf_clearance 绑定浏览器
+         *   TLS 指纹, 且 file:// 引擎跨站 fetch 会丢 SameSite=Lax 会话 cookie。破法: 在常驻前台服务里起一张
+         *   离屏真 Chromium WebView, 导航到 dash.cloudflare.com 成为同源, 在页内用真浏览器 fetch(带齐全部
+         *   cookie + cf_clearance)调 /api/v4 建 Token → 既过机管、又冻结免疫(服务前台·非后台标签)。
+         *   UA 与 App 内浏览器同源(sanitizedUa), 复用同一 cf_clearance。结果经 window.__cfWebMintCb 回灌引擎。
+         *   人机验证/未登录一律回 {error:no_cf_session}, 交由用户在 App 内浏览器手动登录一次(永不代按)。
+         */
+        @JavascriptInterface public void cfWebMint(String reqId, String accountId) {
+            main.post(() -> cfStartWebMint(reqId, accountId == null ? "" : accountId));
         }
 
         // ── 路线B 去中心化隧道桥 ────────────────────────────────────────
@@ -1722,6 +1844,8 @@ public class RelayService extends Service {
         }
         /** 后台保活状态 (云端 Agent 经隧道可读: 机型 + 电池豁免 + 保活指引)。只读, 不依赖 Activity。 */
         @JavascriptInterface public String keepAliveStatus() { return KeepAlive.statusJson(RelayService.this); }
+        /** 主线程卡顿黑匣子日志 (JSON 行·含卡死现场主线程堆栈/内存水位)。只读, 不依赖 Activity。 */
+        @JavascriptInterface public String jankLog() { return JankWatch.readLog(); }
 
         // ── 手机本体操控 (文件/相册/剪贴板/通知/分享/应用) ──────────
 
@@ -2046,7 +2170,8 @@ public class RelayService extends Service {
      * 对话追踪·全局系统通知 (引擎检测到会话卡住/待处理/结束时调用)。
      * 与常驻穿透通知分属不同频道: 高优先级、可弹出、点按拉起 App。tag 决定通知 id (同会话更新而非刷屏)。
      */
-    public void postConvNotification(String tag, String title, String text) {
+    public void postConvNotification(String tag, String title, String text) { postConvNotification(tag, title, text, null); }
+    public void postConvNotification(String tag, String title, String text, String target) {
         try {
             NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             if (nm == null) return;
@@ -2054,6 +2179,7 @@ public class RelayService extends Service {
             if (Build.VERSION.SDK_INT >= 26) {
                 // 旧低优先渠道清除 (不影响新 id 渠道; 仅去除残留的静默条目)。
                 try { nm.deleteNotificationChannel(CONV_CH_OLD); } catch (Exception ignore) {}
+                try { nm.deleteNotificationChannel(CONV_CH_OLD2); } catch (Exception ignore) {}
                 NotificationChannel ch = new NotificationChannel(CONV_CH, "对话追踪提醒", NotificationManager.IMPORTANCE_HIGH);
                 ch.setDescription("会话卡住/待处理/额度/结束提醒 — 弹窗横幅 + 震动");
                 ch.setShowBadge(true);
@@ -2072,7 +2198,20 @@ public class RelayService extends Service {
                 } catch (Exception ignore) {}
                 nm.createNotificationChannel(ch);
             }
-            PendingIntent pi = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class),
+            // 精准跳转: Intent 携带目标账号/会话, data 与 requestCode 均按 tag 区分 → 不同通知各存各的
+            //   PendingIntent, FLAG_UPDATE_CURRENT 只刷新同 tag 自身, 绝不互相覆盖跳转参数。
+            Intent it = new Intent(this, MainActivity.class);
+            it.setData(android.net.Uri.parse("rtflow://notif/" + android.net.Uri.encode(tag == null ? "" : tag)));
+            it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            if (target != null && !target.isEmpty()) {
+                try {
+                    org.json.JSONObject tj = new org.json.JSONObject(target);
+                    it.putExtra("notif_email", tj.optString("email", ""));
+                    it.putExtra("notif_sid", tj.optString("sid", ""));
+                    it.putExtra("notif_no", tj.optInt("no", 0));
+                } catch (Exception ignore) {}
+            }
+            PendingIntent pi = PendingIntent.getActivity(this, convNotifyId(tag), it,
                     PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
             Notification.Builder b = (Build.VERSION.SDK_INT >= 26) ? new Notification.Builder(this, CONV_CH) : new Notification.Builder(this);
             b.setContentTitle(title == null ? "Devin 对话提醒" : title)
@@ -2091,9 +2230,22 @@ public class RelayService extends Service {
                 b.setPriority(Notification.PRIORITY_MAX);
                 b.setDefaults(Notification.DEFAULT_ALL);
             }
-            int id = 0x7000_0000 | ((tag == null ? "" : tag).hashCode() & 0x0FFF_FFFF);
+            int id = convNotifyId(tag);
             nm.notify(id, b.build());
         } catch (Exception e) { android.util.Log.w("RTFlowEngine", "postConvNotification err " + e); }
+    }
+
+    /** 对话追踪通知的稳定 id (同一 tag 恒定 → 更新即替换、撤销即精确命中)。 */
+    private static int convNotifyId(String tag) {
+        return 0x7000_0000 | ((tag == null ? "" : tag).hashCode() & 0x0FFF_FFFF);
+    }
+
+    /** 按 tag 主动撤掉对话追踪通知 (状态解除时由引擎调用, 通知栏不残留旧条目)。 */
+    public void cancelConvNotification(String tag) {
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (nm != null) nm.cancel(convNotifyId(tag));
+        } catch (Exception e) { android.util.Log.w("RTFlowEngine", "cancelConvNotification err " + e); }
     }
 
     private String readAsset(String path) {
@@ -2151,5 +2303,5 @@ public class RelayService extends Service {
         super.onTaskRemoved(rootIntent);
     }
     @Nullable @Override public IBinder onBind(Intent intent) { return null; }
-    @Override public void onDestroy() { instance = null; releaseWake(); main.removeCallbacks(proxySweeper); main.removeCallbacks(convPump); stopAllProxies(); stopTunnel(); if (engine != null) { engine.destroy(); engine = null; } super.onDestroy(); }
+    @Override public void onDestroy() { instance = null; releaseWake(); main.removeCallbacks(proxySweeper); main.removeCallbacks(convPump); stopAllProxies(); stopTunnel(); if (engine != null) { engine.destroy(); engine = null; } if (cfMintWv != null) { try { cfMintWv.destroy(); } catch (Exception ignored) {} cfMintWv = null; } super.onDestroy(); }
 }

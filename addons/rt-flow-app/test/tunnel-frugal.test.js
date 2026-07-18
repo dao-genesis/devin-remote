@@ -54,5 +54,13 @@ ok(HTML.indexOf("cfBrowserLogin") < 0 || !/onclick="send\('cfBrowserLogin'\)"/.t
 // 5) token 不在普通状态区明文渲染: agentCount 反映真实 /api/agents, 非 on?1:0 硬编码残留
 ok(/agentCount:\s*on\?1:0/.test(scriptBodies) === false || /filter\(function\(a\)\{return a\.status==='online'/.test(scriptBodies), "在线电脑数取真实 /api/agents 计数");
 
+// 6) 局域网直连也「单网页传输一切」: 面板既给同网浏览器直开的满血 APK UI 链接 (_webConsoleUrl),
+//    又给裸 RPC 入口 —— 与公网「网页直开」卡片同款结构, 不再只有 curl/RPC。
+const lanCopy = (scriptBodies.match(/function\s+copyLanAccess\s*\([\s\S]*?\n}/) || [""])[0];
+ok(/网页直开/.test(lanCopy) && /_webConsoleUrl\(/.test(lanCopy), "copyLanAccess 含 局域网网页直开(满血 APK UI)链接");
+ok(/\/relay\/"\s*\+\s*\(c\.session/.test(lanCopy), "copyLanAccess 仍保留 裸 RPC 入口 (程序/curl)");
+const lanRefresh = (scriptBodies.match(/function\s+refreshLan\s*\([\s\S]*?\n}/) || [""])[0];
+ok(/_webConsoleUrl\(/.test(lanRefresh), "refreshLan 展示 同网浏览器直开(满血 APK UI)链接");
+
 console.log(failures ? ("\nFAIL " + failures) : "\nALL GREEN (tunnel-frugal)");
 process.exit(failures ? 1 : 0);

@@ -127,8 +127,21 @@ function test(name, fn) {
     assert.strictEqual(cloud.billingBalance({}), null);
     assert.strictEqual(cloud.billingBalance(null), null);
   });
-  test("overage 负值不减 avail (max(0,overage))", () => {
-    assert.strictEqual(cloud.billingBalance({ available_credits: 10, overage_credits: -5 }), 10);
+  // overage_credits 双符号实证归一(正本清源): 负值且无 billing_error = 以负号记账的剩余余额(v3.0 实证·幅值即美金);
+  //   正值 = 可用余额(rioskolton +33.27 实测)。旧断言「负值抹 0」把满额号读成小残值 → 单话上限被钉 $4 之根源。
+  test("overage 负值+无 billing_error = 剩余余额 (幅值计入·不再抹 0)", () => {
+    assert.strictEqual(cloud.billingBalance({ available_credits: 10, overage_credits: -5 }), 15);
+    assert.strictEqual(cloud.billingBalance({ available_credits: 0, overage_credits: -67 }), 67);
+  });
+  test("overage 负值+有 billing_error = 真欠费 → 计 0 (不减 avail)", () => {
+    assert.strictEqual(cloud.billingBalance({ available_credits: 10, overage_credits: -5, billing_error: "payment_failed" }), 10);
+  });
+  test("overageBalance 纯函数: 正值原样·负值取幅·非数计 0", () => {
+    assert.strictEqual(cloud.overageBalance(33.27, null), 33.27);
+    assert.strictEqual(cloud.overageBalance(-67, null), 67);
+    assert.strictEqual(cloud.overageBalance(-67, "err"), 0);
+    assert.strictEqual(cloud.overageBalance(undefined, null), 0);
+    assert.strictEqual(cloud.overageBalance(NaN, null), 0);
   });
 
   // ── 6. Git 已注册态分流 (classifyRegisteredState) ─────────────────────────
