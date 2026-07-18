@@ -89,7 +89,7 @@ function buildVsix() {
       code = code.replace(
         /(const\s+noAuthNeeded\s*=\s*\[[^\]]*?)(\s*\]\s*;)/,
         (m, head, tail) =>
-          head.includes("'winStatus'") ? m : head + ", 'winStatus', 'winExec', 'winScreenshot', 'winVmList', 'winHostEnsure', 'winVmCreate', 'winVmDestroy', 'winOpenDesktop'" + tail,
+          head.includes("'winStatus'") ? m : head + ", 'winStatus', 'winExec', 'winScreenshot', 'winVmList', 'winHostEnsure', 'winVmCreate', 'winVmDestroy', 'winOpenDesktop', 'winOpenAllDesktops'" + tail,
       );
       // 'windows' 折入 solo 白名单 (汉堡列表点开即独立子网页·隐左导航)。
       code = code.replace(
@@ -271,9 +271,11 @@ function verifyFolds() {
     "function vmHostApi",           // 复制品桌面 · 宿主守护(vm_host_daemon)直连
     "function ensureRdpWeb",        // 复制品桌面 · rdp-web 网关(官方 RDP<->WebSocket)按需拉起
     "function openVmDesktopPanel",  // 复制品桌面 · IDE 内多实例桌面页(内嵌官方 mstsc.js RDP 前端)
+    "int.openDesktopTab",           // 复制品桌面 · 优先折入 rt-flow 多实例外壳当同级标签(单壳一切)
     "case 'winVmList'",             // 后端 · 分身列表
     "case 'winVmCreate'",           // 后端 · 新建/连接分身(RDP 多会话)
     "case 'winOpenDesktop'",        // 后端 · 打开复制品桌面页
+    "case 'winOpenAllDesktops'",    // 后端 · 并行全开(全部分身各折一张同级标签)
     "'winStatus'",                  // 免登白名单
     "'windows'",                    // _solo 白名单 / 早退清单
     "t==='windows')return;",        // reloadActiveDataTab/renderCredLimited 面板板块早退
@@ -283,9 +285,10 @@ function verifyFolds() {
     "proxy:['🔀','Proxy Pro']",     // BOARD_META 标签
     "board:windows",                // 归一·③ Windows 汉堡菜单入口
     "windows:['🪟','Windows 总控']", // BOARD_META 标签
+    "async function openDesktopTab", // 归一 · 复制品桌面标签入口(dao-vsix 经 _internals 注入)
   ]);
   must("vendor-proxy/extension.js", ["getEaConfigHtml"]);
-  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×19 · vendor-flow ×4 · vendor-proxy ×1)");
+  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×20 · vendor-flow ×4 · vendor-proxy ×1)");
 }
 
 buildVsix();

@@ -3996,7 +3996,10 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         try { body = JSON.parse(await readBody(req) || '{}'); } catch (e) { body = {}; }
         const sid = String((body && body.sid) || '');
         const msg = body && body.msg;
-        try { if (rtint && typeof rtint.shellHandleMessage === 'function') await rtint.shellHandleMessage(sid, msg); } catch (e) { /* 守柔 */ }
+        // 火后即忘: 回包一律走 SSE/长轮询, HTTP 响应不等宿主处理完 —
+        //   否则串行队列被慢任务(上游 API 卡顿)拖住时, 页面的 POST 悬挂会耗尽浏览器
+        //   同源连接池, 连长轮询都被饿死 → 六大板块永远「加载中」(真机实证)。
+        try { if (rtint && typeof rtint.shellHandleMessage === 'function') { Promise.resolve(rtint.shellHandleMessage(sid, msg)).catch(() => { /* 守柔 */ }); } } catch (e) { /* 守柔 */ }
         return { ok: true };
     }
 
@@ -8023,7 +8026,7 @@ function sw(t){
     }
   }
 }
-function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull()}
+function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull();if(S.tab==='inject')rInject()}
 // 帛书·「见小曰明」: 凭证就绪后(login/autoAcquire 使 canUseApi 转真), 当前数据 tab 仍停在「获取凭证」占位
 // (该占位故意不标记 loaded) — 此处自动重载, 拉取真实数据, 用户无需再次点击。
 function reloadActiveDataTab(){
