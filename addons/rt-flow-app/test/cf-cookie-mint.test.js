@@ -67,6 +67,7 @@ const GROUPS = [
   ok(post.headers.Cookie && post.headers.Cookie.indexOf("cf_clearance") >= 0, "POST 带会话 Cookie 头");
   ok(post.headers.Origin === "https://dash.cloudflare.com" && post.headers.Referer === "https://dash.cloudflare.com/", "POST 带 Origin/Referer 同源头 (绕过 CSRF)");
   ok(post.headers["X-Requested-With"] === "XMLHttpRequest", "POST 带 X-Requested-With (dashboard 内部接口约定)");
+  ok(post.headers["X-Cross-Site-Security"] === "dash", "POST 带 X-Cross-Site-Security:dash (CF 现要求·缺则 403·实测验证)");
 
   // ── 5) 无登录态 → no_cf_session (明确区分未登录 vs 过期) ──
   DaoRelayApp.setCfCookieFn(() => "");

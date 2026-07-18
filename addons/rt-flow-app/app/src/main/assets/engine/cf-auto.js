@@ -271,7 +271,7 @@
           var r = await fetch(path, {
             method: init.method || "GET",
             credentials: "include",
-            headers: Object.assign({ Accept: "application/json" }, init.headers || {}),
+            headers: Object.assign({ Accept: "application/json", "X-Cross-Site-Security": "dash" }, init.headers || {}),
             body: init.body
           });
           var t = null; try { t = await r.json(); } catch (e) { t = {}; }
