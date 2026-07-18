@@ -1479,7 +1479,7 @@ public class RelayService extends Service {
             + "function fin(o){try{__CFM.done(JSON.stringify(o));}catch(e){}}"
             + "if(/\\/login|\\/sign-?in/i.test(location.href||'')){fin({error:'no_cf_session'});return;}"
             + "function api(p,init){init=init||{};return fetch(p,{method:init.method||'GET',credentials:'include',"
-            + "headers:Object.assign({Accept:'application/json'},init.headers||{}),body:init.body}).then(function(r){"
+            + "headers:Object.assign({Accept:'application/json','X-Cross-Site-Security':'dash'},init.headers||{}),body:init.body}).then(function(r){"
             + "return r.text().then(function(tx){var t={};try{t=JSON.parse(tx);}catch(e){}"
             + "if(r.status===401||r.status===403){var er=new Error('auth');er.code=r.status;throw er;}"
             + "if(!r.ok||t.success===false){throw new Error('cf '+p+' HTTP '+r.status);}return t.result;});});}"

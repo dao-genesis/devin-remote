@@ -154,5 +154,15 @@ function ts(name, fn) { return t(name, async () => fn()); }
     assert.strictEqual(threw, true);
   });
 
+  // ── X-Cross-Site-Security: dash 源码护栏 (CF 自 2025Q3 起 POST /api/v4 必带·缺则 403·实测验证) ──
+  await ts("cf-auto.js cfMintToken 包含 X-Cross-Site-Security:dash", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/cf-auto.js"), "utf-8");
+    assert.ok(src.includes("X-Cross-Site-Security"), "cf-auto.js 缺少 X-Cross-Site-Security 头");
+  });
+  await ts("RelayService.java cfMintJs 包含 X-Cross-Site-Security:dash", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/java/ai/devin/rtflow/RelayService.java"), "utf-8");
+    assert.ok(src.includes("X-Cross-Site-Security") && src.includes("dash"), "RelayService.java cfMintJs 缺少 X-Cross-Site-Security:dash 头");
+  });
+
   console.log("\ncf-auto.test.js: " + pass + " assertions passed");
 })();

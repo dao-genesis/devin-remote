@@ -432,7 +432,7 @@ const DaoRelayApp = (function () {
   }
   // 经原生 HTTP 桥调 dashboard 同源内部接口 (带会话 cookie + Origin/Referer·无 CORS·冻结免疫)。
   async function cfDashHttp(method, apiPath, cookie, body) {
-    var headers = { "Cookie": cookie, "Origin": CF_DASH, "Referer": CF_DASH + "/", "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" };
+    var headers = { "Cookie": cookie, "Origin": CF_DASH, "Referer": CF_DASH + "/", "Accept": "application/json", "X-Requested-With": "XMLHttpRequest", "X-Cross-Site-Security": "dash" };
     if (body != null) headers["Content-Type"] = "application/json";
     var httpFn = cfDashFn || ((typeof DaoCore !== "undefined" && DaoCore.httpReq) ? DaoCore.httpReq : null);
     if (!httpFn) throw new Error("原生 HTTP 桥不可用 (需引擎上下文·DaoCore.httpReq)");
