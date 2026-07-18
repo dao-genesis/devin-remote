@@ -60,6 +60,20 @@ second call (`JSON.stringify(window.__X)`), sleeping ~5-6s between.
   "DAO Bridge 内网穿透远程操作文档" knowledge note as the persistent channel.
 - `getState` over the relay returns `413 relay payload too large` — use small RPCs
   (`ping` / `browseOpen` / `browseExecJs` / `browseListTabs`), never bulk state.
+- **Background-tab timer throttling blocks the remote kick+read mint.** A CF dashboard tab opened
+  with `foreground:false` gets its JS event loop suspended by the OS when the app is backgrounded —
+  `fetch('/api/v4/user')` (and even `setTimeout`) never progress, so `window.__R` stays `pending`/`start`
+  forever no matter how long you poll. `browseActivateTab` is a deliberate no-op (isolation contract in
+  `engine.html`), so you cannot foreground it remotely. Practical consequence: the **remote** VM-driven
+  mint only works when the user's phone screen is on and the app is foregrounded during the run. The
+  **in-app** path (`cf-auto.js`, user taps 全自动) is not affected — it runs in the active page. When
+  remote-driving, confirm the tab's JS actually advances (kick a trivial `window.__R=Date.now()` and
+  read it back changes) before assuming the mint hung on the network. `tools/cf-drive.mjs` wraps the
+  kick+read pattern.
+- Permission-group matching is now locale/case tolerant (`pickGroups` in `cf-auto.js` falls back to a
+  trimmed case-insensitive match), and `cfMintToken` fails loudly with `missing_perm_groups: <names>`
+  if a CF account doesn't expose the two account-scope groups (Workers Scripts Write + Account Settings
+  Read) — instead of silently minting an under-scoped token that later dies at "can't read accounts".
 - Per AGENTS.md §三: a persistent CF Worker is an **optional** "fixed domain" enhancement, not a
   prerequisite — the zero-account ntfy mesh + `cloudflared` quick-tunnel fallback already work without any
   CF account. Only run this when the user explicitly wants the constant Worker address.
