@@ -206,12 +206,16 @@ ok(/function _sessTs\(s\)/.test(switchSrc),
    "源级: 存在 _sessTs 会话活跃时间戳解析(择取最新对话)");
 ok(/var latestName="", latestTs=-1/.test(switchSrc),
    "源级: _pollOneAcc 计算该账号最新对话名 latestName");
-ok(/var nm = top \? \(top\.title\|\|""\) : latestName/.test(switchSrc),
-   "源级: 无需关注对话时标签回退「最新对话名」而非空(空才由原生回退账号名)");
-ok(/items:items,latest:latestName/.test(switchSrc) && /items:\[\],latest:latestName/.test(switchSrc),
-   "源级: _trk 持久化 latest(活跃与墓碑两态皆带最新对话名)");
-ok(/else \{ nm=st\.latest\|\|""; stt="finished"; if\(!nm\) return; \}/.test(switchSrc),
-   "源级: _repushTabsFromTrk 空闲账号即刻重显缓存最新对话名");
+ok(/var nm = latestName;/.test(switchSrc) && /var stt = latestStt;/.test(switchSrc),
+   "源级: 页签恒随该账号「最新对话」名称+状态(而非残留的高优先级老对话)");
+ok(/latestStt=_clsToStt\(cls\)/.test(switchSrc),
+   "源级: _pollOneAcc 记录最新对话的真实状态 latestStt");
+ok(/if\(latestUuid\)\{ for\(var q=0;q<items\.length;q\+\+\)\{ if\(items\[q\]\.uuid===latestUuid\)/.test(switchSrc),
+   "源级: 最新对话被逆流兜底改判后同步 latestStt (页签状态恒等最新对话真实态)");
+ok(/items:items,latest:latestName,latestStt:latestStt/.test(switchSrc) && /items:\[\],latest:latestName,latestStt:latestStt/.test(switchSrc),
+   "源级: _trk 持久化 latest+latestStt(活跃与墓碑两态皆带最新对话名与其状态)");
+ok(/var nm=st\.latest\|\|""; if\(!nm\) return;/.test(switchSrc) && /var stt=st\.latestStt\|\|"finished";/.test(switchSrc),
+   "源级: _repushTabsFromTrk 用缓存 latest+latestStt 重显最新对话(与 _pollOneAcc 同源)");
 ok(/function _convNameOf\(a\)/.test(switchSrc),
    "源级: 存在 _convNameOf 统一取「对话名为消息主体」");
 ok(/_bigAlert\("⚠ "\+_convNameOf\(a\)\+" 额度仅/.test(switchSrc),
