@@ -6035,25 +6035,61 @@ function daoRelayWriteGhCfAssistExt(profileDir: string, cred: { user?: string; p
         return extDir;
     } catch { return null; }
 }
-// 后端代登编排: 选一个 GitHub 账号 → 隔离档开 CF 建 Token 页(触发 GitHub 代登链) → 助手代填。
-//   守柔: 只代填不代提交登录/2FA/建 Token 终键。返回不含任何明文(账密/2FA/Token)。
-async function daoRelayGhAutoLogin(login: string): Promise<{ ok: boolean; login: string; launched?: boolean; hasOtp?: boolean; tokenUrl?: string; error?: string }> {
+// 守柔回退: 有头隔离档打开 CF 建 Token 页 + 代填助手(仅命中真·反自动化关卡时, 由号主本人过最后一关)。
+function daoRelayGhAssistLaunch(login: string, a: any, profileDir: string, proxy: string): boolean {
+    try {
+        const cred = a.cred || {};
+        const otpNow = cred.otp ? ghTotp(cred.otp) : '';
+        const safeKey = ('cf:gh:' + login).replace(/[^a-zA-Z0-9._@-]/g, '_');
+        const tokenUrl = daoRelayTokenDeepLink('dao-relay');
+        const assistExt = daoRelayWriteGhCfAssistExt(profileDir, cred, otpNow, 'dao-relay');
+        const fp = daoAcctFingerprint(safeKey);
+        return !!daoLaunchChromiumIsolated(tokenUrl, safeKey, fp, proxy, profileDir, assistExt ? [assistExt] : []);
+    } catch { return false; }
+}
+// 后端「零点击」全自动代登(道法自然·无为而无不为·承担一切负担): 选一 GitHub 账号(账密+2FA 存号)
+//   → 无头隔离档全自动登 Cloudflare(CF 点 Sign in with GitHub → GitHub 填账密 + 本地算 2FA → 授权)
+//   → 会话态经内部接口纯 HTTP 直建 API Token → provision 部署持久 Worker, **无需任何人工终键**。
+//   仅命中真·反自动化关卡(人机验证码/硬件密钥/邮箱设备验证)才 needUser 回退到有头隔离档 + 代填助手,
+//   交号主本人过最后一关。返回不含任何明文(账密/2FA/Token)。
+async function daoRelayGhAutoLogin(login: string): Promise<{ ok: boolean; login: string; url?: string; healthy?: boolean; via?: string; needUser?: boolean; launched?: boolean; error?: string }> {
     login = String(login || '').trim().replace(/^@/, '');
     const prof = loadInjectProfile();
     const a = (prof.ghFleet || []).find(x => x.login.toLowerCase() === login.toLowerCase());
     if (!a) return { ok: false, login, error: '账号不在池中' };
     const cred = a.cred;
-    if (!cred || !cred.user) return { ok: false, login, error: '该账号无账密存号 — 用「③ 账密+2FA」模式添号后再代登 Cloudflare' };
-    const otpNow = cred.otp ? ghTotp(cred.otp) : '';
+    if (!cred || !cred.user || !cred.pass) return { ok: false, login, error: '该账号无完整账密存号 — 用「③ 账密+2FA」模式添号后再代登 Cloudflare' };
     const safeKey = ('cf:gh:' + login).replace(/[^a-zA-Z0-9._@-]/g, '_');
     const profileDir = path.join(DAO_DIR, 'browser-profiles', safeKey);
     try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* 守柔 */ }
-    const tokenUrl = daoRelayTokenDeepLink('dao-relay');
-    const assistExt = daoRelayWriteGhCfAssistExt(profileDir, cred, otpNow, 'dao-relay');
-    const fp = daoAcctFingerprint(safeKey);
     const proxy = daoAcctProxy(safeKey);
-    const launched = daoLaunchChromiumIsolated(tokenUrl, safeKey, fp, proxy, profileDir, assistExt ? [assistExt] : []);
-    return { ok: !!launched, login, launched: !!launched, hasOtp: !!otpNow, tokenUrl };
+
+    // ★主路径: 无头隔离档全自动登 CF → 建 Token → 部署(零人工终键)。
+    let mod: any = null;
+    try { mod = await daoRelayLoadMod('gh-cf-login.mjs'); } catch { mod = null; }
+    if (mod && typeof mod.ghCfLoginProvision === 'function') {
+        try {
+            const st = await mod.ghCfLoginProvision({
+                login: cred.user, pass: cred.pass, otp: cred.otp || '',
+                profileDir, proxy: proxy || undefined, headless: true,
+                log: (m: string) => { try { console.log('[gh-cf ' + login + '] ' + m); } catch { /* 守柔 */ } }
+            });
+            if (st && st.ok) {
+                try { if (st.url) await daoRelaySetPersistent(st.url); } catch { /* 守柔 */ }
+                try { refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ }
+                return { ok: true, login, url: st.url, healthy: !!st.healthy, via: st.via || 'gh-cf' };
+            }
+            // 命中真·反自动化关卡 / 其它未完成 → 回退有头隔离档 + 代填助手, 交号主过最后一关。
+            const launched = daoRelayGhAssistLaunch(login, a, profileDir, proxy);
+            return { ok: false, login, needUser: !!(st && st.needUser), launched, via: 'gh-cf', error: (st && st.error) || '全自动未完成, 已打开隔离档代填交你过最后一关' };
+        } catch (e: any) {
+            const launched = daoRelayGhAssistLaunch(login, a, profileDir, proxy);
+            return { ok: false, login, launched, error: String(e && e.message || e) };
+        }
+    }
+    // playwright 模块不可用 → 直接有头代填回退。
+    const launched = daoRelayGhAssistLaunch(login, a, profileDir, proxy);
+    return { ok: !!launched, login, launched: !!launched, via: 'assist', error: launched ? undefined : '无法启动隔离档(playwright 缺失且系统 Chromium 未就绪)' };
 }
 // GitHub 管理中心 MD(一键复制/打开 · 对照 Bridge MD 模式): 只含脱敏元数据 + 热接入指引, 绝不含明文 PAT/密码/2FA。
 function ghGenerateMgmtMd(): string {
@@ -8342,7 +8378,7 @@ function rBridgeFull(){
   h+='</div>';
   // ── 代登 Cloudflare · 用 GitHub 账号(账密+2FA 已存号)后端代操作 → 隔离档链式代填建 API Token(守柔不代提交) ──
   h+='<div class="card">';
-  h+='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">不懂建 Token？<b style="color:var(--fg)">直接选</b>一个已在 <b style="color:var(--fg)">GitHub 板块</b>用「账密+2FA」添加的账号(同一账号池·两板块隔离共用)，后端即在其<b style="color:var(--fg)">隔离浏览器档</b>代你打开 Cloudflare 建 Token 页并链式代填(CF 选 Sign in with GitHub → GitHub 自动填账密/2FA → 建 Token 页按 dao-relay 所需权限预勾)。<b style="color:var(--warn)">守柔</b>: 只代填不代提交登录/2FA/建 Token 终键, 遇验证码/设备验证不绕过, 你核对后手动点最后一步; 建成的 Token 贴到上方即全自动部署。</div>';
+  h+='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">不懂建 Token？<b style="color:var(--fg)">直接选</b>一个已在 <b style="color:var(--fg)">GitHub 板块</b>用「账密+2FA」添加的账号(同一账号池·两板块隔离共用)，后端即在其<b style="color:var(--fg)">隔离浏览器档</b><b style="color:var(--success)">零点击全自动</b>打通: CF 点 Sign in with GitHub → GitHub 自动填账密 + 本地算 2FA → 授权 → 进 dashboard 经内部接口直建 API Token → 全自动部署持久 Worker，<b style="color:var(--success)">无需任何人工终键</b>。仅命中真·人机验证码/硬件密钥/邮箱设备验证(专挡机器人)才回退到有头隔离档交你过最后一关。</div>';
   // 本源: GitHub 账号既在 GitHub 板块管理一切, 也可在此登 Cloudflare。直接列舰队(账密+2FA 存号者)供选, 不再盲填 login。
   var _gha=S.bridgeGhAccts;var _sel='width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px';
   if(_gha===undefined){h+='<div style="font-size:10px;color:var(--muted);margin:3px 0">载入 GitHub 舰队…</div>';}
@@ -8352,7 +8388,7 @@ function rBridgeFull(){
       if(_gha.length)h+='<div style="font-size:10px;color:var(--warn);margin-top:2px">GitHub 舰队有 '+_gha.length+' 号, 但均无「账密+2FA」存号 — 代登 CF 需账密, 请在 GitHub 板块以「③ 账密+2FA」模式添号</div>';
       else h+='<div style="font-size:10px;color:var(--muted);margin-top:2px">GitHub 舰队为空 — 先去 GitHub 板块「③ 账密+2FA」添号</div>';}
   }
-  h+='<div class="br" style="margin-top:4px"><button class="btn sm" onclick="relayGhAutoLogin()" title="隔离档浏览器代登 Cloudflare(GitHub 代登链)→ 建 Token 页链式代填, 守柔不代提交">🤖 用 GitHub 账号代登 Cloudflare</button></div>';
+  h+='<div class="br" style="margin-top:4px"><button class="btn sm primary" onclick="relayGhAutoLogin()" title="零点击全自动: 无头隔离档登 CF(Sign in with GitHub)→GitHub 账密+本地2FA→授权→建 Token→部署持久 Worker, 无需人工终键">🤖 用 GitHub 账号全自动代登 Cloudflare</button></div>';
   h+='</div>';
   // ── 末·更深层能力 → 已独立为 MCP (内穿面板回归本源·只管整机直连; 四大模块不再内联此处) ──
   h+='<div class="st" style="margin-top:14px">🧩 更深层专业操作 · DAO Bridge MCP</div>';
@@ -8388,8 +8424,8 @@ function _cfParseCred(raw){var parts=String(raw||'').split(/----|[\s,;\t|]+/).ma
 function relayCfSmartGo(){var k=document.getElementById('cfKey');var raw=k?k.value.trim():'';if(!raw){toast('请贴入 API Token / 邮箱+Global API Key / 账号密码(+2FA)',false);return}var pr=_cfParseCred(raw);if(pr&&pr.email){var one=(pr.rest.length===1)?pr.rest[0]:'';if(one&&/^[a-f0-9]{37}$/i.test(one)){toast('验证 Global API Key…',true);cmd('bridgeCfLogin',{email:pr.email,key:one});return}if(pr.rest.length){toast('🚀 账号密码零点击全自动打通中…(登录→授权→部署 Worker, 约 1-2 分钟; 遇验证码将自动回退)',true);cmd('relayCredLogin',{email:pr.email,password:pr.rest.join(' '),totp:pr.otp||undefined});return}toast('该邮箱缺少密码或 Global API Key',false);return}toast('全自动打通中…(取账号→部署 Worker→落盘置顶, 约 1-2 分钟)',true);cmd('relayProvisionToken',{token:raw})}
 // 纯凭证·零点击全自动: 只填 CF 账号密码(+可选 TOTP) → 后端 CDP 驱动登录+授权+部署持久 Worker(承担一切负担)。
 function relayCredGo(){var e=document.getElementById('relayCfEmail'),p=document.getElementById('relayCfPass'),t=document.getElementById('relayCfTotp');var email=e?e.value.trim():'';var pass=p?p.value:'';var totp=t?t.value.trim():'';if(!email||!pass){toast('请先填 Cloudflare 账号与密码',false);return}toast('🚀 零点击全自动打通中…(登录→授权→部署 Worker, 约 1-2 分钟; 遇验证码将自动回退一次授权)',true);cmd('relayCredLogin',{email:email,password:pass,totp:totp||undefined})}
-// 代登 Cloudflare: 用 GitHub 账号(账密+2FA 存号)后端代操作 → 隔离档链式代填建 API Token(守柔不代提交)。
-function relayGhAutoLogin(){var el=document.getElementById('relayGhLogin');var login=el?el.value.trim().replace(/^@/,''):'';if(!login){toast('请先填一个 GitHub 账号 login(需先在 GitHub 板块以账密+2FA 添加)',false);return}toast('🤖 代登 Cloudflare 中…隔离档浏览器将打开(GitHub 代登链→建 Token 页代填·守柔不代提交)',true);cmd('relayGhAutoLogin',{login:login})}
+// 全自动代登 Cloudflare: 用 GitHub 账号(账密+2FA 存号)后端零点击登入→内部接口建 Token→部署持久 Worker。
+function relayGhAutoLogin(){var el=document.getElementById('relayGhLogin');var login=el?el.value.trim().replace(/^@/,''):'';if(!login){toast('请先选/填一个 GitHub 账号 login(需先在 GitHub 板块以账密+2FA 添加)',false);return}toast('🤖 GitHub 全自动代登 Cloudflare 中…(登 CF→GitHub 账密+本地2FA→授权→建 Token→部署 Worker, 约 1-2 分钟, 零人工; 仅真·人机验证码才回退交你过最后一关)',true);cmd('relayGhAutoLogin',{login:login})}
 function bridgeExec(){var c=document.getElementById('bridgeCmd');var v=c?c.value.trim():'';if(!v)return;var o=document.getElementById('bridgeOut');if(o)o.textContent='执行中…';cmd('bridgeExec',{cmd:v})}
 // 问题②③ · 备份板块: 全账号×全对话备份成果 + 查看/下载 (路由 rt-flow 同源备份 · 纯本地·免 cog_ key)
 function rBackups(){
@@ -9229,10 +9265,10 @@ function rGitHub(){
   var _rl=(S.bridge&&S.bridge.relay)||{};
   var _rlSt=(_rl.active&&_rl.url)?('<span style="color:'+(_rl.healthy?'var(--success)':'var(--warn)')+'">'+(_rl.healthy?'● 就绪·置顶接管':'⚠ 已部署·传播中')+'</span> <span style="font-size:10px;word-break:break-all;color:var(--muted)">'+esc(_rl.url)+'</span>'):'<span style="color:var(--warn)">○ 未打通(快速隧道/mesh 照常可用·零账号)</span>';
   h+='<div class="cr"><span class="l">通道状态</span><span class="v">'+_rlSt+'</span></div>';
-  h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:4px 0 6px">想要<b style="color:var(--fg)">永不漂的固定公网地址</b>？三条路任选(状态同显于内网穿透板块): ① 一键 OAuth 全自动(推荐·免手搓 Token); ② 用本板块账号池的 GitHub 号<b>代登 Cloudflare</b> → 建 Token 页链式代填(守柔不代提交); ③ 已有 Cloudflare API Token 直接贴入(含 Workers 脚本编辑+账号读权限)。打通后自动部署你自己的 Worker、落盘置顶、与内网穿透板块同步。</p>';
+  h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:4px 0 6px">想要<b style="color:var(--fg)">永不漂的固定公网地址</b>？三条路任选(状态同显于内网穿透板块): ① 一键 OAuth 全自动(推荐·免手搓 Token); ② 用本板块账号池的 GitHub 号<b>全自动代登 Cloudflare</b>(零点击·登入→建 Token→部署 Worker, 无需人工终键); ③ 已有 Cloudflare API Token 直接贴入(含 Workers 脚本编辑+账号读权限)。打通后自动部署你自己的 Worker、落盘置顶、与内网穿透板块同步。</p>';
   h+='<div class="br" style="margin:2px 0"><button class="btn sm primary" onclick="toast(&#39;打开 Cloudflare 授权页…点一次授权即全自动打通&#39;,true);cmd(&#39;relayOAuthLogin&#39;)" title="浏览器打开 Cloudflare 登录授权 → 后端全自动注册 Token·部署 Worker·落盘置顶·自动续期">🔐 一键 OAuth 全自动打通</button>'+(_rl.active?'<button class="btn sm" onclick="cmd(&#39;relayRestart&#39;)" title="重启 Worker 通道; 连不上自动升级重建">🔄 重启 Worker</button><button class="btn sm" onclick="cmd(&#39;copyRelayInfo&#39;)" title="复制完整接入信息(地址+Token+兜底)">📋 复制接入信息</button>':'')+'</div>';
   var _credAccts=_fleet.filter(function(a){return a.hasCred});
-  h+='<div style="display:flex;gap:4px;margin:6px 0 2px"><select id="ghCfGhLogin" style="flex:1">'+(_credAccts.length?_credAccts.map(function(a){return '<option value="'+esc(a.login)+'">'+esc(a.login)+' (有账密·可代登)</option>'}).join(''):'<option value="">— 账号池暂无「账密+2FA」账号(添号③模式) —</option>')+'</select><button class="btn sm" onclick="ghCfGhGo()" title="隔离档浏览器: GitHub 代登 Cloudflare → 建 Token 页按 dao-relay 所需权限预勾预填·守柔不代提交"'+(_credAccts.length?'':' disabled style="opacity:.5"')+'>🤖 用该号代登建 Token</button></div>';
+  h+='<div style="display:flex;gap:4px;margin:6px 0 2px"><select id="ghCfGhLogin" style="flex:1">'+(_credAccts.length?_credAccts.map(function(a){return '<option value="'+esc(a.login)+'">'+esc(a.login)+' (有账密·可全自动代登)</option>'}).join(''):'<option value="">— 账号池暂无「账密+2FA」账号(添号③模式) —</option>')+'</select><button class="btn sm primary" onclick="ghCfGhGo()" title="零点击全自动: 无头隔离档登 CF(Sign in with GitHub)→GitHub 账密+本地2FA→授权→建 Token→部署持久 Worker, 无需人工终键"'+(_credAccts.length?'':' disabled style="opacity:.5"')+'>🤖 用该号全自动代登打通</button></div>';
   h+='<div style="display:flex;gap:4px;margin:4px 0 2px"><input id="ghCfToken" type="password" placeholder="Cloudflare API Token(Workers 脚本编辑+账号读) · 贴入一键全自动" style="flex:1"><button class="btn sm primary" onclick="ghCfTokenGo()" title="token→取账号→部署 Worker→落盘置顶, 全后台自动(约1-2分钟)">🚀 Token 打通</button></div>';
   h+='<div class="br" style="margin:4px 0 0"><a href="#" onclick="cmd(&#39;openCf&#39;);return false" style="font-size:10px;color:var(--accent2)">去 Cloudflare 手动创建 Token →</a><span style="font-size:10px;color:var(--muted)"> · 也可在内网穿透板块手动贴 Token 打通(同一后端)</span></div>';
   h+='</div>';
@@ -9244,7 +9280,7 @@ function rGitHub(){
 // 添号模式切换
 function ghAddMode(m){var st=_ghState();st.addMode=m;rGitHub()}
 // ⑤ 持久化 Worker · GitHub 板块入口(复用穿透板块同一后端命令, 状态两板同步)
-function ghCfGhGo(){var el=document.getElementById('ghCfGhLogin');var login=el?el.value.trim():'';if(!login){toast('账号池暂无「账密+2FA」账号 — 先在「① 添加账号 → ③ 账密+2FA」添号',false);return}toast('🤖 代登 Cloudflare 中…隔离档浏览器将打开(GitHub 代登链→建 Token 页代填·守柔不代提交)',true);cmd('relayGhAutoLogin',{login:login})}
+function ghCfGhGo(){var el=document.getElementById('ghCfGhLogin');var login=el?el.value.trim():'';if(!login){toast('账号池暂无「账密+2FA」账号 — 先在「① 添加账号 → ③ 账密+2FA」添号',false);return}toast('🤖 GitHub 全自动代登 Cloudflare 中…(登 CF→GitHub 账密+本地2FA→授权→建 Token→部署 Worker, 约 1-2 分钟, 零人工; 仅真·人机验证码才回退交你过最后一关)',true);cmd('relayGhAutoLogin',{login:login})}
 function ghCfTokenGo(){var k=document.getElementById('ghCfToken');var token=k?k.value.trim():'';if(!token){toast('请先贴入 Cloudflare API Token',false);return}toast('全自动打通中…(取账号→部署 Worker→落盘置顶, 约 1-2 分钟)',true);cmd('relayProvisionToken',{token:token})}
 // 添加账号(三模式统一入口): PAT 模式与账密模式都走 daoGhAccountAdd(后端按格式识别)。
 function ghAcctAdd(){var t=(document.getElementById('ghAddInput')||{}).value||'';if(!t.trim()){toast('先填至少一行',false);return}var role=(document.getElementById('ghAddRole')||{}).value||'member';var mode=(_ghState().addMode||'pat');ghMsg('ghAddOut','⏳ 校验并加入账号池(限速)…');cmd('daoGhAccountAdd',{text:t,role:role,mode:mode})}
@@ -11232,11 +11268,13 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 refreshReply({ type: 'actionResult', command: 'relayProvisionToken', ok: !!r.ok, url: r.url, error: r.error });
                 break;
             }
-            // 后端代登: 用 GitHub 账号(账密+2FA 存号)代登 Cloudflare → 隔离档链式代填建 API Token(守柔不代提交)。
+            // 后端「零点击」全自动代登: 用 GitHub 账号(账密+2FA 存号)全自动登 Cloudflare → 内部接口建 Token → 部署持久 Worker。
             case 'relayGhAutoLogin': {
                 const r = await daoRelayGhAutoLogin(String(msg.login || ''));
-                vscode.window[r.ok ? 'showInformationMessage' : 'showErrorMessage']('DAO 持久通道·代登 Cloudflare: ' + (r.ok ? ('已在 ' + r.login + ' 隔离档打开 CF 建 Token 页(GitHub 代登链)' + (r.hasOtp ? '·2FA已填充' : '')) : (r.error || '失败')));
-                reply({ type: 'actionResult', command: 'relayGhAutoLogin', ok: !!r.ok, login: r.login, error: r.error });
+                const okMsg = 'DAO 持久通道·GitHub 全自动代登 Cloudflare 成功: ' + r.login + ' → 已建 Token 并部署持久 Worker' + (r.url ? ('(' + r.url + ')') : '');
+                const failMsg = 'DAO 持久通道·GitHub 代登 Cloudflare: ' + (r.needUser ? ('命中安全挑战, 已在 ' + r.login + ' 隔离档打开 CF 页交你过最后一关') : (r.launched ? ('全自动未完成, 已在 ' + r.login + ' 隔离档代填交你过最后一关') : (r.error || '失败')));
+                vscode.window[r.ok ? 'showInformationMessage' : 'showWarningMessage'](r.ok ? okMsg : failMsg);
+                reply({ type: 'actionResult', command: 'relayGhAutoLogin', ok: !!r.ok, login: r.login, url: r.url, via: r.via, needUser: !!r.needUser, launched: !!r.launched, error: r.error });
                 break;
             }
             // 纯凭证「零点击」全自动: 只填 CF 账号密码(+可选 TOTP) → 后端 CDP 驱动登录+授权 → 部署持久 Worker。
