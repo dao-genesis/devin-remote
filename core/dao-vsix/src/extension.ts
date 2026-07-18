@@ -129,6 +129,9 @@ const CONFIG_FILE = GLOBAL_CONFIG_FILE;  // 别名 — 道法自然：一即一�
 //   getRelayConfig 把它**置顶**为出站中继首选 → org MCP/公网入站配一次永久有效;
 //   既有 quick tunnel / ntfy mesh 仍作回退, 两者取长补短。
 const RELAY_STATE_FILE = path.join(DAO_DIR, 'relay.json');
+// CF 账号池落盘(电脑端多号统管·移植手机 APK cf-pool.js 池哲学)。凭证仅落此文件(600 权限)供后端直连
+//   CF API, 绝不经回包明文外泄; 回包只出非密元数据(email/accountId/cred 类型)。
+const CF_POOL_FILE = path.join(DAO_DIR, 'cf-pool.json');
 function getPersistentRelayUrl(): string {
     try {
         const s = JSON.parse(fs.readFileSync(RELAY_STATE_FILE, 'utf8'));
@@ -5468,6 +5471,179 @@ async function bridgeCfDeleteWorker(name: string): Promise<{ ok: boolean; error?
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// CF 账号池 · 多号统管 (电脑端做得比手机端更全 · 移植 addons/rt-flow-app cf-pool.js 池哲学)
+// ───────────────────────────────────────────────────────────────────────────
+// 本源: 手机端有「CF 账号池」可粘贴多号→识号入池→逐号建 Token/Worker→统管一切; 过去电脑端只管
+//   单一持久通道账号(bridgeReadRelayCf 读 relay.json)。此处把池哲学移到桌面并做得更全: 一个板块
+//   粘贴任意格式的多账号凭证, 后端按需用各号自己的 Bearer/Global API Key 直连 CF API, 列/撤该号全部
+//   API Token、列/删该号全部 Worker —— 多号并列统一管理, 用户无需逐个登录 dash.cloudflare.com。
+//   凭证只落 CF_POOL_FILE(600), 回包只出非密元数据; 与 relay.json 持久通道账号并存不冲突。
+type CfAuth = { token?: string; email?: string; key?: string };
+// 凭证判类(与手机 cf-pool.js classifySecret 同构): Global API Key=37位hex; API Token=40位urlsafe; 余=密码。
+function cfClassifySecret(s: string): 'key' | 'token' | 'password' {
+    const v = String(s == null ? '' : s).trim();
+    if (/^[a-f0-9]{37}$/i.test(v)) return 'key';
+    if (/^[A-Za-z0-9_-]{40}$/.test(v)) return 'token';
+    return 'password';
+}
+// 任意格式粘贴 → CF 池记录(每行一账号): 抽邮箱 + 按 classifySecret 归类其余为 key/token/password。
+//   兼容空白/逗号/分号/竖线/制表分隔与 md 表格行(首尾竖线剥离)。
+function cfParsePoolText(raw: string): Array<{ email?: string; token?: string; key?: string; password?: string }> {
+    const out: Array<{ email?: string; token?: string; key?: string; password?: string }> = [];
+    const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(s);
+    String(raw == null ? '' : raw).split(/\r?\n/).forEach((line) => {
+        let ln = String(line || '').trim();
+        if (!ln) return;
+        ln = ln.replace(/^\|/, '').replace(/\|$/, '');
+        const parts = ln.split(/[\s|,;，；\t]+/).map((x) => String(x || '').trim()).filter(Boolean);
+        if (!parts.length) return;
+        const email = parts.find(isEmail);
+        const e: any = {};
+        if (email) e.email = email.toLowerCase();
+        for (const p of parts) {
+            if (p === email) continue;
+            const k = cfClassifySecret(p);
+            if (k === 'key' && !e.key) e.key = p;
+            else if (k === 'token' && !e.token) e.token = p;
+            else if (k === 'password' && !e.password) e.password = p;
+        }
+        if (e.email || e.token || e.key) out.push(e);
+    });
+    return out;
+}
+// 池去重键: 有邮箱按邮箱, 否则按 token/key。
+function cfPoolKeyOf(e: any): string {
+    if (!e) return '';
+    if (e.email) return 'email:' + String(e.email).trim().toLowerCase();
+    if (e.token) return 'token:' + String(e.token);
+    if (e.key) return 'key:' + String(e.key);
+    return '';
+}
+// 该池记录可否纯 API 统管(有 Bearer Token 或 Global API Key+邮箱); 仅密码 → 需登录建 token。
+function cfEntryAuth(e: any): CfAuth | null {
+    if (!e) return null;
+    if (e.token && String(e.token).length >= 20) return { token: String(e.token) };
+    if (e.key && e.email) return { email: String(e.email).toLowerCase(), key: String(e.key) };
+    return null;
+}
+function bridgeCfPoolRead(): any[] {
+    try { const a = JSON.parse(fs.readFileSync(CF_POOL_FILE, 'utf8')); return Array.isArray(a) ? a : []; } catch { return []; }
+}
+function bridgeCfPoolWrite(pool: any[]): void {
+    try {
+        fs.mkdirSync(DAO_DIR, { recursive: true });
+        fs.writeFileSync(CF_POOL_FILE, JSON.stringify(pool, null, 2), { mode: 0o600 });
+        try { fs.chmodSync(CF_POOL_FILE, 0o600); } catch { /* 守柔 */ }
+    } catch { /* 守柔 */ }
+}
+// CF API 请求(支持 Bearer Token 或 Global API Key 双鉴权) — 池内各号凭证形态不一, 统一封装。
+function bridgeCfApiRequestAuth(method: string, apiPath: string, auth: CfAuth, body?: any): Promise<{ status: number; json?: any; text?: string; error?: string }> {
+    return new Promise((resolve) => {
+        const https = require('https');
+        const data = body ? JSON.stringify(body) : null;
+        const headers: any = { 'Content-Type': 'application/json', 'User-Agent': 'dao-vsix/' + EXT_VERSION };
+        if (auth && auth.token) headers['Authorization'] = 'Bearer ' + auth.token;
+        else if (auth && auth.email && auth.key) { headers['X-Auth-Email'] = auth.email; headers['X-Auth-Key'] = auth.key; }
+        const req = https.request({ hostname: 'api.cloudflare.com', path: '/client/v4' + apiPath, method, headers }, (res: any) => {
+            let d = ''; res.on('data', (c: any) => d += c);
+            res.on('end', () => { try { resolve({ status: res.statusCode, json: JSON.parse(d) }); } catch { resolve({ status: res.statusCode, text: d }); } });
+        });
+        req.on('error', (e: any) => resolve({ status: 0, error: String(e && e.message) }));
+        req.setTimeout(20000, () => { req.destroy(); resolve({ status: 0, error: 'timeout' }); });
+        if (data) req.write(data); req.end();
+    });
+}
+// 识号入池(合并去重·新凭证覆盖旧凭证·保留已建 accountId): 返回新增/更新计数。
+function bridgeCfPoolAdd(raw: string): { ok: boolean; added: number; updated: number; total: number } {
+    const incoming = cfParsePoolText(raw);
+    const pool = bridgeCfPoolRead();
+    if (!incoming.length) return { ok: false, added: 0, updated: 0, total: pool.length };
+    const idx: any = {};
+    pool.forEach((e, i) => { const k = cfPoolKeyOf(e); if (k) idx[k] = i; });
+    let added = 0, updated = 0;
+    for (const e of incoming) {
+        const k = cfPoolKeyOf(e); if (!k) continue;
+        if (idx[k] != null) {
+            const cur = pool[idx[k]];
+            (['email', 'token', 'key', 'password'] as const).forEach((f) => { if ((e as any)[f]) cur[f] = (e as any)[f]; });
+            updated++;
+        } else { (e as any).addedAt = new Date().toISOString(); idx[k] = pool.length; pool.push(e); added++; }
+    }
+    bridgeCfPoolWrite(pool);
+    return { ok: true, added, updated, total: pool.length };
+}
+function bridgeCfPoolRemove(key: string): { ok: boolean } {
+    bridgeCfPoolWrite(bridgeCfPoolRead().filter((e) => cfPoolKeyOf(e) !== key));
+    return { ok: true };
+}
+// 池清单(只出非密元数据): key/email/accountId/cred 类型/是否可纯 API 统管/入池时间。
+function bridgeCfPoolList(): { ok: boolean; entries: any[] } {
+    const entries = bridgeCfPoolRead().map((e) => ({
+        key: cfPoolKeyOf(e),
+        email: e.email || '',
+        accountId: e.accountId || '',
+        cred: e.token ? 'token' : (e.key ? 'key' : (e.password ? 'password' : 'none')),
+        canApi: !!cfEntryAuth(e),
+        addedAt: e.addedAt || '',
+    }));
+    return { ok: true, entries };
+}
+// 列某号全部 API Token + Worker(用该号自己的凭证直连·必要时先解析 accountId 并回落盘)。
+async function bridgeCfPoolResources(key: string): Promise<{ ok: boolean; key: string; tokens?: any[]; workers?: any[]; accountId?: string; email?: string; tokensErr?: string; workersErr?: string; error?: string; needLogin?: boolean }> {
+    const pool = bridgeCfPoolRead();
+    const e = pool.find((x) => cfPoolKeyOf(x) === key);
+    if (!e) return { ok: false, key, error: '池中无此账号' };
+    const auth = cfEntryAuth(e);
+    if (!auth) return { ok: false, key, email: e.email || '', needLogin: true, error: '该账号仅有邮箱+密码, 纯 API 无法列举 — 先用「持久通道·账号密码打通」流程登录建 API Token 后即可统管。' };
+    const out: any = { ok: true, key, email: e.email || '', tokens: [], workers: [] };
+    let accountId = String(e.accountId || '');
+    if (!accountId) {
+        const ar = await bridgeCfApiRequestAuth('GET', '/accounts?per_page=50', auth);
+        if (ar.status === 200 && ar.json && ar.json.success && Array.isArray(ar.json.result) && ar.json.result[0]) {
+            accountId = String(ar.json.result[0].id || '');
+            if (accountId) { e.accountId = accountId; bridgeCfPoolWrite(pool); }
+        }
+    }
+    out.accountId = accountId;
+    const tr = await bridgeCfApiRequestAuth('GET', '/user/tokens?per_page=50', auth);
+    if (tr.status === 200 && tr.json && tr.json.success && Array.isArray(tr.json.result)) {
+        out.tokens = tr.json.result.map((t: any) => ({
+            id: String(t.id || ''), name: String(t.name || ''), status: String(t.status || ''),
+            issuedOn: t.issued_on || '', lastUsed: t.last_used_on || '', expiresOn: t.expires_on || '',
+        }));
+    } else if (tr.status && tr.status !== 200) {
+        out.tokensErr = 'HTTP ' + tr.status + (tr.json && tr.json.errors ? (' ' + JSON.stringify(tr.json.errors).slice(0, 120)) : '');
+    }
+    if (accountId) {
+        const wr = await bridgeCfApiRequestAuth('GET', '/accounts/' + accountId + '/workers/scripts', auth);
+        if (wr.status === 200 && wr.json && wr.json.success && Array.isArray(wr.json.result)) {
+            out.workers = wr.json.result.map((w: any) => { const nm = String(w.id || w.name || ''); return { name: nm, modified: w.modified_on || '', active: nm === RELAY_WORKER_NAME }; });
+        } else if (wr.status && wr.status !== 200) {
+            out.workersErr = 'HTTP ' + wr.status;
+        }
+    }
+    return out;
+}
+async function bridgeCfPoolRevokeToken(key: string, id: string): Promise<{ ok: boolean; error?: string }> {
+    const e = bridgeCfPoolRead().find((x) => cfPoolKeyOf(x) === key);
+    const auth = e && cfEntryAuth(e);
+    if (!auth) return { ok: false, error: '无可用凭证(需 Bearer Token 或 Global API Key)' };
+    if (!id) return { ok: false, error: '缺少 tokenId' };
+    const r = await bridgeCfApiRequestAuth('DELETE', '/user/tokens/' + encodeURIComponent(id), auth);
+    const ok = r.status === 200 && r.json && r.json.success;
+    return ok ? { ok: true } : { ok: false, error: 'HTTP ' + r.status + (r.error ? (' ' + r.error) : '') };
+}
+async function bridgeCfPoolDeleteWorker(key: string, name: string): Promise<{ ok: boolean; error?: string }> {
+    const e = bridgeCfPoolRead().find((x) => cfPoolKeyOf(x) === key);
+    const auth = e && cfEntryAuth(e);
+    if (!auth || !e || !e.accountId) return { ok: false, error: '无凭证/账号(先「加载资源」以解析 accountId)' };
+    if (!name) return { ok: false, error: '缺少 worker 名' };
+    const r = await bridgeCfApiRequestAuth('DELETE', '/accounts/' + e.accountId + '/workers/scripts/' + encodeURIComponent(name) + '?force=true', auth);
+    const ok = r.status === 200 && r.json && r.json.success;
+    return ok ? { ok: true } : { ok: false, error: 'HTTP ' + r.status + (r.error ? (' ' + r.error) : '') };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 组织管理 · body/glove 批量入组 (通用 · 任意用户只需一枚自己的 PAT)
 // ───────────────────────────────────────────────────────────────────────────
 // 道: 数据本体(org·低频·几乎不被封) + 手套(各 Devin 自带 GitHub 号·高频自动化·可弃换)。
@@ -8360,6 +8536,52 @@ function rCfResources(){
 }
 function cfRevoke(id,name){if(!id)return;if(!confirm('撤销 API Token「'+name+'」？此操作不可逆。'))return;if(S.cfResources)S.cfResources.loading=true;var b=document.getElementById('cfResBox');if(b)b.innerHTML=rCfResources();cmd('cfRevokeToken',{id:id});}
 function cfDelWorker(name,active){if(!name)return;var m=active?'「'+name+'」是当前持久通道 Worker，删除后公网穿透会断开（可重建）。确定删除？':'删除 Worker「'+name+'」？此操作不可逆。';if(!confirm(m))return;if(S.cfResources)S.cfResources.loading=true;var b=document.getElementById('cfResBox');if(b)b.innerHTML=rCfResources();cmd('cfDeleteWorker',{name:name});}
+// 🗂️ CF 账号池 · 多号统管(电脑端做得比手机端更全): 粘贴任意格式多号→识号入池→逐号列/撤 Token·列/删 Worker。
+//   凭证仅落后端 ~/.dao/cf-pool.json, 前端只见 email/accountId/cred 类型等非密元数据。
+function rCfPool(){
+  var h='';
+  h+='<div style="font-size:10px;color:var(--muted);margin-bottom:5px">粘贴多个 Cloudflare 账号(每行一个·任意格式)：<b style="color:var(--fg)">邮箱 密码</b> / <b style="color:var(--fg)">邮箱 GlobalAPIKey</b> / <b style="color:var(--fg)">API Token</b>。自动识号入池，逐号统一管理其全部 API Token 与 Worker，无需逐个登录官网。</div>';
+  h+='<textarea id="cfPoolIn" placeholder="user@example.com  密码或GlobalAPIKey&#10;another@example.com  40位APIToken" style="width:100%;height:52px;box-sizing:border-box;margin:2px 0;padding:5px 7px;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px;font-size:11px;resize:vertical"></textarea>';
+  h+='<div class="br"><button class="btn sm primary" onclick="cfPoolAdd()">➕ 识号入池</button><button class="btn sm ghost" onclick="cmd(&#39;cfPoolList&#39;)">⟳ 刷新池</button></div>';
+  var d=S.cfPool;
+  if(d===undefined)return h+'<div style="font-size:10px;color:var(--muted);margin-top:4px">点「刷新池」加载已入池账号。</div>';
+  var es=(d.entries||[]);
+  h+='<div style="font-size:11px;color:var(--fg);margin:8px 0 3px"><b>账号池</b> <span style="color:var(--muted)">('+es.length+')</span></div>';
+  if(!es.length)return h+'<div style="font-size:10px;color:var(--muted)">池为空 — 粘贴账号后点「识号入池」。</div>';
+  var credLabel={token:'API Token',key:'Global API Key',password:'仅密码',none:'无凭证'};
+  for(var i=0;i<es.length;i++){var e=es[i];var kb=btoa(unescape(encodeURIComponent(e.key)));
+    h+='<div style="border-top:1px solid var(--border);padding-top:5px;margin-top:5px">';
+    h+='<div class="cr"><span class="l" style="font-size:11px">'+esc(e.email||'(无邮箱·凭 Token)')+' <span style="color:var(--muted);font-size:10px">· '+esc(credLabel[e.cred]||e.cred)+(e.accountId?(' · acct '+esc(String(e.accountId).slice(0,8))):'')+'</span></span>';
+    h+='<span class="v">'+(e.canApi?'<button class="btn sm" onclick="cfPoolRes(&#39;'+kb+'&#39;)">管理资源</button> ':'<span style="color:var(--warn);font-size:10px">需登录建 Token </span>')+'<button class="btn sm danger" onclick="cfPoolDel(&#39;'+kb+'&#39;)">移出</button></span></div>';
+    var res=(S.cfPoolRes||{})[e.key];
+    if(res)h+='<div style="padding:2px 0 2px 8px">'+rCfPoolRes(res,kb)+'</div>';
+  }
+  return h;
+}
+// 单账号资源清单渲染(与 rCfResources 同构·但作用于池内该号凭证)。kb=base64(key) 供内联回调防转义炸。
+function rCfPoolRes(d,kb){
+  if(d.loading)return '<div style="font-size:10px;color:var(--muted)">加载中…</div>';
+  if(!d.ok)return '<div style="font-size:10px;color:var(--warn)">'+esc(d.error||'加载失败')+'</div>';
+  var h='';var tks=d.tokens||[];
+  h+='<div style="font-size:10px;color:var(--fg);margin:2px 0"><b>API Token</b> <span style="color:var(--muted)">('+tks.length+')</span>'+(d.tokensErr?' <span style="color:var(--warn)">'+esc(d.tokensErr)+'</span>':'')+'</div>';
+  if(!tks.length&&!d.tokensErr)h+='<div style="font-size:10px;color:var(--muted)">无</div>';
+  for(var i=0;i<tks.length;i++){var t=tks[i];var meta=[t.status||''];if(t.lastUsed)meta.push('用于 '+String(t.lastUsed).slice(0,10));if(t.expiresOn)meta.push('至 '+String(t.expiresOn).slice(0,10));
+    h+='<div class="cr"><span class="l" style="font-size:10px">'+esc(t.name||t.id)+' <span style="color:var(--muted)">· '+esc(meta.filter(Boolean).join(' · '))+'</span></span><span class="v"><button class="btn sm danger" onclick="cfPoolRevoke(&#39;'+kb+'&#39;,&#39;'+esc(t.id)+'&#39;,&#39;'+esc((t.name||t.id).replace(/&#39;/g,""))+'&#39;)">撤销</button></span></div>';
+  }
+  var wks=d.workers||[];
+  h+='<div style="font-size:10px;color:var(--fg);margin:6px 0 2px"><b>Worker</b> <span style="color:var(--muted)">('+wks.length+')</span>'+(d.workersErr?' <span style="color:var(--warn)">'+esc(d.workersErr)+'</span>':'')+'</div>';
+  if(!wks.length&&!d.workersErr)h+='<div style="font-size:10px;color:var(--muted)">无</div>';
+  for(var j=0;j<wks.length;j++){var w=wks[j];
+    h+='<div class="cr"><span class="l" style="font-size:10px">'+esc(w.name)+(w.active?' <span style="color:var(--success)">· 当前通道</span>':'')+(w.modified?' <span style="color:var(--muted)">· '+esc(String(w.modified).slice(0,10))+'</span>':'')+'</span><span class="v"><button class="btn sm '+(w.active?'':'danger')+'" onclick="cfPoolDelWorker(&#39;'+kb+'&#39;,&#39;'+esc(w.name)+'&#39;,'+(w.active?'true':'false')+')">删除</button></span></div>';
+  }
+  return h;
+}
+function _cfKeyFromB64(kb){try{return decodeURIComponent(escape(atob(kb)));}catch(e){return kb;}}
+function cfPoolAdd(){var t=document.getElementById('cfPoolIn');if(!t||!t.value.trim())return;cmd('cfPoolAdd',{text:t.value});t.value='';}
+function cfPoolRes(kb){var key=_cfKeyFromB64(kb);S.cfPoolRes=S.cfPoolRes||{};S.cfPoolRes[key]={loading:true,ok:true};var b=document.getElementById('cfPoolBox');if(b)b.innerHTML=rCfPool();cmd('cfPoolResources',{key:key});}
+function cfPoolDel(kb){if(!confirm('从池中移出该账号？(仅本地移除，不影响云端资源)'))return;cmd('cfPoolRemove',{key:_cfKeyFromB64(kb)});}
+function cfPoolRevoke(kb,id,name){if(!id)return;if(!confirm('撤销 API Token「'+name+'」？此操作不可逆。'))return;cmd('cfPoolRevokeToken',{key:_cfKeyFromB64(kb),id:id});}
+function cfPoolDelWorker(kb,name,active){if(!name)return;var m=active?'「'+name+'」是当前持久通道 Worker，删除后公网穿透会断开（可重建）。确定删除？':'删除 Worker「'+name+'」？此操作不可逆。';if(!confirm(m))return;cmd('cfPoolDeleteWorker',{key:_cfKeyFromB64(kb),name:name});}
 function rBridgeRelayCard(r){
   var h='<div class="st" style="margin-top:2px">⭐ 持久通道 · 一次登录全自动打通<span style="font-size:10px;color:var(--muted);font-weight:normal"> · 你自己的固定 Worker 地址·永不漂</span></div>';
   if(r&&r.active&&r.url){
@@ -8390,6 +8612,9 @@ function rBridgeRelayCard(r){
     h+='<div style="font-size:10px;color:var(--muted);margin-top:8px">或：不想填密码？点下面用浏览器一次授权(不碰你的密码):</div>';
     h+='<button class="btn" style="margin-top:4px" onclick="cmd(&#39;relayOAuthLogin&#39;)">🔐 一次授权·全自动打通</button></div>';
   }
+  // 🗂️ CF 账号池 · 多号统管(电脑端更全·并列于单一持久通道之外): 粘贴任意多号统一管理其 Token/Worker。
+  h+='<div class="st" style="margin-top:12px;font-size:12px">🗂️ CF 账号池 · 多号统管<span style="font-size:10px;color:var(--muted);font-weight:normal"> · 批量管理多个 Cloudflare 账号的 Token 与 Worker</span></div>';
+  h+='<div id="cfPoolBox" class="card">'+rCfPool()+'</div>';
   return h;
 }
 // 内网穿透 · DAO Bridge — 与独立穿透插件 1:1: 状态 + 命名隧道/CloudFlare + 导出文档 + 能力自测。
@@ -8837,7 +9062,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){if(_tabWatch[d.tab]){clearTimeout(_tabWatch[d.tab]);_tabWatch[d.tab]=0;}S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='bridgeGhAccounts'){S.bridgeGhAccts=d.accounts||[];try{rBridgeFull()}catch(e){}}else if(d.type==='bridgeCfResources'){S.cfResources=d;var _cb=document.getElementById('cfResBox');if(_cb)_cb.innerHTML=rCfResources();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='actionResult'){if(d.command==='setCleanupCooldown'){var _m=document.getElementById('swCdMsg');if(_m){_m.textContent=d.ok?('✓ 已保存 '+(d.hours!=null?d.hours+'h':'')):('✗ '+(d.error||'保存失败'));_m.style.color=d.ok?'var(--success)':'var(--danger)'}if(d.ok&&typeof d.hours==='number')S.cooldownH=d.hours;}else if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='devinAutoAcquire'&&d.ok&&d.canUseApi===false){toast('已获取 Session Token, 但完整 API(cog_ key)不可用',false);renderCredLimited()}else if(d.command==='copyBackupCred'){toast(d.ok?(d.hasPw?'已复制账号+密码':'已复制邮箱(本地无密码)'):'复制失败',d.ok&&d.hasPw)}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){if(_tabWatch[d.tab]){clearTimeout(_tabWatch[d.tab]);_tabWatch[d.tab]=0;}S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='bridgeGhAccounts'){S.bridgeGhAccts=d.accounts||[];try{rBridgeFull()}catch(e){}}else if(d.type==='bridgeCfResources'){S.cfResources=d;var _cb=document.getElementById('cfResBox');if(_cb)_cb.innerHTML=rCfResources();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='bridgeCfPool'){S.cfPool=d;var _cp=document.getElementById('cfPoolBox');if(_cp)_cp.innerHTML=rCfPool();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='bridgeCfPoolResources'){S.cfPoolRes=S.cfPoolRes||{};S.cfPoolRes[d.key]=d;var _cpr=document.getElementById('cfPoolBox');if(_cpr)_cpr.innerHTML=rCfPool();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='actionResult'){if(d.command==='setCleanupCooldown'){var _m=document.getElementById('swCdMsg');if(_m){_m.textContent=d.ok?('✓ 已保存 '+(d.hours!=null?d.hours+'h':'')):('✗ '+(d.error||'保存失败'));_m.style.color=d.ok?'var(--success)':'var(--danger)'}if(d.ok&&typeof d.hours==='number')S.cooldownH=d.hours;}else if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='devinAutoAcquire'&&d.ok&&d.canUseApi===false){toast('已获取 Session Token, 但完整 API(cog_ key)不可用',false);renderCredLimited()}else if(d.command==='copyBackupCred'){toast(d.ok?(d.hasPw?'已复制账号+密码':'已复制邮箱(本地无密码)'):'复制失败',d.ok&&d.hasPw)}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){S.bkRecentLive=d.list||[];if(S.tab==='backups'&&(S.bkView||'recent')==='recent')rBackupsData(S.backups,null)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -9689,7 +9914,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'relayCredLogin', 'cfListResources', 'cfRevokeToken', 'cfDeleteWorker', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'relayCredLogin', 'cfListResources', 'cfRevokeToken', 'cfDeleteWorker', 'cfPoolList', 'cfPoolAdd', 'cfPoolRemove', 'cfPoolResources', 'cfPoolRevokeToken', 'cfPoolDeleteWorker', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
     // GitHub 纵向板块独立于 Devin 账号池(自带 PAT 鉴权) — daoGh* 一律免 Devin 登录
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command) && !/^daoGh/.test(String(msg.command || ''))) {
         reply({ type: 'error', msg: 'Not logged in' });
@@ -11484,6 +11709,38 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 vscode.window[r.ok ? 'showInformationMessage' : 'showErrorMessage']('Cloudflare Worker 删除: ' + (r.ok ? ('✓ 已删除 ' + nm) : ('失败 ' + (r.error || ''))));
                 const list = await bridgeCfListResources();
                 reply({ type: 'bridgeCfResources', ...list, toast: r.ok ? ('已删除 Worker ' + nm) : ('删除失败: ' + (r.error || '')), toastOk: !!r.ok });
+                break;
+            }
+            // ── CF 账号池 · 多号统管(电脑端更全: 粘贴多号→识号入池→逐号列/撤 Token·列/删 Worker) ──
+            case 'cfPoolList': {
+                reply({ type: 'bridgeCfPool', ...bridgeCfPoolList() });
+                break;
+            }
+            case 'cfPoolAdd': {
+                const r = bridgeCfPoolAdd(String(msg.text || ''));
+                reply({ type: 'bridgeCfPool', ...bridgeCfPoolList(), toast: r.ok ? ('入池: 新增 ' + r.added + ' · 更新 ' + r.updated + ' · 共 ' + r.total) : '未识别到有效 Cloudflare 账号(需邮箱/Token/Global API Key)', toastOk: r.ok });
+                break;
+            }
+            case 'cfPoolRemove': {
+                bridgeCfPoolRemove(String(msg.key || ''));
+                reply({ type: 'bridgeCfPool', ...bridgeCfPoolList(), toast: '已移出池(不影响云端资源)', toastOk: true });
+                break;
+            }
+            case 'cfPoolResources': {
+                const r = await bridgeCfPoolResources(String(msg.key || ''));
+                reply({ type: 'bridgeCfPoolResources', ...r });
+                break;
+            }
+            case 'cfPoolRevokeToken': {
+                const r = await bridgeCfPoolRevokeToken(String(msg.key || ''), String(msg.id || ''));
+                const res = await bridgeCfPoolResources(String(msg.key || ''));
+                reply({ type: 'bridgeCfPoolResources', ...res, toast: r.ok ? '已撤销 Token' : ('撤销失败: ' + (r.error || '')), toastOk: !!r.ok });
+                break;
+            }
+            case 'cfPoolDeleteWorker': {
+                const r = await bridgeCfPoolDeleteWorker(String(msg.key || ''), String(msg.name || ''));
+                const res = await bridgeCfPoolResources(String(msg.key || ''));
+                reply({ type: 'bridgeCfPoolResources', ...res, toast: r.ok ? ('已删除 Worker ' + String(msg.name || '')) : ('删除失败: ' + (r.error || '')), toastOk: !!r.ok });
                 break;
             }
             case 'bridgeHealth': {
