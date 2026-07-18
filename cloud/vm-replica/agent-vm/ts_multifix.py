@@ -655,7 +655,7 @@ def _configure_rdsh_registry():
         return False
 
 
-def enable_server_multisession(install_role=True):
+def enable_server_multisession(install_role=False):
     """Lift the concurrent-session cap on a Windows SERVER SKU.
 
     Unlike client SKUs (handled by the in-memory `ensure_multisession()` patch), Server runs
@@ -663,10 +663,11 @@ def enable_server_multisession(install_role=True):
     is re-synced away by the licensing path (see module docstring). The supported way to run
     >=2 replica desktops in parallel is the RD Session Host role, which needs one reboot.
 
-    This applies the safe RDSH registry config immediately (reboot-free, reversible) and, if
-    the role is not yet installed and `install_role` is set, installs RDS-RD-Server (no auto
-    reboot). Idempotent. Returns `reboot_required=True` when a reboot is still needed to
-    activate the role.
+    This always applies the safe RDSH registry config (reboot-free, reversible). Installing
+    the RDS-RD-Server role is a heavy, reboot-pending operation, so it is gated behind an
+    EXPLICIT `install_role=True` (default False) — a bare call never installs anything or
+    triggers a pending reboot; it only reports whether the role is present. Idempotent.
+    Returns `reboot_required=True` when a reboot is still needed to activate the role.
     """
     if not _is_server_sku():
         return {'ok': True, 'skipped': 'not-server',
