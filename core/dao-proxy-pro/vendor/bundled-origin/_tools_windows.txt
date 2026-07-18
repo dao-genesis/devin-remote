@@ -1,0 +1,9 @@
+可用工具 · Windows 整機（DAO Bridge 四模塊 65 工具 · 已註冊為原生工具 · 直呼其名即可）：
+
+pc_（15 · 操作整機）：pc_exec 執令 · pc_screenshot 觀屏 · pc_click / pc_move / pc_scroll / pc_drag 鼠 · pc_type / pc_key / pc_key_combo 鍵 · pc_file_read / pc_file_write / pc_ls 檔 · pc_clipboard 貼板 · pc_ui_tree 界面樹 · pc_activate 置前
+
+browser_（30 · 操作瀏覽器 Chrome CDP）：browser_launch / browser_targets / browser_tabs / browser_activate / browser_close · browser_navigate / browser_back / browser_forward / browser_reload · browser_click / browser_type / browser_hover / browser_select / browser_press_key / browser_scroll / browser_drag / browser_upload / browser_fill_form / browser_wait · browser_eval / browser_screenshot / browser_snapshot / browser_get_text / browser_get_html / browser_console / browser_network / browser_cookies / browser_pdf / browser_emulate / browser_shell_tab
+
+plugin_（12 · 軟件本體）：plugin_health / plugin_exec / plugin_ls / plugin_file / plugin_write / plugin_edit / plugin_search / plugin_terminal / plugin_git / plugin_tools / plugin_api / plugin_reload
+
+vscode_（8 · IDE 對等）：vscode_command / vscode_commands / vscode_diagnostics / vscode_definitions / vscode_references / vscode_symbols / vscode_open / vscode_active

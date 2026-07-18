@@ -3940,6 +3940,61 @@ function handleControl(req, res) {
     return true;
   }
 
+  // ─── /origin/toolset · 工具轴切换(与经藏轴正交) · 工具提示词 ───
+  //   default(不注) | windows(DAO Bridge 四模块 65 工具) | freecad(FreeCAD 建模)
+  //   存 _origin_toolset.txt · 注入由 sp_invert 于道化 SP 末追加最小描述 · 执一
+  if (u.pathname === "/origin/toolset" && req.method === "GET") {
+    const lib = _spInvertLib || {};
+    res.end(
+      JSON.stringify({
+        ok: true,
+        toolset: lib.getToolset ? lib.getToolset() : "default",
+        toolset_chars: lib.getToolsetChars ? lib.getToolsetChars() : 0,
+        valid: lib.TOOLSET_VALID ? [...lib.TOOLSET_VALID] : ["default", "windows", "freecad"],
+        map: lib.getToolsetMap ? lib.getToolsetMap() : {},
+      }),
+    );
+    return true;
+  }
+
+  if (u.pathname === "/origin/toolset" && req.method === "POST") {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const t = String(body.toolset || "").toLowerCase();
+        const lib = _spInvertLib || {};
+        const valid = lib.TOOLSET_VALID || new Set(["default", "windows", "freecad"]);
+        if (!valid.has(t)) {
+          res.statusCode = 400;
+          res.end(
+            JSON.stringify({ ok: false, error: `invalid toolset: ${t}`, valid: [...valid] }),
+          );
+          return;
+        }
+        const old = lib.getToolset ? lib.getToolset() : "default";
+        try {
+          fs.writeFileSync(path.join(__dirname, "_origin_toolset.txt"), t, { mode: 0o600 });
+        } catch {}
+        if (lib.setToolset) lib.setToolset(t);
+        log(`toolset: ${old} -> ${t} (persisted)`);
+        res.end(
+          JSON.stringify({
+            ok: true,
+            toolset: t,
+            toolset_chars: lib.getToolsetChars ? lib.getToolsetChars() : 0,
+            previous: old,
+          }),
+        );
+      } catch (e) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    });
+    return true;
+  }
+
   // ═══════════════════════════════════════════════════════════
   // ★ v9.9.90 · /origin/ea/* · 外接api热配置控制面
   //   五十七章「我无为也 而民自化」· 热操作 · 不重启 · 即时生效
@@ -6287,6 +6342,8 @@ function _buildHandoffMd() {
   L.push("# 经藏热切: laozi+yinfu(默认) / laozi(单帛书老子) / yinfu(单阴符经)");
   L.push("curl -s " + base + "/origin/canon");
   L.push("curl -X POST " + base + "/origin/canon -H 'Content-Type: application/json' -d '" + JSON.stringify({ canon: "laozi" }) + "'");
+  L.push("curl -s " + base + "/origin/toolset");
+  L.push("curl -X POST " + base + "/origin/toolset -H 'Content-Type: application/json' -d '" + JSON.stringify({ toolset: "windows" }) + "'");
   L.push("# 自定义注入 SP: GET 看 / POST 设 / DELETE 清");
   L.push("curl -s " + base + "/origin/custom_sp");
   L.push("curl -X POST " + base + "/origin/custom_sp -H 'Content-Type: application/json' -d '" + JSON.stringify({ sp: "你的自定义系统提示词" }) + "'");

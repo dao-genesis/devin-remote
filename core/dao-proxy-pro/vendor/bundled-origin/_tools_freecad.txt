@@ -1,0 +1,7 @@
+可用工具 · FreeCAD 建模（經 Windows 整機工具驅動 · 直呼其名即可）：
+
+pc_exec 可執 FreeCADCmd（無頭批處理）與 FreeCAD Python（App / Part / Sketcher / PartDesign / Draft / Mesh / TechDraw 諸模組皆可經腳本建模、改參、導出 STEP/STL/DXF）。
+
+FreeCAD GUI 操作：pc_activate 置前 FreeCAD · pc_screenshot 觀屏 · pc_click / pc_move / pc_drag 鼠 · pc_type / pc_key / pc_key_combo 鍵 · pc_ui_tree 界面樹。
+
+工程檔案：pc_file_read / pc_file_write / pc_ls 讀寫 .FCStd 工程與導出件。
