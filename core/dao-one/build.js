@@ -89,7 +89,7 @@ function buildVsix() {
       code = code.replace(
         /(const\s+noAuthNeeded\s*=\s*\[[^\]]*?)(\s*\]\s*;)/,
         (m, head, tail) =>
-          head.includes("'winStatus'") ? m : head + ", 'winStatus', 'winExec', 'winScreenshot', 'winVmList', 'winHostEnsure', 'winVmCreate', 'winVmDestroy', 'winOpenDesktop', 'winOpenAllDesktops'" + tail,
+          head.includes("'winStatus'") ? m : head + ", 'winStatus', 'winExec', 'winScreenshot', 'winVmList', 'winHostEnsure', 'winVmCreate', 'winReplicaCreate', 'winVmDestroy', 'winOpenDesktop', 'winOpenAllDesktops'" + tail,
       );
       // 'windows' 折入 solo 白名单 (汉堡列表点开即独立子网页·隐左导航)。
       code = code.replace(
@@ -274,6 +274,7 @@ function verifyFolds() {
     "int.openDesktopTab",           // 复制品桌面 · 优先折入 rt-flow 多实例外壳当同级标签(单壳一切)
     "case 'winVmList'",             // 后端 · 分身列表
     "case 'winVmCreate'",           // 后端 · 新建/连接分身(RDP 多会话)
+    "case 'winReplicaCreate'",      // 后端 · 同账号复制品(replica-of-self·同号数据共享·会话隔离)
     "case 'winOpenDesktop'",        // 后端 · 打开复制品桌面页
     "case 'winOpenAllDesktops'",    // 后端 · 并行全开(全部分身各折一张同级标签)
     "setDesktopReopener",           // 复制品桌面 · reload 续接重开器注入(外壳恢复 vmdesk 标签时先确保守护/网关再折标签)

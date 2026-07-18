@@ -147,6 +147,11 @@ def _keepalive_loop():
         if _stealth_state['mode'] == 'active':
             try: ensure_rdp_active(RDP_TARGET, offscreen=True)
             except Exception: pass
+            # also keep each same-account replica's own loopback window operable
+            for _v in list(vms.values()):
+                if _v.get('kind') == 'replica' and _v.get('alias'):
+                    try: ensure_rdp_active(_v['alias'], offscreen=True)
+                    except Exception: pass
         time.sleep(interval)
 
 def _idle_watchdog():
@@ -470,7 +475,144 @@ Write-Output 'task-ok'
 """
     return ps_run(ps)
 
+# ====== 同账号「复制品」· replica-of-self (鸡犬相闻 · 数据共享 / 民至老死不相往来 · 操作隔离) ======
+#
+# Unlike create_vm (which New-LocalUser's an INDEPENDENT account with its own SID and
+# profile — data must be re-adapted), a replica opens an ADDITIONAL independent
+# interactive session for the CURRENT Windows account. Because it is the same account:
+#   * the profile / HKCU / AppData / logins are one and the same  -> data shared (鸡犬相闻)
+#   * yet each session has its own desktop, window station, focus, mouse/keyboard, and
+#     per-session Local\ object namespace  -> operations isolated (民至老死不相往来)
+# This also breaks the third-party "single-instance" trap: a Local\-mutex app runs an
+# independent instance per session, so the same app can run once in each replica.
+#
+# Mechanism (client-SKU, reboot-free): fSingleSessionPerUser=0 (ts_multifix) + a FRESH
+# loopback alias (127.0.0.20+) + a stored TERMSRV credential + an AtLogOn task that boots
+# the inner agent INSIDE the new session (never the console). Connecting to 127.0.0.1
+# would be redirected back to the console; a distinct alias yields a truly new session.
+
+REPLICA_ALIAS_OCTET_START = 20  # 127.0.0.20, .21, ... one per concurrent replica
+
+def _console_user():
+    """The interactive account the daemon runs under -- the one we replicate."""
+    return (os.environ.get('USERNAME') or '').strip()
+
+def _alloc_alias():
+    """Next free loopback alias not already bound to a live replica."""
+    used = {v.get('alias') for v in vms.values() if v.get('alias')}
+    n = REPLICA_ALIAS_OCTET_START
+    while f'127.0.0.{n}' in used:
+        n += 1
+    return f'127.0.0.{n}'
+
+def _user_session_ids(user):
+    """Set of numeric session ids currently held by <user> (locale-neutral): the id is
+    the first pure-digit column of each quser row that mentions the account."""
+    try:
+        out, _, _ = ps_run(
+            rf"quser 2>$null | Where-Object {{ $_ -match '\b{user}\b' }} | ForEach-Object {{ "
+            rf"(($_ -replace '\s+',' ').Trim().Split(' ') | "
+            rf"Where-Object {{ $_ -match '^\d+$' }} | Select-Object -First 1) }}", timeout=20)
+        return {s.strip() for s in (out or '').splitlines() if s.strip().isdigit()}
+    except Exception:
+        return set()
+
+def register_replica_task(source, bat_path):
+    """Arm an AtLogOn task for <source> that starts the inner agent in the NEXT session
+    <source> logs on to. Unlike register_agent_task we do NOT Start-ScheduledTask now:
+    starting would run it in the already-logged-on console; we want it to fire ONLY for
+    the freshly-created replica logon. Disarmed by create_replica once the agent binds."""
+    tn = f'dao_replica_{source}'
+    ps = f"""
+$ErrorActionPreference='Continue'
+$tn = '{tn}'
+Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue
+$a = New-ScheduledTaskAction -Execute '{bat_path}'
+$t = New-ScheduledTaskTrigger -AtLogOn -User '{source}'
+$p = New-ScheduledTaskPrincipal -UserId '{source}' -LogonType Interactive -RunLevel Limited
+$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0)
+Register-ScheduledTask -TaskName $tn -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
+Write-Output 'replica-task-armed'
+"""
+    return ps_run(ps)
+
+def create_replica(source=None, password=None, name=None):
+    """Open an additional isolated interactive session for the CURRENT account (same
+    username -> shared profile/data, isolated desktop/session). Requires the account
+    password, used transiently only to store a loopback TERMSRV credential (never
+    persisted by the daemon)."""
+    source = (source or _console_user()).strip()
+    if not source:
+        return {'error': 'cannot determine current account; pass "source"'}
+    if not password:
+        return {'error': 'replica requires the account password (used transiently to '
+                         'store a loopback TERMSRV credential; not persisted)'}
+    ms = ensure_multisession()
+    deploy_inner_script()
+    ensure_daoshare()
+    alias = _alloc_alias()
+    port = find_next_port()
+    key = name or f'self-{alias.rsplit(".", 1)[-1]}'
+    bat_path = f"C:\\dao_vm\\start_{key}.bat"
+    write_launcher(key, port)  # start_<key>.bat -> inner agent on <port>
+
+    esc_pw = password.replace("'", "''")
+    ps_run(f"""
+cmdkey /generic:TERMSRV/{alias} /user:{source} /pass:'{esc_pw}' | Out-Null
+New-Item -Path 'HKCU:\\Software\\Microsoft\\Terminal Server Client' -Force | Out-Null
+New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Terminal Server Client' -Name 'AuthenticationLevelOverride' -Value 0 -PropertyType DWord -Force | Out-Null
+Write-Output 'cred-ok'
+""")
+    register_replica_task(source, bat_path)
+    before = _user_session_ids(source)
+    ps_run(f"Start-Process mstsc -ArgumentList '/v:{alias} /w:1280 /h:800'; Write-Output 'rdp-started'")
+
+    vms[key] = {'port': port, 'status': 'starting', 'password': None,
+                'created_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'kind': 'replica', 'replica_of': source, 'source_user': source,
+                'alias': alias, 'session_id': None}
+
+    def bring_up():
+        # keep this replica's mstsc window active + offscreen so screenshot/input work
+        for _ in range(8):
+            r = ensure_rdp_active(alias, offscreen=True)
+            if isinstance(r, dict) and r.get('ok'):
+                break
+            time.sleep(2)
+        for _ in range(45):
+            time.sleep(2)
+            h = inner_health(port)
+            if h and h.get('status') == 'ok':
+                vms[key]['status'] = 'running'
+                vms[key]['session_user'] = h.get('user', source)
+                new = sorted(_user_session_ids(source) - before)
+                vms[key]['session_id'] = new[-1] if new else None
+                break
+        else:
+            vms[key]['status'] = 'timeout'
+        # disarm so the task won't misfire on the NEXT replica's logon
+        ps_run(f"Unregister-ScheduledTask -TaskName 'dao_replica_{source}' -Confirm:$false -ErrorAction SilentlyContinue")
+    threading.Thread(target=bring_up, daemon=True).start()
+    return {'ok': True, 'name': key, 'kind': 'replica', 'replica_of': source,
+            'alias': alias, 'port': port, 'status': 'starting',
+            'multisession': ms.get('ok') if isinstance(ms, dict) else None}
+
 def destroy_vm(name, delete_user=True):
+    # Safety: a replica is an extra session of the REAL current account -- never delete
+    # the user or its (shared) profile; only close the replica session + clean its task.
+    info = vms.get(name, {})
+    if info.get('kind') == 'replica':
+        sid = info.get('session_id')
+        src = info.get('source_user') or ''
+        alias = info.get('alias') or ''
+        if sid and str(sid).isdigit():
+            ps_run(f"logoff {sid} 2>$null")
+        ps_run(f"cmdkey /delete:TERMSRV/{alias} 2>$null | Out-Null; "
+               f"Unregister-ScheduledTask -TaskName 'dao_replica_{src}' -Confirm:$false -ErrorAction SilentlyContinue; "
+               f"Remove-Item 'C:\\dao_vm\\start_{name}.bat' -Force -ErrorAction SilentlyContinue")
+        vms.pop(name, None)
+        return {'ok': True, 'name': name, 'kind': 'replica', 'destroyed': True,
+                'note': 'replica session closed; shared account/profile preserved (no user delete)'}
     # Safety: never log off or delete an ATTACHED account (a real user-owned session).
     # Attached VMs can only be detached (inner-agent task removed), leaving the user intact.
     if vms.get(name, {}).get('attached'):
@@ -894,6 +1036,9 @@ class HostHandler(http.server.BaseHTTPRequestHandler):
     def _dispatch(self, action, body):
         if action in ('vm.create', 'vm.ensure'):
             return create_vm(body.get('name', 'vm01'), body.get('password'))
+        if action in ('vm.replica', 'replica.create', 'vm.replica_self'):
+            return create_replica(body.get('source') or body.get('replica_of'),
+                                  body.get('password'), body.get('name'))
         if action == 'vm.attach':
             return attach_vm(body.get('name', ''))
         if action == 'vm.destroy':
