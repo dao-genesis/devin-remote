@@ -2,6 +2,26 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.357 · custom 模式 SP 不替换根治·三态归位(invert/passthrough/custom)
+: 承 v9.9.356 续。实践复现: 把「本源观照」切到**自定义编写(custom)模式**后, 面板
+  `/origin/preview` 仍显官方原 SP、出网 SP 亦是官方在顶 + 底部再补一份经藏(阴符经),
+  自编文本根本没生效。究根溯源(三态与替换链错位):
+  - 三模式 `invert` / `passthrough` / `custom` 中, 用户「自编平替」逻辑寄居于 `invertSP()`
+    内(优先于经藏), 而 `invertSP()` 只由源级替换链(`modifySPProto` / `modifyRawSP` /
+    `/origin/preview` / 延迟 observe / `INFER_STRIP` 侧信道剥离)调用。
+  - **这条链历来只认 `SP_MODE === "invert"`**。故 mode 一切到 `custom`, 整条源级替换被
+    跳过 → 官方 SP 原样透传 → 到 `dao_router` 增强路径见「未处理的官方SP」→ 从底部再补
+    一份经藏/自编 → 即用户所见「官方SP在顶 + 阴符经在底重复带一份、自编未平替」。
+  修法(执一·二章「有无相生」: invert 与 custom 皆有为之替, passthrough 独无为之透):
+  ① `source.js` 新增 `_spReplaceActive()`(invert‖custom), 源级替换链五处门控由「仅
+     invert」统一改为 `_spReplaceActive()` —— custom 模式亦经 `invertSP` 走自编平替。
+  ② `invertSP` / `invertAnySP`: custom 模式而**无**自编文本时 `return null` 透传,
+     **绝不回落经藏注入**(用户选 custom 即以用户为真, 无文则无为); 副路(summary/
+     memory/ephemeral)custom 模式亦透传, 阴符经不再从副路带入 —— 隔离彻底。
+  自检 L4.6 增 4 例(源级门控 = `_spReplaceActive` · custom 无自编则透传 · 副路隔离)。
+  三副本(devin-remote + windsurf plugins/packages)同步, dao-one 重建装配。
+
+
 v9.9.356 · 自定义SP隔离替换根治·用户即道(自编平替经藏·不再重复注入阴符经)
 : 用户反馈: 自定义编写模式下, 用户以自己的新提示词替换后, 实测系统提示里自编文本在最顶、
   而底层《阴符经》仍带了一份(<!-- DAO-ENHANCE --> 后附全经) —— 未能平替。究根溯源:
