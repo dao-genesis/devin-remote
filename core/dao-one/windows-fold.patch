@@ -67,16 +67,33 @@
 +  h+='<div style="display:flex;gap:6px"><input id="winCmd" placeholder="在整机执行命令 (PowerShell)…" style="flex:1" onkeydown="if(event.key===&#39;Enter&#39;)winExec()"/><button class="btn sm primary" onclick="winExec()">▶ 执行</button></div>';
 +  h+='<pre id="winOut" style="white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.25);padding:8px;border-radius:4px;font-size:11px;max-height:280px;overflow:auto;margin:6px 0 0">'+((ws.out!=null)?esc(ws.out):'—')+'</pre>';
 +  h+='</div>';
++  // ── ⑥ 复制品桌面 · Windows 账号/分身管理(仿 rt-flow 多实例 Devin 账号页 · 复用官方 RDP 多会话·环回·boot-safe) ──
++  var vms=(ws.vms&&ws.vms.list)||[];var hostOk=ws.vms&&ws.vms.hostOk;
++  h+='<div class="st" style="margin-top:12px">🖥️ 复制品桌面 · 账号/分身 <button class="btn sm ghost" style="float:right;margin-top:-3px;padding:2px 8px" onclick="cmd(&#39;winVmList&#39;)">⟳ 刷新</button></div>';
++  h+='<div class="card" style="font-size:11px;color:var(--muted)">复用官方 RDP 多会话(环回·boot-safe·不挂 rdpwrap)把本机另一 Windows 账号当隔离复制品桌面——道并行而不相悖: 资源共享、会话隔离。点「打开桌面」在 IDE 内以多实例页面实时操作(你与 AI 同源共控·同一后端会话)。</div>';
++  h+='<div class="card"><div class="cr"><span class="l">宿主守护</span><span class="v" style="color:'+(hostOk?'var(--success)':'var(--warn)')+'">'+(hostOk?'✓ 就绪 (vm_host_daemon)':(ws.vms?'未运行':'点「刷新」探活'))+'</span></div>';
++  if(!hostOk)h+='<div class="br" style="margin-top:4px"><button class="btn sm primary" onclick="cmd(&#39;winHostEnsure&#39;)">▶ 启动宿主守护</button></div>';
++  h+='<div style="display:flex;gap:6px;margin-top:6px"><input id="winVmName" placeholder="分身名(如 vm01)" style="flex:1" value="'+esc(ws.vmName||'vm01')+'"/><button class="btn sm primary" onclick="winVmCreate()">＋ 新建/连接分身</button></div>';
++  if(vms.length){for(var vi=0;vi<vms.length;vi++){var vm=vms[vi];
++    h+='<div class="cr" style="align-items:center;gap:8px;border-top:1px solid var(--border);padding-top:6px;margin-top:6px"><span style="width:8px;height:8px;border-radius:50%;flex:none;background:'+(vm.status==='running'?'var(--success)':'var(--muted)')+'"></span>';
++    h+='<span style="flex:1"><b style="font-size:12px">'+esc(vm.name)+'</b> <span style="font-size:10px;color:var(--muted)">'+esc(vm.session_user||vm.status||'')+(vm.port?(' · :'+vm.port):'')+'</span></span>';
++    h+='<button class="btn sm primary" style="padding:2px 8px" onclick="cmd(&#39;winOpenDesktop&#39;,{vm:&#39;'+esc(vm.name)+'&#39;})">🖥️ 打开桌面</button>';
++    h+='<button class="btn sm ghost" style="padding:2px 8px" onclick="winVmDestroy(&#39;'+esc(vm.name)+'&#39;)">✕ 销毁</button></div>';
++  }}else h+='<div style="font-size:11px;color:var(--muted);margin-top:6px">暂无分身。新建一个即在 IDE 内获得可实时操作的复制品桌面页。</div>';
++  h+='</div>';
 +  v.innerHTML=h;
-+  if(!ws.checked){ws.checked=true;cmd('winStatus');}
++  if(!ws.checked){ws.checked=true;cmd('winStatus');cmd('winVmList');}
 +}
 +function winTog(i){var ws=S.win||(S.win={});ws.open=ws.open||{};ws.open[i]=!ws.open[i];var e=document.getElementById('wtool-'+i);if(e)e.style.display=ws.open[i]?'block':'none';}
 +function winExec(){var c=document.getElementById('winCmd');var v=c?c.value.trim():'';if(!v)return;var o=document.getElementById('winOut');if(o)o.textContent='执行中…';cmd('winExec',{cmd:v});}
++function winVmCreate(){var n=document.getElementById('winVmName');var v=n?n.value.trim():'';if(!v)return;var ws=S.win||(S.win={});ws.vmName=v;cmd('winVmCreate',{name:v});}
++function winVmDestroy(n){if(!n)return;cmd('winVmDestroy',{name:n});}
 +function rWindowsResult(d){
 +  var ws=S.win||(S.win={});
 +  if(d.kind==='status'){ws.checked=true;ws.healthOk=!!d.ok;ws.health=d.health||null;ws.sysinfo=d.sysinfo||'';}
 +  else if(d.kind==='exec'){ws.out=d.text||'';}
 +  else if(d.kind==='screenshot'){if(d.ok){ws.shot=d.image||'';ws.shotErr='';}else{ws.shot='';ws.shotErr=d.error||'未知错误';}}
++  else if(d.kind==='vms'){ws.vms={hostOk:!!d.hostOk,list:d.list||[]};}
 +  if(S.tab==='windows')rWindowsFull();
 +}
 +window.addEventListener('message',function(e){var d=e.data;if(d&&d.type==='winData')rWindowsResult(d);});
@@ -97,6 +114,87 @@
 +        req.setTimeout(30000, () => { req.destroy(); resolve({ status: 0, text: 'timeout' }); });
 +        if (data) req.write(data); req.end();
 +    });
++}
++// ═══ Windows 复制品桌面 · 宿主守护(cloud/vm-replica·vm_host_daemon)直连 + IDE 内多实例桌面页 ═══
++// 读 %ProgramData%\dao_vm\config.json 取环回端口/令牌(守护为独立进程·仅 127.0.0.1·Bearer 鉴权)。
++function vmHostConf(): { port: number; token: string } {
++    try { const pd = process.env.ProgramData || 'C:\\ProgramData'; const c = JSON.parse(fs.readFileSync(path.join(pd, 'dao_vm', 'config.json'), 'utf8')); return { port: Number(c.host_port) || 9000, token: String(c.token || '') }; } catch { return { port: 9000, token: '' }; }
++}
++function vmHostApi(p: string, method: string, body?: any): Promise<{ status: number; text: string }> {
++    const cf = vmHostConf();
++    return new Promise((resolve) => {
++        const http = require('http');
++        const data = body ? JSON.stringify(body) : null;
++        const req = http.request({ host: '127.0.0.1', port: cf.port, path: p, method: method || 'GET', headers: { Authorization: 'Bearer ' + cf.token, 'Content-Type': 'application/json' } }, (res: any) => { let d = ''; res.on('data', (c: any) => d += c); res.on('end', () => resolve({ status: res.statusCode, text: d })); });
++        req.on('error', (e: any) => resolve({ status: 0, text: String(e && e.message) }));
++        req.setTimeout(120000, () => { req.destroy(); resolve({ status: 0, text: 'timeout' }); });
++        if (data) req.write(data); req.end();
++    });
++}
++// 宿主守护探活/按需拉起(boot-safe·仅按需·永不注册开机自启, 遵 README 防开机死锁): /health 通即用; 否则从随插件分发的 vm-replica 部署并 spawn。
++let _vmHostSpawned = false;
++async function ensureVmHost(spawnIfDown: boolean): Promise<{ ok: boolean; note?: string }> {
++    const h = await vmHostApi('/health', 'GET');
++    if (h.status === 200) return { ok: true };
++    if (!spawnIfDown) return { ok: false, note: '宿主守护未运行' };
++    try {
++        const cp = require('child_process');
++        const mediaDir = path.join(__dirname, '..', 'media', 'vm-replica');
++        const daemon = path.join(mediaDir, 'vm_host_daemon.py');
++        const deploy = path.join(mediaDir, 'deploy_host.py');
++        const pyExe = fs.existsSync('C:\\devin\\python\\python.exe') ? 'C:\\devin\\python\\python.exe' : 'python';
++        if (fs.existsSync(deploy)) { try { cp.execFileSync(pyExe, [deploy], { cwd: mediaDir, timeout: 60000 }); } catch { /* 守柔 */ } }
++        if (fs.existsSync(daemon) && !_vmHostSpawned) { _vmHostSpawned = true; const ch = cp.spawn(pyExe, [daemon], { cwd: mediaDir, detached: true, stdio: 'ignore' }); ch.unref(); }
++    } catch (e: any) { return { ok: false, note: String(e && e.message) }; }
++    for (let i = 0; i < 30; i++) { await new Promise((r) => setTimeout(r, 1000)); const hh = await vmHostApi('/health', 'GET'); if (hh.status === 200) return { ok: true, note: '已拉起' }; }
++    return { ok: false, note: '拉起超时' };
++}
++async function vmHostList(): Promise<any[]> {
++    const r = await vmHostApi('/vms', 'GET');
++    try { const j = JSON.parse(r.text || '{}'); const vv = j.vms || {}; return Object.keys(vv).map((k) => Object.assign({ name: (vv[k].session_user || k) }, vv[k])); } catch { return []; }
++}
++// IDE 内多实例复制品桌面页(仿 rt-flow daoMultiInstance·单 webview=一分身): 直接内嵌官方 RDP 前端(mstsc.js·canvas/rle/keyboard)经 rdp-web 网关实时渲染同一 RDP 会话——你与 AI 同源共控。
++// rdp-web 网关(官方 RDP 线协议 node-rdpjs <-> 浏览器 WebSocket · 环回 · 零 GUI)按需拉起: 根路由探活通即用, 否则以扩展宿主 node 运行时 spawn media/rdp-web/gateway.js(永不注册开机自启)。
++const RDP_WEB_PORT = 9040;
++let _rdpWebSpawned = false;
++function rdpWebProbe(): Promise<number> {
++    return new Promise((resolve) => {
++        const http = require('http');
++        const req = http.request({ host: '127.0.0.1', port: RDP_WEB_PORT, path: '/', method: 'GET' }, (res: any) => { res.resume(); resolve(res.statusCode || 0); });
++        req.on('error', () => resolve(0));
++        req.setTimeout(3000, () => { req.destroy(); resolve(0); });
++        req.end();
++    });
++}
++async function ensureRdpWeb(): Promise<boolean> {
++    if ((await rdpWebProbe()) === 200) return true;
++    try {
++        const cp = require('child_process');
++        const gw = path.join(__dirname, '..', 'media', 'rdp-web', 'gateway.js');
++        if (fs.existsSync(gw) && !_rdpWebSpawned) {
++            _rdpWebSpawned = true;
++            const env = Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1', RDP_WEB_PORT: String(RDP_WEB_PORT) });
++            const ch = cp.spawn(process.execPath, [gw], { cwd: path.dirname(gw), detached: true, stdio: 'ignore', env });
++            ch.unref();
++        }
++    } catch (e) { /* 守柔 */ }
++    for (let i = 0; i < 20; i++) { await new Promise((r) => setTimeout(r, 500)); if ((await rdpWebProbe()) === 200) return true; }
++    return false;
++}
++const _vmDeskPanels: { [k: string]: any } = {};
++async function openVmDesktopPanel(vm: string) {
++    const key = String(vm || 'vm01');
++    if (_vmDeskPanels[key]) { try { _vmDeskPanels[key].panel.reveal(); return; } catch (e) { /* 守柔 */ } }
++    const ok = await ensureRdpWeb();
++    const panel = vscode.window.createWebviewPanel('daoVmDesktop', '\uD83E\uDE9F ' + key + ' · 复制品桌面', vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true });
++    panel.webview.html = vmDesktopHtml(key, ok, RDP_WEB_PORT);
++    panel.onDidDispose(() => { delete _vmDeskPanels[key]; });
++    _vmDeskPanels[key] = { panel };
++}
++function vmDesktopHtml(vm: string, ok: boolean, port: number): string {
++    const src = 'http://127.0.0.1:' + port + '/?vm=' + encodeURIComponent(vm);
++    if (!ok) return '<!doctype html><meta charset="utf-8"><body style="font:13px system-ui;color:#f88;background:#111;padding:16px">RDP 网关(rdp-web gateway)未就绪。请确认宿主守护(vm_host_daemon)与 node 运行时可用后重开桌面。</body>';
++    return '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; frame-src http://127.0.0.1:*; style-src \'unsafe-inline\'"><style>html,body{margin:0;height:100%;background:#111;overflow:hidden}iframe{position:fixed;inset:0;width:100%;height:100%;border:0}</style></head><body><iframe src="' + src + '" allow="clipboard-read; clipboard-write"></iframe></body></html>';
 +}
  // 在线设备 · 查询中枢(dao-bridge)代理注册表 — 走 conn.json 的本地端口 + 令牌(整机直连, 免公网往返)。
 @@ -11203,0 +11363,29 @@
@@ -124,6 +222,34 @@
 +                let img = ''; let err = '';
 +                try { const j = JSON.parse(r.text || '{}'); const res = j.result || {}; img = String(res.stdout || '').replace(/\s+/g, ''); if (!img) err = res.stderr || ('HTTP ' + r.status); } catch (e: any) { err = 'HTTP ' + r.status + ' ' + (e && e.message ? e.message : ''); }
 +                reply({ type: 'winData', kind: 'screenshot', ok: !!img && r.status === 200, image: img, error: err });
++                break;
++            }
++            // ═══ 复制品桌面 · Windows 账号/分身生命周期(经 vm_host_daemon·官方 RDP 多会话) ═══
++            case 'winVmList': {
++                const r = await ensureVmHost(false);
++                reply({ type: 'winData', kind: 'vms', hostOk: r.ok, list: r.ok ? await vmHostList() : [] });
++                break;
++            }
++            case 'winHostEnsure': {
++                const r = await ensureVmHost(true);
++                reply({ type: 'winData', kind: 'vms', hostOk: r.ok, list: r.ok ? await vmHostList() : [], note: r.note || '' });
++                break;
++            }
++            case 'winVmCreate': {
++                const e0 = await ensureVmHost(true);
++                if (e0.ok) await vmHostApi('/', 'POST', { action: 'vm.create', name: String(msg.name || 'vm01') });
++                reply({ type: 'winData', kind: 'vms', hostOk: e0.ok, list: e0.ok ? await vmHostList() : [] });
++                break;
++            }
++            case 'winVmDestroy': {
++                await vmHostApi('/', 'POST', { action: 'vm.destroy', name: String(msg.name || '') });
++                reply({ type: 'winData', kind: 'vms', hostOk: true, list: await vmHostList() });
++                break;
++            }
++            case 'winOpenDesktop': {
++                const e1 = await ensureVmHost(true);
++                if (e1.ok) { await vmHostApi('/', 'POST', { action: 'vm.ensure', name: String(msg.vm || 'vm01') }); await openVmDesktopPanel(String(msg.vm || 'vm01')); }
++                reply({ type: 'winData', kind: 'vms', hostOk: e1.ok, list: e1.ok ? await vmHostList() : [] });
 +                break;
 +            }
              case 'bridgeHealth': {
