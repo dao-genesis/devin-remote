@@ -280,7 +280,16 @@
         };
         var user = await api("/api/v4/user");
         var accts = await api("/api/v4/accounts?per_page=50");
-        if (!accts || !accts.length) throw new Error("no_account");
+        accts = Array.isArray(accts) ? accts : [];
+        if (!accts.length) throw new Error("no_account");
+        // 多账号隔离: 指定 accountId 时精确命中(不静默串号); 未指定且唯一才自动选; 未指定且多账号报错。
+        var want = String((CFG && CFG.accountId) || "").trim();
+        var acct = null;
+        if (want) {
+          for (var ai = 0; ai < accts.length; ai++) { if (accts[ai] && accts[ai].id === want) { acct = accts[ai]; break; } }
+          if (!acct) throw new Error("account_not_found");
+        } else if (accts.length === 1) { acct = accts[0]; }
+        else throw new Error("multi_account: " + accts.map(function (a) { return a && a.id; }).filter(Boolean).join(","));
         var groups = await api("/api/v4/user/tokens/permission_groups");
         // 部署/读账号硬需求账号级两组; 缺任一即明确报错(列出 CF 实际回传的组名·便于任意用户排查),
         // 不静默铸出欠权 Token 拖到后续「读不到账号」才炸。
@@ -289,17 +298,23 @@
           var names = (Array.isArray(groups) ? groups : []).map(function (g) { return g && g.name; }).filter(Boolean);
           throw new Error("missing_perm_groups: " + acctMiss.join(", ") + " (CF 回传 " + names.length + " 组·此账号权限组名与预期不符)");
         }
-        var payload = buildTokenPayload({ name: "dao-relay " + Date.now(), accountId: accts[0].id, userId: user.id, groups: groups });
+        var payload = buildTokenPayload({ name: "dao-relay " + Date.now(), accountId: acct.id, userId: user.id, groups: groups });
         if (!payload.policies.length) throw new Error("no_permission_groups_matched");
         var res = await api("/api/v4/user/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-        return res && res.value;
+        if (!res || !res.value) throw new Error("no_token_value");
+        return { token: res.value, accountId: acct.id };
       };
 
       var act = async function () {
         var f = facts();
         var cat = classifyPage(location.href, f);
         status("stage", cat);
-        if (cat === "captcha" || cat === "webauthn") { status("pause", "需你完成人机验证/硬件密钥, 完成后自动续跑"); return; }
+        if (cat === "captcha" || cat === "webauthn") {
+          status("pause", "需你完成人机验证/硬件密钥, 完成后自动续跑");
+          // 离屏自包含模式无可见页可点 → 回灌明确挑战信号, 由引擎提示用户仅需前台过一次这道关。
+          if (CFG.deliver && !root.__cfDelivered) { root.__cfDelivered = 1; try { root.__CFM && root.__CFM.done(JSON.stringify({ error: "cf_challenge" })); } catch (e) {} }
+          return;
+        }
         if (cat === "gh_login") {
           if (CFG.gh && CFG.gh.user) { setVal(q("#login_field"), CFG.gh.user); setVal(q("#password"), CFG.gh.pass || ""); var fm = q("#login_field"); var form = fm && fm.form; if (form) { var sb = form.querySelector("input[type=submit], button[type=submit]"); (sb || {}).click ? sb.click() : form.submit(); } }
           else status("wait", "登录页·未提供账密, 等你手动登录");
@@ -345,13 +360,22 @@
           root.__cfMinted = 1;
           status("mint", "已登录 CF·经内部接口直建 Token…");
           try {
-            var mtk = await cfMintToken();
-            if (mtk) {
-              status("token", "内部接口已建 Token, 灌入部署…");
-              var mr = await feedToken(CFG.bases || [], CFG.session, CFG.relayToken, mtk, xhr);
-              status("done", mr.ok ? "Token 已建·全自动部署 Worker 中" : "灌入失败");
+            var mtk = await cfMintToken();               // { token, accountId }
+            if (mtk && mtk.token) {
+              if (CFG.deliver) {
+                // 离屏自包含模式: 不走 feedToken, 直接把 {token, accountId} 回灌原生 → 引擎侧同一条部署链。
+                status("token", "Token 已建·回灌部署…");
+                try { root.__CFM && root.__CFM.done(JSON.stringify({ token: mtk.token, accountId: mtk.accountId })); } catch (e) {}
+              } else {
+                status("token", "内部接口已建 Token, 灌入部署…");
+                var mr = await feedToken(CFG.bases || [], CFG.session, CFG.relayToken, mtk.token, xhr);
+                status("done", mr.ok ? "Token 已建·全自动部署 Worker 中" : "灌入失败");
+              }
             } else { root.__cfMinted = 0; status("wait", "未取到 Token, 重试中"); }
-          } catch (e) { root.__cfMinted = 0; status("error", "建 Token 失败: " + (e && e.message || e)); }
+          } catch (e) {
+            root.__cfMinted = 0; status("error", "建 Token 失败: " + (e && e.message || e));
+            if (CFG.deliver && !root.__cfDelivered) { root.__cfDelivered = 1; try { root.__CFM && root.__CFM.done(JSON.stringify({ error: String(e && e.message || e) })); } catch (x) {} }
+          }
           return;
         }
         if (cat === "cf_continue") { var c = btnByText(/continue to summary|继续.*(摘要|以显示)/i); if (c) c.click(); return; }

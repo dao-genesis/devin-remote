@@ -1506,6 +1506,58 @@ public class RelayService extends Service {
             + ".catch(function(e){var m=String(e&&e.message||e);if(e&&(e.code===401||e.code===403))m='no_cf_session';fin({error:m});});})();";
     }
 
+    // ── 自包含·离屏真 Chromium「代登录→同源建 Token」(见 Bridge.cfWebAuto 注释) ──────────────
+    //   与 cfStartWebMint 的区别: 那条要求 App 内已登录过 CF(全局 cookie 有会话·否则 no_cf_session);
+    //   这条把 cf-auto.js 编排器(deliver 模式)注入离屏页, 用池里存的账密自己在离屏页导航登录→拿到
+    //   同源会话与 cf_clearance→同源建 Token→回灌 {token, accountId}。全程无可见网页·零用户点击·
+    //   常驻前台服务·冻结免疫。命中登录页人机验证/硬件密钥 → 回灌 {error:cf_challenge}(不代按)。
+    @SuppressWarnings({ "SetJavaScriptEnabled", "deprecation" })
+    private void cfStartWebAuto(String reqId, String cfgJson) {
+        try {
+            synchronized (cfMintDone) { cfMintDone[0] = false; }
+            if (cfMintWv != null) { try { cfMintWv.destroy(); } catch (Exception ignored) {} cfMintWv = null; }
+            final String cfg = (cfgJson == null || cfgJson.trim().isEmpty()) ? "{}" : cfgJson;
+            final WebView wv = new WebView(this);
+            cfMintWv = wv;
+            WebSettings s = wv.getSettings();
+            s.setJavaScriptEnabled(true);
+            s.setDomStorageEnabled(true);
+            s.setDatabaseEnabled(true);
+            try { s.setUserAgentString(MainActivity.sanitizedUa(s.getUserAgentString())); } catch (Exception ignored) {}
+            if (Build.VERSION.SDK_INT >= 21) s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            if (Build.VERSION.SDK_INT >= 24) wv.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+            android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+            cm.setAcceptCookie(true);
+            if (Build.VERSION.SDK_INT >= 21) cm.setAcceptThirdPartyCookies(wv, true);
+            // cf-auto.js 在 cf_authed 建到 Token / 命中挑战 / 出错 时, 经此桥回灌 {token,accountId}|{error}。
+            wv.addJavascriptInterface(new Object() {
+                @JavascriptInterface public void done(String json) { cfMintDeliver(reqId, json); }
+            }, "__CFM");
+            final String core = readAsset("engine/cf-auto.js");
+            wv.setWebViewClient(new android.webkit.WebViewClient() {
+                @Override public void onPageFinished(WebView view, String url) {
+                    // 每次导航完成 (登录页→2FA→dash) 重注编排器: 页内 __cfAutoRan 幂等·跨页续跑。
+                    if (core == null) { cfMintDeliver(reqId, "{\"error\":\"cf_auto_asset_missing\"}"); return; }
+                    try {
+                        String js = "(function(){try{window.__CFAUTO=Object.assign({active:true,deliver:true}," + cfg + ");\n"
+                            + core + "\n}catch(e){}})();";
+                        view.evaluateJavascript(js, null);
+                    } catch (Exception ignored) {}
+                }
+                @Override public void onReceivedError(WebView view, android.webkit.WebResourceRequest req, android.webkit.WebResourceError err) {
+                    if (Build.VERSION.SDK_INT >= 23 && req != null && req.isForMainFrame())
+                        cfMintDeliver(reqId, "{\"error\":\"cf_dash_unreachable\"}");
+                }
+            });
+            // 从登录页起步: 未登录 → cf-auto 填账密登录; 已登录 → CF 自动跳 dash → cf_authed 直建。
+            wv.loadUrl("https://dash.cloudflare.com/login");
+            // 兜底超时: 代登录+建 Token 比纯建 Token 慢, 给足 90s; 卡人机验证等则回灌超时(离屏不无限占用)。
+            main.postDelayed(() -> cfMintDeliver(reqId, "{\"error\":\"cf_webauto_timeout\"}"), 90000);
+        } catch (Exception e) {
+            cfMintDeliver(reqId, "{\"error\":\"cf_webauto_init_failed\"}");
+        }
+    }
+
     /** JS ↔ 原生桥 (引擎页用 window.Native.*) */
     public class Bridge {
         @JavascriptInterface public String getConn() {
@@ -1614,6 +1666,12 @@ public class RelayService extends Service {
          */
         @JavascriptInterface public void cfWebMint(String reqId, String accountId) {
             main.post(() -> cfStartWebMint(reqId, accountId == null ? "" : accountId));
+        }
+        /** 自包含·离屏「代登录→同源建 Token」: cfg={cf:{user,pass,otp}, accountId?}。用户只提供账号,
+         *  离屏真 Chromium 自己登录取会话再同源建 Token → 回灌 {token,accountId}。全程无可见网页·零点击。
+         *  与 cfWebMint 的差别: 不依赖 App 内已有登录态(自己登)。见 cfStartWebAuto 注释。 */
+        @JavascriptInterface public void cfWebAuto(String reqId, String cfgJson) {
+            main.post(() -> cfStartWebAuto(reqId, cfgJson == null ? "{}" : cfgJson));
         }
 
         // ── 路线B 去中心化隧道桥 ────────────────────────────────────────
