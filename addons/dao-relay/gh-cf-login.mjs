@@ -44,11 +44,17 @@ export async function ghCfLoginProvision(opts = {}) {
   if (!login || !pass) return { ok: false, error: "缺 GitHub 账号或密码(需在 GitHub 板块以「账密+2FA」存号)" };
 
   const chromium = await loadChromium();
-  const launchOpts = { headless, channel: opts.channel || "chrome", args: ["--no-sandbox", "--disable-blink-features=AutomationControlled"] };
-  if (opts.proxy) launchOpts.proxy = typeof opts.proxy === "string" ? { server: opts.proxy } : opts.proxy;
-  let ctx;
-  try { ctx = await chromium.launchPersistentContext(opts.profileDir || "", launchOpts); }
-  catch (e) { return { ok: false, error: "browser 启动失败: " + (e && e.message || e) }; }
+  const baseOpts = { headless, args: ["--no-sandbox", "--disable-blink-features=AutomationControlled"] };
+  if (opts.proxy) baseOpts.proxy = typeof opts.proxy === "string" ? { server: opts.proxy } : opts.proxy;
+  // 先试系统 Chrome(复用常驻登录态·更不易被风控); 起不来(如无桌面会话/版本不符)则回退 Playwright 自带 chromium。
+  const channels = opts.channel ? [opts.channel] : ["chrome", null];
+  let ctx = null, lastErr = null;
+  for (const ch of channels) {
+    const launchOpts = ch ? { ...baseOpts, channel: ch } : { ...baseOpts };
+    try { ctx = await chromium.launchPersistentContext(opts.profileDir || "", launchOpts); break; }
+    catch (e) { lastErr = e; log("浏览器启动失败(channel=" + (ch || "bundled") + "): " + String(e && e.message || e).slice(0, 120)); }
+  }
+  if (!ctx) return { ok: false, error: "browser 启动失败: " + (lastErr && lastErr.message || lastErr) };
   const page = ctx.pages()[0] || await ctx.newPage();
 
   let lastCode = "";
@@ -74,6 +80,22 @@ export async function ghCfLoginProvision(opts = {}) {
     await sleep(1500);
 
     if (!isAuthedDash(page.url())) {
+      // ①b CF 自身反爬关卡: dash 登录页可能先下发 Turnstile 人机验证(标题「Just a moment…」/
+      //   cf-turnstile / /cdn-cgi/challenge)。这是 Cloudflare 专门挡机器人的真·反自动化控制,
+      //   守柔不绕过 → 交回用户在有头隔离档过一次(过后会话常驻, 后续零点击)。
+      const cfInterstitial = async () => {
+        const title = (await page.title().catch(() => "")) || "";
+        if (/just a moment|attention required|checking your browser/i.test(title)) return true;
+        if (/\/cdn-cgi\/challenge/.test(page.url())) return true;
+        return await page.locator('[name="cf-turnstile-response"], .cf-turnstile, iframe[src*="challenges.cloudflare.com"]')
+          .first().count().then(n => n > 0).catch(() => false);
+      };
+      for (let i = 0; i < 8 && await cfInterstitial(); i++) await sleep(1500); // 给 Turnstile 自动放行留窗口
+      if (await cfInterstitial()) {
+        await ctx.close().catch(() => {});
+        return { ok: false, needUser: true, via: "gh-cf", error: "Cloudflare 登录页命中 Turnstile 人机验证(专挡机器人·守柔不绕过, 交你在有头隔离档过一次即会话常驻)" };
+      }
+
       // ② 点「Sign in with GitHub」
       const ghBtn = page.locator('a[href*="github.com/login/oauth"], a[href*="/oauth2/github"], button:has-text("GitHub"), a:has-text("GitHub"), [data-testid*="github" i]').first();
       if (await ghBtn.isVisible({ timeout: 6000 }).catch(() => false)) {
