@@ -5929,6 +5929,22 @@ function daoGhFleetOpenPat(login: string): { ok: boolean; login: string; launche
     const launched = daoLaunchChromiumIsolated(url, safeKey, fp, proxy, profileDir, patExt ? [patExt] : []);
     return { ok: !!launched, login, launched: !!launched, scopes: cfg.scopes, expDays: cfg.expDays };
 }
+// 反者道之动·原生页直取: 在【该号专属隔离档】(与建 PAT/续登同 profileDir·已登录该号)打开任意 github.com
+//   官方页, 直接操作真官网, 不复刻界面、不张冠李戴。p 为站内路径(如 /settings/tokens · /<login> · /orgs/<o>)。
+function daoGhFleetOpenUrl(login: string, p: string): { ok: boolean; login: string; launched?: boolean; url?: string } {
+    login = String(login || '').trim().replace(/^@/, '');
+    if (!login) return { ok: false, login };
+    let rel = String(p || '/').trim();
+    if (!rel.startsWith('/')) rel = '/' + rel;
+    const url = 'https://github.com' + rel;
+    const safeKey = ('gh:' + login).replace(/[^a-zA-Z0-9._@-]/g, '_');
+    const profileDir = path.join(DAO_DIR, 'browser-profiles', safeKey);
+    try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* 守柔 */ }
+    const fp = daoAcctFingerprint(safeKey);
+    const proxy = daoAcctProxy(safeKey);
+    const launched = daoLaunchChromiumIsolated(url, safeKey, fp, proxy, profileDir, []);
+    return { ok: !!launched, login, launched: !!launched, url };
+}
 // 全自动建 PAT: 用该号账密+TOTP 在【专属隔离档】走 GitHub 官方登录 → 官网建经典 PAT → 回吐并落舰队。
 //   与 daoGhFleetOpenPat 同 profileDir(不张冠李戴)。守柔: 撞真·人机/设备/硬件密钥挑战即 needUser 交回
 //   (前端引导用户改走「续登助手」半自动)。TOTP 是号主自有第二因子(本地 RFC6238), 非绕过安全挑战。
@@ -8963,6 +8979,7 @@ function ghFleetRemoveOrg(login){if(!login)return;if(typeof confirm==='function'
 function ghFleetForget(login){if(!login)return;if(typeof confirm==='function'&&!confirm('从本地舰队删除 '+login+'?(不影响其 GitHub 账号)'))return;cmd('daoGhFleetForget',{login:login})}
 function ghAssistLogin(login){if(!login)return;toast('🚀 隔离档续登(自动填充·守柔不提交): '+login,true);cmd('daoGhFleetAssistLogin',{login:login})}
 function ghFleetOpenPat(login){if(!login)return;toast('🔑 该号隔离档打开建 PAT('+((_ghState().patCfg||{}).expDays===0?'永不过期':(((_ghState().patCfg||{}).expDays||30)+'天'))+'): '+login,true);cmd('daoGhFleetOpenPat',{login:login})}
+function ghFleetOpen(login,p){if(!login)return;toast('🌐 该号隔离档打开官网'+(p&&p!=='/'?(' '+p):'')+': '+login,true);cmd('daoGhFleetOpenUrl',{login:login,path:p||'/'})}
 function ghFleetMintPat(login){if(!login)return;toast('⚡ 全自动建 PAT(隔离档官方登录→建经典 PAT→落舰队·约 1-2 分钟): '+login,true);cmd('daoGhFleetMintPat',{login:login})}
 // PAT 通用配置窗: 先拉当前配置(含全量 scope 清单)再弹窗渲染。
 function ghPatCfgOpen(){_ghState().patCfgWantShow=true;toast('⏳ 载入 PAT 通用配置…',true);cmd('daoGhGetPatCfg',{})}
@@ -8999,7 +9016,8 @@ function ghRenderGhFleet(){var st=_ghState();var v=document.getElementById('ghGh
   if(!a.hasPat&&a.hasCred)h+='<button class="btn sm primary" onclick="ghFleetMintPat(&#39;'+lg+'&#39;)" title="全自动建 PAT: 该号隔离档官方登录(账密+本地算 2FA)→官网建经典 PAT→落舰队·守柔撞人机/设备验证即交回">⚡ 自动建 PAT</button>';
   if(!a.hasPat&&a.hasCred)h+='<button class="btn sm" onclick="ghAssistLogin(&#39;'+lg+'&#39;)" title="半登录续登: 该号隔离档打开 GitHub 登录页·自动填充账密+当前2FA(守柔不自动提交)">🚀 续登</button>';
   h+='<button class="btn sm" onclick="ghFleetOpenPat(&#39;'+lg+'&#39;)" title="该号专属隔离档打开建 PAT 页(不张冠李戴·必为本号建)">🔑 建 PAT</button>';
-  h+='<button class="btn sm" onclick="ghOpen(&#39;https://github.com/settings/tokens&#39;)" title="官网查看该账号所有 PAT 状态">📋 PAT 列表</button>';
+  h+='<button class="btn sm" onclick="ghFleetOpen(&#39;'+lg+'&#39;,&#39;/settings/tokens&#39;)" title="该号隔离档(已登录本号)打开官网 PAT 列表·必为本号(不张冠李戴)">📋 PAT 列表</button>';
+  h+='<button class="btn sm" onclick="ghFleetOpen(&#39;'+lg+'&#39;,&#39;/&#39;)" title="反者道之动·原生页直取: 该号隔离档(已登录本号)打开真 GitHub 官网, 直接操作">🌐 官网</button>';
   h+='</div>';
   // 操作行 2: 角色/本体/移除
   h+='<div class="br" style="margin-top:3px">';
@@ -10367,6 +10385,12 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // 隔离建 PAT: 在该号专属隔离档打开建 PAT 页(与续登同 profile · 不张冠李戴)。
                 const r = daoGhFleetOpenPat(String(msg.login || ''));
                 reply({ type: 'daoGhResult', kind: 'fleetOpenPat', ...r });
+                break;
+            }
+            case 'daoGhFleetOpenUrl': {
+                // 反者道之动·原生页直取: 该号专属隔离档(已登录本号)打开任意 github.com 官方页, 不张冠李戴。
+                const r = daoGhFleetOpenUrl(String(msg.login || ''), String(msg.path || '/'));
+                reply({ type: 'daoGhResult', kind: 'fleetOpenUrl', ...r });
                 break;
             }
             case 'daoGhFleetMintPat': {
