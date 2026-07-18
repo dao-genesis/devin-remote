@@ -7304,6 +7304,17 @@ function bridgeEffectiveUrl(): string {
     //   本实例自有隧道空/死时, 存活探测环(bridgeLiveness)会重起隧道; 期间诚实回空(不臆造死址)。
     return bridgeUrl || '';
 }
+// 一行接入(irm .../api/bootstrap.ps1|iex)唯一权威 URL 解析 — 面板显示与「复制」按钮共用同一真源,
+//   杜绝两处各取候选而显示/复制不一致。铁律: 必须是「透明快速隧道」(公网免鉴权 GET 可拉脚本);
+//   一律排除 /relay/ 地址(持久中继是鉴权 POST-RPC 通道, 裸 GET 回 405 → 接入必死)。无可达即回空。
+function bridgeJoinUrl(): string {
+    let conn: any = null;
+    try { conn = readBridgeConn(); } catch { /* 守柔 */ }
+    const cand = [bridgeEffectiveUrl(), conn && conn.url, ws.publicUrl]
+        .map((u: any) => String(u || '').replace(/\/$/, ''))
+        .filter((u: string) => /^https?:\/\//.test(u) && u.indexOf('/relay/') < 0);
+    return cand[0] || '';
+}
 // 帛书·「以实际有效性为基准·重新模拟配源」: 发布/探活/签名/去中心化会话一律取「服务端实际校验且
 //   机器级恒稳」的权威令牌 ws.token (即 dao-conn-current.json 之 token), 而非随隧道轮换的 bridgeToken。
 //   根治本源脱钩(错误认知): 旧法对外发布易变 bridgeToken, 重载/轮换即与 checkAuth 主令牌脱钩 →
@@ -8246,12 +8257,18 @@ function rBridgeFull(){
   h+='<div class="st" style="margin-top:14px">🖥️ 在线设备 <button class="btn sm ghost" style="float:right;margin-top:-3px;padding:2px 8px" onclick="cmd(&#39;bridgeListAgents&#39;)">⟳ 刷新</button></div>';
   h+='<div id="bridgeAgents" class="card">'+rBridgeAgents()+'</div>';
   // ── 一行接入 · PowerShell 把另一台设备接进本中枢 (irm .../bootstrap.ps1 | iex) ──
-  if(on&&String(b.url||'').indexOf('/relay/')<0){
-    var bu=String(b.url);var joinCmd='irm '+(bu.charAt(bu.length-1)==='/'?bu.slice(0,-1):bu)+'/api/bootstrap.ps1 | iex';
-    h+='<div class="st" style="margin-top:14px">🔗 一行接入设备 · PowerShell</div>';
+  //   显示与「复制」共用后端解析的同一透明隧道 joinUrl(已排除 /relay/·免鉴权 GET 可拉脚本), 二者恒一致。
+  var joinUrl=String((b.joinUrl||'')).replace(/\/$/,'');
+  h+='<div class="st" style="margin-top:14px">🔗 一行接入设备 · PowerShell</div>';
+  if(joinUrl){
+    var joinCmd='irm '+joinUrl+'/api/bootstrap.ps1 | iex';
     h+='<div class="card"><div style="font-size:10px;color:var(--muted);margin-bottom:4px">在另一台 Windows 上以 PowerShell 运行下面这行，即把该机接入本中枢，出现在上方「在线设备」并可被远程操控：</div>';
     h+='<pre style="white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.25);padding:7px;font-size:11px;margin:0 0 6px;border-radius:4px;color:var(--accent2)">'+esc(joinCmd)+'</pre>';
     h+='<button class="btn sm primary" onclick="cmd(&#39;copyBridgeJoin&#39;)">📋 复制一行接入命令</button></div>';
+  } else {
+    // 当前无透明快速隧道(仅持久中继或隧道重建中): 裸 GET 不可达, 一行接入必须等透明隧道就绪 → 引导启动, 不显示会报错的死命令。
+    h+='<div class="card"><div style="font-size:10px;color:var(--muted);margin-bottom:6px">一行接入需要<b style="color:var(--fg)">透明快速隧道</b>(公网免鉴权 GET 拉取引导脚本)。当前仅持久中继在线或隧道正在重建，请先启动快速隧道再复制接入命令。</div>';
+    h+='<button class="btn sm primary" onclick="cmd(&#39;bridgeStart&#39;)">▶ 启动快速隧道</button> <button class="btn sm" onclick="cmd(&#39;bridgeRestart&#39;)">🔄 重启隧道</button></div>';
   }
   // ── 四大接入模块介绍/命名隧道均移至本面板底部 (核心: 导出文档/自测 前置) ──
   // ── 导出接入文档 (回归 dao-bridge 本源 · 仅整机穿透接入信息 + 端点 + SDK; 四大模块在 MCP 使用文档) ──
@@ -9355,7 +9372,7 @@ function getPanelState() {
         relayUrl: ws.publicUrl || '',
         hostname: os.hostname(),
         injecting: ws.devinInjecting,
-        bridge: readBridgeConn(),
+        bridge: (() => { const bc = readBridgeConn() || {}; return { ...bc, joinUrl: bridgeJoinUrl() }; })(),
         hostCaps: detectHostCapabilities(),
     };
 }
@@ -11272,19 +11289,18 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             }
             // 一行接入 · 复制把另一台设备接进本中枢的 PowerShell 一行命令(irm .../bootstrap.ps1 | iex)。
             case 'copyBridgeJoin': {
-                const c = readBridgeConn();
-                // 一行接入须走「透明快速隧道」(cloudflared·公网免鉴权 GET 可达) — 即常驻进程 conn.url;
-                //   持久 relay 是鉴权 POST-RPC 通道, 不承载公网裸 GET 拉脚本(实测 relay 对 GET 回 405),
-                //   故此处只认 conn.url; 缺失才回落主口公网(仅在主口本身为透明隧道时有效)。道并行而不相悖。
-                //   且一律排除 /relay/ 地址(conn.url 可能已被持久中继接管 — 中继裸 GET 回 405, 接入必死)。
-                const cand = [bridgeUrl, c && c.url, ws.publicUrl]
-                    .map((u: any) => String(u || '').replace(/\/$/, ''))
-                    .filter((u: string) => /^https?:\/\//.test(u) && u.indexOf('/relay/') < 0);
-                const url = cand[0] || '';
+                // 一行接入须走「透明快速隧道」(cloudflared·公网免鉴权 GET 可达); 持久 relay 是鉴权 POST-RPC
+                //   通道, 裸 GET 回 405 → 接入必死。URL 解析与面板显示共用 bridgeJoinUrl()(已排除 /relay/),
+                //   杜绝显示/复制不一致。无透明隧道时不静默失败 — 明确提示先启动快速隧道。
+                const url = bridgeJoinUrl();
                 const line = url ? ('irm ' + url + '/api/bootstrap.ps1 | iex') : '';
-                if (line) await vscode.env.clipboard.writeText(line);
-                if (line) vscode.window.showInformationMessage('已复制一行接入命令 · 在另一台 Windows 的 PowerShell 运行即接入本中枢');
-                reply({ type: 'actionResult', command: 'copyBridgeJoin', ok: !!line });
+                if (line) {
+                    await vscode.env.clipboard.writeText(line);
+                    vscode.window.showInformationMessage('已复制一行接入命令 · 在另一台 Windows 的 PowerShell 运行即接入本中枢');
+                } else {
+                    vscode.window.showWarningMessage('当前无透明快速隧道(仅持久中继在线或隧道重建中)· 一行接入需先在内网穿透面板启动快速隧道后再复制');
+                }
+                reply({ type: 'actionResult', command: 'copyBridgeJoin', ok: !!line, error: line ? undefined : 'no-transparent-tunnel' });
                 break;
             }
         }
