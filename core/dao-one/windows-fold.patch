@@ -281,3 +281,8 @@
 +                break;
 +            }
              case 'bridgeHealth': {
+@@ -797,0 +798,2 @@
+             try { if (int && typeof int.setDevinProxyBridgeServe === 'function') int.setDevinProxyBridgeServe(daoServeBridgeRoute); } catch { /* 守柔 */ }
++            // 归一·③ 复制品桌面 reload 续接: 注入桌面重开器 → 外壳恢复 vmdesk 标签时先确保宿主守护/网关在位再折标签(自愈)。
++            try { if (int && typeof (int as any).setDesktopReopener === 'function') (int as any).setDesktopReopener((vm: string) => { openVmDesktopPanel(String(vm || 'vm01')).catch(() => { /* 守柔 */ }); }); } catch { /* 守柔 */ }
+             if (int && typeof int.setCloudProvider === 'function') {

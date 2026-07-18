@@ -1620,6 +1620,22 @@ function test(name, fn) {
     }
   });
 
+  // ── vmdesk 复制品桌面标签 · reload 状态续接 (源级护栏·双副本) ────────────────
+  console.log("\n[vmdesk 桌面标签 reload 续接]");
+  test("extension.js: persistShell 须持久化 vmdesk 标签 + restoreTabs 经 reopenDesktop 续接 + 重开器可注入 (双副本源级护栏)", () => {
+    const fs = require("fs"), path = require("path");
+    for (const rel of [["..", "extension.js"], ["..", "..", "dao-vsix", "rtflow", "extension.js"]]) {
+      const src = fs.readFileSync(path.join(__dirname, ...rel), "utf8");
+      const p = rel.join("/");
+      assert.ok(/id\.indexOf\('vmdesk:'\)===0\)\{.*?kind:'vmdesk'/.test(src), p + " persistShell 须把 vmdesk:<vm> 标签存为 {kind:'vmdesk',vm,url,label} — 否则 reload 后复制品桌面标签蒸发");
+      assert.ok(/s\.kind==='vmdesk'&&s\.vm\)\{vscode\.postMessage\(\{type:'reopenDesktop'/.test(src), p + " restoreTabs 须对 vmdesk 存档发 reopenDesktop 续接");
+      assert.ok(/s\.kind==='vmdesk'\)\{id='vmdesk:'\+\(s\.vm\|\|''\);\}/.test(src), p + " _tryRestoreActive 须能回到上次活动的 vmdesk 标签");
+      assert.ok(/m\.type === "reopenDesktop" && m\.vm/.test(src), p + " 宿主须处理 reopenDesktop");
+      assert.ok(/typeof _desktopReopener === "function"/.test(src) && /setDesktopReopener\(fn\)/.test(src), p + " 须支持 dao-vsix 注入桌面重开器(先确保守护/网关再折标签), 无重开器按存档 URL 直折(mstsc.js 自带退避重连)");
+      assert.ok(/s\.kind !== 'vmdesk'/.test(src), p + " 公网 /shell 侧须滤掉 vmdesk 存档(127.0.0.1 环回网关公网不可达)");
+    }
+  });
+
   // ── 汇总 ──────────────────────────────────────────────────────────────────
   console.log("\n──────────────────────────────────────");
   console.log("PASS " + passed + "  FAIL " + failed);

@@ -1089,6 +1089,7 @@ function _liveAccPath(t){try{var loc=t.frame.contentWindow.location;var p=(loc.p
 function persistShell(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];var act=(id===active)?1:0;
   if(id.indexOf('board:')===0){arr.push({kind:'board',board:id.slice(6),act:act});}
   else if(id.indexOf('web:')===0){var tw=tabs[id];var mw=(tw&&tw.meta)||{};var wu=_liveWebUrl(tw)||mw.origUrl||'';if(wu)arr.push({kind:'web',url:wu,label:mw.label||wu,act:act});}
+  else if(id.indexOf('vmdesk:')===0){var tv=tabs[id];var mv=(tv&&tv.meta)||{};arr.push({kind:'vmdesk',vm:id.slice(7),url:(tv&&tv.url)||mv.url||'',label:mv.label||'',act:act});}
   else{var t=tabs[id];var mt=(t&&t.meta)||{};if(mt.email)arr.push({kind:'acc',id:id,email:mt.email,devinId:mt.devinId||'',path:_liveAccPath(t),title:mt.label||'',status:mt.status||'',act:act});}}
   vscode.postMessage({type:'shellSaveTabs',tabs:arr});}catch(e){}}
 function schedPersist(){clearTimeout(_persistT);_persistT=setTimeout(persistShell,400);}
@@ -1098,12 +1099,14 @@ function _tryRestoreActive(){if(!_restoreAct)return;var s=_restoreAct,id='';
   if(s.kind==='board'){id='board:'+(s.board||'home');}
   else if(s.kind==='acc'){id=s.id||'';}
   else if(s.kind==='web'){for(var k in tabs){if(k.indexOf('web:')===0&&tabs[k].meta&&tabs[k].meta.origUrl===s.url){id=k;break;}}}
+  else if(s.kind==='vmdesk'){id='vmdesk:'+(s.vm||'');}
   if(id&&tabs[id]){setActive(id);_restoreAct=null;}}
 function restoreTabs(arr){if(!arr||!arr.length)return;for(var i=0;i<arr.length;i++){var s=arr[i]||{};try{
   if(s.act)_restoreAct=s;
   if(s.kind==='board'){openBoard(s.board||'home');}
   else if(s.kind==='web'&&s.url){vscode.postMessage({type:'openWebTab',url:s.url,label:s.label||s.url});}
-  else if(s.kind==='acc'&&s.email){vscode.postMessage({type:'reopen',id:s.id||'',email:s.email,devinId:s.devinId||'',path:s.path||''});}}catch(e){}}
+  else if(s.kind==='acc'&&s.email){vscode.postMessage({type:'reopen',id:s.id||'',email:s.email,devinId:s.devinId||'',path:s.path||''});}
+  else if(s.kind==='vmdesk'&&s.vm){vscode.postMessage({type:'reopenDesktop',vm:s.vm,url:s.url||'',label:s.label||''});}}catch(e){}}
   setTimeout(_tryRestoreActive,1500);setTimeout(_tryRestoreActive,4000);setTimeout(_tryRestoreActive,9000);}
 // 归一 · 站内新标签开任意网页/搜索(复刻手机端 APK · 不再弹外部系统浏览器):
 //   经本地 HTTP 代理 /__web?u= 直出(剥 XFO/CSP · 注入 base + 链接/表单拦截), 当 iframe 挂一张站内标签。
@@ -2338,7 +2341,8 @@ async function shellHandleMessage(sid, m) {
         send({ type: 'userscripts', list: _getUserScripts() });
         // 状态续接: 有已存标签 → 还原(老用户停在原网页); 无 → 电脑端落「六合一主页」(新用户), 手机端由前端冷启动开🔀切号。
         try {
-          const st = (_ctx && _ctx.globalState && _ctx.globalState.get('dao.shellTabs')) || [];
+          // vmdesk 桌面标签指向宿主 127.0.0.1 环回网关, 公网 /shell 浏览器不可达 → 只在 IDE webview 侧续接。
+          const st = (((_ctx && _ctx.globalState && _ctx.globalState.get('dao.shellTabs')) || [])).filter((s) => s && s.kind !== 'vmdesk');
           if (st.length) send({ type: 'restoreTabs', tabs: st });
           else if (!m.mobile) send({ type: 'gotoBoard', board: 'home' });
         } catch (e) {}
@@ -2921,6 +2925,16 @@ function _wireMultiPanel(panel) {
         return;
       }
       if (m.type === "shellSaveTabs") { try { if (_ctx && _ctx.globalState) _ctx.globalState.update("dao.shellTabs", Array.isArray(m.tabs) ? m.tabs.slice(0, 40) : []); } catch (e) {} return; }
+      if (m.type === "reopenDesktop" && m.vm) {
+        // 归一 · 复制品桌面标签状态续接: reload 后经 dao-vsix 注入的重开器(先确保 vm 宿主守护 +
+        //   rdp-web 网关在位再折标签); 无重开器(纯 rt-flow 独立版)则按存档 URL 直接折回,
+        //   页内 mstsc.js 前端自带退避重连, 网关就绪即自愈上屏。
+        try {
+          if (typeof _desktopReopener === "function") { await _desktopReopener(String(m.vm)); }
+          else if (m.url) { await openDesktopTab({ vm: String(m.vm), url: String(m.url), label: String(m.label || "") }); }
+        } catch (e) {}
+        return;
+      }
       if (m.type === "reopen") {
         try { await openMultiInstance({ id: m.id, email: m.email, devinId: m.devinId, path: m.path }); } catch (e) {}
         return;
@@ -3284,6 +3298,9 @@ async function openShellHome(board) {
 //   由 dao-vsix winOpenDesktop 经 _internals 注入 URL(rdp-web 官方 mstsc.js 前端·127.0.0.1 环回,
 //   webview CSP 本就放行 127.0.0.1:* 当 iframe 加载) — 单壳一切·不另起独立 WebviewPanel。
 //   同分身重开: mkTab 以 id 折叠聚焦已开标签, 不重复建页。
+// 归一 · 桌面重开器 (dao-vsix 经 _internals.setDesktopReopener 注入): reload 续接 vmdesk 标签时
+//   先确保 vm 宿主守护 + rdp-web 网关在位再折标签(openVmDesktopPanel 全链路), 而非仅折回死 URL。
+let _desktopReopener = null;
 async function openDesktopTab(opts) {
   try {
     const o = opts || {};
@@ -17313,6 +17330,7 @@ module.exports = {
     _shellAccKey, // (供单测) email → 稳定不可枚举 accKey
     _shellAccRoute, // (供单测) 同源前缀路径 → 路由类型 (list/conv/create/sessionsJson/favicon)
     setCloudProvider(p) { _cloudProvider = p || null; }, // 归一 · dao-vsix 注入「六大板块」面板提供者
+    setDesktopReopener(fn) { _desktopReopener = (typeof fn === "function") ? fn : null; }, // 归一 · dao-vsix 注入复制品桌面重开器 (reload 状态续接自愈)
     parseAccountText,
     Store,
     // v2.4.0 · 暴露 endpoint 健康度给回归测
