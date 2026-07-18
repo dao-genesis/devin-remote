@@ -3996,7 +3996,10 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         try { body = JSON.parse(await readBody(req) || '{}'); } catch (e) { body = {}; }
         const sid = String((body && body.sid) || '');
         const msg = body && body.msg;
-        try { if (rtint && typeof rtint.shellHandleMessage === 'function') await rtint.shellHandleMessage(sid, msg); } catch (e) { /* 守柔 */ }
+        // 火后即忘: 回包一律走 SSE/长轮询, HTTP 响应不等宿主处理完 —
+        //   否则串行队列被慢任务(上游 API 卡顿)拖住时, 页面的 POST 悬挂会耗尽浏览器
+        //   同源连接池, 连长轮询都被饿死 → 六大板块永远「加载中」(真机实证)。
+        try { if (rtint && typeof rtint.shellHandleMessage === 'function') { Promise.resolve(rtint.shellHandleMessage(sid, msg)).catch(() => { /* 守柔 */ }); } } catch (e) { /* 守柔 */ }
         return { ok: true };
     }
 
