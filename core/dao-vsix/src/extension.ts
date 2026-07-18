@@ -4269,7 +4269,21 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         // 删除通道/切号: 撤销 CF 授权 + 清态 → 回退 quick tunnel/mesh。
         case '/api/relay/oauth-logout': { return await daoRelayOAuthLogout(); }
         case '/api/agents': {
-            return { agents: [{ id: os.hostname(), hostname: os.hostname(), ip: '127.0.0.1', os: `${os.type()} ${os.release()}`, user: os.userInfo().username, agent_version: '1.0.0', status: 'online', connected_at: new Date(ws.startTime).toISOString(), last_heartbeat: new Date().toISOString(), pending_commands: 0, completed_commands: 0, workspace: vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [], port: ws.port, publicUrl: ws.publicUrl }], count: 1 };
+            // 本机(中枢自身)恒在线 + 合入 dao-bridge 常驻进程已登记的远端设备(经一行接入接进来的机器)。
+            //   旧病灶: 硬编码只返本机 count:1 → 云端 Agent 查公网 /api/agents 永远看不到已接入的其他设备,
+            //   与「在线设备」板块(经 bridgeHubApi 合并)不一致。归一: 公网端点亦合并中枢注册表。
+            const self = { id: os.hostname(), hostname: os.hostname(), ip: '127.0.0.1', os: `${os.type()} ${os.release()}`, user: os.userInfo().username, agent_version: '1.0.0', status: 'online', connected_at: new Date(ws.startTime).toISOString(), last_heartbeat: new Date().toISOString(), pending_commands: 0, completed_commands: 0, workspace: vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [], port: ws.port, publicUrl: ws.publicUrl };
+            const agents: any[] = [self];
+            try {
+                const hr = await bridgeHubApi('/api/agents');
+                if (hr.status === 200) {
+                    const hj = JSON.parse(hr.text || '{}');
+                    for (const a of (Array.isArray(hj.agents) ? hj.agents : [])) {
+                        if (a && String(a.hostname || a.id || '') !== os.hostname()) agents.push(a);
+                    }
+                }
+            } catch { /* 守柔: 中枢未起则仅返本机 */ }
+            return { agents, count: agents.length };
         }
         case '/api/commands': {
             const cmds = await vscode.commands.getCommands(true);
