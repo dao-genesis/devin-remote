@@ -1984,6 +1984,8 @@ function daoFetchJson(u: string, timeoutMs: number): Promise<any> {
     });
 }
 
+// 中继最近一次失败原因(诊断用): open 即清, error/close 即记 — /api/relay/state 与 bridge 板块卡片可见。
+let _relayLastErr = '';
 function connectRelay(port: number, token: string) {
     if (ws.relayConnected || ws.relayConnecting) return;
     ws.relayConnecting = true;
@@ -2068,27 +2070,39 @@ function connectSingleRelay(wsUrl: string, relayUrl: string, sessionId: string, 
         const relayHostname = new URL(relayUrl).hostname;
         const isCfHost = relayHostname.includes('workers.dev') || relayHostname.includes('cloudflare');
         // 直连兜底: 每实例独立出站连自己的 relay session (鸡犬相闻·老死不相往来)
-        // 反者道之动: 不再「无代理即放弃」——本机出网通(cloudflared 隧道已可达 CF), 故直连必通。
-        const tryDirect = () => {
+        // 反者道之动: 不再「无代理即放弃」——直连与本地代理互为回退, 绝不空手而归。
+        const tryDirect = (fail: () => void) => {
             try {
-                const socket = new WebSocket(wsUrl);
-                setupRelayHandlers(socket, relayUrl, sessionId, port, token, onFail);
-            } catch { onFail(); }
+                // 真·直连: 自建 TLS socket, 绕开 IDE exthost 注入的 proxy-agent —— 其按系统/PAC 解析出的
+                // 代理若不可达(如失效的局域网代理), 会把一切 http/https 出站劫持致死(实测 close 1006)。
+                if (wsUrl.startsWith('wss://')) {
+                    const tlsSocket = tls.connect({ host: relayHostname, port: 443, servername: relayHostname, rejectUnauthorized: false });
+                    const socket = new WebSocket(wsUrl, { createConnection: () => tlsSocket });
+                    setupRelayHandlers(socket, relayUrl, sessionId, port, token, fail);
+                } else {
+                    const socket = new WebSocket(wsUrl);
+                    setupRelayHandlers(socket, relayUrl, sessionId, port, token, fail);
+                }
+            } catch (e: any) { _relayLastErr = 'direct: ' + String(e && e.message || e); fail(); }
         };
-        // workers.dev/cloudflare: 优先用本地代理(为 DNS 污染网络兜底), 但无代理/代理失败 → 直连, 绝不空手而归
-        if (isCfHost) {
+        const tryProxy = (fail: () => void) => {
             const proxyPort = detectedProxyPort || detectProxyPort();
-            if (!proxyPort) { tryDirect(); return; }
+            if (!proxyPort) { fail(); return; }
             createProxyTunnel(relayHostname).then((tlsSocket) => {
                 if (tlsSocket) {
                     const socket = new WebSocket(wsUrl, { createConnection: () => tlsSocket });
-                    setupRelayHandlers(socket, relayUrl, sessionId, port, token, onFail);
+                    setupRelayHandlers(socket, relayUrl, sessionId, port, token, fail);
                 } else {
-                    tryDirect();
+                    fail();
                 }
-            }).catch(() => tryDirect());
+            }).catch(() => fail());
+        };
+        // workers.dev/cloudflare 域: 代理先行(DNS 污染网络兜底) → 直连回退;
+        // 自有域名(alias/自定义域·同样多为 CF 边缘承载): 直连先行 → 代理回退 —— 两赛道互补, 任一通即通。
+        if (isCfHost) {
+            tryProxy(() => tryDirect(onFail));
         } else {
-            tryDirect();
+            tryDirect(() => tryProxy(onFail));
         }
     } catch {
         onFail();
@@ -2102,6 +2116,7 @@ function setupRelayHandlers(relaySocket: any, relayUrl: string, sessionId: strin
     let closeHandled = false;
 
     relaySocket.on('open', () => {
+        _relayLastErr = '';
         ws.relayConnected = true;
         ws.relayConnecting = false;
         if (ws.relayConnectWatchdog) { clearTimeout(ws.relayConnectWatchdog); ws.relayConnectWatchdog = null; }
@@ -2139,6 +2154,7 @@ function setupRelayHandlers(relaySocket: any, relayUrl: string, sessionId: strin
     relaySocket.on('close', (code: number) => {
         if (closeHandled) return;
         closeHandled = true;
+        if (code !== 1000 && !_relayLastErr) _relayLastErr = 'close code=' + code + ' url=' + relayUrl;
         const isCurrent = (relaySocket === ws.relayWs);
         if (!isCurrent) return;
         ws.relayConnected = false;
@@ -2157,7 +2173,8 @@ function setupRelayHandlers(relaySocket: any, relayUrl: string, sessionId: strin
         }
     });
 
-    relaySocket.on('error', () => {
+    relaySocket.on('error', (e: any) => {
+        _relayLastErr = 'error: ' + String(e && e.message || e) + ' url=' + relayUrl;
         if (closeHandled) return;
         onFail();
     });
@@ -4228,7 +4245,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             let raw: any = null; try { raw = JSON.parse(fs.readFileSync(RELAY_STATE_FILE, 'utf8')); } catch { /* 无 */ }
             if (raw && raw.token) raw = { ...raw, token: '***' };
             if (raw && raw.oauth) raw = { ...raw, oauth: { ...raw.oauth, refreshToken: raw.oauth.refreshToken ? '***' : '', accessToken: raw.oauth.accessToken ? '***' : '' } };
-            return { ok: true, active: !!persist, url: persist || null, connected: ws.relayConnected, publicUrl: ws.publicUrl, state: raw };
+            return { ok: true, active: !!persist, url: persist || null, connected: ws.relayConnected, publicUrl: ws.publicUrl, lastErr: _relayLastErr, state: raw };
         }
         case '/api/relay/set': {
             const rb: any = JSON.parse(await readBody(req) || '{}');
@@ -4252,7 +4269,21 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         // 删除通道/切号: 撤销 CF 授权 + 清态 → 回退 quick tunnel/mesh。
         case '/api/relay/oauth-logout': { return await daoRelayOAuthLogout(); }
         case '/api/agents': {
-            return { agents: [{ id: os.hostname(), hostname: os.hostname(), ip: '127.0.0.1', os: `${os.type()} ${os.release()}`, user: os.userInfo().username, agent_version: '1.0.0', status: 'online', connected_at: new Date(ws.startTime).toISOString(), last_heartbeat: new Date().toISOString(), pending_commands: 0, completed_commands: 0, workspace: vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [], port: ws.port, publicUrl: ws.publicUrl }], count: 1 };
+            // 本机(中枢自身)恒在线 + 合入 dao-bridge 常驻进程已登记的远端设备(经一行接入接进来的机器)。
+            //   旧病灶: 硬编码只返本机 count:1 → 云端 Agent 查公网 /api/agents 永远看不到已接入的其他设备,
+            //   与「在线设备」板块(经 bridgeHubApi 合并)不一致。归一: 公网端点亦合并中枢注册表。
+            const self = { id: os.hostname(), hostname: os.hostname(), ip: '127.0.0.1', os: `${os.type()} ${os.release()}`, user: os.userInfo().username, agent_version: '1.0.0', status: 'online', connected_at: new Date(ws.startTime).toISOString(), last_heartbeat: new Date().toISOString(), pending_commands: 0, completed_commands: 0, workspace: vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [], port: ws.port, publicUrl: ws.publicUrl };
+            const agents: any[] = [self];
+            try {
+                const hr = await bridgeHubApi('/api/agents');
+                if (hr.status === 200) {
+                    const hj = JSON.parse(hr.text || '{}');
+                    for (const a of (Array.isArray(hj.agents) ? hj.agents : [])) {
+                        if (a && String(a.hostname || a.id || '') !== os.hostname()) agents.push(a);
+                    }
+                }
+            } catch { /* 守柔: 中枢未起则仅返本机 */ }
+            return { agents, count: agents.length };
         }
         case '/api/commands': {
             const cmds = await vscode.commands.getCommands(true);
@@ -7143,6 +7174,7 @@ function bridgeRelayState(): any {
         expiry: (st && st.oauth && st.oauth.expiry) || '',
         deployedAt: (st && st.deployedAt) || '',
         subdomain: (st && st.subdomain) || '',
+        lastErr: _relayLastErr,
     };
 }
 
@@ -8214,7 +8246,7 @@ function rBridgeFull(){
   h+='<div class="st" style="margin-top:14px">🖥️ 在线设备 <button class="btn sm ghost" style="float:right;margin-top:-3px;padding:2px 8px" onclick="cmd(&#39;bridgeListAgents&#39;)">⟳ 刷新</button></div>';
   h+='<div id="bridgeAgents" class="card">'+rBridgeAgents()+'</div>';
   // ── 一行接入 · PowerShell 把另一台设备接进本中枢 (irm .../bootstrap.ps1 | iex) ──
-  if(on){
+  if(on&&String(b.url||'').indexOf('/relay/')<0){
     var bu=String(b.url);var joinCmd='irm '+(bu.charAt(bu.length-1)==='/'?bu.slice(0,-1):bu)+'/api/bootstrap.ps1 | iex';
     h+='<div class="st" style="margin-top:14px">🔗 一行接入设备 · PowerShell</div>';
     h+='<div class="card"><div style="font-size:10px;color:var(--muted);margin-bottom:4px">在另一台 Windows 上以 PowerShell 运行下面这行，即把该机接入本中枢，出现在上方「在线设备」并可被远程操控：</div>';
@@ -11244,7 +11276,11 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // 一行接入须走「透明快速隧道」(cloudflared·公网免鉴权 GET 可达) — 即常驻进程 conn.url;
                 //   持久 relay 是鉴权 POST-RPC 通道, 不承载公网裸 GET 拉脚本(实测 relay 对 GET 回 405),
                 //   故此处只认 conn.url; 缺失才回落主口公网(仅在主口本身为透明隧道时有效)。道并行而不相悖。
-                const url = ((c && c.url) ? String(c.url).replace(/\/$/, '') : '') || (ws.publicUrl ? String(ws.publicUrl).replace(/\/$/, '') : '');
+                //   且一律排除 /relay/ 地址(conn.url 可能已被持久中继接管 — 中继裸 GET 回 405, 接入必死)。
+                const cand = [bridgeUrl, c && c.url, ws.publicUrl]
+                    .map((u: any) => String(u || '').replace(/\/$/, ''))
+                    .filter((u: string) => /^https?:\/\//.test(u) && u.indexOf('/relay/') < 0);
+                const url = cand[0] || '';
                 const line = url ? ('irm ' + url + '/api/bootstrap.ps1 | iex') : '';
                 if (line) await vscode.env.clipboard.writeText(line);
                 if (line) vscode.window.showInformationMessage('已复制一行接入命令 · 在另一台 Windows 的 PowerShell 运行即接入本中枢');

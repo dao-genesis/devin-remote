@@ -3280,6 +3280,22 @@ async function openShellHome(board) {
     return { ok: true };
   } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 }
+// 归一 · 复制品桌面入口: 在多实例外壳内开/聚焦一个分身桌面标签(与账号页/六合板块同壳同级),
+//   由 dao-vsix winOpenDesktop 经 _internals 注入 URL(rdp-web 官方 mstsc.js 前端·127.0.0.1 环回,
+//   webview CSP 本就放行 127.0.0.1:* 当 iframe 加载) — 单壳一切·不另起独立 WebviewPanel。
+//   同分身重开: mkTab 以 id 折叠聚焦已开标签, 不重复建页。
+async function openDesktopTab(opts) {
+  try {
+    const o = opts || {};
+    const url = String(o.url || "");
+    if (!url) return { ok: false, error: "no-url" };
+    const vm = String(o.vm || "vm01");
+    _ensureMultiPanel();
+    try { _multiPanel.reveal(vscode.ViewColumn.Active); } catch (e) {}
+    _postMulti({ type: "open", id: "vmdesk:" + vm, url, label: String(o.label || ("\uD83E\uDE9F " + vm + " · 复制品桌面")) });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+}
 // v4.16.0 · 归一 · 单账号「路由官网→IDE」实现抽出为可复用函数 (供单点 routeToIde + 多选批量 routeToIdeBatch 共用)。
 async function _routeAccountToIde(i) {
   if (i < 0 || i >= _store.accounts.length) return;
@@ -17276,6 +17292,7 @@ module.exports = {
     _resolveCascadePbDir, // v2.5.9 · Layer 6 cascade pb 目录
     buildHtml,
     openShellHome, // 归一 · 9921 综合外壳入口 (冷启动落六合主页·不强开 Devin 对话框)
+    openDesktopTab, // 归一 · 复制品桌面标签 (dao-vsix winOpenDesktop 注入 · 同壳同源)
     handleWebviewMessage, // 归一 · 内嵌「切号」消息处理 (dao-vsix wamRelay 中继 → 此 · 根治内嵌面板按钮全失效)
     setHostPost(fn) { _hostPost = (typeof fn === "function") ? fn : null; }, // 归一 · 内嵌「切号」宿主回推注入 (live 同步)
     openEditorPanel,
