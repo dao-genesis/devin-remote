@@ -39,10 +39,16 @@ function buildVsix() {
   // 在构建期把 proxy-fold.patch 叠到 extension.ts 副本上再转译 → vendor-vsix 含 Proxy 板。
   // 帛·「巧拙可伏藏」: 源洁, 合于 dao-one 时方现第三板。
   const overlayPatch = path.join(root, "proxy-fold.patch");
-  let patchText = null, applyOverlay = null;
+  // 归一·③ Windows 总控: 同理另叠 windows-fold.patch (汉堡面板单页 Windows 板块 + 后端 win* 处理器)。
+  const winPatch = path.join(root, "windows-fold.patch");
+  let patchText = null, applyOverlay = null, winPatchText = null;
   if (fs.existsSync(overlayPatch)) {
     applyOverlay = require("./apply-overlay").applyUnifiedDiff;
     patchText = fs.readFileSync(overlayPatch, "utf8");
+  }
+  if (fs.existsSync(winPatch)) {
+    applyOverlay = applyOverlay || require("./apply-overlay").applyUnifiedDiff;
+    winPatchText = fs.readFileSync(winPatch, "utf8");
   }
   let n = 0;
   for (const f of fs.readdirSync(srcDir)) {
@@ -75,6 +81,26 @@ function buildVsix() {
         );
       }
       log("vendor-vsix: applied proxy-fold.patch + folded getProxyPanel/noAuthNeeded + 'proxy' into _solo/reloadActiveDataTab (三合一叠加)");
+    }
+    // 归一·③ Windows 总控叠加 (在 proxy-fold 之后叠, 上下文级匹配抗行漂移)。
+    if (winPatchText && f === "extension.ts") {
+      code = applyOverlay(code, winPatchText);
+      // win* 命令并入免登白名单 (与 bridgeHealth/bridgeExec 同列, 桥面板命令均免登)。
+      code = code.replace(
+        /(const\s+noAuthNeeded\s*=\s*\[[^\]]*?)(\s*\]\s*;)/,
+        (m, head, tail) =>
+          head.includes("'winStatus'") ? m : head + ", 'winStatus', 'winExec', 'winScreenshot'" + tail,
+      );
+      // 'windows' 折入 solo 白名单 (汉堡列表点开即独立子网页·隐左导航)。
+      code = code.replace(
+        /(const\s+_solo\s*=\s*\[)([^\]]*?)(\]\s*\.includes)/,
+        (m, head, body, tail) =>
+          body.includes("'windows'") ? m : head + body + ", 'windows'" + tail,
+      );
+      // 'windows' 是面板板块而非数据 tab → 折入 reloadActiveDataTab / renderCredLimited 早退清单,
+      //   与 bridge/backups/github 同列, 避免 init 广播触发 loadTab('windows') 被宿主回 'Unknown tab'。
+      code = code.replace(/t==='github'\)return;/g, (m) => m.includes("windows") ? m : "t==='github'||t==='windows')return;");
+      log("vendor-vsix: applied windows-fold.patch + folded win*/noAuthNeeded + 'windows' into _solo/reloadActiveDataTab (Windows 总控叠加)");
     }
     const res = transform(code, {
       transforms: ["typescript", "imports"],
@@ -151,8 +177,21 @@ function buildFlow() {
         (m) => (touched = true, m + "['🔀','Proxy Pro · 本源观照 / 渠道配置 / 模型路由','board:proxy'],"),
       );
     }
+    // 归一·③ Windows 总控: 同法折入汉堡 PAGES + BOARD_META (源纯净·仅 dao-one 构建期幂等注入)。
+    if (!/windows:\[/.test(flow)) {
+      flow = flow.replace(
+        /(var BOARD_META=\{[^}]*?)(\};)/,
+        (m, head, tail) => head.includes("windows:") ? m : (touched = true, head + ",windows:['🪟','Windows 总控']" + tail),
+      );
+    }
+    if (!flow.includes("board:windows")) {
+      flow = flow.replace(
+        /(\['🌐','公网穿透 · DAO Bridge','board:bridge'\],)/,
+        (m) => (touched = true, m + "['🪟','Windows 总控 · 整机信息/工具清单/桥·MCP/密钥·资源/截屏·执行','board:windows'],"),
+      );
+    }
     if (touched) fs.writeFileSync(flowExt, flow);
-    log("vendor-flow: folded Proxy Pro into PAGES(汉堡)+BOARD_META (三合一叠加·源纯净)" + (touched ? "" : " · 已存在跳过"));
+    log("vendor-flow: folded Proxy Pro + Windows 总控 into PAGES(汉堡)+BOARD_META (叠加·源纯净)" + (touched ? "" : " · 已存在跳过"));
   }
   log("vendor-flow: copied extension.js + devin_cloud/proxy/web/git/stuck + py helpers + media");
 }
@@ -202,12 +241,26 @@ function verifyFolds() {
     "'proxy'",                      // _solo 白名单 (独立子网页模式)
     "t==='proxy'||",                // reloadActiveDataTab 面板板块早退
   ]);
+  must("vendor-vsix/out/extension.js", [
+    "data-tab=\"windows\"",        // 归一·③ Windows 总控 · 左栏第8板块入口
+    "id=\"v-windows\"",            // Windows 单页容器
+    "function rWindowsFull",        // Windows 单页渲染
+    "function rWindowsResult",
+    "case 'winStatus'",             // 后端 · 整机信息(桥 /api/health + sysinfo)
+    "case 'winExec'",               // 后端 · 整机执行
+    "case 'winScreenshot'",         // 后端 · 整机截屏
+    "'winStatus'",                  // 免登白名单
+    "'windows'",                    // _solo 白名单 / 早退清单
+    "t==='windows')return;",        // reloadActiveDataTab/renderCredLimited 面板板块早退
+  ]);
   must("vendor-flow/extension.js", [
     "board:proxy",                  // 汉堡菜单 PAGES 入口
     "proxy:['🔀','Proxy Pro']",     // BOARD_META 标签
+    "board:windows",                // 归一·③ Windows 汉堡菜单入口
+    "windows:['🪟','Windows 总控']", // BOARD_META 标签
   ]);
   must("vendor-proxy/extension.js", ["getEaConfigHtml"]);
-  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×8 · vendor-flow ×2 · vendor-proxy ×1)");
+  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×18 · vendor-flow ×4 · vendor-proxy ×1)");
 }
 
 buildVsix();
