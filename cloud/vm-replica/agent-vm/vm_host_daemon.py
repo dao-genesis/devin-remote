@@ -894,10 +894,12 @@ class HostHandler(http.server.BaseHTTPRequestHandler):
             # RD-for-Administration 2-session cap (licensing re-syncs it away), so route to
             # the RD Session Host role path, which admits >=2 replica desktops after 1 reboot.
             if _os_edition().get('is_server'):
-                return enable_server_multisession(install_role=body.get('install_role', True))
+                # install_role defaults False: never auto-install RDS / never leave a
+                # pending reboot. Pass install_role:true explicitly to install the role.
+                return enable_server_multisession(install_role=bool(body.get('install_role', False)))
             return ensure_multisession()
         if action == 'host.server_multisession':
-            return enable_server_multisession(install_role=body.get('install_role', True))
+            return enable_server_multisession(install_role=bool(body.get('install_role', False)))
         # ── Stealth / Silent mode (太上下知有之) ──
         if action == 'host.hibernate':
             return hibernate()
@@ -950,10 +952,11 @@ def ensure_multisession():
         return {'ok': False, 'error': str(e)}
 
 
-def enable_server_multisession(install_role=True):
-    """Server-SKU concurrent-session enabler: installs/activates the RD Session Host role so
-    >=2 replica desktops can run in parallel (the in-memory patch cannot do this on Server).
-    Reboot-safe & idempotent; reports reboot_required when the role was just installed."""
+def enable_server_multisession(install_role=False):
+    """Server-SKU concurrent-session enabler: activates the RD Session Host role so >=2
+    replica desktops can run in parallel (the in-memory patch cannot do this on Server).
+    Role install is gated behind explicit install_role=True (heavy, reboot-pending); a bare
+    call only applies the safe registry config and reports role state. Idempotent."""
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import ts_multifix
