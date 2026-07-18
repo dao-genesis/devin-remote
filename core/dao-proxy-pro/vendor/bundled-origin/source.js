@@ -3844,6 +3844,13 @@ function handleControl(req, res) {
           at: Date.now(),
         };
         _saveCustomSP();
+        // ★ v9.9.357 · 注入即入 custom 模式 · 面板无需额外模式按钮
+        //   道义: 「编辑即真」· 用户按下注入即愿以自编为真 → 模式随之归 custom
+        if (SP_MODE !== "custom") {
+          SP_MODE = "custom";
+          _saveModeToDisk(SP_MODE);
+          log("[模式] 注入自编 → 自动入 custom 模式");
+        }
         log(
           `custom_sp set: chars=${sp.length} keep_blocks=${_customSP.keep_blocks} source=${_customSP.source}`,
         );
@@ -3853,6 +3860,7 @@ function handleControl(req, res) {
             chars: sp.length,
             keep_blocks: _customSP.keep_blocks,
             at: _customSP.at,
+            mode: SP_MODE,
           }),
         );
       } catch (e) {
@@ -3867,8 +3875,14 @@ function handleControl(req, res) {
     const had = !!(_customSP && _customSP.sp);
     _customSP = null;
     _saveCustomSP();
+    // ★ v9.9.357 · 归道即回 invert · 与「注入即入 custom」对称
+    if (SP_MODE === "custom") {
+      SP_MODE = "invert";
+      _saveModeToDisk(SP_MODE);
+      log("[模式] 归道 → 自动回 invert 模式");
+    }
     if (had) log("custom_sp cleared");
-    res.end(JSON.stringify({ ok: true, was_set: had }));
+    res.end(JSON.stringify({ ok: true, was_set: had, mode: SP_MODE }));
     return true;
   }
 

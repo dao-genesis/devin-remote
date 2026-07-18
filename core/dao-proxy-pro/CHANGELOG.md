@@ -18,7 +18,13 @@ v9.9.357 · custom 模式 SP 不替换根治·三态归位(invert/passthrough/cu
   ② `invertSP` / `invertAnySP`: custom 模式而**无**自编文本时 `return null` 透传,
      **绝不回落经藏注入**(用户选 custom 即以用户为真, 无文则无为); 副路(summary/
      memory/ephemeral)custom 模式亦透传, 阴符经不再从副路带入 —— 隔离彻底。
-  自检 L4.6 增 4 例(源级门控 = `_spReplaceActive` · custom 无自编则透传 · 副路隔离)。
+  ③ 面板可达性: 「本源观照」仅有 道(invert)/官(passthrough) 两模式按钮, custom 模式
+     此前无 UI 入口(实机验证暴露)。修法: `POST /origin/custom_sp`(编→注入)保存自编即
+     **自动切入 custom 模式**并落盘; `DELETE`(归道)清空即自动回 invert —— 注入即真、
+     归道即返, 面板闭环, 无需额外模式按钮。响应体增返 `mode` 供面板即时回显。
+  自检 L4.6 增 6 例(源级门控 = `_spReplaceActive` · custom 无自编则透传 · 副路隔离 ·
+  注入/归道自动切换模式)。实机 Devin Desktop 3.4.27 全量验证 7 项皆过(invert/custom/
+  passthrough 三态 · 模型路由 /origin/ea/overview · 内网穿透)。
   三副本(devin-remote + windsurf plugins/packages)同步, dao-one 重建装配。
 
 
