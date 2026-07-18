@@ -276,6 +276,7 @@ function verifyFolds() {
     "case 'winVmCreate'",           // 后端 · 新建/连接分身(RDP 多会话)
     "case 'winOpenDesktop'",        // 后端 · 打开复制品桌面页
     "case 'winOpenAllDesktops'",    // 后端 · 并行全开(全部分身各折一张同级标签)
+    "setDesktopReopener",           // 复制品桌面 · reload 续接重开器注入(外壳恢复 vmdesk 标签时先确保守护/网关再折标签)
     "'winStatus'",                  // 免登白名单
     "'windows'",                    // _solo 白名单 / 早退清单
     "t==='windows')return;",        // reloadActiveDataTab/renderCredLimited 面板板块早退
@@ -286,9 +287,11 @@ function verifyFolds() {
     "board:windows",                // 归一·③ Windows 汉堡菜单入口
     "windows:['🪟','Windows 总控']", // BOARD_META 标签
     "async function openDesktopTab", // 归一 · 复制品桌面标签入口(dao-vsix 经 _internals 注入)
+    "setDesktopReopener",           // 归一 · vmdesk reload 续接重开器钩子(dao-vsix 注入 · 无则按存档 URL 直折)
+    "reopenDesktop",                // 归一 · vmdesk 存档续接消息(persistShell/restoreTabs 往返)
   ]);
   must("vendor-proxy/extension.js", ["getEaConfigHtml"]);
-  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×20 · vendor-flow ×4 · vendor-proxy ×1)");
+  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×21 · vendor-flow ×6 · vendor-proxy ×1)");
 }
 
 buildVsix();
