@@ -76,4 +76,25 @@ ok(/function cfPoolRevoke\(kb,id,name\)/.test(src) && /confirm\('撤销 API Toke
 ok(/function cfPoolDelWorker\(kb,name,active\)/.test(src) && /当前持久通道 Worker/.test(src), "删当前通道 Worker 有强警示确认");
 ok(/id="cfPoolBox"/.test(src) && /d\.type==='bridgeCfPool'/.test(src) && /d\.type==='bridgeCfPoolResources'/.test(src), "面板挂 CF 账号池区 + message 处理刷新");
 
+// ⑨ 「Token 权限拉满」纯后端直建(凭 Global API Key/Token · 无需浏览器登录 · 绕过 Turnstile):
+//    partition 全部权限组按 scope → 账号级/用户级/zone 级各建 allow=* 策略 → POST /user/tokens。
+const pol = sliceFn(src, "function cfBuildMaxScopePolicies");
+ok(/com\.cloudflare\.api\.account\.' \+ accountId/.test(pol) && /effect: 'allow'/.test(pol), "账号级策略 allow=* on com.cloudflare.api.account.<id>");
+ok(/com\.cloudflare\.api\.user\.' \+ userId/.test(pol), "用户级策略 allow=* on com.cloudflare.api.user.<id>(令牌可自管理)");
+ok(/com\.cloudflare\.api\.account\.zone\.\*/.test(pol), "zone 级策略 allow=* on account.zone.*(供绑自定义域)");
+const mint = sliceFn(src, "async function bridgeCfPoolMintToken");
+ok(/\/user\/tokens\/permission_groups/.test(mint), "取全部权限组走 /user/tokens/permission_groups");
+ok(/'POST', '\/user\/tokens'/.test(mint) && /policies/.test(mint), "POST /user/tokens 建 Token(拉满 policies)");
+ok(/e\.token = String\(cr\.json\.result\.value\)/.test(mint) && /bridgeCfPoolWrite\(pool\)/.test(mint), "新 Token value 落回池(600·供后续统管/复制)");
+ok(/needLogin: true/.test(mint), "仅密码账号 → needLogin(不硬造·需先过 Turnstile 登录)");
+
+// ⑩ Token 明文提取只经宿主剪贴板(绝不回传 webview): copyToken 读值 → vscode.env.clipboard。
+const cpv = sliceFn(src, "function bridgeCfPoolTokenValue");
+ok(/return \(e && e\.token\) \? String\(e\.token\) : ''/.test(cpv), "bridgeCfPoolTokenValue 只在后端取明文");
+ok(/case 'cfPoolCopyToken':/.test(src) && /vscode\.env\.clipboard\.writeText\(v\)/.test(src), "复制 Token 经宿主剪贴板(不回传 webview·守密)");
+ok(/case 'cfPoolMintToken':/.test(src), "建 Token 命令挂 dispatch");
+ok(/'cfPoolMintToken', 'cfPoolCopyToken'/.test(src), "建/复制 Token 在 noAuthNeeded 白名单");
+ok(/function cfPoolMint\(kb\)/.test(src) && /🔑 建 Token\(拉满\)/.test(src), "前端「建 Token(拉满)」按钮 + 二次确认");
+ok(/function cfPoolCopyToken\(kb\)/.test(src) && /hasToken\?/.test(src), "已落盘 Token 号出「复制 Token」按钮(hasToken 条件)");
+
 console.log("全部通过 (" + pass + " 项)");

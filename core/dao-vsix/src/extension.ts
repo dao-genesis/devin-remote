@@ -5584,6 +5584,9 @@ function bridgeCfPoolList(): { ok: boolean; entries: any[] } {
         accountId: e.accountId || '',
         cred: e.token ? 'token' : (e.key ? 'key' : (e.password ? 'password' : 'none')),
         canApi: !!cfEntryAuth(e),
+        hasToken: !!e.token,
+        mintedTokenName: e.mintedTokenName || '',
+        mintedAt: e.mintedAt || '',
         addedAt: e.addedAt || '',
     }));
     return { ok: true, entries };
@@ -5641,6 +5644,65 @@ async function bridgeCfPoolDeleteWorker(key: string, name: string): Promise<{ ok
     const r = await bridgeCfApiRequestAuth('DELETE', '/accounts/' + e.accountId + '/workers/scripts/' + encodeURIComponent(name) + '?force=true', auth);
     const ok = r.status === 200 && r.json && r.json.success;
     return ok ? { ok: true } : { ok: false, error: 'HTTP ' + r.status + (r.error ? (' ' + r.error) : '') };
+}
+// 纯逻辑·「Token 权限全部拉满」: 按 scope 归类 CF 全部权限组, 账号级/用户级/zone 级各建一条 allow=* 策略。
+//   与 addons/dao-relay/credlogin.mjs 的 partitionGroupsByScope+buildTokenPayload 同源(此处后端纯 API 版,
+//   凭 Global API Key 直建·无需浏览器会话·绕不过则由调用方回退)。groups 缺 scopes 时按名兜底归账号级。
+function cfBuildMaxScopePolicies(groups: any[], accountId: string, userId: string): any[] {
+    const account: any[] = [], user: any[] = [], zone: any[] = [];
+    for (const g of (Array.isArray(groups) ? groups : [])) {
+        if (!g || !g.id) continue;
+        const g2 = { id: String(g.id), name: String(g.name || '') };
+        const scopes = Array.isArray(g.scopes) ? g.scopes.map((s: any) => String(s)) : [];
+        const sc = scopes.join(' ').toLowerCase();
+        if (sc.includes('api.account.zone') || /\bzone\b|\bdns\b/i.test(g2.name)) zone.push(g2);
+        else if (sc.includes('api.user') || /\buser\b|api token|membership/i.test(g2.name)) user.push(g2);
+        else account.push(g2);
+    }
+    const policies: any[] = [];
+    if (account.length && accountId) { const r: any = {}; r['com.cloudflare.api.account.' + accountId] = '*'; policies.push({ effect: 'allow', resources: r, permission_groups: account }); }
+    if (user.length && userId) { const r: any = {}; r['com.cloudflare.api.user.' + userId] = '*'; policies.push({ effect: 'allow', resources: r, permission_groups: user }); }
+    if (zone.length && accountId) { const r: any = {}; r['com.cloudflare.api.account.zone.*'] = '*'; policies.push({ effect: 'allow', resources: r, permission_groups: zone }); }
+    return policies;
+}
+// 承接本源(用户「后端能做→固化自动化」+「Token 拉满」): 凭池内该号 Bearer/Global API Key 纯 HTTP 直建
+//   一枚**权限拉满**的 API Token(GET /user + /accounts + /user/tokens/permission_groups → POST /user/tokens),
+//   把 value 落回 cf-pool.json(600·供后续统管与「复制」提取), 只回非密元数据。仅密码号无凭证 → needLogin。
+async function bridgeCfPoolMintToken(key: string, name?: string): Promise<{ ok: boolean; key: string; tokenId?: string; tokenName?: string; error?: string; needLogin?: boolean }> {
+    const pool = bridgeCfPoolRead();
+    const e = pool.find((x) => cfPoolKeyOf(x) === key);
+    if (!e) return { ok: false, key, error: '池中无此账号' };
+    const auth = cfEntryAuth(e);
+    if (!auth) return { ok: false, key, needLogin: true, error: '该账号仅有邮箱+密码, 纯 API 无法建 Token — 需先登录(过 Turnstile)坐实会话。' };
+    const ur = await bridgeCfApiRequestAuth('GET', '/user', auth);
+    const userId = (ur.status === 200 && ur.json && ur.json.success && ur.json.result) ? String(ur.json.result.id || '') : '';
+    let accountId = String(e.accountId || '');
+    if (!accountId) {
+        const ar = await bridgeCfApiRequestAuth('GET', '/accounts?per_page=50', auth);
+        if (ar.status === 200 && ar.json && ar.json.success && Array.isArray(ar.json.result) && ar.json.result[0]) accountId = String(ar.json.result[0].id || '');
+    }
+    if (!accountId && !userId) return { ok: false, key, error: '取账号/用户失败: /user HTTP ' + ur.status };
+    const gr = await bridgeCfApiRequestAuth('GET', '/user/tokens/permission_groups', auth);
+    if (!(gr.status === 200 && gr.json && gr.json.success && Array.isArray(gr.json.result))) return { ok: false, key, error: '取权限组失败: HTTP ' + gr.status };
+    const policies = cfBuildMaxScopePolicies(gr.json.result, accountId, userId);
+    if (!policies.length) return { ok: false, key, error: '无可授予的权限组(账号/用户级为空)' };
+    const tokenName = String(name || ('dao-cf-pool ' + new Date().toISOString().slice(0, 10)));
+    const cr = await bridgeCfApiRequestAuth('POST', '/user/tokens', auth, { name: tokenName, policies });
+    if (!(cr.status === 200 && cr.json && cr.json.success && cr.json.result && cr.json.result.value)) {
+        return { ok: false, key, error: '建 Token 失败: HTTP ' + cr.status + (cr.json && cr.json.errors ? (' ' + JSON.stringify(cr.json.errors).slice(0, 160)) : '') };
+    }
+    e.token = String(cr.json.result.value);
+    e.mintedTokenId = String(cr.json.result.id || '');
+    e.mintedTokenName = tokenName;
+    e.mintedAt = new Date().toISOString();
+    if (accountId) e.accountId = accountId;
+    bridgeCfPoolWrite(pool);
+    return { ok: true, key, tokenId: e.mintedTokenId, tokenName };
+}
+// 取池内该号已铸/已存的 Token 明文(仅供「复制」显式提取·由宿主写入系统剪贴板, 绝不回传 webview)。
+function bridgeCfPoolTokenValue(key: string): string {
+    const e = bridgeCfPoolRead().find((x) => cfPoolKeyOf(x) === key);
+    return (e && e.token) ? String(e.token) : '';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -8552,7 +8614,8 @@ function rCfPool(){
   for(var i=0;i<es.length;i++){var e=es[i];var kb=btoa(unescape(encodeURIComponent(e.key)));
     h+='<div style="border-top:1px solid var(--border);padding-top:5px;margin-top:5px">';
     h+='<div class="cr"><span class="l" style="font-size:11px">'+esc(e.email||'(无邮箱·凭 Token)')+' <span style="color:var(--muted);font-size:10px">· '+esc(credLabel[e.cred]||e.cred)+(e.accountId?(' · acct '+esc(String(e.accountId).slice(0,8))):'')+'</span></span>';
-    h+='<span class="v">'+(e.canApi?'<button class="btn sm" onclick="cfPoolRes(&#39;'+kb+'&#39;)">管理资源</button> ':'<span style="color:var(--warn);font-size:10px">需登录建 Token </span>')+'<button class="btn sm danger" onclick="cfPoolDel(&#39;'+kb+'&#39;)">移出</button></span></div>';
+    h+='<span class="v">'+(e.canApi?('<button class="btn sm" onclick="cfPoolRes(&#39;'+kb+'&#39;)">管理资源</button> <button class="btn sm" onclick="cfPoolMint(&#39;'+kb+'&#39;)" title="凭该号 Global API Key/Token 纯后端直建一枚权限拉满的 API Token(无需登录官网·落盘可复制)">🔑 建 Token(拉满)</button> '+(e.hasToken?'<button class="btn sm" onclick="cfPoolCopyToken(&#39;'+kb+'&#39;)" title="复制该号已落盘 Token 到剪贴板">📋 复制 Token</button> ':'')):'<span style="color:var(--warn);font-size:10px">需登录建 Token </span>')+'<button class="btn sm danger" onclick="cfPoolDel(&#39;'+kb+'&#39;)">移出</button></span></div>';
+    if(e.mintedAt)h+='<div style="font-size:10px;color:var(--success);padding-left:8px">✓ 已建拉满 Token'+(e.mintedTokenName?('「'+esc(e.mintedTokenName)+'」'):'')+' · '+esc(String(e.mintedAt).slice(0,10))+'</div>';
     var res=(S.cfPoolRes||{})[e.key];
     if(res)h+='<div style="padding:2px 0 2px 8px">'+rCfPoolRes(res,kb)+'</div>';
   }
@@ -8580,6 +8643,8 @@ function _cfKeyFromB64(kb){try{return decodeURIComponent(escape(atob(kb)));}catc
 function cfPoolAdd(){var t=document.getElementById('cfPoolIn');if(!t||!t.value.trim())return;cmd('cfPoolAdd',{text:t.value});t.value='';}
 function cfPoolRes(kb){var key=_cfKeyFromB64(kb);S.cfPoolRes=S.cfPoolRes||{};S.cfPoolRes[key]={loading:true,ok:true};var b=document.getElementById('cfPoolBox');if(b)b.innerHTML=rCfPool();cmd('cfPoolResources',{key:key});}
 function cfPoolDel(kb){if(!confirm('从池中移出该账号？(仅本地移除，不影响云端资源)'))return;cmd('cfPoolRemove',{key:_cfKeyFromB64(kb)});}
+function cfPoolMint(kb){if(!confirm('用该账号自己的凭证在其 Cloudflare 上新建一枚「权限拉满」的 API Token？(纯后端·无需登录官网·落盘可复制)'))return;cmd('cfPoolMintToken',{key:_cfKeyFromB64(kb)});}
+function cfPoolCopyToken(kb){cmd('cfPoolCopyToken',{key:_cfKeyFromB64(kb)});}
 function cfPoolRevoke(kb,id,name){if(!id)return;if(!confirm('撤销 API Token「'+name+'」？此操作不可逆。'))return;cmd('cfPoolRevokeToken',{key:_cfKeyFromB64(kb),id:id});}
 function cfPoolDelWorker(kb,name,active){if(!name)return;var m=active?'「'+name+'」是当前持久通道 Worker，删除后公网穿透会断开（可重建）。确定删除？':'删除 Worker「'+name+'」？此操作不可逆。';if(!confirm(m))return;cmd('cfPoolDeleteWorker',{key:_cfKeyFromB64(kb),name:name});}
 function rBridgeRelayCard(r){
@@ -9914,7 +9979,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'relayCredLogin', 'cfListResources', 'cfRevokeToken', 'cfDeleteWorker', 'cfPoolList', 'cfPoolAdd', 'cfPoolRemove', 'cfPoolResources', 'cfPoolRevokeToken', 'cfPoolDeleteWorker', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'relayCredLogin', 'cfListResources', 'cfRevokeToken', 'cfDeleteWorker', 'cfPoolList', 'cfPoolAdd', 'cfPoolRemove', 'cfPoolResources', 'cfPoolRevokeToken', 'cfPoolDeleteWorker', 'cfPoolMintToken', 'cfPoolCopyToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
     // GitHub 纵向板块独立于 Devin 账号池(自带 PAT 鉴权) — daoGh* 一律免 Devin 登录
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command) && !/^daoGh/.test(String(msg.command || ''))) {
         reply({ type: 'error', msg: 'Not logged in' });
@@ -11741,6 +11806,17 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const r = await bridgeCfPoolDeleteWorker(String(msg.key || ''), String(msg.name || ''));
                 const res = await bridgeCfPoolResources(String(msg.key || ''));
                 reply({ type: 'bridgeCfPoolResources', ...res, toast: r.ok ? ('已删除 Worker ' + String(msg.name || '')) : ('删除失败: ' + (r.error || '')), toastOk: !!r.ok });
+                break;
+            }
+            case 'cfPoolMintToken': {
+                const r = await bridgeCfPoolMintToken(String(msg.key || ''), msg.name ? String(msg.name) : undefined);
+                reply({ type: 'bridgeCfPool', ...bridgeCfPoolList(), toast: r.ok ? ('已建拉满 Token「' + (r.tokenName || '') + '」· 已落盘可复制/统管') : ('建 Token 失败: ' + (r.error || '')), toastOk: !!r.ok });
+                break;
+            }
+            case 'cfPoolCopyToken': {
+                const v = bridgeCfPoolTokenValue(String(msg.key || ''));
+                if (v) { try { await vscode.env.clipboard.writeText(v); } catch { /* 守柔 */ } }
+                reply({ type: 'bridgeCfPool', ...bridgeCfPoolList(), toast: v ? '已复制该号 Token 到剪贴板' : '该号暂无已落盘 Token(先「建 Token」或加载资源)', toastOk: !!v });
                 break;
             }
             case 'bridgeHealth': {
