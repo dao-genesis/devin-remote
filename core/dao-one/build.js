@@ -246,6 +246,7 @@ function verifyFolds() {
     "id=\"v-windows\"",            // Windows 单页容器
     "function rWindowsFull",        // Windows 单页渲染
     "function rWindowsResult",
+    "function winBridgeApi",        // 后端 · 桥直连(cf-hub-conn.json 端口/令牌)
     "case 'winStatus'",             // 后端 · 整机信息(桥 /api/health + sysinfo)
     "case 'winExec'",               // 后端 · 整机执行
     "case 'winScreenshot'",         // 后端 · 整机截屏
@@ -260,7 +261,7 @@ function verifyFolds() {
     "windows:['🪟','Windows 总控']", // BOARD_META 标签
   ]);
   must("vendor-proxy/extension.js", ["getEaConfigHtml"]);
-  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×18 · vendor-flow ×4 · vendor-proxy ×1)");
+  log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×19 · vendor-flow ×4 · vendor-proxy ×1)");
 }
 
 buildVsix();

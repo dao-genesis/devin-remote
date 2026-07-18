@@ -81,18 +81,36 @@
 +}
 +window.addEventListener('message',function(e){var d=e.data;if(d&&d.type==='winData')rWindowsResult(d);});
  function rBridgeFull(){
-@@ -11203,0 +11346,29 @@
+@@ -6372,0 +6373,17 @@
++// Windows 总控: 桥直连 — 读 ~/.dao/cf-hub-conn.json 取 dao-bridge 本地端口/令牌(桥为独立进程·非本服务端口); 缺失回退本服务
++function winBridgeApi(p: string, method: string, body?: any): Promise<{ status: number; text: string }> {
++    let bport = 0, btok = '';
++    try { const c = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.dao', 'cf-hub-conn.json'), 'utf8')); bport = Number(c.port) || 0; btok = String(c.token || ''); } catch { /* 守柔 */ }
++    if (!bport || bport === ws.port) return bridgeLocalApi(p, method, body);
++    return new Promise((resolve) => {
++        const http = require('http');
++        const data = body ? JSON.stringify(body) : null;
++        const req = http.request({ host: '127.0.0.1', port: bport, path: p, method: method || 'GET', headers: { Authorization: 'Bearer ' + (btok || bridgeToken || ws.token), 'Content-Type': 'application/json' } }, (res: any) => {
++            let d = ''; res.on('data', (c: any) => d += c); res.on('end', () => resolve({ status: res.statusCode, text: d }));
++        });
++        req.on('error', (e: any) => resolve({ status: 0, text: String(e.message) }));
++        req.setTimeout(30000, () => { req.destroy(); resolve({ status: 0, text: 'timeout' }); });
++        if (data) req.write(data); req.end();
++    });
++}
+ // 在线设备 · 查询中枢(dao-bridge)代理注册表 — 走 conn.json 的本地端口 + 令牌(整机直连, 免公网往返)。
+@@ -11203,0 +11363,29 @@
 +            // ═══ 归一·③ Windows 总控: 整机信息 / 执行 / 截屏 — 复用 dao-bridge 本地 /api ═══
 +            case 'winStatus': {
-+                const rh = await bridgeLocalApi('/api/health', 'GET');
++                const rh = await winBridgeApi('/api/health', 'GET');
 +                let health: any = null; try { health = JSON.parse(rh.text || 'null'); } catch { /* 守柔 */ }
-+                const rs = await bridgeLocalApi('/api/exec-sync', 'POST', { type: 'sysinfo' });
++                const rs = await winBridgeApi('/api/exec-sync', 'POST', { type: 'sysinfo' });
 +                let sysinfo = ''; try { const j = JSON.parse(rs.text || '{}'); sysinfo = (j.result && (j.result.stdout || j.result.stderr)) || rs.text || ''; } catch { sysinfo = rs.text || ''; }
 +                reply({ type: 'winData', kind: 'status', ok: rh.status === 200, health, sysinfo: String(sysinfo).slice(0, 4000) });
 +                break;
 +            }
 +            case 'winExec': {
-+                const r = await bridgeLocalApi('/api/exec-sync', 'POST', { cmd: String(msg.cmd || '') });
++                const r = await winBridgeApi('/api/exec-sync', 'POST', { cmd: String(msg.cmd || '') });
 +                let out = r.text || '';
 +                try { const j = JSON.parse(r.text || '{}'); if (j.result) out = [j.result.stdout || '', j.result.stderr ? ('[stderr] ' + j.result.stderr) : ''].filter(Boolean).join('\n'); } catch { /* 守柔: 原样 */ }
 +                reply({ type: 'winData', kind: 'exec', ok: r.status === 200, text: 'HTTP ' + r.status + '\n' + String(out).slice(0, 4000) });
@@ -100,7 +118,7 @@
 +            }
 +            case 'winScreenshot': {
 +                const ps = "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; $bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height; $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.X,$b.Y,0,0,$bmp.Size); $ms=New-Object System.IO.MemoryStream; $bmp.Save($ms,[System.Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($ms.ToArray())";
-+                const r = await bridgeLocalApi('/api/exec-sync', 'POST', { cmd: ps, type: 'shell', timeout: 30 });
++                const r = await winBridgeApi('/api/exec-sync', 'POST', { cmd: ps, type: 'shell', timeout: 30 });
 +                let img = ''; let err = '';
 +                try { const j = JSON.parse(r.text || '{}'); const res = j.result || {}; img = String(res.stdout || '').replace(/\s+/g, ''); if (!img) err = res.stderr || ('HTTP ' + r.status); } catch (e: any) { err = 'HTTP ' + r.status + ' ' + (e && e.message ? e.message : ''); }
 +                reply({ type: 'winData', kind: 'screenshot', ok: !!img && r.status === 200, image: img, error: err });
