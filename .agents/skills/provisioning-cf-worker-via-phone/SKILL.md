@@ -25,6 +25,33 @@ This is exactly what `addons/rt-flow-app/app/src/main/assets/engine/cf-auto.js` 
 (`cfMintToken` → `feedToken` → `/api/cf-provision`). This skill is how you drive that same flow **remotely
 from the VM** over the mesh.
 
+## Preferred path: engine-native cookie mint (zero browser, freeze-immune) — v0.37.252+
+The background-tab throttling gotcha below is **structurally solved** by moving the token mint out of a
+throttled browser tab into the **persistent engine WebView** (runs inside `RelayService`'s foreground
+service — never frozen) using the CF dashboard cookies already in Android's global `CookieManager`.
+
+- Native bridge `Native.cookiesFor(url)` (`RelayService.java`, **Cloudflare-domain-gated only**) reads the
+  session cookie for `https://dash.cloudflare.com` from the process-wide `CookieManager` — works in the
+  background, no foreground tab, no `browseExecJs` kick+read.
+- Engine (`relay-app.js`) then uses the **native HTTP bridge** (`DaoCore.httpReq`, no CORS, freeze-immune)
+  to call the same dashboard internal APIs (`GET /api/v4/user` → `/api/v4/accounts?per_page=50` →
+  `/api/v4/user/tokens/permission_groups` → `POST /api/v4/user/tokens`) with `Cookie`+`Origin`+`Referer`+
+  `X-Requested-With`, mints a least-privilege token in memory, and hands it to `cfProvisionRun`.
+- **Route**: `{"path":"/api/cf-autoprovision","body":{}}` (optional `{"accountId":"<id>"}`). Returns
+  `{"started":true,"poll":"/api/cf-status","mode":"cookie-session"}`; poll `/api/cf-status` to `done` exactly
+  as the token path. UI button: 「⚡ 会话态直建 Worker」 in `tunnel.html` (`cfCookieAuto`).
+- **Multi-account safe**: single visible account auto-selected; multiple → `multi_account: <ids>` error (pass
+  `accountId`); unknown id → `account_not_found`; none → `no_account`. Never silently picks `accounts[0]`.
+- **Diagnostics**: no session cookie → `no_cf_session` (log into CF once in the in-app browser — clear a
+  human/Turnstile challenge that one time — then this button is fully automatic); missing account-scope
+  groups → `missing_perm_groups: <names>` before any token is created. Token value never appears in
+  status/error.
+- **Precondition**: the user must have logged into Cloudflare once in the in-app browser (GitHub-SSO to CF
+  counts). No credentials, cookies, passwords, or TOTP are accepted from remote callers — the route only
+  takes an optional `accountId`.
+- Tests: `addons/rt-flow-app/test/cf-cookie-mint.test.js` (pure helpers + injected cookie/dash mint flow +
+  route contract). Prefer this path; fall back to the mesh RPC procedure below only for old APKs (<0.37.252).
+
 ## Procedure (mesh RPC from the VM)
 Tool: `addons/rt-flow-app/tools/dao-mesh-rpc.mjs <session> <token> <frame>` (needs `ws`; `npm i ws --no-save`).
 Session/token come from the user's share block (`Session:` / `Token:`). The `browseExecJs` bridge does **not**

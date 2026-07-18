@@ -1,0 +1,104 @@
+"use strict";
+// 实测 relay-app.js 的「会话态·零浏览器·冻结免疫」建 Token 路 (恒定内网穿透通道之本源):
+//   用户在 App 内浏览器登录过 CF 后, 引擎经 CookieManager 会话 cookie + 原生 HTTP 桥直调 dashboard
+//   内部接口建最小权限 Token → 转 cfProvisionRun 部署 Worker。全程零可见标签·零前台·后台标签冻结免疫。
+// 覆盖: 纯函数 (权限组匹配/多账号选择/Token 载荷) + 会话态 mint 编排 (注入 cookie/dash 替身·不触真实网络)。
+// 无框架: node test/cf-cookie-mint.test.js (退出码非 0 即失败)。
+const assert = require("assert");
+const path = require("path");
+const { DaoRelayApp } = require(path.join(__dirname, "..", "app", "src", "main", "assets", "engine", "relay-app.js"));
+const CF = DaoRelayApp._cf;
+
+let failures = 0;
+function ok(c, msg) { if (c) { console.log("  ok  - " + msg); } else { failures++; console.error("  FAIL- " + msg); } }
+
+// CF 权限组全集 (含大小写/空白差异·成员/无关组·验证容错匹配)
+const GROUPS = [
+  { id: "g_ws", name: "Workers Scripts Write" },
+  { id: "g_as", name: "  account settings read " },   // 大小写+空白差异
+  { id: "g_ud", name: "User Details Read" },
+  { id: "g_mr", name: "Memberships Read" },
+  { id: "g_dns", name: "DNS Write" },                  // 无关组
+];
+
+(async () => {
+  // ── 1) 纯函数: 权限组匹配 (精确 + trim/不分大小写回退) ──
+  const acct = CF.pickGroups(GROUPS, ["Workers Scripts Write", "Account Settings Read"]);
+  ok(acct.length === 2 && acct[0].id === "g_ws" && acct[1].id === "g_as", "pickGroups: 精确+大小写/空白容错命中账号级两组");
+  const miss = CF.missingGroups(GROUPS, ["Workers Scripts Write", "Account Settings Read"]);
+  ok(miss.length === 0, "missingGroups: 账号级两组齐备 → 无缺");
+  const miss2 = CF.missingGroups([{ id: "x", name: "DNS Write" }], ["Workers Scripts Write"]);
+  ok(miss2.length === 1 && miss2[0] === "Workers Scripts Write", "missingGroups: 缺组精确列出");
+
+  // ── 2) 纯函数: Token 载荷 = 最小权限双策略 (账号级 + 用户级·资源精确钉 id) ──
+  const payload = CF.buildTokenPayload({ name: "t", accountId: "ACC1", userId: "USR1", groups: GROUPS });
+  ok(payload.policies.length === 2, "buildTokenPayload: 账号级+用户级 两条策略");
+  const ap = payload.policies.find((p) => p.resources["com.cloudflare.api.account.ACC1"] === "*");
+  const up = payload.policies.find((p) => p.resources["com.cloudflare.api.user.USR1"] === "*");
+  ok(ap && ap.permission_groups.length === 2, "账号策略钉 account.ACC1 + Workers写/账号设置读");
+  ok(up && up.permission_groups.length === 2, "用户策略钉 user.USR1 + 用户详情读/成员读 (非误用 acctG)");
+
+  // ── 3) 纯函数: 多账号选择 ──
+  ok(CF.pickAccount([{ id: "a1" }], "").id === "a1", "pickAccount: 单账号自动选");
+  ok(CF.pickAccount([{ id: "a1" }, { id: "a2" }], "a2").id === "a2", "pickAccount: 指定命中");
+  assert.throws(() => CF.pickAccount([{ id: "a1" }, { id: "a2" }], ""), /multi_account/, "pickAccount: 多账号未指定 → multi_account 报错");
+  assert.throws(() => CF.pickAccount([{ id: "a1" }], "zzz"), /account_not_found/, "pickAccount: 指定不存在 → account_not_found");
+  assert.throws(() => CF.pickAccount([], ""), /no_account/, "pickAccount: 空 → no_account");
+  ok(true, "pickAccount 三类错误分支均如期抛出");
+
+  // ── 4) 会话态 mint 编排: 注入 cookie + dash HTTP 替身, 断言端点顺序/头/无 token 泄漏 ──
+  const dashCalls = [];
+  function dashResp(obj, status) { return Promise.resolve({ status: status || 200, text: JSON.stringify(obj) }); }
+  DaoRelayApp.setCfCookieFn((url) => (String(url).indexOf("cloudflare.com") >= 0 ? "cf_clearance=xyz; __cfruid=abc" : ""));
+  DaoRelayApp.setCfDashFn(function (method, url, headers, body) {
+    dashCalls.push({ method, url, headers, body });
+    if (url.endsWith("/api/v4/user")) return dashResp({ success: true, result: { id: "USR1", email: "z@e.com" } });
+    if (url.indexOf("/api/v4/accounts") >= 0) return dashResp({ success: true, result: [{ id: "ACC1" }] });
+    if (url.endsWith("/permission_groups")) return dashResp({ success: true, result: GROUPS });
+    if (url.endsWith("/api/v4/user/tokens") && method === "POST") return dashResp({ success: true, result: { id: "tok1", value: "SECRET_TOKEN_VALUE_9876543210" } });
+    return dashResp({ success: false, errors: [{ message: "unexpected " + url }] }, 500);
+  });
+
+  const minted = await CF.mintViaCookie({ accountId: "ACC1" });
+  ok(minted.token === "SECRET_TOKEN_VALUE_9876543210" && minted.accountId === "ACC1", "mintViaCookie: 返回 token+accountId");
+  const order = dashCalls.map((c) => c.url.replace("https://dash.cloudflare.com", ""));
+  ok(order[0] === "/api/v4/user" && order[1].indexOf("/api/v4/accounts") === 0 && order[2].endsWith("/permission_groups") && order[3] === "/api/v4/user/tokens", "端点顺序: user → accounts → permission_groups → POST tokens");
+  const post = dashCalls.find((c) => c.method === "POST");
+  ok(post.headers.Cookie && post.headers.Cookie.indexOf("cf_clearance") >= 0, "POST 带会话 Cookie 头");
+  ok(post.headers.Origin === "https://dash.cloudflare.com" && post.headers.Referer === "https://dash.cloudflare.com/", "POST 带 Origin/Referer 同源头 (绕过 CSRF)");
+  ok(post.headers["X-Requested-With"] === "XMLHttpRequest", "POST 带 X-Requested-With (dashboard 内部接口约定)");
+
+  // ── 5) 无登录态 → no_cf_session (明确区分未登录 vs 过期) ──
+  DaoRelayApp.setCfCookieFn(() => "");
+  let e5 = null; try { await CF.mintViaCookie({}); } catch (e) { e5 = e; }
+  ok(e5 && /no_cf_session/.test(e5.message), "无 cookie → no_cf_session 明确报错");
+
+  // ── 6) 缺权限组 → missing_perm_groups (建 Token 前拦截·不静默铸欠权 Token) ──
+  DaoRelayApp.setCfCookieFn(() => "cf_clearance=xyz");
+  DaoRelayApp.setCfDashFn(function (method, url) {
+    if (url.endsWith("/api/v4/user")) return dashResp({ success: true, result: { id: "USR1" } });
+    if (url.indexOf("/api/v4/accounts") >= 0) return dashResp({ success: true, result: [{ id: "ACC1" }] });
+    if (url.endsWith("/permission_groups")) return dashResp({ success: true, result: [{ id: "g_dns", name: "DNS Write" }] });
+    return dashResp({ success: false }, 500);
+  });
+  let e6 = null; try { await CF.mintViaCookie({ accountId: "ACC1" }); } catch (e) { e6 = e; }
+  ok(e6 && /missing_perm_groups/.test(e6.message), "缺账号级权限组 → missing_perm_groups (POST tokens 未被调用)");
+
+  // ── 7) token 秘密性: 任何抛错信息都不含 token 明文 ──
+  const allErrs = [e5, e6].map((e) => (e && e.message) || "").join(" | ");
+  ok(allErrs.indexOf("SECRET_TOKEN_VALUE") < 0, "错误信息不含 token 明文");
+
+  // ── 8) /api/cf-autoprovision 路由: 只收 accountId·启动异步·回 poll 契约 ──
+  const rpc = async (p, body) => { const raw = await DaoRelayApp.serveLocal(JSON.stringify({ path: p, method: "POST", body: body || {} })); const o = JSON.parse(raw); return { status: o.status, body: JSON.parse(o.bodyText) }; };
+  DaoRelayApp.setCfCookieFn(() => "");   // 无登录态 → 会异步走进 no_cf_session, 但路由本身应立即 started
+  const r8 = await rpc("/api/cf-autoprovision", { accountId: "ACC1" });
+  ok(r8.status === 200 && r8.body.started === true && r8.body.mode === "cookie-session", "cf-autoprovision → started + mode=cookie-session");
+  ok(r8.body.poll === "/api/cf-status", "cf-autoprovision 回 poll=/api/cf-status");
+
+  // 复位注入, 不污染同进程其它测试
+  DaoRelayApp.setCfCookieFn(null);
+  DaoRelayApp.setCfDashFn(null);
+
+  console.log(failures ? ("\nFAIL " + failures) : "\nALL GREEN (cf-cookie-mint)");
+  process.exit(failures ? 1 : 0);
+})().catch((e) => { console.error("THROW", e); process.exit(1); });
