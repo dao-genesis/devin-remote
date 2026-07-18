@@ -118,7 +118,9 @@
 +            }
 +            case 'winScreenshot': {
 +                const ps = "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; $bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height; $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.X,$b.Y,0,0,$bmp.Size); $ms=New-Object System.IO.MemoryStream; $bmp.Save($ms,[System.Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($ms.ToArray())";
-+                const r = await winBridgeApi('/api/exec-sync', 'POST', { cmd: ps, type: 'shell', timeout: 30 });
++                // 桥 shell 型经 cmd.exe 派发, 故显式拉起 PowerShell(-EncodedCommand · UTF-16LE base64)避免引号/cmd 语义丢失
++                const psCmd = 'powershell -NoProfile -EncodedCommand ' + Buffer.from(ps, 'utf16le').toString('base64');
++                const r = await winBridgeApi('/api/exec-sync', 'POST', { cmd: psCmd, type: 'shell', timeout: 30 });
 +                let img = ''; let err = '';
 +                try { const j = JSON.parse(r.text || '{}'); const res = j.result || {}; img = String(res.stdout || '').replace(/\s+/g, ''); if (!img) err = res.stderr || ('HTTP ' + r.status); } catch (e: any) { err = 'HTTP ' + r.status + ' ' + (e && e.message ? e.message : ''); }
 +                reply({ type: 'winData', kind: 'screenshot', ok: !!img && r.status === 200, image: img, error: err });
