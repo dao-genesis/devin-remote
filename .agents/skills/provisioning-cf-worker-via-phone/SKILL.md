@@ -56,6 +56,12 @@ the same `cf_clearance`. Result returns via `window.__cfWebMintCb`; the token st
   takes an optional `accountId`.
 - Tests: `addons/rt-flow-app/test/cf-cookie-mint.test.js` (pure helpers + injected cookie/dash mint flow +
   route contract). Prefer this path; fall back to the mesh RPC procedure below only for old APKs (<0.37.252).
+- **Real-device end-to-end PASS (v0.37.254, real phone over ntfy mesh):** `POST /api/cf-autoprovision` →
+  `{"started":true,"mode":"cookie-session"}`; `/api/cf-status` advanced through step ⑤ (Worker upload) to
+  `phase=done, step=8, healthy:true` with `url=https://dao-relay-do.dao-d318ce25.workers.dev` in ~20s.
+  The offscreen same-origin mint **passes CF bot-management** where the native-HTTP path 403'd. The URL is
+  persisted (`saveRelayConfig`) — a later `/api/cf-status` re-poll still returns the same `done` record —
+  and `/health` from the VM returns 200 `dao-relay 3.9.0`.
 
 ## Procedure (mesh RPC from the VM)
 Tool: `addons/rt-flow-app/tools/dao-mesh-rpc.mjs <session> <token> <frame>` (needs `ws`; `npm i ws --no-save`).
