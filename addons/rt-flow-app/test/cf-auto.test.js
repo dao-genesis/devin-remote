@@ -188,6 +188,21 @@ function ts(name, fn) { return t(name, async () => fn()); }
     assert.ok(build.includes("/api/cf-autoprovision"), "cfPoolBuild login 分支未改走 /api/cf-autoprovision");
     assert.ok(!build.includes("cfAutoArm") && !build.includes("_cfTokenDeepLink") && !build.includes("openTab"), "cfPoolBuild login 分支仍在开可见页/武装 (未做到零点击)");
   });
+  await ts("cf-auto.js cfMintToken 403+HTML → cf_challenge (bot-management 拦截降级到 UI 流)", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/cf-auto.js"), "utf-8");
+    assert.ok(src.includes("text/html") && src.includes("cf_challenge"), "cfMintToken 缺少 403+HTML → cf_challenge 检测");
+    assert.ok(src.includes("emsg === \"cf_challenge\"") || src.includes('emsg === "cf_challenge"'), "cf_authed 分支缺少 cf_challenge 降级到 UI 建 Token 流");
+    assert.ok(src.includes("dash.cloudflare.com/profile/api-tokens"), "cf_challenge 降级未导航到 api-tokens 页");
+  });
+  await ts("tunnel.html Token 统管 (列出/撤销) UI 与 API 路由", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/tunnel.html"), "utf-8");
+    assert.ok(src.includes("cfListTokens") && src.includes("cfRevokeTokenPrompt"), "tunnel.html 缺少 Token 列出/撤销函数");
+    assert.ok(src.includes("/api/cf-list-tokens") && src.includes("/api/cf-revoke-token"), "tunnel.html 缺少 Token 统管 API 调用");
+  });
+  await ts("relay-app.js Token/Worker 统管路由 (list/revoke/delete)", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/relay-app.js"), "utf-8");
+    assert.ok(src.includes("/api/cf-list-tokens") && src.includes("/api/cf-revoke-token") && src.includes("/api/cf-delete-worker"), "relay-app.js 缺少 Token/Worker 统管路由");
+  });
 
   console.log("\ncf-auto.test.js: " + pass + " assertions passed");
 })();
