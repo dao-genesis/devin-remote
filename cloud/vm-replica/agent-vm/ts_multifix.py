@@ -36,7 +36,14 @@ If no source resolves the build, the module is a NO-OP (logs + returns) so a
 Windows Update that swaps termsrv.dll degrades gracefully to native single-session.
 
 Universal Windows edition support:
-  * Server SKUs: multi-session is NATIVE; this module is a no-op (unnecessary).
+  * Server SKUs: the in-memory CSLQuery data-patch is a NO-OP here — and, crucially,
+    it is NOT sufficient to lift the concurrent-session cap. Server runs in "RD for
+    Administration" mode (2 total sessions: console + 1 remote). Empirically the
+    server's licensing path RE-SYNCS the CSLQuery globals (bAppServerAllowed etc.)
+    right back to admin-mode within milliseconds, so even a live re-apply watchdog
+    holding bAppServerAllowed=1/lMaxUserSessions=1024 does NOT admit a 3rd session.
+    Lifting the cap on Server therefore requires the RD Session Host role (a reboot),
+    exposed here as `enable_server_multisession()` — the correct, automated path.
   * Pro/Enterprise: client SKU; patch needed. Standard code path.
   * Home: client SKU + tighter restrictions; same patch path but may need
     additional RDP enablement (fDenyTSConnections registry override).
@@ -615,6 +622,79 @@ def ensure_multisession():
         return {"ok": False, "error": "ensure_multisession exception: %s" % e}
 
 
+def _rds_role_state():
+    """Return the RDS-RD-Server feature InstallState ('Installed'|'Available'|'Removed'|...)."""
+    try:
+        return subprocess.check_output(
+            ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+             '(Get-WindowsFeature -Name RDS-RD-Server).InstallState'],
+            timeout=30, encoding='utf-8', errors='replace').strip()
+    except Exception:
+        return 'Unknown'
+
+
+def _configure_rdsh_registry():
+    """Safe, reboot-free registry config so the RD Session Host, once active, admits many
+    concurrent sessions without a license server: enable RDP, allow >1 session per user,
+    lift MaxInstanceCount, and select the 120-day per-device grace licensing mode. All keys
+    are reversible; none brick boot."""
+    ps = (
+        r"Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0 -Type DWord -Force;"
+        r"Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fSingleSessionPerUser -Value 0 -Type DWord -Force;"
+        r"New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Force | Out-Null;"
+        r"Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name fSingleSessionPerUser -Value 0 -Type DWord -Force;"
+        r"Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name MaxInstanceCount -Value 999999 -Type DWord -Force;"
+        # LicensingMode 4 = per-device grace (no license server needed for the 120-day window)
+        r"Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name LicensingMode -Value 4 -Type DWord -Force -ErrorAction SilentlyContinue"
+    )
+    try:
+        subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', ps],
+                       capture_output=True, timeout=30)
+        return True
+    except Exception:
+        return False
+
+
+def enable_server_multisession(install_role=True):
+    """Lift the concurrent-session cap on a Windows SERVER SKU.
+
+    Unlike client SKUs (handled by the in-memory `ensure_multisession()` patch), Server runs
+    in RD-for-Administration mode capped at 2 total sessions, and the in-memory CSLQuery patch
+    is re-synced away by the licensing path (see module docstring). The supported way to run
+    >=2 replica desktops in parallel is the RD Session Host role, which needs one reboot.
+
+    This applies the safe RDSH registry config immediately (reboot-free, reversible) and, if
+    the role is not yet installed and `install_role` is set, installs RDS-RD-Server (no auto
+    reboot). Idempotent. Returns `reboot_required=True` when a reboot is still needed to
+    activate the role.
+    """
+    if not _is_server_sku():
+        return {'ok': True, 'skipped': 'not-server',
+                'note': 'client SKU: use in-memory ensure_multisession() instead'}
+    _configure_rdsh_registry()
+    state = _rds_role_state()
+    if state.lower() == 'installed':
+        return {'ok': True, 'source': 'rds-role', 'applied': True,
+                'reboot_required': False, 'role_state': state,
+                'note': 'RD Session Host active; concurrent-session cap lifted'}
+    if not install_role:
+        return {'ok': True, 'source': 'rds-role', 'applied': False,
+                'reboot_required': True, 'role_state': state,
+                'note': 'RDS role not installed; re-call with install_role=True'}
+    ps = ("$r = Install-WindowsFeature RDS-RD-Server -IncludeManagementTools; "
+          "\"$($r.Success)|$($r.RestartNeeded)|$($r.ExitCode)\"")
+    try:
+        out = subprocess.check_output(
+            ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', ps],
+            timeout=900, encoding='utf-8', errors='replace').strip().splitlines()[-1]
+    except Exception as e:
+        return {'ok': False, 'error': 'RDS role install failed: %s' % e, 'role_state': state}
+    success = out.split('|')[0].strip().lower() in ('true', 'success')
+    return {'ok': success, 'source': 'rds-role', 'applied': False, 'reboot_required': True,
+            'role_state': _rds_role_state(), 'install_result': out,
+            'note': 'RDS role installed; ONE reboot required to activate and lift the cap'}
+
+
 def sysinfo():
     """Return a comprehensive system info dict for diagnostics and adaptation."""
     m, err = _open()
@@ -637,5 +717,7 @@ def sysinfo():
 if __name__ == "__main__":
     import json
     act = sys.argv[1] if len(sys.argv) > 1 else "status"
-    fn = {"status": status, "apply": apply, "revert": revert, "ensure": ensure_multisession}.get(act, status)
+    fn = {"status": status, "apply": apply, "revert": revert, "ensure": ensure_multisession,
+          "server": enable_server_multisession, "rds": enable_server_multisession,
+          "sysinfo": sysinfo}.get(act, status)
     print(json.dumps(fn(), ensure_ascii=False, indent=2))

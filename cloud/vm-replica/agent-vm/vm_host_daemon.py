@@ -890,7 +890,14 @@ class HostHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 return {'ok': False, 'error': str(e)}
         if action == 'host.enable_multisession':
+            # Client SKUs: in-memory termsrv patch. Server SKUs: that patch can't lift the
+            # RD-for-Administration 2-session cap (licensing re-syncs it away), so route to
+            # the RD Session Host role path, which admits >=2 replica desktops after 1 reboot.
+            if _os_edition().get('is_server'):
+                return enable_server_multisession(install_role=body.get('install_role', True))
             return ensure_multisession()
+        if action == 'host.server_multisession':
+            return enable_server_multisession(install_role=body.get('install_role', True))
         # ── Stealth / Silent mode (太上下知有之) ──
         if action == 'host.hibernate':
             return hibernate()
@@ -940,6 +947,21 @@ def ensure_multisession():
         return r
     except Exception as e:
         log.info('multi-session enable skipped: %s', e)
+        return {'ok': False, 'error': str(e)}
+
+
+def enable_server_multisession(install_role=True):
+    """Server-SKU concurrent-session enabler: installs/activates the RD Session Host role so
+    >=2 replica desktops can run in parallel (the in-memory patch cannot do this on Server).
+    Reboot-safe & idempotent; reports reboot_required when the role was just installed."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import ts_multifix
+        r = ts_multifix.enable_server_multisession(install_role=install_role)
+        log.info('server multi-session: %s', r)
+        return r
+    except Exception as e:
+        log.info('server multi-session enable failed: %s', e)
         return {'ok': False, 'error': str(e)}
 
 
