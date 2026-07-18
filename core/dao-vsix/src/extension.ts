@@ -8232,7 +8232,7 @@ function rBridgeFull(){
   h+='<div class="st" style="margin-top:14px">🖥️ 在线设备 <button class="btn sm ghost" style="float:right;margin-top:-3px;padding:2px 8px" onclick="cmd(&#39;bridgeListAgents&#39;)">⟳ 刷新</button></div>';
   h+='<div id="bridgeAgents" class="card">'+rBridgeAgents()+'</div>';
   // ── 一行接入 · PowerShell 把另一台设备接进本中枢 (irm .../bootstrap.ps1 | iex) ──
-  if(on){
+  if(on&&String(b.url||'').indexOf('/relay/')<0){
     var bu=String(b.url);var joinCmd='irm '+(bu.charAt(bu.length-1)==='/'?bu.slice(0,-1):bu)+'/api/bootstrap.ps1 | iex';
     h+='<div class="st" style="margin-top:14px">🔗 一行接入设备 · PowerShell</div>';
     h+='<div class="card"><div style="font-size:10px;color:var(--muted);margin-bottom:4px">在另一台 Windows 上以 PowerShell 运行下面这行，即把该机接入本中枢，出现在上方「在线设备」并可被远程操控：</div>';
@@ -11262,7 +11262,11 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 // 一行接入须走「透明快速隧道」(cloudflared·公网免鉴权 GET 可达) — 即常驻进程 conn.url;
                 //   持久 relay 是鉴权 POST-RPC 通道, 不承载公网裸 GET 拉脚本(实测 relay 对 GET 回 405),
                 //   故此处只认 conn.url; 缺失才回落主口公网(仅在主口本身为透明隧道时有效)。道并行而不相悖。
-                const url = ((c && c.url) ? String(c.url).replace(/\/$/, '') : '') || (ws.publicUrl ? String(ws.publicUrl).replace(/\/$/, '') : '');
+                //   且一律排除 /relay/ 地址(conn.url 可能已被持久中继接管 — 中继裸 GET 回 405, 接入必死)。
+                const cand = [bridgeUrl, c && c.url, ws.publicUrl]
+                    .map((u: any) => String(u || '').replace(/\/$/, ''))
+                    .filter((u: string) => /^https?:\/\//.test(u) && u.indexOf('/relay/') < 0);
+                const url = cand[0] || '';
                 const line = url ? ('irm ' + url + '/api/bootstrap.ps1 | iex') : '';
                 if (line) await vscode.env.clipboard.writeText(line);
                 if (line) vscode.window.showInformationMessage('已复制一行接入命令 · 在另一台 Windows 的 PowerShell 运行即接入本中枢');
