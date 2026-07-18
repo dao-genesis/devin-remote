@@ -6,8 +6,9 @@
  * 交互流程原样嵌入 IDE 内页, 用户体感与原生 RDP 完全一致。
  *
  * 纯 Node 内置模块实现(http/crypto), 不引第三方: WebSocket 服务端手写(RFC6455)。
- * 复制品会话凭据由本机守护 config.json 解析(域=本机名, 用户=分身名, 口令=default_password),
- * 全程 127.0.0.1 环回, 零 GUI 依赖, 后端可无头验证。
+ * 复制品会话凭据由本机守护环回 /vm/rdpcreds 动态解析(同账号复制品→别名+源账号+RAM-only口令;
+ * 独立账号VM→静态rdp_target+default_password)。口令全程 127.0.0.1 环回: 浏览器只收位图帧,
+ * 永远看不到口令; 守护不可达时回退 config.json 静态配置。零 GUI 依赖, 后端可无头验证。
  */
 const http = require('http');
 const fs = require('fs');
@@ -87,37 +88,66 @@ function attachWs(socket, onMessage, onClose) {
     socket.on('error', () => onClose && onClose());
 }
 
+/* ── RDP 凭据解析: 守护环回 /vm/rdpcreds → target/user/password(RAM-only) ──
+ * 同账号复制品的 target=动态别名(127.0.0.20+)、user=源账号、password=会话内存口令;
+ * 独立账号 VM 的 target=静态 rdp_target(127.0.0.2)、user=分身名、password=default_password。
+ * 口令全程 127.0.0.1 环回: 浏览器只收位图帧, 永远看不到口令。
+ * 守护不可达时回退静态 config(兼容无守护独立部署)。 */
+function resolveCreds(vm, cb) {
+    const cfg = daemonConfig();
+    const token = cfg.token || '';
+    const daemonPort = Number(cfg.daemon_port) || 9000;
+    const fallback = { target: cfg.rdp_target || '127.0.0.2', user: vm, password: cfg.default_password || '' };
+    const opts = {
+        hostname: '127.0.0.1', port: daemonPort,
+        path: '/vm/rdpcreds?name=' + encodeURIComponent(vm),
+        headers: { 'Authorization': 'Bearer ' + token },
+        timeout: 5000
+    };
+    const req = http.get(opts, (res) => {
+        let data = '';
+        res.on('data', (c) => { data += c; });
+        res.on('end', () => {
+            try {
+                const j = JSON.parse(data);
+                cb(j && j.ok ? j : fallback);
+            } catch (e) { cb(fallback); }
+        });
+    });
+    req.on('error', () => cb(fallback));
+    req.on('timeout', () => { req.destroy(); cb(fallback); });
+}
+
 /* ── RDP 会话代理: 一条 WS <-> 一路官方 RDP 连接(同源共控复制品会话) ── */
 function bridgeRdp(socket, vm) {
-    const cfg = daemonConfig();
-    const target = cfg.rdp_target || '127.0.0.2';
-    const domain = process.env.COMPUTERNAME || os.hostname();
-    const password = cfg.default_password || '';
-    const send = (o) => { try { socket.write(wsEncode(JSON.stringify(o))); } catch (e) {} };
+    resolveCreds(vm, (creds) => {
+        const domain = process.env.COMPUTERNAME || os.hostname();
+        const send = (o) => { try { socket.write(wsEncode(JSON.stringify(o))); } catch (e) {} };
 
-    let client = rdp.createClient({
-        domain: domain, userName: vm, password: password,
-        enablePerf: true, autoLogin: true,
-        screen: { width: 1280, height: 800 }, locale: 'en', logLevel: 'ERROR'
-    }).on('connect', () => send({ e: 'rdp-connect' }))
-        .on('bitmap', (b) => send({ e: 'rdp-bitmap', b: {
-            destTop: b.destTop, destLeft: b.destLeft, destBottom: b.destBottom, destRight: b.destRight,
-            width: b.width, height: b.height, bitsPerPixel: b.bitsPerPixel, isCompress: b.isCompress,
-            data: Buffer.from(b.data).toString('base64') } }))
-        .on('close', () => { send({ e: 'rdp-close' }); try { socket.end(); } catch (e) {} })
-        .on('error', (err) => send({ e: 'rdp-error', m: String((err && err.message) || err) }))
-        .connect(target, 3389);
+        let client = rdp.createClient({
+            domain: domain, userName: creds.user, password: creds.password,
+            enablePerf: true, autoLogin: true,
+            screen: { width: 1280, height: 800 }, locale: 'en', logLevel: 'ERROR'
+        }).on('connect', () => send({ e: 'rdp-connect' }))
+            .on('bitmap', (b) => send({ e: 'rdp-bitmap', b: {
+                destTop: b.destTop, destLeft: b.destLeft, destBottom: b.destBottom, destRight: b.destRight,
+                width: b.width, height: b.height, bitsPerPixel: b.bitsPerPixel, isCompress: b.isCompress,
+                data: Buffer.from(b.data).toString('base64') } }))
+            .on('close', () => { send({ e: 'rdp-close' }); try { socket.end(); } catch (e) {} })
+            .on('error', (err) => send({ e: 'rdp-error', m: String((err && err.message) || err) }))
+            .connect(creds.target, 3389);
 
-    attachWs(socket, (raw) => {
-        let m; try { m = JSON.parse(raw); } catch (e) { return; }
-        if (!client) return;
-        try {
-            if (m.t === 'mouse') client.sendPointerEvent(m.x, m.y, m.button, m.pressed);
-            else if (m.t === 'wheel') client.sendWheelEvent(m.x, m.y, m.step, m.neg, m.horiz);
-            else if (m.t === 'scancode') client.sendKeyEventScancode(m.code, m.pressed);
-            else if (m.t === 'unicode') client.sendKeyEventUnicode(m.code, m.pressed);
-        } catch (e) {}
-    }, () => { try { client && client.close(); } catch (e) {} client = null; });
+        attachWs(socket, (raw) => {
+            let m; try { m = JSON.parse(raw); } catch (e) { return; }
+            if (!client) return;
+            try {
+                if (m.t === 'mouse') client.sendPointerEvent(m.x, m.y, m.button, m.pressed);
+                else if (m.t === 'wheel') client.sendWheelEvent(m.x, m.y, m.step, m.neg, m.horiz);
+                else if (m.t === 'scancode') client.sendKeyEventScancode(m.code, m.pressed);
+                else if (m.t === 'unicode') client.sendKeyEventUnicode(m.code, m.pressed);
+            } catch (e) {}
+        }, () => { try { client && client.close(); } catch (e) {} client = null; });
+    });
 }
 
 const PORT = Number(process.env.RDP_WEB_PORT) || 9040;

@@ -82,7 +82,7 @@
 +    var _isRep=(vm.kind==='replica');var _badge=_isRep?('<span style="font-size:9px;background:rgba(16,185,129,.18);color:var(--success);border-radius:3px;padding:0 5px;margin-left:4px" title="同账号复制品 · 会话隔离 · 数据共享">🧬同号'+(vm.session_id?(' #'+vm.session_id):'')+'</span>'):'';
 +    var _meta=_isRep?('复制品 · '+(vm.replica_of||'当前账号')+(vm.alias?(' · '+vm.alias):'')):(vm.session_user||vm.status||'');
 +    h+='<span style="flex:1"><b style="font-size:12px">'+esc(vm.name)+'</b>'+_badge+' <span style="font-size:10px;color:var(--muted)">'+esc(_meta+(vm.port?(' · :'+vm.port):''))+'</span></span>';
-+    h+='<button class="btn sm primary" style="padding:2px 8px" onclick="cmd(&#39;winOpenDesktop&#39;,{vm:&#39;'+esc(vm.name)+'&#39;})">🖥️ 打开桌面</button>';
++    h+='<button class="btn sm primary" style="padding:2px 8px" onclick="cmd(&#39;winOpenDesktop&#39;,{vm:&#39;'+esc(vm.name)+'&#39;,kind:&#39;'+(vm.kind||'vm')+'&#39;})">🖥️ 打开桌面</button>';
 +    h+='<button class="btn sm ghost" style="padding:2px 8px" onclick="winVmDestroy(&#39;'+esc(vm.name)+'&#39;)">✕ 销毁</button></div>';
 +  }}else h+='<div style="font-size:11px;color:var(--muted);margin-top:6px">暂无分身。新建一个即在 IDE 内获得可实时操作的复制品桌面页。</div>';
 +  h+='</div>';
@@ -281,7 +281,11 @@
 +            }
 +            case 'winOpenDesktop': {
 +                const e1 = await ensureVmHost(true);
-+                if (e1.ok) { await vmHostApi('/', 'POST', { action: 'vm.ensure', name: String(msg.vm || 'vm01') }); await openVmDesktopPanel(String(msg.vm || 'vm01')); }
++                if (e1.ok) {
++                    // 复制品(kind=replica)已由 create_replica 启动会话; vm.ensure 走独立账号路径会冲突——跳过。
++                    if (String(msg.kind) !== 'replica') await vmHostApi('/', 'POST', { action: 'vm.ensure', name: String(msg.vm || 'vm01') });
++                    await openVmDesktopPanel(String(msg.vm || 'vm01'));
++                }
 +                reply({ type: 'winData', kind: 'vms', hostOk: e1.ok, list: e1.ok ? await vmHostList() : [] });
 +                break;
 +            }
@@ -294,7 +298,7 @@
 +                    const list = await vmHostList();
 +                    for (const vm of list) {
 +                        const nm = String((vm && vm.name) || '').trim(); if (!nm) continue;
-+                        await vmHostApi('/', 'POST', { action: 'vm.ensure', name: nm });
++                        if (String((vm as any).kind) !== 'replica') await vmHostApi('/', 'POST', { action: 'vm.ensure', name: nm });
 +                        await openVmDesktopPanel(nm); opened++;
 +                    }
 +                }
