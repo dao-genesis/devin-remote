@@ -531,8 +531,12 @@ const DaoRelayApp = (function () {
     opts = opts || {};
     var minted;
     // 有账密 → 自包含离屏代登录+建 Token (用户只提供账号·无可见网页·零点击);
-    // 无账密 → 会话态直建 (需 App 内已登录过 CF)。两路都收敛到同一条部署链。
-    if (opts.cf && opts.cf.user) {
+    // GitHub 号 → 离屏走 GitHub SSO 登 CF (账号+密码+TOTP·自动过 2FA/授权);
+    // 无账密 → 会话态直建 (需 App 内已登录过 CF)。三路都收敛到同一条部署链。
+    if (opts.gh && opts.gh.user) {
+      cfSet("running", 1, "① 离屏 GitHub SSO 登 CF·同源直建 Token (零可见页·零点击·冻结免疫)…", { error: "", url: "" });
+      minted = await cfWebAuto({ gh: opts.gh, accountId: opts.accountId || "" });
+    } else if (opts.cf && opts.cf.user) {
       cfSet("running", 1, "① 离屏代登录 CF·同源直建 Token (零可见页·零点击·冻结免疫)…", { error: "", url: "" });
       minted = await cfWebAuto({ cf: opts.cf, accountId: opts.accountId || "" });
     } else {
@@ -691,11 +695,26 @@ const DaoRelayApp = (function () {
       var apPass = String((ab && ab.password) || "");
       var apOtp = String((ab && ab.otp) || "").trim();
       var apAcct = String((ab && ab.accountId) || "").trim() || null;
-      // 有账密 → 自包含离屏代登录 (用户只提供账号); 无账密 → 会话态直建 (需 App 内已登录过 CF)。
-      var apOpts = (apEmail && apPass) ? { cf: { user: apEmail, pass: apPass, otp: apOtp }, accountId: apAcct } : { accountId: apAcct };
+      // GitHub 号: 用户名+密码+TOTP → 离屏 GitHub SSO 登 CF。
+      var apGhUser = String((ab && (ab.ghUser || (ab.gh && ab.gh.user))) || "").trim();
+      var apGhPass = String((ab && (ab.ghPass || (ab.gh && ab.gh.pass))) || "");
+      var apGhOtp = String((ab && (ab.ghOtp || (ab.gh && ab.gh.otp))) || "").trim();
+      var apGh = String((ab && ab.provider) || "").toLowerCase() === "github";
+      // 有账密 → 自包含离屏代登录 (用户只提供账号); GitHub 号 → GitHub SSO; 无账密 → 会话态直建 (需 App 内已登录过 CF)。
+      var apOpts, apMode;
+      if ((apGh || apGhUser) && apGhUser && apGhPass) {
+        apOpts = { gh: { user: apGhUser, pass: apGhPass, otp: apGhOtp }, accountId: apAcct };
+        apMode = "github-sso";
+      } else if (apEmail && apPass) {
+        apOpts = { cf: { user: apEmail, pass: apPass, otp: apOtp }, accountId: apAcct };
+        apMode = "web-auto";
+      } else {
+        apOpts = { accountId: apAcct };
+        apMode = "cookie-session";
+      }
       cfAutoProvisionRun(apOpts)
         .catch(function (e) { cfSet("error", cfProv.step, "✗ " + String((e && e.message) || e), { error: String((e && e.message) || e) }); });
-      return { status: 200, body: { started: true, poll: "/api/cf-status", mode: (apEmail && apPass) ? "web-auto" : "cookie-session" } };
+      return { status: 200, body: { started: true, poll: "/api/cf-status", mode: apMode } };
     }
     if (path === "/api/result-fetch") {
       const a = hubGetAgent(m.body && m.body.agent_id);
@@ -895,6 +914,7 @@ const DaoRelayApp = (function () {
     setCfDashFn(fn) { cfDashFn = fn; },        // 测试注入 dashboard 原生 HTTP (DaoCore.httpReq 替身)
     setCfWebMintFn(fn) { cfWebMintFn = fn; },   // 测试注入 离屏真 Chromium 同源建 Token (Native.cfWebMint 替身)
     setCfWebAutoFn(fn) { cfWebAutoFn = fn; },    // 测试注入 离屏代登录+建 Token (Native.cfWebAuto 替身)
+    _cfResetForTest() { cfSet("idle", 0, "未配置 (使用零账号内置中继)", { url: "", subdomain: "", accountId: "", error: "" }); },   // 测试专用: 复位单例状态 (直调编排后落定 running 不污染后续路由测)
     // 纯函数·供单测直取 (会话态建 Token 编排的可验证切片)
     _cf: { pickGroups: cfPickGroups, missingGroups: cfMissingGroups, buildTokenPayload: cfBuildTokenPayload,
            pickAccount: cfPickAccount, mintViaCookie: cfMintViaCookie, autoProvisionRun: cfAutoProvisionRun, webAuto: cfWebAuto },

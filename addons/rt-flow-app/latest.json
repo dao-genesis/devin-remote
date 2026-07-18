@@ -1,6 +1,6 @@
 {
-  "versionCode": 363,
-  "versionName": "0.37.258",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.258/DevinCloud-mobile-v0.37.258.apk",
-  "notes": "v0.37.258 · 自动发版"
+  "versionCode": 364,
+  "versionName": "0.37.259",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.259/DevinCloud-mobile-v0.37.259.apk",
+  "notes": "v0.37.259 · 账号池支持 GitHub 账号(用户名+密码+TOTP 经 GitHub SSO 登 CF)·万法识号自动分流 CF/GitHub·每号一键开官网·no_cf_session 自动改走账密离屏登录·已有 Worker 时错误不覆盖资源就绪"
 }
