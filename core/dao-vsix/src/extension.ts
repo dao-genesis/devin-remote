@@ -6092,23 +6092,38 @@ function _ghParseCredLine(line: string): { user: string; pass: string; otp: stri
     return { user, pass: rest[0] || '', otp };
 }
 // 统一添号入口: mode=pat 复用舰队 PAT 校验; mode=cred 账密+2FA 本地存号(随后可点「⚡ 自动建 PAT」隔离档官方登录建 PAT)。
+// 归一·自动识别添号(对齐切号板块「粘任意格式即自动识别」): 单一输入框可混合 PAT 行与账密行,
+//   不再强制用户先选格式。逐行判定: 含 GitHub token(ghp_/github_pat_/gho_/ghu_) → PAT 入舰队;
+//   否则可解析为「账号[+密码/2FA]」→ 账密本地存号(随后隔离档官方登录换 PAT)。mode 仅作歧义行兜底偏好。
+function _ghLineHasPat(line: string): boolean {
+    return /(?:^|[\s,;|])(ghp_|github_pat_|gho_|ghu_)[A-Za-z0-9_]+/.test(String(line || ''));
+}
 async function daoGhAccountAdd(text: string, role: string, mode: string): Promise<{ ok: boolean; results: { login: string; ok: boolean; role?: string; note?: string; error?: string }[] }> {
     const lines = String(text || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    if (mode !== 'cred') return daoGhFleetAdd(lines, role);
-    const prof = loadInjectProfile();
-    if (!Array.isArray(prof.ghFleet)) prof.ghFleet = [];
-    const r = (role === 'admin') ? 'admin' : 'member';
-    const results: { login: string; ok: boolean; role?: string; note?: string; error?: string }[] = [];
+    const patLines: string[] = []; const credLines: string[] = [];
     for (const ln of lines) {
-        const c = _ghParseCredLine(ln);
-        if (!c) { results.push({ login: ln.slice(0, 20), ok: false, error: '本行无法解析(至少 账号+密码)' }); continue; }
-        const login = c.user.includes('@') ? c.user.split('@')[0] : c.user;
-        const ex = prof.ghFleet.find(a => a.login.toLowerCase() === login.toLowerCase());
-        if (ex) { ex.cred = c; if (!ex.note) ex.note = '账密存号'; }
-        else prof.ghFleet.push({ login, pat: '', role: prof.ghFleet.length === 0 ? 'admin' : r, note: '账密存号·待官网换 PAT', addedAt: new Date().toISOString(), cred: c });
-        results.push({ login, ok: true, role: (ex ? ex.role : r), note: '已本地存号 · 点「⚡ 自动建 PAT」隔离档官方登录→官网建经典 PAT→自动落舰队(撞人机/设备验证则改点「🚀 续登」半自动)' });
+        if (_ghLineHasPat(ln)) patLines.push(ln);          // 明含 PAT → 舰队 PAT 路径
+        else if (_ghParseCredLine(ln)) credLines.push(ln); // 可解析为账密 → 账密存号
+        else if (mode === 'cred') credLines.push(ln);       // 歧义 → 按所选偏好兜底(给出明确报错)
+        else patLines.push(ln);
     }
-    saveInjectProfile(prof);
+    const results: { login: string; ok: boolean; role?: string; note?: string; error?: string }[] = [];
+    if (patLines.length) { const r = await daoGhFleetAdd(patLines, role); for (const x of r.results) results.push(x); }
+    if (credLines.length) {
+        const prof = loadInjectProfile();
+        if (!Array.isArray(prof.ghFleet)) prof.ghFleet = [];
+        const r = (role === 'admin') ? 'admin' : 'member';
+        for (const ln of credLines) {
+            const c = _ghParseCredLine(ln);
+            if (!c) { results.push({ login: ln.slice(0, 20), ok: false, error: '本行无法解析(至少 账号+密码, 或含 ghp_/github_pat_ PAT)' }); continue; }
+            const login = c.user.includes('@') ? c.user.split('@')[0] : c.user;
+            const ex = prof.ghFleet.find(a => a.login.toLowerCase() === login.toLowerCase());
+            if (ex) { ex.cred = c; if (!ex.note) ex.note = '账密存号'; }
+            else prof.ghFleet.push({ login, pat: '', role: prof.ghFleet.length === 0 ? 'admin' : r, note: '账密存号·待官网换 PAT', addedAt: new Date().toISOString(), cred: c });
+            results.push({ login, ok: true, role: (ex ? ex.role : r), note: '已本地存号 · 点「⚡ 自动建 PAT」隔离档官方登录→官网建经典 PAT→自动落舰队(撞人机/设备验证则改点「🚀 续登」半自动)' });
+        }
+        saveInjectProfile(prof);
+    }
     return { ok: results.some(x => x.ok), results };
 }
 // 单账号详情(用该账号自己的 PAT): /user + /user/orgs — 名字/scopes/公私仓数/组织。
@@ -9105,10 +9120,10 @@ function rGitHub(){
   // ① 添加 GitHub 账号 (三模式)
   h+='<div class="st">① 添加 GitHub 账号</div><div class="card" style="border-left:3px solid var(--success)">';
   var _tab=function(k,lbl){return '<span onclick="ghAddMode(&#39;'+k+'&#39;)" style="cursor:pointer;font-size:11px;padding:3px 10px;border-radius:12px;border:1px solid var(--border);margin-right:4px;background:'+(_mode===k?'var(--accent,#0e639c)':'transparent')+';color:'+(_mode===k?'#fff':'var(--muted)')+'">'+lbl+'</span>'};
-  h+='<div style="margin:2px 0 6px">'+_tab('pat','① 粘 PAT')+_tab('login','② 登录链接')+_tab('cred','③ 账密+2FA')+'</div>';
+  h+='<div style="margin:2px 0 6px">'+_tab('pat','① 粘账号 · 任意格式')+_tab('login','② 登录链接')+_tab('cred','③ 账密+2FA')+'</div>';
   if(_mode==='pat'){
-    h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 4px">粘 PAT(scopes 建议 <b>admin:org+repo+workflow</b>), 每行一个, 可「login PAT」或仅「PAT」(自动解析 login)。首个自动为本体·可随时改。</p>';
-    h+='<textarea id="ghAddInput" placeholder="ghp_xxx&#10;alice ghp_yyy&#10;github_pat_zzz" style="width:100%;height:60px;margin:2px 0;box-sizing:border-box;font-family:monospace;font-size:11px"></textarea>';
+    h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 4px">与切号板块同构·<b>粘任意格式即自动识别</b>: 每行可为 PAT(<b>ghp_/github_pat_</b>·建议 scopes admin:org+repo+workflow)、「login PAT」、或账密+2FA(<b>account----pass----2FA</b> / 空格逗号分隔)。含 PAT 的行入舰队, 账密行本地存号(随后一键换 PAT)。混合粘贴亦可, 首个自动为本体。</p>';
+    h+='<textarea id="ghAddInput" placeholder="ghp_xxx&#10;alice ghp_yyy&#10;github_pat_zzz&#10;bob@mail.com----passw0rd----JBSWY3DP" style="width:100%;height:60px;margin:2px 0;box-sizing:border-box;font-family:monospace;font-size:11px"></textarea>';
   }else if(_mode==='login'){
     h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 4px">不用手填凭证: 直接跳 GitHub 官网登录/建 PAT(已预置 scopes 与有效期选择页), 建好回来切到「① 粘 PAT」贴入即入池。逻辑与官网完全一致。</p>';
     h+='<div class="br" style="margin:2px 0"><button class="btn sm" onclick="ghOpen(&#39;https://github.com/login&#39;)">🔗 登录 GitHub</button><button class="btn sm primary" onclick="ghOpen(&#39;https://github.com/settings/tokens/new?scopes=admin:org,repo,workflow&amp;description=dao-vsix&#39;)">🔑 建 PAT(选有效期)</button><button class="btn sm" onclick="ghOpen(&#39;https://github.com/settings/tokens&#39;)">📋 查看我的 PAT</button></div>';
