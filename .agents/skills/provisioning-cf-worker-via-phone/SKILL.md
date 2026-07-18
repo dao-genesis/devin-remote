@@ -25,18 +25,23 @@ This is exactly what `addons/rt-flow-app/app/src/main/assets/engine/cf-auto.js` 
 (`cfMintToken` → `feedToken` → `/api/cf-provision`). This skill is how you drive that same flow **remotely
 from the VM** over the mesh.
 
-## Preferred path: engine-native cookie mint (zero browser, freeze-immune) — v0.37.252+
-The background-tab throttling gotcha below is **structurally solved** by moving the token mint out of a
-throttled browser tab into the **persistent engine WebView** (runs inside `RelayService`'s foreground
-service — never frozen) using the CF dashboard cookies already in Android's global `CookieManager`.
+## Preferred path: offscreen same-origin WebView mint (zero visible tab, freeze-immune, passes CF bot-mgmt) — v0.37.254+
+**Root cause discovered v0.37.254 (verified against the real phone):** CF binds the dashboard `/api/v4/*`
+API to the **browser fingerprint + `cf_clearance` + SameSite cookies**. A native `HttpURLConnection` reuse
+of the login-session cookies (the old v0.37.252 approach) — even with a Chrome UA — is **403'd by CF
+bot-management** (`✗ CF dash /api/v4/user: HTTP 403`), because its TLS fingerprint isn't Chromium's and a
+`file://`-origin `fetch` drops the `SameSite=Lax` session cookies. **Only a same-origin request from an
+actual `dash.cloudflare.com` page carries all the cookies and passes.**
 
-- Native bridge `Native.cookiesFor(url)` (`RelayService.java`, **Cloudflare-domain-gated only**) reads the
-  session cookie for `https://dash.cloudflare.com` from the process-wide `CookieManager` — works in the
-  background, no foreground tab, no `browseExecJs` kick+read.
-- Engine (`relay-app.js`) then uses the **native HTTP bridge** (`DaoCore.httpReq`, no CORS, freeze-immune)
-  to call the same dashboard internal APIs (`GET /api/v4/user` → `/api/v4/accounts?per_page=50` →
-  `/api/v4/user/tokens/permission_groups` → `POST /api/v4/user/tokens`) with `Cookie`+`Origin`+`Referer`+
-  `X-Requested-With`, mints a least-privilege token in memory, and hands it to `cfProvisionRun`.
+The fix (`RelayService.cfWebMint` + `relay-app.js` `cfWebMint`/`cfMintViaCookie`): mint inside a **dedicated
+offscreen real-Chromium `WebView`** that `RelayService` (foreground service → never frozen) navigates to
+`https://dash.cloudflare.com/`. On page load it injects a same-origin `fetch` mint (`GET /api/v4/user` →
+`/api/v4/accounts?per_page=50` → `/api/v4/user/tokens/permission_groups` → `POST /api/v4/user/tokens`),
+which carries the full session cookies + `cf_clearance` (real browser → passes bot-mgmt) **and** is
+freeze-immune (service, not a background tab). UA matches the in-app browser (`sanitizedUa`) so it reuses
+the same `cf_clearance`. Result returns via `window.__cfWebMintCb`; the token stays in memory and flows to
+`cfProvisionRun`. The old native-HTTP path is kept only as a fallback for non-semantic bridge failures.
+
 - **Route**: `{"path":"/api/cf-autoprovision","body":{}}` (optional `{"accountId":"<id>"}`). Returns
   `{"started":true,"poll":"/api/cf-status","mode":"cookie-session"}`; poll `/api/cf-status` to `done` exactly
   as the token path. UI button: 「⚡ 会话态直建 Worker」 in `tunnel.html` (`cfCookieAuto`).
