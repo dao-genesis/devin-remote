@@ -96,6 +96,18 @@ function ts(name, fn) { return t(name, async () => fn()); }
     assert.strictEqual(p2.policies.length, 0);
     assert.ok(/^dao-relay /.test(p2.name));   // 默认名
   });
+  // 任意用户健壮性: CF 不同账号/语言环境回传的组名大小写/首尾空白可能不同 → 语义名一致即命中
+  await ts("pickGroups 大小写/空白不敏感回退命中 (任意用户可复现)", () => {
+    const PG2 = [{ id: "gW", name: " workers scripts WRITE " }, { id: "gA", name: "Account Settings Read" }];
+    assert.deepStrictEqual(CFAUTO.pickGroups(PG2, ["Workers Scripts Write", "Account Settings Read"]), [{ id: "gW" }, { id: "gA" }]);
+  });
+  await ts("missingGroups 找出缺失的必需组名 (缺权即明确诊断·非静默铸欠权 Token)", () => {
+    assert.deepStrictEqual(CFAUTO.missingGroups(PG, CFAUTO.ACCT_GROUPS), []);              // 全在
+    const partial = [{ id: "gW", name: "Workers Scripts Write" }];
+    assert.deepStrictEqual(CFAUTO.missingGroups(partial, CFAUTO.ACCT_GROUPS), ["Account Settings Read"]);
+    assert.deepStrictEqual(CFAUTO.missingGroups([], CFAUTO.ACCT_GROUPS), CFAUTO.ACCT_GROUPS.slice());
+    assert.deepStrictEqual(CFAUTO.missingGroups(null, ["x"]), ["x"]);
+  });
 
   await ts("classify 人机验证/硬件密钥优先停手", () => {
     assert.strictEqual(CFAUTO.classifyPage("https://github.com/login", { ghLogin: true, captcha: true }), "captcha");

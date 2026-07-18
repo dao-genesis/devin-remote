@@ -42,3 +42,10 @@ description: Build the rt-flow-app APK and verify it end-to-end on an Android 34
 
 ## Devin Secrets Needed
 - None currently provisioned; account credentials and a GitHub PAT arrive in user-attached MD files. Prefer asking the user to store `DAO_GENESIS_GITHUB_PAT` and the Outlook test-account credentials as permanent secrets.
+
+## Convwatch / notification testing (engine.html)
+- The engine WebView is CDP-inspectable: `adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof ai.devin.rtflow)`, target url `file:///android_asset/engine/engine.html`.
+- To drive notification states without live accounts: seed `localStorage["rtflow.accounts"]` with one `{email,auth1,orgId}` entry (notifyTick early-returns on empty pool), stub `window.CMDS.trackStuck` (CMDS is window-exposed) to return a synthetic `{ok:true,sessions:[...],scanned:[...],ended:[...]}`, then call `window.__convTick()` per tick. This exercises the real `_convTrack → notify → NotificationManager` chain.
+- Assert via `adb shell dumpsys notification --noredact`: rt-flow conv notifications post with `tag=null` (count `NotificationRecord.*pkg=ai.devin.rtflow`, don't grep `tag=conv`); titles carry the account 【N】 prefix.
+- Grant `adb shell pm grant ai.devin.rtflow android.permission.POST_NOTIFICATIONS` on a fresh AVD or nothing will post. `adb shell cmd statusbar expand-notifications` shows the shade for visual/recorded evidence.
+- Ledger keys: `rtflow.convwatch` (prev sid→phase), `rtflow.convwatch.alerted` (dedup ledger); clear them between scenarios to reset dedup.
