@@ -8294,13 +8294,13 @@ function rBridgeFull(){
   h+='<button class="btn sm" onclick="cmd(&#39;bridgeInjectKnowledge&#39;)">📚 注入</button></div></div>';
 
   // ── 末·兜底通道: 单一接口 · 贴 API Token 全自动打通(与顶部 OAuth 同源后半程 provision.mjs) ──
-  h+='<div class="st" style="margin-top:14px">🔑 兜底通道 · 贴 API Token 全自动打通（可选）</div>';
+  h+='<div class="st" style="margin-top:14px">🔑 兜底通道 · 贴任意 Cloudflare 凭证全自动打通（可选）</div>';
   h+='<div class="card">';
   var cfOn=!!(b.cfLoggedIn||b.named);
-  h+='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">顶部「一次登录」有问题时的<b style="color:var(--fg)">兜底</b>：只需贴一个 Cloudflare <b style="color:var(--fg)">API Token</b>（含 Workers 脚本编辑 + 账号读权限），后端即全自动 取账号 → 部署你自己的固定 Worker → 落盘置顶接管，与顶部同一套逻辑，状态同显于顶部持久通道卡片。<a href="#" onclick="cmd(&#39;openCf&#39;);return false" style="color:var(--accent2)">去 Cloudflare 创建 Token →</a></div>';
+  h+='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">顶部「一次登录」有问题时的<b style="color:var(--fg)">兜底</b>：与切号板块同构·<b style="color:var(--fg)">粘任意格式即自动识别</b> — 可贴 <b>API Token</b>、<b>邮箱+Global API Key</b>、或 <b>账号+密码(+2FA)</b>(空格/逗号/<code>----</code>分隔)。后端即全自动 取账号 → 部署你自己的固定 Worker → 落盘置顶接管，状态同显于顶部持久通道卡片。<a href="#" onclick="cmd(&#39;openCf&#39;);return false" style="color:var(--accent2)">去 Cloudflare 创建 Token →</a></div>';
   if(cfOn)h+='<div class="cr"><span class="l">CloudFlare</span><span class="v" style="color:var(--success)">✓ 已绑定凭证'+(b.cfEmail?(' · '+esc(b.cfEmail)):'')+(b.named?'（命名隧道·固定域名）':'')+'</span></div>';
-  h+='<input id="cfKey" type="password" placeholder="Cloudflare API Token（唯一入口 · 贴入后一键全自动打通）" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
-  h+='<div class="br" style="margin-top:4px"><button class="btn sm primary" onclick="relayTokenGo()" title="token→取账号→保证子域→wrangler deploy→落盘置顶, 全后台自动">🚀 用 Token 全自动打通</button>';
+  h+='<input id="cfKey" type="password" placeholder="API Token · 或 邮箱+Global API Key · 或 账号----密码----2FA（自动识别）" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
+  h+='<div class="br" style="margin-top:4px"><button class="btn sm primary" onclick="relayCfSmartGo()" title="自动识别 token/账密/GlobalAPIKey→取账号→保证子域→wrangler deploy→落盘置顶, 全后台自动">🚀 全自动打通（任意格式）</button>';
   if(cfOn)h+='<button class="btn sm danger" onclick="if(confirm(&#39;退出账号并清空全部 CloudFlare 凭证残留(含 cert.pem)，回到无账号快速隧道？&#39;))cmd(&#39;bridgeLogout&#39;)">🚪 退出/重置</button>';
   h+='</div>';
   h+='</div>';
@@ -8335,6 +8335,12 @@ function rBridgeAgents(){
 function bridgeCfLogin(){var e=document.getElementById('cfEmail'),k=document.getElementById('cfKey');var email=e?e.value.trim():'';var key=k?k.value.trim():'';if(!key){toast('请填写 Token / API Key',false);return}toast('验证中…',true);cmd('bridgeCfLogin',{email:email,key:key})}
 // 兜底通道·单一接口: 贴 API Token → 后端全自动 provision 持久 Worker(+尽力绑定凭证/命名隧道)。
 function relayTokenGo(){var k=document.getElementById('cfKey');var token=k?k.value.trim():'';if(!token){toast('请先贴入 Cloudflare API Token',false);return}toast('全自动打通中…(取账号→部署 Worker→落盘置顶, 约 1-2 分钟)',true);cmd('relayProvisionToken',{token:token})}
+// 归一·自动识别 Cloudflare 凭证(对齐切号板块「粘任意格式即自动识别」): 单框可贴
+//   ① 纯 API Token(无 @) → relayProvisionToken 全自动部署;
+//   ② 邮箱+Global API Key(37位hex) → bridgeCfLogin 校验绑定;
+//   ③ 账号+密码(+2FA) → relayCredLogin 零点击 CDP 登录→授权→部署。
+function _cfParseCred(raw){var parts=String(raw||'').split(/----|[\s,;\t|]+/).map(function(s){return s.trim()}).filter(Boolean);if(!parts.length)return null;var email='',otp='',rest=[];for(var i=0;i<parts.length;i++){var p=parts[i];if(!email&&/@/.test(p)){email=p;continue}if(!otp&&/^[A-Z2-7]{16,}$/i.test(p.replace(/\s+/g,''))){otp=p.replace(/\s+/g,'');continue}rest.push(p)}return {email:email,rest:rest,otp:otp}}
+function relayCfSmartGo(){var k=document.getElementById('cfKey');var raw=k?k.value.trim():'';if(!raw){toast('请贴入 API Token / 邮箱+Global API Key / 账号密码(+2FA)',false);return}var pr=_cfParseCred(raw);if(pr&&pr.email){var one=(pr.rest.length===1)?pr.rest[0]:'';if(one&&/^[a-f0-9]{37}$/i.test(one)){toast('验证 Global API Key…',true);cmd('bridgeCfLogin',{email:pr.email,key:one});return}if(pr.rest.length){toast('🚀 账号密码零点击全自动打通中…(登录→授权→部署 Worker, 约 1-2 分钟; 遇验证码将自动回退)',true);cmd('relayCredLogin',{email:pr.email,password:pr.rest.join(' '),totp:pr.otp||undefined});return}toast('该邮箱缺少密码或 Global API Key',false);return}toast('全自动打通中…(取账号→部署 Worker→落盘置顶, 约 1-2 分钟)',true);cmd('relayProvisionToken',{token:raw})}
 // 纯凭证·零点击全自动: 只填 CF 账号密码(+可选 TOTP) → 后端 CDP 驱动登录+授权+部署持久 Worker(承担一切负担)。
 function relayCredGo(){var e=document.getElementById('relayCfEmail'),p=document.getElementById('relayCfPass'),t=document.getElementById('relayCfTotp');var email=e?e.value.trim():'';var pass=p?p.value:'';var totp=t?t.value.trim():'';if(!email||!pass){toast('请先填 Cloudflare 账号与密码',false);return}toast('🚀 零点击全自动打通中…(登录→授权→部署 Worker, 约 1-2 分钟; 遇验证码将自动回退一次授权)',true);cmd('relayCredLogin',{email:email,password:pass,totp:totp||undefined})}
 // 代登 Cloudflare: 用 GitHub 账号(账密+2FA 存号)后端代操作 → 隔离档链式代填建 API Token(守柔不代提交)。
