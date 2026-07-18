@@ -69,7 +69,7 @@
 +  h+='</div>';
 +  // ── ⑥ 复制品桌面 · Windows 账号/分身管理(仿 rt-flow 多实例 Devin 账号页 · 复用官方 RDP 多会话·环回·boot-safe) ──
 +  var vms=(ws.vms&&ws.vms.list)||[];var hostOk=ws.vms&&ws.vms.hostOk;
-+  h+='<div class="st" style="margin-top:12px">🖥️ 复制品桌面 · 账号/分身 <button class="btn sm ghost" style="float:right;margin-top:-3px;padding:2px 8px" onclick="cmd(&#39;winVmList&#39;)">⟳ 刷新</button></div>';
++  h+='<div class="st" style="margin-top:12px">🖥️ 复制品桌面 · 账号/分身 <button class="btn sm ghost" style="float:right;margin-top:-3px;padding:2px 8px" onclick="cmd(&#39;winVmList&#39;)">⟳ 刷新</button>'+(vms.length>1?'<button class="btn sm ghost" style="float:right;margin:-3px 6px 0 0;padding:2px 8px" onclick="cmd(&#39;winOpenAllDesktops&#39;)" title="把全部分身桌面并行折入归一外壳同级标签(各自隔离会话·共享同一宿主)——一屏多标签并行实测">🖥️ 全部打开(并行)</button>':'')+'</div>';
 +  h+='<div class="card" style="font-size:11px;color:var(--muted)">复用官方 RDP 多会话(环回·boot-safe·不挂 rdpwrap)把本机另一 Windows 账号当隔离复制品桌面——道并行而不相悖: 资源共享、会话隔离。点「打开桌面」在 IDE 内以多实例页面实时操作(你与 AI 同源共控·同一后端会话)。</div>';
 +  h+='<div class="card"><div class="cr"><span class="l">宿主守护</span><span class="v" style="color:'+(hostOk?'var(--success)':'var(--warn)')+'">'+(hostOk?'✓ 就绪 (vm_host_daemon)':(ws.vms?'未运行':'点「刷新」探活'))+'</span></div>';
 +  if(!hostOk)h+='<div class="br" style="margin-top:4px"><button class="btn sm primary" onclick="cmd(&#39;winHostEnsure&#39;)">▶ 启动宿主守护</button></div>';
@@ -185,16 +185,18 @@
 +async function openVmDesktopPanel(vm: string) {
 +    const key = String(vm || 'vm01');
 +    const ok = await ensureRdpWeb();
-+    // 归一·单壳一切: 优先折入 rt-flow 多实例外壳当同级标签(与账号页/六合板块同壳同源),
-+    //   经 _internals.openDesktopTab 注入 rdp-web 官方前端 URL — 不另起独立 WebviewPanel。
-+    try {
-+        const int = _rtflowModule && (_rtflowModule as any)._internals;
-+        if (ok && int && typeof int.openDesktopTab === 'function') {
++    // 归一·单壳一切: 复制品桌面恒折入 rt-flow 多实例外壳当同级标签(与账号页/六合板块同壳同源),
++    //   经 _internals.openDesktopTab 注入 rdp-web 官方前端 URL。★ 决不因网关未就绪(ok=false)就
++    //   退回独立 WebviewPanel/空屏 — 只要归一外壳在, 一律折标签; 前端 mstsc.js 自带「连接中·自动重连」,
++    //   网关按需拉起后即同源共控。仅「独立二合一(无归一外壳)」才走原生 WebviewPanel 兜底。
++    const int = _rtflowModule && (_rtflowModule as any)._internals;
++    if (int && typeof int.openDesktopTab === 'function') {
++        try {
 +            const r = await int.openDesktopTab({ vm: key, url: 'http://127.0.0.1:' + RDP_WEB_PORT + '/?vm=' + encodeURIComponent(key), label: '\uD83E\uDE9F ' + key + ' · 复制品桌面' });
 +            if (r && r.ok) return;
-+        }
-+    } catch (e) { /* 守柔 */ }
-+    // 兜底(独立二合一·无归一外壳时): 原生 WebviewPanel
++        } catch (e) { /* 守柔 */ }
++    }
++    // 兜底(仅独立二合一·无归一外壳时): 原生 WebviewPanel
 +    if (_vmDeskPanels[key]) { try { _vmDeskPanels[key].panel.reveal(); return; } catch (e) { /* 守柔 */ } }
 +    const panel = vscode.window.createWebviewPanel('daoVmDesktop', '\uD83E\uDE9F ' + key + ' · 复制品桌面', vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true });
 +    panel.webview.html = vmDesktopHtml(key, ok, RDP_WEB_PORT);
@@ -260,6 +262,22 @@
 +                const e1 = await ensureVmHost(true);
 +                if (e1.ok) { await vmHostApi('/', 'POST', { action: 'vm.ensure', name: String(msg.vm || 'vm01') }); await openVmDesktopPanel(String(msg.vm || 'vm01')); }
 +                reply({ type: 'winData', kind: 'vms', hostOk: e1.ok, list: e1.ok ? await vmHostList() : [] });
++                break;
++            }
++            // 复制品桌面 · 并行全开: 把全部分身桌面各折成归一外壳内一张同级标签(彼此隔离会话·共享同一后端宿主),
++            //   一屏多标签并行——正对「一个 Windows 上多开第三方软件并行实测」的本源诉求(道并行而不相悖)。
++            case 'winOpenAllDesktops': {
++                const e2 = await ensureVmHost(true);
++                let opened = 0;
++                if (e2.ok) {
++                    const list = await vmHostList();
++                    for (const vm of list) {
++                        const nm = String((vm && vm.name) || '').trim(); if (!nm) continue;
++                        await vmHostApi('/', 'POST', { action: 'vm.ensure', name: nm });
++                        await openVmDesktopPanel(nm); opened++;
++                    }
++                }
++                reply({ type: 'winData', kind: 'vms', hostOk: e2.ok, list: e2.ok ? await vmHostList() : [], note: opened ? ('已并行开启 ' + opened + ' 个复制品桌面标签(同壳同级·各自隔离会话)') : '' });
 +                break;
 +            }
              case 'bridgeHealth': {
