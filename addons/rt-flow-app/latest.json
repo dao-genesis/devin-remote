@@ -1,6 +1,6 @@
 {
-  "versionCode": 359,
-  "versionName": "0.37.254",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.254/DevinCloud-mobile-v0.37.254.apk",
-  "notes": "v0.37.254 · 自动发版"
+  "versionCode": 360,
+  "versionName": "0.37.255",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.255/DevinCloud-mobile-v0.37.255.apk",
+  "notes": "v0.37.255 · Cloudflare 账号池 (万法识号·多号统管·一键闭环建 Worker)"
 }
