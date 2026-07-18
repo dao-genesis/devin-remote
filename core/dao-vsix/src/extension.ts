@@ -8309,7 +8309,7 @@ function rBridgeFull(){
   h+='<div id="bridgeAgents" class="card">'+rBridgeAgents()+'</div>';
   // ── 一行接入 · PowerShell 把另一台设备接进本中枢 (irm .../bootstrap.ps1 | iex) ──
   //   显示与「复制」共用后端解析的同一透明隧道 joinUrl(已排除 /relay/·免鉴权 GET 可拉脚本), 二者恒一致。
-  var joinUrl=String((b.joinUrl||'')).replace(/\/$/,'');
+  var joinUrl=String((b.joinUrl||'')).replace(/[/]$/,'');
   h+='<div class="st" style="margin-top:14px">🔗 一行接入设备 · PowerShell</div>';
   if(joinUrl){
     var joinCmd='irm '+joinUrl+'/api/bootstrap.ps1 | iex';
