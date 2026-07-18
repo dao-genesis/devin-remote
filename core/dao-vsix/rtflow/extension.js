@@ -1085,7 +1085,7 @@ try{setInterval(shellStatusTick,5000);}catch(e){}
 //   重开 /shell 时宿主在 ready 回推 restoreTabs, 逐个还原(老用户停在原网页·新用户落主页)。
 var _persistT=null;
 function _liveWebUrl(t){try{var loc=t.frame.contentWindow.location;if((loc.pathname||'').indexOf('/__web')!==0)return '';var m=/[?&]u=([^&]+)/.exec(loc.search||'');return m?decodeURIComponent(m[1]):'';}catch(e){return '';}}
-function _liveAccPath(t){try{var loc=t.frame.contentWindow.location;var p=(loc.pathname||'')+(loc.search||'');p=p.replace(/[?&]dao_acct=[^&]*/g,'');if(p.indexOf('?')<0)p=p.replace('&','?');if(!p||p==='/'||p==='/?'||p.indexOf('/__web')===0)return '';return p;}catch(e){return '';}}
+function _liveAccPath(t){try{var loc=t.frame.contentWindow.location;var p=(loc.pathname||'')+(loc.search||'');p=p.replace(/[?&]dao_acct=[^&]*/g,'');if(p.indexOf('?')<0)p=p.replace('&','?');if(!p||p==='/'||p==='/?'||p.indexOf('/__web')===0||p.indexOf('/blank')===0)return '';return p;}catch(e){return '';}}
 function persistShell(){try{var arr=[];for(var i=0;i<order.length;i++){var id=order[i];var act=(id===active)?1:0;
   if(id.indexOf('board:')===0){arr.push({kind:'board',board:id.slice(6),act:act});}
   else if(id.indexOf('web:')===0){var tw=tabs[id];var mw=(tw&&tw.meta)||{};var wu=_liveWebUrl(tw)||mw.origUrl||'';if(wu)arr.push({kind:'web',url:wu,label:mw.label||wu,act:act});}
@@ -2039,10 +2039,18 @@ function _cloudHostFanout(mm) {
 // 而永不 resolve 时, _shellCloudActiveSid 被它长期锁定, 后续所有用户/板块的操作在队列上无限
 // 排队(全局假死·相悖)。正法: 每任务与看门狗竞速, 超时即释放 active-sid 锁并推进队列(卡住的任务
 // 在后台自生自灭·不阻塞他者); 其迟到回推因 activeSid 已换而降级为号主共享广播(幂等无害·绝不串台)。
-const SHELL_CLOUD_TASK_MAX_MS = 45000;
+// 45s→12s(真机实证): 上游(app.devin.ai)网络卡顿时, 主页十板齐发 × 每任务 45s 看门狗
+//   = 队列瘀滞数分钟, 板块挂载(cloudInit)排不上队 → 永久「加载中」。12s 内释放锁,
+//   慢任务迟到回推降级为号主共享广播(幂等无害), 队列吞吐提 4 倍。
+const SHELL_CLOUD_TASK_MAX_MS = 12000;
+// 同 sid 并发直跑(真机实证·主页十板齐发): 同一页面的多条 loadTab 请求回推目的地相同,
+//   并发执行不破 sid 隔离; 仅「不同 sid」之间才串行(切号等共享态变更语义不变)。
+//   直跑任务也接入队列尾(catch 吞错), 保证后续异 sid 任务仍等它结束才夺锁 → 绝不串台。
+let _shellCloudActiveN = 0;
 function _shellCloudRun(sid, fn) {
-  _shellCloudQueue = _shellCloudQueue.then(async () => {
-    _shellCloudActiveSid = sid || '';
+  sid = sid || '';
+  const exec = async () => {
+    _shellCloudActiveSid = sid; _shellCloudActiveN++;
     try { if (_cloudProvider && _cloudProvider.setHostPost) _cloudProvider.setHostPost(_cloudHostFanout); } catch (e) {}
     let wd = null;
     try {
@@ -2051,8 +2059,14 @@ function _shellCloudRun(sid, fn) {
         new Promise((res) => { wd = setTimeout(() => { try { log('[shell] cloud task watchdog fired (' + SHELL_CLOUD_TASK_MAX_MS + 'ms) sid=' + (sid || '-')); } catch (x) {} res(); }, SHELL_CLOUD_TASK_MAX_MS); }),
       ]);
     } catch (e) { try { log('[shell] cloud task err: ' + (e && e.message)); } catch (x) {} }
-    finally { if (wd) { try { clearTimeout(wd); } catch (x) {} } _shellCloudActiveSid = ''; }
-  });
+    finally { if (wd) { try { clearTimeout(wd); } catch (x) {} } if (--_shellCloudActiveN <= 0) { _shellCloudActiveN = 0; _shellCloudActiveSid = ''; } }
+  };
+  if (_shellCloudActiveN > 0 && _shellCloudActiveSid === sid) {
+    const p = exec();
+    _shellCloudQueue = _shellCloudQueue.then(() => p.catch(() => {}));
+    return p;
+  }
+  _shellCloudQueue = _shellCloudQueue.then(exec);
   return _shellCloudQueue;
 }
 // ── 归一 · 公网同源前缀 · dao 自渲染 (道并行而不相悖) ──────────────────────────
