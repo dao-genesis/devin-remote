@@ -445,9 +445,45 @@ const DaoRelayApp = (function () {
     }
     return j && j.result;
   }
-  // 会话态直建 Token: GET user/accounts/permission_groups → POST user/tokens → 取 value。
+  // 离屏真 Chromium 同源建 Token 桥 (Native.cfWebMint → window.__cfWebMintCb 回灌)。
+  //   CF 机管把 dash /api/v4 与浏览器指纹 + cf_clearance + SameSite cookie 强绑; 原生 HTTP / file:// 跨站
+  //   fetch 都会 403/丢 cookie。此路在常驻服务里起离屏真 Chromium 导航 dash 成同源, 页内 fetch 带齐全部
+  //   cookie 过机管, 又冻结免疫。返回 {token, accountId} 或抛语义化错误 (no_cf_session/multi_account/…)。
+  var cfWebMintFn = null;   // 测试注入; 运行时默认 Native.cfWebMint
+  // 全局句柄: WebView 里 = window (native evaluateJavascript 回灌 window.__cfWebMintCb); node 测试里 = globalThis。
+  var _G = (typeof window !== "undefined") ? window : ((typeof globalThis !== "undefined") ? globalThis : {});
+  function cfWebMint(accountId) {
+    return new Promise(function (resolve, reject) {
+      var fn = cfWebMintFn;
+      if (!fn) { try { var Nx = (typeof Native !== "undefined") ? Native : {}; fn = Nx.cfWebMint ? function (id, a) { Nx.cfWebMint(id, a); } : null; } catch (e) { fn = null; } }
+      if (!fn) { reject(new Error("no_webmint_bridge")); return; }
+      var id = "cfm" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+      var reg = (_G.__cfWebMintReg = _G.__cfWebMintReg || {});
+      _G.__cfWebMintCb = _G.__cfWebMintCb || function (rid, js) { try { var f = (_G.__cfWebMintReg || {})[rid]; if (f) f(js); } catch (e) {} };
+      var to = setTimeout(function () { if (reg[id]) { delete reg[id]; reject(new Error("cf_webmint_timeout")); } }, 50000);
+      reg[id] = function (js) {
+        clearTimeout(to); delete reg[id];
+        var o = null; try { o = (typeof js === "string") ? JSON.parse(js) : js; } catch (e) { o = null; }
+        if (!o) { reject(new Error("cf_webmint_bad_result")); return; }
+        if (o.error) { reject(new Error(o.error)); return; }
+        if (!o.token) { reject(new Error("cf_webmint_no_token")); return; }
+        resolve({ token: o.token, accountId: o.accountId || "" });
+      };
+      try { fn(id, accountId || ""); } catch (e) { clearTimeout(to); delete reg[id]; reject(e); }
+    });
+  }
+  // 会话态直建 Token: 首选离屏真 Chromium 同源(过机管·冻结免疫); 桥不可用/超时才落原生 HTTP 兜底。
   async function cfMintViaCookie(opts) {
     opts = opts || {};
+    var root2 = (typeof Native !== "undefined") ? Native : {};
+    if (cfWebMintFn || root2.cfWebMint) {
+      try { return await cfWebMint(opts.accountId || ""); }
+      catch (e) {
+        var msg = String(e && e.message || e);
+        // 语义化业务错误直接上抛(供 UI 精准提示); 仅「桥不可用/超时/坏结果」才落原生兜底。
+        if (/no_cf_session|multi_account|account_not_found|missing_perm_groups|no_account|no_token_value/.test(msg)) throw e;
+      }
+    }
     var cookie = String(cfReadCookie(CF_DASH) || "").trim();
     if (!cookie) throw new Error("no_cf_session: 未检测到 Cloudflare 登录态 (请先在 App 内浏览器登录一次 CF·人机验证同一道关手动过, 之后建 Token 全自动)");
     var user = await cfDashHttp("GET", "/api/v4/user", cookie);
@@ -766,6 +802,7 @@ const DaoRelayApp = (function () {
     setNetFn(fn) { cfNet = fn; },   // 测试注入 fetch (CF provisioning 切片实测用)
     setCfCookieFn(fn) { cfCookieFn = fn; },   // 测试注入 会话态 cookie 读取 (原生 Native.cookiesFor 替身)
     setCfDashFn(fn) { cfDashFn = fn; },        // 测试注入 dashboard 原生 HTTP (DaoCore.httpReq 替身)
+    setCfWebMintFn(fn) { cfWebMintFn = fn; },   // 测试注入 离屏真 Chromium 同源建 Token (Native.cfWebMint 替身)
     // 纯函数·供单测直取 (会话态建 Token 编排的可验证切片)
     _cf: { pickGroups: cfPickGroups, missingGroups: cfMissingGroups, buildTokenPayload: cfBuildTokenPayload,
            pickAccount: cfPickAccount, mintViaCookie: cfMintViaCookie, autoProvisionRun: cfAutoProvisionRun },

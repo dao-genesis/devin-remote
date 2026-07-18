@@ -95,7 +95,37 @@ const GROUPS = [
   ok(r8.status === 200 && r8.body.started === true && r8.body.mode === "cookie-session", "cf-autoprovision → started + mode=cookie-session");
   ok(r8.body.poll === "/api/cf-status", "cf-autoprovision 回 poll=/api/cf-status");
 
+  // ── 9) 离屏真 Chromium 同源建 Token 为首选: 注入 cfWebMintFn → 走 web mint, 原生 dash HTTP 不被触碰 ──
+  //   (CF 机管把 dash /api/v4 与浏览器指纹+cf_clearance+SameSite cookie 强绑·原生 HTTP 会 403;
+  //    离屏真 Chromium 导航 dash 同源 fetch 带齐全部 cookie 过机管, 又冻结免疫 → 本源正解为首选。)
+  const dashHit9 = [];
+  DaoRelayApp.setCfCookieFn(() => "cf_clearance=xyz");
+  DaoRelayApp.setCfDashFn(function (method, url) { dashHit9.push(url); return dashResp({ success: false }, 403); });
+  DaoRelayApp.setCfWebMintFn(function (id, a) { setImmediate(() => global.__cfWebMintCb(id, JSON.stringify({ token: "WEB_TOKEN_5555", accountId: a || "ACCW" }))); });
+  const m9 = await CF.mintViaCookie({ accountId: "ACCW" });
+  ok(m9.token === "WEB_TOKEN_5555" && m9.accountId === "ACCW", "mintViaCookie: 首选离屏真 Chromium 同源建 Token 返回 token+accountId");
+  ok(dashHit9.length === 0, "web mint 成功 → 原生 dash HTTP 完全不被触碰 (不重蹈 403 老路)");
+
+  // ── 10) web mint 语义错误 (no_cf_session) 直接上抛, 不静默落原生兜底 (避免同一错误被 403 掩盖) ──
+  DaoRelayApp.setCfWebMintFn(function (id) { setImmediate(() => global.__cfWebMintCb(id, JSON.stringify({ error: "no_cf_session" }))); });
+  let e10 = null; try { await CF.mintViaCookie({ accountId: "ACCW" }); } catch (e) { e10 = e; }
+  ok(e10 && /no_cf_session/.test(e10.message), "web mint 语义错误 → 直接上抛 no_cf_session");
+  ok(dashHit9.length === 0, "web mint 语义错误 → 未落原生兜底");
+
+  // ── 11) web mint 非语义错误 (桥超时/坏结果) → 落原生 HTTP 兜底成功 (双路互补·不空手而归) ──
+  DaoRelayApp.setCfDashFn(function (method, url) {
+    if (url.endsWith("/api/v4/user")) return dashResp({ success: true, result: { id: "USR1" } });
+    if (url.indexOf("/api/v4/accounts") >= 0) return dashResp({ success: true, result: [{ id: "ACC1" }] });
+    if (url.endsWith("/permission_groups")) return dashResp({ success: true, result: GROUPS });
+    if (url.endsWith("/api/v4/user/tokens") && method === "POST") return dashResp({ success: true, result: { value: "NATIVE_FALLBACK_TOK" } });
+    return dashResp({ success: false }, 500);
+  });
+  DaoRelayApp.setCfWebMintFn(function (id) { setImmediate(() => global.__cfWebMintCb(id, JSON.stringify({ error: "cf_webmint_bad_result" }))); });
+  const m11 = await CF.mintViaCookie({ accountId: "ACC1" });
+  ok(m11.token === "NATIVE_FALLBACK_TOK", "web mint 非语义错误 → 落原生 HTTP 兜底建 Token 成功");
+
   // 复位注入, 不污染同进程其它测试
+  DaoRelayApp.setCfWebMintFn(null);
   DaoRelayApp.setCfCookieFn(null);
   DaoRelayApp.setCfDashFn(null);
 

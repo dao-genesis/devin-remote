@@ -43,6 +43,7 @@ public class RelayService extends Service {
     public static volatile RelayService instance;
 
     private WebView engine;
+    private WebView cfMintWv;   // 离屏·真 Chromium·导航 dash.cloudflare.com 同源建 Token (冻结免疫·过 CF 机管)
     private final Handler main = new Handler(Looper.getMainLooper());
     private PowerManager.WakeLock wakeLock;   // P2: 持锁防 Doze CPU 节流, 保 WSS 心跳不断
     private WifiManager.WifiLock wifiLock;     // 息屏防 Wi-Fi 休眠/降频, 保出站 WSS 不掉 (移植自 knoop7/Ava WifiWakeLock)
@@ -1420,6 +1421,91 @@ public class RelayService extends Service {
         } catch (Exception ignored) {} });
     }
 
+    // ── 会话态·离屏真 Chromium 同源建 CF Token (见 Bridge.cfWebMint 注释) ────────────────
+    private final boolean[] cfMintDone = { false };
+    /** 把离屏建 Token 结果 (JSON 串) 回灌引擎 window.__cfWebMintCb(reqId, jsonStr) 并销毁离屏页 (仅一次)。 */
+    private void cfMintDeliver(String reqId, String resultJson) {
+        main.post(() -> {
+            synchronized (cfMintDone) { if (cfMintDone[0]) return; cfMintDone[0] = true; }
+            String js = resultJson == null || resultJson.isEmpty() ? "{\"error\":\"cf_webmint_empty\"}" : resultJson;
+            if (engine != null) try {
+                engine.evaluateJavascript("window.__cfWebMintCb&&window.__cfWebMintCb(" + HttpBridge.jsonStr(reqId) + "," + HttpBridge.jsonStr(js) + ")", null);
+            } catch (Exception ignored) {}
+            if (cfMintWv != null) try { cfMintWv.destroy(); } catch (Exception ignored) {} finally { cfMintWv = null; }
+        });
+    }
+    @SuppressWarnings({ "SetJavaScriptEnabled", "deprecation" })
+    private void cfStartWebMint(String reqId, String accountId) {
+        try {
+            synchronized (cfMintDone) { cfMintDone[0] = false; }
+            if (cfMintWv != null) { try { cfMintWv.destroy(); } catch (Exception ignored) {} cfMintWv = null; }
+            final WebView wv = new WebView(this);
+            cfMintWv = wv;
+            WebSettings s = wv.getSettings();
+            s.setJavaScriptEnabled(true);
+            s.setDomStorageEnabled(true);
+            s.setDatabaseEnabled(true);
+            // UA 与 App 内浏览器同源(仅去 wv 标记·保真实 Android UA) → 复用登录时取得的同一 cf_clearance。
+            try { s.setUserAgentString(MainActivity.sanitizedUa(s.getUserAgentString())); } catch (Exception ignored) {}
+            if (Build.VERSION.SDK_INT >= 21) s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            if (Build.VERSION.SDK_INT >= 24) wv.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+            android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+            cm.setAcceptCookie(true);
+            if (Build.VERSION.SDK_INT >= 21) cm.setAcceptThirdPartyCookies(wv, true);
+            wv.addJavascriptInterface(new Object() {
+                @JavascriptInterface public void done(String json) { cfMintDeliver(reqId, json); }
+            }, "__CFM");
+            wv.setWebViewClient(new android.webkit.WebViewClient() {
+                @Override public void onPageFinished(WebView view, String url) {
+                    // 页加载完 (dash 同源) → 注入同源 fetch 建 Token。SPA 重定向多次触发亦无妨 (页内 __cfmRan 幂等)。
+                    try { view.evaluateJavascript(cfMintJs(accountId), null); } catch (Exception ignored) {}
+                }
+                @Override public void onReceivedError(WebView view, android.webkit.WebResourceRequest req, android.webkit.WebResourceError err) {
+                    if (Build.VERSION.SDK_INT >= 23 && req != null && req.isForMainFrame())
+                        cfMintDeliver(reqId, "{\"error\":\"cf_dash_unreachable\"}");
+                }
+            });
+            wv.loadUrl("https://dash.cloudflare.com/");
+            // 兜底超时: 页卡在人机验证/长时间无回灌 → 明确报错, 不无限占用离屏页。
+            main.postDelayed(() -> cfMintDeliver(reqId, "{\"error\":\"cf_webmint_timeout\"}"), 45000);
+        } catch (Exception e) {
+            cfMintDeliver(reqId, "{\"error\":\"cf_webmint_init_failed\"}");
+        }
+    }
+    /** 同源建 Token 注入脚本 (真浏览器 fetch·带齐 cookie/cf_clearance)。accountId 空=单账号自动/多账号报错。 */
+    private static String cfMintJs(String accountId) {
+        String want = HttpBridge.jsonStr(accountId == null ? "" : accountId);
+        return "(function(){if(window.__cfmRan)return;window.__cfmRan=1;var WANT=" + want + ";"
+            + "function fin(o){try{__CFM.done(JSON.stringify(o));}catch(e){}}"
+            + "if(/\\/login|\\/sign-?in/i.test(location.href||'')){fin({error:'no_cf_session'});return;}"
+            + "function api(p,init){init=init||{};return fetch(p,{method:init.method||'GET',credentials:'include',"
+            + "headers:Object.assign({Accept:'application/json'},init.headers||{}),body:init.body}).then(function(r){"
+            + "return r.text().then(function(tx){var t={};try{t=JSON.parse(tx);}catch(e){}"
+            + "if(r.status===401||r.status===403){var er=new Error('auth');er.code=r.status;throw er;}"
+            + "if(!r.ok||t.success===false){throw new Error('cf '+p+' HTTP '+r.status);}return t.result;});});}"
+            + "function nm(x){return String(x==null?'':x).trim().toLowerCase();}"
+            + "function pick(all,names){all=all||[];return (names||[]).map(function(n){"
+            + "for(var i=0;i<all.length;i++){if(all[i]&&all[i].name===n)return {id:all[i].id};}"
+            + "for(var j=0;j<all.length;j++){if(all[j]&&nm(all[j].name)===nm(n))return {id:all[j].id};}return null;})"
+            + ".filter(Boolean);}"
+            + "var AG=['Workers Scripts Write','Account Settings Read'],UG=['User Details Read','Memberships Read'];"
+            + "(async function(){var user=await api('/api/v4/user');if(!user||!user.id)return fin({error:'no_cf_session'});"
+            + "var accts=await api('/api/v4/accounts?per_page=50');accts=Array.isArray(accts)?accts:[];var acct=null;"
+            + "if(WANT){for(var i=0;i<accts.length;i++){if(accts[i]&&accts[i].id===WANT){acct=accts[i];break;}}"
+            + "if(!acct)return fin({error:'account_not_found'});}else if(accts.length===1)acct=accts[0];"
+            + "else if(!accts.length)return fin({error:'no_account'});"
+            + "else return fin({error:'multi_account: '+accts.map(function(a){return a&&a.id;}).filter(Boolean).join(',')});"
+            + "var groups=await api('/api/v4/user/tokens/permission_groups');var ag=pick(groups,AG),ug=pick(groups,UG);"
+            + "if(ag.length<AG.length){var gn=(Array.isArray(groups)?groups:[]).map(function(g){return g&&g.name;}).filter(Boolean);"
+            + "return fin({error:'missing_perm_groups: CF 回传 '+gn.length+' 组'});}"
+            + "var pol=[];var ar={};ar['com.cloudflare.api.account.'+acct.id]='*';pol.push({effect:'allow',resources:ar,permission_groups:ag});"
+            + "if(ug.length){var ur={};ur['com.cloudflare.api.user.'+user.id]='*';pol.push({effect:'allow',resources:ur,permission_groups:ug});}"
+            + "var res=await api('/api/v4/user/tokens',{method:'POST',headers:{'Content-Type':'application/json'},"
+            + "body:JSON.stringify({name:'dao-relay '+Date.now(),policies:pol})});"
+            + "if(!res||!res.value)return fin({error:'no_token_value'});fin({token:res.value,accountId:acct.id});})()"
+            + ".catch(function(e){var m=String(e&&e.message||e);if(e&&(e.code===401||e.code===403))m='no_cf_session';fin({error:m});});})();";
+    }
+
     /** JS ↔ 原生桥 (引擎页用 window.Native.*) */
     public class Bridge {
         @JavascriptInterface public String getConn() {
@@ -1516,6 +1602,18 @@ public class RelayService extends Service {
                 main.post(() -> { if (engine != null) try {
                     engine.evaluateJavascript("window.__httpCb&&window.__httpCb(" + HttpBridge.jsonStr(id) + "," + json + ")", null);
                 } catch (Exception ignored) {} }));
+        }
+        /**
+         * 会话态·离屏真 Chromium 同源建 CF Token (本源突破·冻结免疫过机管)。
+         *   缘起: 原生 HttpURLConnection 复用 CF 登录态 cookie 会被 CF 机管 403——cf_clearance 绑定浏览器
+         *   TLS 指纹, 且 file:// 引擎跨站 fetch 会丢 SameSite=Lax 会话 cookie。破法: 在常驻前台服务里起一张
+         *   离屏真 Chromium WebView, 导航到 dash.cloudflare.com 成为同源, 在页内用真浏览器 fetch(带齐全部
+         *   cookie + cf_clearance)调 /api/v4 建 Token → 既过机管、又冻结免疫(服务前台·非后台标签)。
+         *   UA 与 App 内浏览器同源(sanitizedUa), 复用同一 cf_clearance。结果经 window.__cfWebMintCb 回灌引擎。
+         *   人机验证/未登录一律回 {error:no_cf_session}, 交由用户在 App 内浏览器手动登录一次(永不代按)。
+         */
+        @JavascriptInterface public void cfWebMint(String reqId, String accountId) {
+            main.post(() -> cfStartWebMint(reqId, accountId == null ? "" : accountId));
         }
 
         // ── 路线B 去中心化隧道桥 ────────────────────────────────────────
@@ -2205,5 +2303,5 @@ public class RelayService extends Service {
         super.onTaskRemoved(rootIntent);
     }
     @Nullable @Override public IBinder onBind(Intent intent) { return null; }
-    @Override public void onDestroy() { instance = null; releaseWake(); main.removeCallbacks(proxySweeper); main.removeCallbacks(convPump); stopAllProxies(); stopTunnel(); if (engine != null) { engine.destroy(); engine = null; } super.onDestroy(); }
+    @Override public void onDestroy() { instance = null; releaseWake(); main.removeCallbacks(proxySweeper); main.removeCallbacks(convPump); stopAllProxies(); stopTunnel(); if (engine != null) { engine.destroy(); engine = null; } if (cfMintWv != null) { try { cfMintWv.destroy(); } catch (Exception ignored) {} cfMintWv = null; } super.onDestroy(); }
 }

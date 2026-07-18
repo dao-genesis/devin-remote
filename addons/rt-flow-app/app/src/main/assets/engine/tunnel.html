@@ -101,7 +101,7 @@ details.adv[open]>summary{color:var(--vscode-textLink-foreground)}
   <div class="lbl">☁️ 固定域名 · Cloudflare 一键建 Worker（可选）</div>
   <div class="muted" style="font-size:11px;margin-top:4px">默认零账号通道已全自动, <b>无需任何配置</b>。仅当你想要<b>恒定不变的公网地址</b>时: ① 点下方按钮到 Cloudflare 创建 API Token（模板选「编辑 Workers」, 可用 GitHub 或 Cloudflare 账号登录）② 粘贴回来一键部署, 其余全自动。Token 只在本机内存用一次, 不落盘不上传。</div>
   <button onclick="cfCookieAuto()" style="margin-top:6px;background:#1f6feb">⚡ 会话态直建 Worker（零浏览器·登录态已就绪·一键到底·推荐）</button>
-  <div class="muted" style="font-size:10px;margin-top:2px">若已在 App 内浏览器登录过 Cloudflare（含 GitHub 登 CF）: 引擎直接用登录态 cookie 经原生 HTTP 建 Token→部署, <b>零可见标签·零前台·后台冻结免疫</b>, 全程无需你再点。多账号会提示选一个。</div>
+  <div class="muted" style="font-size:10px;margin-top:2px">若已在 App 内浏览器登录过 Cloudflare（含 GitHub 登 CF）: 引擎在常驻服务里起<b>离屏真 Chromium 导航 dash 同源</b>建 Token→部署（带齐会话 cookie/cf_clearance 过 CF 机管·<b>零可见标签·后台冻结免疫</b>）, 全程无需你再点。多账号会提示选一个；未登录/人机验证会提示你先在 App 内登录一次。</div>
   <button onclick="cfAutoStart()" style="margin-top:6px;background:#8957e5">🤖 全自动建 Worker（登录→建Token→部署·一键到底）</button>
   <div class="muted" style="font-size:11px;margin-top:8px"><b>两种登录方式·任选其一（完全分离）</b>：填哪一套就走哪一套，底层同归一（登进 CF → 建 Token → 部署 Worker）。</div>
   <div class="row" style="margin-top:4px">
