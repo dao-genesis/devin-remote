@@ -617,6 +617,58 @@ const DaoRelayApp = (function () {
       return { status: 200, body: { ok: true, revoked: rid, agents: hubList() } };
     }
     if (path === "/api/cf-status") { return { status: 200, body: Object.assign({}, cfProv) }; }
+    // 列出已建 Token / 撤销 Token / 删除 Worker (统管)
+    if (path === "/api/cf-list-tokens") {
+      var ltb = (m && m.body) || {};
+      var ltAuth = null;
+      if (ltb.token) ltAuth = { token: ltb.token };
+      else if (ltb.email && ltb.key) ltAuth = { email: ltb.email, key: ltb.key };
+      if (!ltAuth) {
+        // 会话态兜底
+        var ltCookie = String(cfReadCookie(CF_DASH) || "").trim();
+        if (ltCookie) {
+          try {
+            var ltTokens = await cfDashHttp("GET", "/api/v4/user/tokens?per_page=50", ltCookie);
+            return { status: 200, body: { tokens: (Array.isArray(ltTokens) ? ltTokens : []).map(function (t) { return { id: t.id, name: t.name, status: t.status, issued_on: t.issued_on, last_used_on: t.last_used_on }; }) } };
+          } catch (e) { return { status: 500, body: { error: String(e && e.message || e) } }; }
+        }
+        return { status: 400, body: { error: "need body.token or body.email+body.key, or App 内已登录 CF" } };
+      }
+      try {
+        var ltRes = await cfApi("/user/tokens?per_page=50", ltAuth);
+        return { status: 200, body: { tokens: (Array.isArray(ltRes) ? ltRes : []).map(function (t) { return { id: t.id, name: t.name, status: t.status, issued_on: t.issued_on, last_used_on: t.last_used_on }; }) } };
+      } catch (e) { return { status: 500, body: { error: String(e && e.message || e) } }; }
+    }
+    if (path === "/api/cf-revoke-token") {
+      var rvb = (m && m.body) || {};
+      var rvId = String(rvb.tokenId || "").trim();
+      if (!rvId) return { status: 400, body: { error: "need body.tokenId" } };
+      var rvAuth = null;
+      if (rvb.token) rvAuth = { token: rvb.token };
+      else if (rvb.email && rvb.key) rvAuth = { email: rvb.email, key: rvb.key };
+      if (!rvAuth) {
+        var rvCookie = String(cfReadCookie(CF_DASH) || "").trim();
+        if (rvCookie) {
+          try { await cfDashHttp("DELETE", "/api/v4/user/tokens/" + rvId, rvCookie); return { status: 200, body: { ok: true, revoked: rvId } }; }
+          catch (e) { return { status: 500, body: { error: String(e && e.message || e) } }; }
+        }
+        return { status: 400, body: { error: "need auth (body.token or body.email+body.key, or App 内已登录 CF)" } };
+      }
+      try { await cfApi("/user/tokens/" + rvId, rvAuth, { method: "DELETE" }); return { status: 200, body: { ok: true, revoked: rvId } }; }
+      catch (e) { return { status: 500, body: { error: String(e && e.message || e) } }; }
+    }
+    if (path === "/api/cf-delete-worker") {
+      var dwb = (m && m.body) || {};
+      var dwAcct = String(dwb.accountId || "").trim();
+      var dwName = String(dwb.workerName || CF_WORKER_NAME).trim();
+      if (!dwAcct) return { status: 400, body: { error: "need body.accountId" } };
+      var dwAuth = null;
+      if (dwb.token) dwAuth = { token: dwb.token };
+      else if (dwb.email && dwb.key) dwAuth = { email: dwb.email, key: dwb.key };
+      if (!dwAuth) return { status: 400, body: { error: "need body.token or body.email+body.key" } };
+      try { await cfApi("/accounts/" + dwAcct + "/workers/scripts/" + dwName, dwAuth, { method: "DELETE" }); return { status: 200, body: { ok: true, deleted: dwName } }; }
+      catch (e) { return { status: 500, body: { error: String(e && e.message || e) } }; }
+    }
     if (path === "/api/cf-provision") {
       var cb = (m && m.body) || {};
       var cfAuth = null;

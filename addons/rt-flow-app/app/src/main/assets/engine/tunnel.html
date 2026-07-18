@@ -107,9 +107,9 @@ details.adv[open]>summary{color:var(--vscode-textLink-foreground)}
 
   <!-- 万法识号·添加 CF 账号入池 (切号板块同款) -->
   <div id="cfAddHeader" onclick="cfToggleAdd()" style="cursor:pointer;margin-top:10px;padding:7px 9px;background:#161b22;border:1px solid #30363d;border-radius:5px;display:flex;justify-content:space-between;align-items:center">
-    <span>＋ 添加 Cloudflare 账号（账号+密码入池）</span><span id="cfAddArrow">▼</span>
+    <span>＋ 添加 Cloudflare 账号（账号+密码入池）</span><span id="cfAddArrow">▲</span>
   </div>
-  <div id="cfAddBody" style="display:none;margin-top:6px">
+  <div id="cfAddBody" style="margin-top:6px">
     <textarea id="cfPoolInput" placeholder="万法识号·任意格式自动识别：&#10;email password&#10;email:password&#10;（Global API Key / API Token 一行也可直接粘贴）" style="width:100%;height:66px;font-size:12px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,#3334);border-radius:5px;padding:7px 9px"></textarea>
     <div class="row" style="margin-top:4px">
       <button onclick="cfPoolAdd(false)">添加入池</button>
@@ -128,6 +128,11 @@ details.adv[open]>summary{color:var(--vscode-textLink-foreground)}
   <!-- 已建资源统管: Worker / Token / 账号 -->
   <div class="lbl" style="margin-top:10px">🔗 已建资源 · Worker/Token/账号统管</div>
   <div id="cfResList" class="val" style="font-size:12px"><span class="muted">（暂无 · 建成后在此统一管理并可设为生效通道）</span></div>
+  <div class="row" style="margin-top:6px">
+    <button onclick="cfListTokens()" style="font-size:11px">📋 列出已建 Token</button>
+    <button onclick="cfRevokeTokenPrompt()" style="font-size:11px;background:#a33">🗑 撤销 Token</button>
+  </div>
+  <div id="cfTokenList" class="muted" style="font-size:11px;margin-top:4px;max-height:120px;overflow:auto"></div>
 
   <div id="cfProvStat" class="muted" style="font-size:11px;margin-top:6px">未配置（零账号通道已全自动运行）</div>
 
@@ -1518,6 +1523,31 @@ function cfWaitBuildEnd(){ return new Promise(function(resolve){ var n=0;
     }).catch(function(){ if(n>60){resolve();}else{n++;setTimeout(chk,2000);} });
   })(); }); }
 function cfPoolRefresh(){ cfPollStatus(); cfPoolRender(); }
+// Token 统管: 列出/撤销已建 Token
+async function cfListTokens(){
+  var box=document.getElementById('cfTokenList'); if(!box) return;
+  box.innerHTML='<span style="color:#e8c84a">加载中…</span>';
+  try{
+    var r=await _hubRpc("/api/cf-list-tokens",{});
+    if(r&&r.tokens&&r.tokens.length){
+      box.innerHTML=r.tokens.map(function(t){
+        var name=cfPoolEsc(t.name||'未命名');
+        var st=t.status==='active'?'<span style="color:#3fb950">active</span>':'<span style="color:#8b949e">'+cfPoolEsc(t.status||'?')+'</span>';
+        return '<div style="padding:3px 0;border-bottom:1px solid #21262d"><b>'+name+'</b> · '+st+' · <span class="muted">id:'+cfPoolEsc(t.id||'')+'</span></div>';
+      }).join("");
+    } else { box.innerHTML='<span class="muted">无 Token (或未检测到 CF 登录态)</span>'; }
+  }catch(e){ box.innerHTML='<span style="color:#f85149">'+cfPoolEsc(String(e&&e.message||e))+'</span>'; }
+}
+async function cfRevokeTokenPrompt(){
+  var id=prompt('输入要撤销的 Token ID (从「列出已建 Token」复制):');
+  if(!id||!id.trim()) return;
+  if(!confirm('确定撤销 Token '+id.trim()+' ? 撤销后使用该 Token 的 Worker 将无法工作。')) return;
+  try{
+    var r=await _hubRpc("/api/cf-revoke-token",{tokenId:id.trim()});
+    if(r&&r.ok){ _result('cf',true,'Token '+id.trim()+' 已撤销'); cfListTokens(); }
+    else _result('cf',false,(r&&r.error)||'撤销失败');
+  }catch(e){ _result('cf',false,String(e&&e.message||e)); }
+}
 
 cfPollStatus();
 cfPoolRender();

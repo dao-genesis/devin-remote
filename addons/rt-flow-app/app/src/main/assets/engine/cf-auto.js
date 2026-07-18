@@ -271,9 +271,12 @@
           var r = await fetch(path, {
             method: init.method || "GET",
             credentials: "include",
-            headers: Object.assign({ Accept: "application/json", "X-Cross-Site-Security": "dash" }, init.headers || {}),
+            headers: Object.assign({ Accept: "application/json", "X-Cross-Site-Security": "dash", "X-Requested-With": "XMLHttpRequest" }, init.headers || {}),
             body: init.body
           });
+          // CF bot-management: 403 + text/html (managed challenge) vs JSON API error
+          var ct = (r.headers.get("content-type") || "").toLowerCase();
+          if (!r.ok && ct.indexOf("text/html") >= 0) throw new Error("cf_challenge");
           var t = null; try { t = await r.json(); } catch (e) { t = {}; }
           if (!r.ok || t.success === false) throw new Error("cf " + path + " HTTP " + r.status);
           return t.result;
@@ -373,8 +376,17 @@
               }
             } else { root.__cfMinted = 0; status("wait", "未取到 Token, 重试中"); }
           } catch (e) {
-            root.__cfMinted = 0; status("error", "建 Token 失败: " + (e && e.message || e));
-            if (CFG.deliver && !root.__cfDelivered) { root.__cfDelivered = 1; try { root.__CFM && root.__CFM.done(JSON.stringify({ error: String(e && e.message || e) })); } catch (x) {} }
+            root.__cfMinted = 0;
+            var emsg = String(e && e.message || e);
+            // cf_challenge = bot-management 拦截(非 API 报错): 降级到 UI 建 Token 流
+            if (emsg === "cf_challenge") {
+              status("fallback", "内部接口被 bot 管理拦截·降级到 UI 建 Token…");
+              var tkUrl = "https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts_write%22%2C%22type%22%3A%22account%22%7D%2C%7B%22key%22%3A%22account_settings_read%22%2C%22type%22%3A%22account%22%7D%2C%7B%22key%22%3A%22user_details_read%22%2C%22type%22%3A%22user%22%7D%2C%7B%22key%22%3A%22memberships_read%22%2C%22type%22%3A%22user%22%7D%5D&name=dao-relay";
+              try { location.href = tkUrl; } catch (x) {}
+              return;
+            }
+            status("error", "建 Token 失败: " + emsg);
+            if (CFG.deliver && !root.__cfDelivered) { root.__cfDelivered = 1; try { root.__CFM && root.__CFM.done(JSON.stringify({ error: emsg })); } catch (x) {} }
           }
           return;
         }
