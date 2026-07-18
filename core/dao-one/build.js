@@ -271,6 +271,7 @@ function verifyFolds() {
     "function vmHostApi",           // 复制品桌面 · 宿主守护(vm_host_daemon)直连
     "function ensureRdpWeb",        // 复制品桌面 · rdp-web 网关(官方 RDP<->WebSocket)按需拉起
     "function openVmDesktopPanel",  // 复制品桌面 · IDE 内多实例桌面页(内嵌官方 mstsc.js RDP 前端)
+    "int.openDesktopTab",           // 复制品桌面 · 优先折入 rt-flow 多实例外壳当同级标签(单壳一切)
     "case 'winVmList'",             // 后端 · 分身列表
     "case 'winVmCreate'",           // 后端 · 新建/连接分身(RDP 多会话)
     "case 'winOpenDesktop'",        // 后端 · 打开复制品桌面页
@@ -283,6 +284,7 @@ function verifyFolds() {
     "proxy:['🔀','Proxy Pro']",     // BOARD_META 标签
     "board:windows",                // 归一·③ Windows 汉堡菜单入口
     "windows:['🪟','Windows 总控']", // BOARD_META 标签
+    "async function openDesktopTab", // 归一 · 复制品桌面标签入口(dao-vsix 经 _internals 注入)
   ]);
   must("vendor-proxy/extension.js", ["getEaConfigHtml"]);
   log("fold-verify: 全部折叠锚点在位 ✓ (vendor-vsix ×19 · vendor-flow ×4 · vendor-proxy ×1)");
