@@ -110,7 +110,7 @@ details.adv[open]>summary{color:var(--vscode-textLink-foreground)}
     <span>＋ 添加 Cloudflare 账号（账号+密码入池）</span><span id="cfAddArrow">▲</span>
   </div>
   <div id="cfAddBody" style="margin-top:6px">
-    <textarea id="cfPoolInput" placeholder="万法识号·任意格式自动识别：&#10;email password&#10;email:password&#10;（Global API Key / API Token 一行也可直接粘贴）" style="width:100%;height:66px;font-size:12px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,#3334);border-radius:5px;padding:7px 9px"></textarea>
+    <textarea id="cfPoolInput" placeholder="万法识号·任意格式自动识别 (Cloudflare / GitHub 自动分流)：&#10;Cloudflare： email password  或  email:password&#10;GitHub 登 CF：  用户名 密码 TOTP密钥  (可附 ghp_ 令牌)&#10;（Global API Key / API Token 一行也可直接粘贴）" style="width:100%;height:80px;font-size:12px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border,#3334);border-radius:5px;padding:7px 9px"></textarea>
     <div class="row" style="margin-top:4px">
       <button onclick="cfPoolAdd(false)">添加入池</button>
       <button onclick="cfPoolAdd(true)" style="background:#238636">添加并全部建 Worker</button>
@@ -1363,7 +1363,14 @@ async function cfCookieAuto(acctId){
     // 多账号 → 让用户选一个再重试 (道法自然·不隐式冒名选第一个)
     var mm=/multi_account:[^:]*:\s*([a-f0-9,]+)/i.exec(err)||/([a-f0-9]{20,}(?:,[a-f0-9]{20,})+)/i.exec(err);
     if(mm){ var pick=prompt('检测到多个 Cloudflare 账号, 请粘贴要用的 accountId:\n'+mm[1].split(',').join('\n')); if(pick&&pick.trim()) return cfCookieAuto(pick.trim()); return; }
-    if(/no_cf_session/.test(err)){ _result('cf',false,'未检测到 Cloudflare 登录态: 请先在 App 内浏览器登录一次 CF (人机验证同一道关手动过一次), 之后本按钮全自动。'); return; }
+    if(/no_cf_session/.test(err)){
+      // 无会话态不等于失败: 若池里已有该号账密, 直接改走「账号密码离屏自动登录」而非要求用户先手动登录。
+      var pool=cfPoolLoad(); var cand=-1;
+      for(var _i=0;_i<pool.length;_i++){ if(CFP.buildMethod(pool[_i])==='login'||CFP.buildMethod(pool[_i])==='github'){ cand=_i; break; } }
+      if(cand>=0){ _result('cf',true,'无本机会话态 → 已自动改用账号池里的账号密码离屏登录建 Worker…'); return cfPoolBuild(cand); }
+      _result('cf',false,'尚无本机 CF 登录态。请在上方「添加」粘贴账号密码 (Cloudflare 或 GitHub), 用每行的「⚡ 建 Worker」自动登录建号; 或点「🌐 登官网」在官网登录一次。');
+      return;
+    }
     _result('cf',false,err);
   }catch(e){ _result('cf',false,String(e&&e.message||e)); }
 }
@@ -1435,18 +1442,25 @@ function cfPoolRender(){
   var pool=cfPoolLoad();
   if(!pool.length){ box.innerHTML='<span class="muted" style="font-size:12px">账号池为空 · 在上方「添加」粘贴账号密码</span>'; cfResRender(); return; }
   box.innerHTML=pool.map(function(e,i){
-    var label=cfPoolEsc(e.email||(e.token?('token '+CFP.maskSecret(e.token)):(e.key?('key '+CFP.maskSecret(e.key)):('号 '+(i+1)))));
+    var dn=(CFP.displayName?CFP.displayName(e):(e.email||''))||(e.token?('token '+CFP.maskSecret(e.token)):(e.key?('key '+CFP.maskSecret(e.key)):('号 '+(i+1))));
+    var label=cfPoolEsc(dn);
+    var isGh=(CFP.accountType?CFP.accountType(e):(e.provider))==='github';
+    var badge='<span style="font-size:9px;padding:1px 5px;border-radius:3px;margin-right:5px;background:'+(isGh?'#6e40c9':'#f38020')+';color:#fff">'+(isGh?'GitHub→CF':'Cloudflare')+'</span>';
     var stt=CFP.statusLabel(e);
     var col= /已就绪|已建/.test(stt)?'#3fb950':(/失败/.test(stt)?'#f85149':(/⏳/.test(stt)?'#e8c84a':'#8b949e'));
     var busy=(e.phase==='running');
     var m=CFP.buildMethod(e);
+    // 已有 Worker 时, 旧造失败不遮盖「资源已就绪」: 资源行优先, 任务错为次级提示。
+    var errNote=(e.phase==='error'&&e.workerUrl)?('<div class="muted" style="font-size:10px;color:#d29922;margin-top:2px">ℹ 本次重建未成 ('+cfPoolEsc(e.msg||'')+'), 旧 Worker 仍可用</div>'):'';
     return '<div style="border:1px solid #30363d;border-radius:5px;padding:7px 9px;margin-bottom:5px;background:#0d1117">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
-      +'<b style="font-size:12px;word-break:break-all">'+label+'</b>'
+      +'<b style="font-size:12px;word-break:break-all">'+badge+label+'</b>'
       +'<span style="font-size:11px;white-space:nowrap;color:'+col+'">'+cfPoolEsc(stt)+'</span></div>'
       +(e.workerUrl?('<div class="muted" style="font-size:10px;word-break:break-all;margin-top:2px">'+cfPoolEsc(e.workerUrl)+'</div>'):'')
+      +errNote
       +'<div class="row" style="margin-top:5px">'
       +'<button '+(busy?'disabled ':'')+'onclick="cfPoolBuild('+i+')" style="background:'+(m==='none'?'#555':'#238636')+';font-size:11px">⚡ '+(e.workerUrl?'重建':'建 Worker')+'</button>'
+      +'<button onclick="cfPoolOpenSite('+i+')" style="font-size:11px;background:#1f6feb">🌐 登官网</button>'
       +(e.workerUrl?('<button onclick="cfPoolUse('+i+')" style="font-size:11px">设为生效</button><button onclick="cfPoolCopy('+i+')" style="font-size:11px">复制URL</button>'):'')
       +'<button onclick="cfPoolDel('+i+')" style="background:#a33;font-size:11px">删</button>'
       +'</div></div>';
@@ -1472,8 +1486,25 @@ function cfPoolMark(key, patch){
   cfPoolRender();
 }
 function cfPoolDel(i){ var pool=cfPoolLoad(); var e=pool[i]; if(!e)return;
-  if(!confirm('删除 '+(e.email||'此号')+'? (只从本机池删除, 不会删除 Cloudflare 上已建的 Worker)'))return;
+  var dn=(CFP.displayName?CFP.displayName(e):(e.email||'此号'));
+  if(!confirm('删除 '+dn+'? (只从本机池删除, 不会删除 Cloudflare 上已建的 Worker)'))return;
   pool.splice(i,1); cfPoolSave(pool); cfPoolRender(); }
+// 一键打开该账号对应的 Cloudflare 官网: 同时把该号凭证“武装”给 cf-auto→可见标签里自动
+// 登录(CF 直登 / GitHub SSO), 登后用户在官网手动管理一切。密码永不入 URL。
+function cfPoolOpenSite(i){
+  var e=cfPoolLoad()[i]; if(!e)return;
+  var url=(CFP.siteUrl?CFP.siteUrl(e):'https://dash.cloudflare.com/login');
+  var isGh=(CFP.accountType?CFP.accountType(e):e.provider)==='github';
+  try{
+    var c=_conn();
+    var cfg={ active:true, bases:_hubBases?_hubBases():[], session:c.session||'local', relayToken:c.token||'' };
+    if(isGh){ if(e.ghUser){ cfg.gh={ user:e.ghUser, pass:e.ghPass||'', otp:(e.ghOtp||'').replace(/\s+/g,'') }; } }
+    else { if(e.email){ cfg.cf={ user:e.email, pass:e.password||'', otp:(e.otp||'').replace(/\s+/g,'') }; } }
+    if(N.cfAutoArm && (cfg.gh||cfg.cf)){ N.cfAutoArm(JSON.stringify(cfg)); }
+  }catch(x){}
+  try{ if(N.openTab){ N.openTab(url); } else { window.open(url,'_blank'); } }catch(x){ try{ window.open(url,'_blank'); }catch(_){} }
+  _result('cf',true,'已打开 '+(isGh?'GitHub→':'')+'Cloudflare 官网'+((cfg&&(cfg.gh||cfg.cf))?'·已携账号凭证自动登录':'')+', 可在官网直接管理所有功能/模块');
+}
 function cfPoolCopy(i){ var e=cfPoolLoad()[i]; if(!e||!e.workerUrl)return;
   var ok=_doClip(e.workerUrl); _result('cf',ok,ok?'已复制 Worker URL':'复制失败'); }
 function cfPoolUse(i){ var e=cfPoolLoad()[i]; if(!e||!e.workerUrl)return;
@@ -1495,14 +1526,15 @@ async function cfPoolBuild(i){
       if(!(r&&(r.started||r.already))){ cfPoolMark(key,{phase:'error',msg:(r&&r.error)||'启动失败'}); _cfBuildingKey=null; return; }
       _result('cf',true,'已为 '+(e.email||'该号')+' 启动纯后端部署 (零浏览器)…');
     } else {
-      // login 闭环 (自包含·零可见页·零点击): 把账密交给后端离屏真 Chromium 自己代登录→同源建Token→部署。
-      //   用户只提供账号即可, 全程无需开 CF 网页、无需停留任何页面; 仅当命中登录页人机验证/硬件密钥时,
-      //   后端回 cf_challenge, 此时才提示用户前台过一次那道关 (住宅 IP 基本不弹)。
-      var payload={ email:e.email, password:(e.password||''), otp:(e.otp||'') };
-      if(e.accountId) payload.accountId=e.accountId;
+      // login/github 闭环 (自包含·零可见页·零点击): 把账密(+TOTP)交给后端离屏真 Chromium
+      //   自己代登录 (CF 直登 / GitHub SSO)→同源建Token→部署。用户只提供账号即可, 全程无需开
+      //   CF 网页; 仅当命中人机验证/硬件密钥时后端回 cf_challenge, 此时才提示用户前台过一次。
+      var payload=CFP.autoPayload?CFP.autoPayload(e):null;
+      if(!payload){ cfPoolMark(key,{phase:'error',msg:'无可用编排凭证'}); _cfBuildingKey=null; return; }
       var r=await _hubRpc("/api/cf-autoprovision", payload);
       if(!(r&&(r.started||r.already))){ cfPoolMark(key,{phase:'error',msg:(r&&r.error)||'启动失败'}); _cfBuildingKey=null; return; }
-      _result('cf',true,'已为 '+(e.email||'该号')+' 启动自包含全自动 (离屏代登录→建Token→部署·零可见页·零点击)…');
+      var dn=(CFP.displayName?CFP.displayName(e):(e.email||'该号'));
+      _result('cf',true,'已为 '+dn+' 启动自包含全自动 ('+(method==='github'?'离屏 GitHub SSO 登 CF':'离屏代登录')+'→建Token→部署·零可见页·零点击)…');
     }
     cfPollStatus();
   }catch(x){ cfPoolMark(key,{phase:'error',msg:String(x&&x.message||x)}); _cfBuildingKey=null; }

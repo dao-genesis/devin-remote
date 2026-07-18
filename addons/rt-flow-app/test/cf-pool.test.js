@@ -63,5 +63,62 @@ ok(/失败/.test(CFP.statusLabel({ phase: "error", msg: "boom" })), "error → �
 let res = CFP.builtResources([{ email: "a@x.com", workerUrl: "https://w.a", accountId: "acc1" }, { email: "b@y.com" }]);
 ok(res.length === 1 && res[0].workerUrl === "https://w.a", "builtResources 只列已建成 Worker 的号");
 
+// 8) 万法识号·GitHub 账号 (用户名+密码+TOTP) 自动分流入池 (不与 CF 邮箱账号混淆)
+let gh = CFP.parsePool("shapetersonv1 3yBSdOHQFWZog LVUGH4AI7URB2OOI", parseAccountText);
+ok(gh.length === 1 && gh[0].provider === "github" && gh[0].ghUser === "shapetersonv1", "GitHub 用户名+密码+TOTP → {provider:github,ghUser}");
+ok(gh[0].ghPass === "3yBSdOHQFWZog" && gh[0].ghOtp === "LVUGH4AI7URB2OOI", "GitHub 密码/TOTP 按语义精确归位");
+
+// 8b) md 表格行 (含 Role 列 + ghp_ PAT) 也识别: user|role|pass|totp|pat
+let ght = CFP.parsePool("| shapetersonv1 | Owner | 3yBSdOHQFWZog | LVUGH4AI7URB2OOI | ghp_" + "x".repeat(36) + " |", parseAccountText);
+ok(ght.length === 1 && ght[0].ghUser === "shapetersonv1" && ght[0].ghPass === "3yBSdOHQFWZog" && ght[0].ghOtp === "LVUGH4AI7URB2OOI", "md 表格行 (Role 列) → TOTP 前一字段为密码");
+ok(/^ghp_/.test(ght[0].ghPat || ""), "md 表格行捕获 ghp_ PAT");
+
+// 8c) 显式前缀 gh:/github: 即使无 TOTP 也判为 GitHub
+let ghp = CFP.parsePool("gh: someuser somepass", parseAccountText);
+ok(ghp.length === 1 && ghp[0].provider === "github" && ghp[0].ghUser === "someuser" && ghp[0].ghPass === "somepass", "gh: 前缀显式判为 GitHub");
+
+// 8d) 强信号门槛: 无 TOTP/无 PAT/无前缀 的「用户名 密码」不误判为 GitHub
+let noise = CFP.parseGithubLines("hello world");
+ok(noise.length === 0, "普通两词行无强信号 → 不误判 GitHub");
+
+// 8e) 邮箱行不被 GitHub 解析器抢走 (仍走 CF 路径)
+ok(CFP.parseGithubLines("a@x.com pass LVUGH4AI7URB2OOI").length === 0, "邮箱首字段 → 不判 GitHub (CF 直登可带 2FA)");
+
+// 8f) CF 与 GitHub 混合多行 → 各自分流入池·键不冲突
+let mix = CFP.parsePool("a@x.com pass1\nshapetersonv1 ghpass LVUGH4AI7URB2OOI", parseAccountText);
+ok(mix.length === 2 && mix.some(e => e.email === "a@x.com") && mix.some(e => e.provider === "github"), "CF+GitHub 混合各自入池");
+
+// 8g) 判类器边界
+ok(CFP.isTotpSeed("LVUGH4AI7URB2OOI") === true && CFP.isTotpSeed("cO6WlSdTohiRtayv") === false, "TOTP 种子=大写 base32; 含小写的强密码不误判为种子");
+ok(CFP.isGhUser("shapeterson-v1") === true && CFP.isGhUser("a@x.com") === false, "GitHub 用户名判定 (排除邮箱)");
+ok(CFP.isGhPat("ghp_" + "a".repeat(36)) === true, "ghp_ PAT 判定");
+
+// 9) buildMethod / autoPayload: GitHub 走 SSO; CF 直登
+ok(CFP.buildMethod({ provider: "github", ghUser: "u", ghPass: "p" }) === "github", "github 号 → github 法");
+ok(CFP.buildMethod({ provider: "github", ghUser: "u" }) === "none", "github 缺密码 → none");
+assert.deepStrictEqual(CFP.autoPayload({ provider: "github", ghUser: "u", ghPass: "p", ghOtp: "S".repeat(16) }),
+  { provider: "github", ghUser: "u", ghPass: "p", ghOtp: "S".repeat(16) }, "github autoPayload");
+assert.deepStrictEqual(CFP.autoPayload({ email: "a@x.com", password: "p" }),
+  { provider: "cloudflare", email: "a@x.com", password: "p" }, "cloudflare autoPayload");
+assert.deepStrictEqual(CFP.autoPayload({ email: "a@x.com", password: "p", accountId: "acc1" }),
+  { accountId: "acc1", provider: "cloudflare", email: "a@x.com", password: "p" }, "autoPayload 带 accountId");
+ok(CFP.autoPayload({ token: "t" }) === null, "纯后端 token 无离屏编排 payload");
+
+// 9b) siteUrl / displayName
+ok(CFP.siteUrl({ email: "a@x.com" }) === "https://dash.cloudflare.com/login", "未建 → 开 CF 登录页");
+ok(CFP.siteUrl({ email: "a@x.com", workerUrl: "https://w" }) === "https://dash.cloudflare.com/", "已建 → 开 CF 仪表盘");
+ok(CFP.displayName({ provider: "github", ghUser: "u" }) === "u" && CFP.displayName({ email: "a@x.com" }) === "a@x.com", "displayName 两类");
+ok(CFP.accountType({ provider: "github" }) === "github" && CFP.accountType({ email: "a@x.com" }) === "cloudflare", "accountType 两类");
+
+// 9c) 状态标签: github 待建 / 已有 Worker 时错误不覆盖资源就绪
+ok(/GitHub/.test(CFP.statusLabel({ provider: "github", ghUser: "u", ghPass: "p" })), "github 待建标签含 GitHub");
+ok(/已建|已就绪/.test(CFP.statusLabel({ workerUrl: "https://w" })), "有 Worker → 已建 (不因历史无状态而空)");
+
+// 9d) 合并: github 号同用户名去重·保留已建资源
+let gbase = [{ provider: "github", ghUser: "u", ghPass: "old", workerUrl: "https://w", phase: "done" }];
+let gm = CFP.mergePool(gbase, CFP.parsePool("gh: u newpass", parseAccountText));
+let gu = gm.pool.find(e => e.provider === "github");
+ok(gm.added === 0 && gm.updated === 1 && gu.ghPass === "newpass" && gu.workerUrl === "https://w", "github 同号更新密码保留 Worker");
+
 console.log(failures ? ("\nFAIL " + failures) : "\nALL GREEN (cf-pool)");
 process.exit(failures ? 1 : 0);

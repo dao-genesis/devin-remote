@@ -156,6 +156,29 @@ const GROUPS = [
   ok(waUsed && !ckRead, "autoProvisionRun 有账密 → 走离屏 web-auto·完全不读会话 cookie");
   ok(e15 && e15.message.indexOf("WEBAUTO_TOK") < 0 && e15.message.indexOf("pw") < 0, "错误信息不含 token/密码明文");
 
+  // ── 16) GitHub SSO 路: cfWebAuto 收 {gh:{user,pass,otp}} 原样透传离屏桥 (账号+密码+TOTP 登 CF) ──
+  await settle();
+  let ghCfg = null;
+  DaoRelayApp.setCfWebAutoFn(function (id, c) { ghCfg = JSON.parse(c); setImmediate(() => global.__cfWebMintCb(id, JSON.stringify({ token: "GH_SSO_TOK_8888", accountId: "ACCG" }))); });
+  const m16 = await CF.webAuto({ gh: { user: "ghuser", pass: "ghpw", otp: "S6BSDOHQFWZOGABC" }, accountId: "ACCG" });
+  ok(m16.token === "GH_SSO_TOK_8888" && m16.accountId === "ACCG", "cfWebAuto(gh): 返回 token+accountId");
+  ok(ghCfg && ghCfg.gh && ghCfg.gh.user === "ghuser" && ghCfg.gh.otp === "S6BSDOHQFWZOGABC" && ghCfg.accountId === "ACCG", "cfWebAuto(gh): GitHub 账密+TOTP 原样透传离屏桥");
+
+  // ── 17) autoProvisionRun GitHub 优先走 gh SSO (不读会话 cookie·不误入 cf 直登) ──
+  let ghUsed = false, ckRead17 = false;
+  DaoRelayApp.setCfWebAutoFn(function (id, c) { ghUsed = !!(JSON.parse(c).gh); setImmediate(() => global.__cfWebMintCb(id, JSON.stringify({ error: "test_stop_gh" }))); });
+  DaoRelayApp.setCfCookieFn(() => { ckRead17 = true; return "cf_clearance=x"; });
+  let e17 = null; try { await CF.autoProvisionRun({ gh: { user: "ghuser", pass: "ghpw", otp: "" } }); } catch (e) { e17 = e; }
+  ok(ghUsed && !ckRead17, "autoProvisionRun 有 GitHub 账号 → 走离屏 GitHub SSO·不读会话 cookie");
+  ok(e17 && e17.message.indexOf("ghpw") < 0, "错误信息不含 GitHub 密码明文");
+
+  // ── 18) /api/cf-autoprovision 路由: provider=github + ghUser/ghPass → mode=github-sso ──
+  DaoRelayApp._cfResetForTest();   // 前面直调编排落定 running·复位单例以免路由被判 already
+  DaoRelayApp.setCfWebAutoFn(function (id) { setImmediate(() => global.__cfWebMintCb(id, JSON.stringify({ error: "test_stop" }))); });
+  const r18 = await rpc("/api/cf-autoprovision", { provider: "github", ghUser: "ghuser", ghPass: "ghpw", ghOtp: "S6BSDOHQFWZOGABC" });
+  ok(r18.status === 200 && r18.body.started === true && r18.body.mode === "github-sso", "cf-autoprovision GitHub 账号 → started + mode=github-sso");
+  await settle();
+
   // 复位注入, 不污染同进程其它测试
   DaoRelayApp.setCfWebMintFn(null);
   DaoRelayApp.setCfWebAutoFn(null);
