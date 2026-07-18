@@ -1984,6 +1984,8 @@ function daoFetchJson(u: string, timeoutMs: number): Promise<any> {
     });
 }
 
+// 中继最近一次失败原因(诊断用): open 即清, error/close 即记 — /api/relay/state 与 bridge 板块卡片可见。
+let _relayLastErr = '';
 function connectRelay(port: number, token: string) {
     if (ws.relayConnected || ws.relayConnecting) return;
     ws.relayConnecting = true;
@@ -2068,27 +2070,39 @@ function connectSingleRelay(wsUrl: string, relayUrl: string, sessionId: string, 
         const relayHostname = new URL(relayUrl).hostname;
         const isCfHost = relayHostname.includes('workers.dev') || relayHostname.includes('cloudflare');
         // 直连兜底: 每实例独立出站连自己的 relay session (鸡犬相闻·老死不相往来)
-        // 反者道之动: 不再「无代理即放弃」——本机出网通(cloudflared 隧道已可达 CF), 故直连必通。
-        const tryDirect = () => {
+        // 反者道之动: 不再「无代理即放弃」——直连与本地代理互为回退, 绝不空手而归。
+        const tryDirect = (fail: () => void) => {
             try {
-                const socket = new WebSocket(wsUrl);
-                setupRelayHandlers(socket, relayUrl, sessionId, port, token, onFail);
-            } catch { onFail(); }
+                // 真·直连: 自建 TLS socket, 绕开 IDE exthost 注入的 proxy-agent —— 其按系统/PAC 解析出的
+                // 代理若不可达(如失效的局域网代理), 会把一切 http/https 出站劫持致死(实测 close 1006)。
+                if (wsUrl.startsWith('wss://')) {
+                    const tlsSocket = tls.connect({ host: relayHostname, port: 443, servername: relayHostname, rejectUnauthorized: false });
+                    const socket = new WebSocket(wsUrl, { createConnection: () => tlsSocket });
+                    setupRelayHandlers(socket, relayUrl, sessionId, port, token, fail);
+                } else {
+                    const socket = new WebSocket(wsUrl);
+                    setupRelayHandlers(socket, relayUrl, sessionId, port, token, fail);
+                }
+            } catch (e: any) { _relayLastErr = 'direct: ' + String(e && e.message || e); fail(); }
         };
-        // workers.dev/cloudflare: 优先用本地代理(为 DNS 污染网络兜底), 但无代理/代理失败 → 直连, 绝不空手而归
-        if (isCfHost) {
+        const tryProxy = (fail: () => void) => {
             const proxyPort = detectedProxyPort || detectProxyPort();
-            if (!proxyPort) { tryDirect(); return; }
+            if (!proxyPort) { fail(); return; }
             createProxyTunnel(relayHostname).then((tlsSocket) => {
                 if (tlsSocket) {
                     const socket = new WebSocket(wsUrl, { createConnection: () => tlsSocket });
-                    setupRelayHandlers(socket, relayUrl, sessionId, port, token, onFail);
+                    setupRelayHandlers(socket, relayUrl, sessionId, port, token, fail);
                 } else {
-                    tryDirect();
+                    fail();
                 }
-            }).catch(() => tryDirect());
+            }).catch(() => fail());
+        };
+        // workers.dev/cloudflare 域: 代理先行(DNS 污染网络兜底) → 直连回退;
+        // 自有域名(alias/自定义域·同样多为 CF 边缘承载): 直连先行 → 代理回退 —— 两赛道互补, 任一通即通。
+        if (isCfHost) {
+            tryProxy(() => tryDirect(onFail));
         } else {
-            tryDirect();
+            tryDirect(() => tryProxy(onFail));
         }
     } catch {
         onFail();
@@ -2102,6 +2116,7 @@ function setupRelayHandlers(relaySocket: any, relayUrl: string, sessionId: strin
     let closeHandled = false;
 
     relaySocket.on('open', () => {
+        _relayLastErr = '';
         ws.relayConnected = true;
         ws.relayConnecting = false;
         if (ws.relayConnectWatchdog) { clearTimeout(ws.relayConnectWatchdog); ws.relayConnectWatchdog = null; }
@@ -2139,6 +2154,7 @@ function setupRelayHandlers(relaySocket: any, relayUrl: string, sessionId: strin
     relaySocket.on('close', (code: number) => {
         if (closeHandled) return;
         closeHandled = true;
+        if (code !== 1000 && !_relayLastErr) _relayLastErr = 'close code=' + code + ' url=' + relayUrl;
         const isCurrent = (relaySocket === ws.relayWs);
         if (!isCurrent) return;
         ws.relayConnected = false;
@@ -2157,7 +2173,8 @@ function setupRelayHandlers(relaySocket: any, relayUrl: string, sessionId: strin
         }
     });
 
-    relaySocket.on('error', () => {
+    relaySocket.on('error', (e: any) => {
+        _relayLastErr = 'error: ' + String(e && e.message || e) + ' url=' + relayUrl;
         if (closeHandled) return;
         onFail();
     });
@@ -4228,7 +4245,7 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             let raw: any = null; try { raw = JSON.parse(fs.readFileSync(RELAY_STATE_FILE, 'utf8')); } catch { /* 无 */ }
             if (raw && raw.token) raw = { ...raw, token: '***' };
             if (raw && raw.oauth) raw = { ...raw, oauth: { ...raw.oauth, refreshToken: raw.oauth.refreshToken ? '***' : '', accessToken: raw.oauth.accessToken ? '***' : '' } };
-            return { ok: true, active: !!persist, url: persist || null, connected: ws.relayConnected, publicUrl: ws.publicUrl, state: raw };
+            return { ok: true, active: !!persist, url: persist || null, connected: ws.relayConnected, publicUrl: ws.publicUrl, lastErr: _relayLastErr, state: raw };
         }
         case '/api/relay/set': {
             const rb: any = JSON.parse(await readBody(req) || '{}');
@@ -7143,6 +7160,7 @@ function bridgeRelayState(): any {
         expiry: (st && st.oauth && st.oauth.expiry) || '',
         deployedAt: (st && st.deployedAt) || '',
         subdomain: (st && st.subdomain) || '',
+        lastErr: _relayLastErr,
     };
 }
 
