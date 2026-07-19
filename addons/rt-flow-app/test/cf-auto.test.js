@@ -63,6 +63,11 @@ function ts(name, fn) { return t(name, async () => fn()); }
     assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/x", { cf2fa: true }), "cf_2fa");
     // 非 dash 的 cloudflare.com 页不触发 cf_authed
     assert.strictEqual(CFAUTO.classifyPage("https://www.cloudflare.com/", {}), "unknown");
+    // 登录/注册路由即便表单未渲染 (facts 空·SPA 加载中) 也绝不误判为 cf_authed —— 否则表单出现前
+    //   抢先建 Token 命中未登录态 403 提前终结登录流 (真机实测·登录页约需 ~10s 才渲染出账密框)。
+    assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/login", {}), "unknown");
+    assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/sign-in", {}), "unknown");
+    assert.strictEqual(CFAUTO.classifyPage("https://dash.cloudflare.com/login?foo=1", {}), "unknown");
   });
 
   // ── pickGroups / buildTokenPayload (内部接口建 Token 请求体·纯函数) ──

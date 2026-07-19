@@ -85,8 +85,13 @@
       if (facts.cfContinue) return "cf_continue";
       if (facts.cf2fa) return "cf_2fa";
       if (facts.cfLogin) return "cf_login";
-      // 已登录 dash 且无登录/2FA/建token 表单 → 直接走内部接口建 Token (首选·零 UI)
-      if (/(^|\.)dash\.cloudflare\.com$/i.test(hostOf(url))) return "cf_authed";
+      // 已登录 dash 且无登录/2FA/建token 表单 → 直接走内部接口建 Token (首选·零 UI)。
+      //   但登录/注册路由 (/login·/sign-in) 绝不可仅凭 host 判为已登录: CF 登录页是 React SPA,
+      //   表单渲染前 body 为空·cfLogin=false, 若此刻按 host 命中即返 cf_authed → 会「表单还没出就
+      //   抢先建 Token」→ 未登录态 /api/v4/user 403 提前终结整条登录流 (真机 2026-07 实测·登录页
+      //   约需 ~10s 才渲染出邮箱/密码框)。故排除登录路由: 表单未出时返 unknown 让主循环等它渲染,
+      //   出来后走 cf_login 正常填表。cfMintViaCookie 早有同款 /login 守卫, 此处补齐一致性。
+      if (/(^|\.)dash\.cloudflare\.com$/i.test(hostOf(url)) && !/\/login\b|\/sign-?in\b/i.test(url)) return "cf_authed";
     }
     return "unknown";
   }
@@ -236,6 +241,9 @@
           var proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
           var setter = Object.getOwnPropertyDescriptor(proto, "value");
           if (setter && setter.set) setter.set.call(el, val); else el.value = val;
+          // React 受控输入: 其内部 _valueTracker 缓存旧值, 若与新值相同会吞掉 input→onChange,
+          //   框架 state 不更新 → 表单校验不过·提交按钮恒 disabled。清空 tracker 迫使 React 认变更。
+          try { if (el._valueTracker) el._valueTracker.setValue(""); } catch (e) {}
           el.dispatchEvent(new Event("input", { bubbles: true }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
           return true;
@@ -370,6 +378,18 @@
             if (cpw) setVal(cpw, CFG.cf.pass || "");
             var csb = (cpw && cpw.form && cpw.form.querySelector("button[type=submit], input[type=submit]")) || btnByText(/log ?in|sign ?in|登录|登入|continue|next|下一步/i);
             if (csb) csb.click();
+            // 停滞侦测: CF 新版统一登录页 (React SPA) 仅接受可信真人输入 —— 注入的账密不触发其
+            //   表单 state, 提交按钮恒 disabled·click 空转 (真机 2026-07 实测: DOM 注入/合成事件/
+            //   _valueTracker 复位/CDP 打字均无法提交)。连续多拍仍停在登录页即回灌明确可执行错误,
+            //   不静默空转到原生 95s 超时, 让引擎精确提示用户「手动登一次 / 或粘贴 CF API Token」。
+            if (CFG.deliver) {
+              root.__cfLoginTicks = (root.__cfLoginTicks || 0) + 1;
+              if (root.__cfLoginTicks >= 6 && !root.__cfDelivered) {
+                root.__cfDelivered = 1;
+                status("blocked", "CF 登录页拒绝自动提交·转人工");
+                try { root.__CFM && root.__CFM.done(JSON.stringify({ error: "cf_login_manual: Cloudflare 新版登录页仅接受真人输入·注入账密无法自动提交 (CF 反自动化)。请在 App 内浏览器手动登录一次 Cloudflare (人机验证同一道关), 之后建 Token/部署 Worker 全自动; 或在「添加」里粘贴一个 Cloudflare API Token 即全程零登录直建。" })); } catch (e) {}
+              }
+            }
           } else status("wait", "Cloudflare 登录页·未提供账密, 等你手动登录");
           return;
         }
