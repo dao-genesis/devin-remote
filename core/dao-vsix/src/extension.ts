@@ -8334,6 +8334,10 @@ input[type=checkbox],input[type=radio],input[type=range]{background:transparent;
 #v-github.active.ghweb{padding:0;column-gap:0}
 #v-github.ghweb .ovwbar{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:0 0 6px;flex-shrink:0}
 #v-github.ghweb iframe{flex:1;min-height:0;width:100%;height:auto;border:0;background:#fff;border-radius:6px}
+/* Cloudflare 官方原生视图(反带官网): 满幅 iframe 直载同源反代的 dash.cloudflare.com */
+#v-bridge.active.cfweb{padding:0;column-gap:0}
+#v-bridge.cfweb .ovwbar{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:0 0 6px;flex-shrink:0}
+#v-bridge.cfweb iframe{flex:1;min-height:0;width:100%;height:auto;border:0;background:#fff;border-radius:6px}
 .toast{position:fixed;bottom:20px;right:20px;padding:8px 16px;border-radius:6px;font-size:12px;z-index:200;animation:fi .2s}
 .toast.hid{display:none}
 .toast.ok{background:var(--success);color:#000}
@@ -8690,12 +8694,44 @@ function rBridgeRelayCard(r){
   h+='<div id="cfPoolBox" class="card">'+rCfPool()+'</div>';
   return h;
 }
+// 帛书·「反者道之动」·搬运工反带官网: Cloudflare 官方原生视图 — 满幅 iframe 直载同源反代的 dash.cloudflare.com
+//   (与 GitHub/主页反带同构·经 /__web 逐源 Cookie 罐保持登录态)。注: CF 有 Turnstile 人机验证, 服务端反代
+//   或被挡在验证墙——挡住时用同款「浏览器代登」按钮回退到本体隔离档官网登录。bridge 主职是内网穿透, 故默认
+//   仍留穿透面板, 一键切到 CF 官网。
+function cfWebUrl(){
+  var org=(location.origin&&/^https?:\/\//.test(location.origin))?location.origin:'';
+  var base=org||(S.server.port?('http://localhost:'+S.server.port):'');
+  return base+'/__web?u='+encodeURIComponent('https://dash.cloudflare.com/');
+}
+function cfSetMode(m){
+  S.cfMode=m;
+  var v=document.getElementById('v-bridge');
+  if(v){v.innerHTML='';v.classList.remove('cfweb')}
+  rBridgeFull();
+}
+function cfWebReload(){var f=document.getElementById('cfWebFrame');if(f){try{f.src=cfWebUrl()}catch(e){}}}
+function cfBar(active){
+  return '<div class="ovwbar">'
+    +'<button class="btn sm '+(active==='bridge'?'primary':'ghost')+'" onclick="cfSetMode(&#39;bridge&#39;)" title="穿透面板: 内网穿透/持久通道/在线设备/一行接入(DAO Bridge 本职)">☯ 穿透面板</button>'
+    +'<button class="btn sm '+(active==='official'?'primary':'ghost')+'" onclick="cfSetMode(&#39;official&#39;)" title="官方原生: 满幅直载同源反代的 dash.cloudflare.com 官网(登录态保持·操作即官网操作)">🌐 Cloudflare 官方原生</button>'
+    +(active==='official'?'<button class="btn sm ghost" onclick="cfWebReload()" title="重载官网页">⟳</button>':'')
+    +(active==='official'?'<button class="btn sm ghost" onclick="cmd(&#39;openCf&#39;)" title="Turnstile 挡住时回退: 隔离档浏览器打开 dash.cloudflare.com 官网登录">🌐 浏览器代登</button>':'')
+    +'</div>';
+}
+function rBridgeOfficial(v){
+  v.classList.add('cfweb');
+  if(document.getElementById('cfWebFrame'))return;
+  v.innerHTML=cfBar('official')+'<iframe id="cfWebFrame" src="'+esc(cfWebUrl())+'" allow="clipboard-read; clipboard-write"></iframe>';
+}
 // 内网穿透 · DAO Bridge — 与独立穿透插件 1:1: 状态 + 命名隧道/CloudFlare + 导出文档 + 能力自测。
 function rBridgeFull(){
   var v=document.getElementById('v-bridge');if(!v)return;
+  if(S.cfMode==='official'){rBridgeOfficial(v);return}
+  v.classList.remove('cfweb');
   var b=S.bridge||{};
   var on=!!b.url;
-  var h='<div class="st">☯ 内网穿透 · DAO Bridge (集成)</div>';
+  var h=cfBar('bridge');
+  h+='<div class="st">☯ 内网穿透 · DAO Bridge (集成)</div>';
   h+='<div class="card" style="font-size:11px;color:var(--muted);margin-bottom:6px">无名之樸 · 插件启动即自动打通整机公网穿透，<b style="color:var(--fg)">零配置、无需任何账号</b>；云端 Agent 即可远程操作本机。</div>';
   // ── 顶层持久通道 · 一次登录全自动打通(自动注册 CF Token·PKCE) ──
   h+=rBridgeRelayCard(b.relay||{});
