@@ -4504,7 +4504,11 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         }
         case '/api/devin/mcp/installations': {
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
-            return await devinListMcpInstallations(ws.devinOrgId, ws.devinAuth1);
+            // 硬时限: 上游偶发悬挂 → 本端点永不无限挂起
+            return await Promise.race([
+                devinListMcpInstallations(ws.devinOrgId, ws.devinAuth1),
+                new Promise<any>((res) => setTimeout(() => res({ ok: false, error: 'timeout(15s) · 官网 MCP 接口悬挂' }), 15000)),
+            ]);
         }
         case '/api/devin/mcp/add': {
             // 追录自定义 MCP — body: {name, transport, command/args/env_variables | url/headers, ...}
@@ -4522,9 +4526,12 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             return await devinDeleteMcp(ws.devinOrgId, id, ws.devinAuth1);
         }
         case '/api/devin/mcp/marketplace': {
-            // 官网 MCP 市场目录 (整图给到本地, 供浏览 + 加入档案 + 批量安装)
+            // 官网 MCP 市场目录 (整图给到本地, 供浏览 + 加入档案 + 批量安装) — 硬时限防悬挂
             if (!ws.devinAuth1 || !ws.devinOrgId) return { ok: false, error: 'not logged in' };
-            return await devinListMcpMarketplace(ws.devinOrgId, ws.devinAuth1);
+            return await Promise.race([
+                devinListMcpMarketplace(ws.devinOrgId, ws.devinAuth1),
+                new Promise<any>((res) => setTimeout(() => res({ ok: false, error: 'timeout(15s) · 官网 MCP 目录悬挂', items: [] }), 15000)),
+            ]);
         }
         case '/api/devin/mcp/ide': {
             // 本机 IDE / 桌面 Agent 内部 MCP 扫描 (纯本地, 无需登录) — 供远程接测/对照 IDE 内显示数量
@@ -15767,7 +15774,13 @@ async function daoReplyMcpTab(reply: (m: any) => void): Promise<void> {
     // 2) 官网市场目录 — 尽力而为 (需 org + 可用 API)
     let mkItems: McpMarketItem[] = []; let mkOk = false; let mkNote = '';
     if (ws.devinAuth1 && ws.devinOrgId && devinCanUseApi()) {
-        try { const mk = await devinListMcpMarketplace(ws.devinOrgId, ws.devinAuth1); mkOk = !!mk.ok; mkItems = mk.items || []; if (!mk.ok) mkNote = '官网 MCP 目录读取失败 (status ' + (mk.status || '?') + ') · 已仅列本机'; }
+        // 硬时限竞速: /api/mcp/servers 上游偶发悬挂(直连+代理级联重试可拖 60s+), 一旦超时立即
+        // 只列本机 IDE MCP — 本 tab 永远秒级有回, 不再被官网目录拖成「正在加载」黑洞。
+        const mkRace = Promise.race([
+            devinListMcpMarketplace(ws.devinOrgId, ws.devinAuth1),
+            new Promise<{ ok: boolean; items?: McpMarketItem[]; status?: number }>((res) => setTimeout(() => res({ ok: false, items: [], status: -1 }), 12000)),
+        ]);
+        try { const mk = await mkRace; mkOk = !!mk.ok; mkItems = mk.items || []; if (!mk.ok) mkNote = (mk.status === -1 ? '官网 MCP 目录响应超时(12s)' : '官网 MCP 目录读取失败 (status ' + (mk.status || '?') + ')') + ' · 已仅列本机'; }
         catch (e: any) { mkNote = '官网 MCP 目录异常: ' + String(e && e.message || e) + ' · 已仅列本机'; }
     } else if (ws.devinAuth1) {
         mkNote = '当前令牌无法读官网 MCP 目录(Windsurf session-token) · 已仅列本机 IDE MCP';
