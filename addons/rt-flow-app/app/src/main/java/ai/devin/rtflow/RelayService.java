@@ -1480,12 +1480,16 @@ public class RelayService extends Service {
             + "if(/\\/login|\\/sign-?in/i.test(location.href||'')){fin({error:'no_cf_session'});return;}"
             + "function _net(m){return /failed to fetch|load failed|networkerror|network error|network request failed/i.test(String(m||''));}"
             + "function _sl(ms){return new Promise(function(r){setTimeout(r,ms);});}"
-            + "function api(p,init){init=init||{};var _try=function(n){return fetch(p,{method:init.method||'GET',credentials:'include',"
-            + "headers:Object.assign({Accept:'application/json','X-Cross-Site-Security':'dash'},init.headers||{}),body:init.body}).then(function(r){"
+            // X-Cross-Site-Security: dash —— CF 跨站保护对该头取舍随时翻转。真机同源 fetch 实测(2026-07):
+            //   带该头的同源 POST /api/v4/user/tokens 被 403, 不带则 200; GET 两态皆 200。默认不带,
+            //   首次 403 翻转该头重试一次 → 兼容 CF 未来若又改回「必带」, 两态皆通。
+            + "function api(p,init){init=init||{};var _try=function(n,xss){return fetch(p,{method:init.method||'GET',credentials:'include',"
+            + "headers:Object.assign(xss?{Accept:'application/json','X-Cross-Site-Security':'dash'}:{Accept:'application/json'},init.headers||{}),body:init.body}).then(function(r){"
+            + "if(r.status===403&&!xss){return _try(n,true);}"
             + "return r.text().then(function(tx){var t={};try{t=JSON.parse(tx);}catch(e){}"
             + "if(r.status===401||r.status===403){var er=new Error('auth');er.code=r.status;throw er;}"
             + "if(!r.ok||t.success===false){throw new Error('cf '+p+' HTTP '+r.status);}return t.result;});})"
-            + ".catch(function(e){var m=String(e&&e.message||e);if(_net(m)&&n<3){return _sl(1200+n*800).then(function(){return _try(n+1);});}throw e;});};return _try(0);}"
+            + ".catch(function(e){var m=String(e&&e.message||e);if(_net(m)&&n<3){return _sl(1200+n*800).then(function(){return _try(n+1,xss);});}throw e;});};return _try(0,false);}"
             + "function nm(x){return String(x==null?'':x).trim().toLowerCase();}"
             + "function pick(all,names){all=all||[];return (names||[]).map(function(n){"
             + "for(var i=0;i<all.length;i++){if(all[i]&&all[i].name===n)return {id:all[i].id};}"

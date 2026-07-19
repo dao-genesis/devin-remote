@@ -154,14 +154,18 @@ function ts(name, fn) { return t(name, async () => fn()); }
     assert.strictEqual(threw, true);
   });
 
-  // ── X-Cross-Site-Security: dash 源码护栏 (CF 自 2025Q3 起 POST /api/v4 必带·缺则 403·实测验证) ──
-  await ts("cf-auto.js cfMintToken 包含 X-Cross-Site-Security:dash", () => {
+  // ── X-Cross-Site-Security 源码护栏 (真机同源 fetch 实测 2026-07: 带该头的 POST /api/v4/user/tokens
+  //    被 403, 不带则 200 建成; GET 两态皆 200。故同源默认不带, 仅首次 403 翻转该头重试一次·两态皆通) ──
+  await ts("cf-auto.js cfMintToken: 同源默认不带 X-Cross-Site-Security·403 时翻转重试", () => {
     const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/cf-auto.js"), "utf-8");
-    assert.ok(src.includes("X-Cross-Site-Security"), "cf-auto.js 缺少 X-Cross-Site-Security 头");
+    assert.ok(src.includes("X-Cross-Site-Security"), "cf-auto.js 缺少 X-Cross-Site-Security 头 (403 回退分支)");
+    assert.ok(/xssToggled/.test(src) && /r\.status === 403/.test(src), "cf-auto.js 缺少 403 翻转 X-Cross-Site-Security 的回退重试");
+    assert.ok(!/Accept: "application\/json", "X-Cross-Site-Security": "dash"/.test(src), "cf-auto.js 不应把 X-Cross-Site-Security 硬写进默认头 (同源 POST 会被 403)");
   });
-  await ts("RelayService.java cfMintJs 包含 X-Cross-Site-Security:dash", () => {
+  await ts("RelayService.java cfMintJs: 同源默认不带 X-Cross-Site-Security·403 时翻转重试", () => {
     const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/java/ai/devin/rtflow/RelayService.java"), "utf-8");
-    assert.ok(src.includes("X-Cross-Site-Security") && src.includes("dash"), "RelayService.java cfMintJs 缺少 X-Cross-Site-Security:dash 头");
+    assert.ok(src.includes("X-Cross-Site-Security") && src.includes("dash"), "RelayService.java cfMintJs 缺少 X-Cross-Site-Security 回退头");
+    assert.ok(/r\.status===403&&!xss/.test(src), "RelayService.java cfMintJs 缺少 403 翻转 X-Cross-Site-Security 的回退重试");
   });
 
   // ── 自包含·离屏「代登录→建 Token」源码护栏 (本源: 用户只提供账号·零可见页·零点击) ──

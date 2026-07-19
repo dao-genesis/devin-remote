@@ -274,19 +274,26 @@
         var api = async function (path, init) {
           init = init || {};
           var lastErr = null;
+          // X-Cross-Site-Security: dash —— CF 跨站保护对该头的取舍随时会翻转。真机同源 fetch 实测
+          //   (2026-07·登录态 dash 页): 带该头的同源 POST /api/v4/user/tokens 被 403, 不带则 200 建成;
+          //   GET 两态皆 200。故默认不带 (不加 X-Requested-With: 该头会触发 CORS 预检→Failed to fetch);
+          //   仅在首次 403 时翻转该头重试一次 —— 兼容 CF 未来若又改回「必带」, 两态皆通 (无为而无不为)。
+          var xss = false, xssToggled = false;
           for (var attempt = 0; attempt < 4; attempt++) {
             try {
-              // 与会话态 cfMintJs 同源建 Token 完全对齐的请求头 (不加 X-Requested-With: 该头在跳转成
-              //   跨源时会触发 CORS 预检并直接 Failed to fetch; 会话态路径无此头且长期实测可用)。
+              var hdrs = Object.assign({ Accept: "application/json" }, init.headers || {});
+              if (xss) hdrs["X-Cross-Site-Security"] = "dash";
               var r = await fetch(path, {
                 method: init.method || "GET",
                 credentials: "include",
-                headers: Object.assign({ Accept: "application/json", "X-Cross-Site-Security": "dash" }, init.headers || {}),
+                headers: hdrs,
                 body: init.body
               });
               // CF bot-management: 403 + text/html (managed challenge) vs JSON API error
               var ct = (r.headers.get("content-type") || "").toLowerCase();
               if (!r.ok && ct.indexOf("text/html") >= 0) throw new Error("cf_challenge");
+              // JSON 403: 翻转 X-Cross-Site-Security 头重试一次 (不计入网络退避预算)
+              if (r.status === 403 && !xssToggled) { xssToggled = true; xss = !xss; continue; }
               var t = null; try { t = await r.json(); } catch (e) { t = {}; }
               if (!r.ok || t.success === false) throw new Error("cf " + path + " HTTP " + r.status);
               return t.result;
