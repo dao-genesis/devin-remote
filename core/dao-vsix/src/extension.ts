@@ -7148,6 +7148,26 @@ function selfUpdateFindCli(): string {
     return '';
 }
 
+// 归一(dao-one)宿主探测: 内折副本(vendor-vsix)运行时, 自更新目标应是 dao-one 整体发版,
+//   而非独立 dao-vsix(装独立版会与宿主抢注同名命令/视图)。返回宿主 dao-one 的版本号; 非归一返回 ''。
+function selfUpdateDaoOneHostVersion(): string {
+    if (!/[\\/]vendor-vsix[\\/]/.test(__dirname)) return '';
+    try {
+        let d = __dirname;
+        for (let i = 0; i < 6; i++) {
+            d = path.dirname(d);
+            const pj = path.join(d, 'package.json');
+            if (fs.existsSync(pj)) {
+                try {
+                    const j = JSON.parse(fs.readFileSync(pj, 'utf8'));
+                    if (j && j.name === 'dao-one' && j.version) return String(j.version);
+                } catch { /* 守柔 */ }
+            }
+        }
+    } catch { /* 守柔 */ }
+    return '0.0.0'; // 归一但读不到版本 → 以 0.0.0 视为可更新, 宁装最新不冻旧版
+}
+
 function selfUpdateGhMirrors(u: string): string[] {
     return [u, 'https://ghfast.top/' + u, 'https://gh-proxy.com/' + u, 'https://mirror.ghproxy.com/' + u, 'https://ghproxy.net/' + u];
 }
@@ -7178,10 +7198,13 @@ function selfUpdateDownload(url: string, dst: string, ms: number): Promise<boole
 }
 
 async function bridgeSelfUpdateCheck(): Promise<void> {
-    // 归一(dao-one)内折副本(vendor-vsix)不自更新: 它若拉取 dao-vsix Release 安装, 装上的是独立版
-    // dao.dao-vsix —— 与宿主 dao-one 抢注同名命令/视图, 已卸载的冗余单体插件会被它反复复活。
-    // 内折副本的更新随 dao-one 整体发版, 不走本通道。
-    if (/[\\/]vendor-vsix[\\/]/.test(__dirname)) return;
+    // 归一(dao-one)内折副本: 不能装独立 dao-vsix(与宿主抢注同名命令/视图), 但更不能永冻——
+    // 旧逻辑此处直接 return → dao-one 用户永远停在安装时版本, 新修复全部无法落地(真·根因)。
+    // 正解: 归一态改为跟踪 dao-one-v* Release, 下载安装 dao-one VSIX(同 id 覆盖·无冲突)。
+    const daoOneVer = selfUpdateDaoOneHostVersion();
+    const tagPrefix = daoOneVer ? 'dao-one-v' : SELF_UPDATE_TAG_PREFIX;
+    const modName = daoOneVer ? 'dao-one' : 'dao-vsix';
+    const curVer = daoOneVer || EXT_VERSION;
     if (Date.now() - _selfUpdateLastCheck < SELF_UPDATE_INTERVAL) return;
     _selfUpdateLastCheck = Date.now();
     try {
@@ -7192,15 +7215,15 @@ async function bridgeSelfUpdateCheck(): Promise<void> {
         const rels = JSON.parse(body); if (!Array.isArray(rels)) return;
         let latVer = '', dlUrl = '';
         for (const r of rels) {
-            const tag = r.tag_name || ''; if (!tag.startsWith(SELF_UPDATE_TAG_PREFIX)) continue;
-            const v = tag.slice(SELF_UPDATE_TAG_PREFIX.length);
+            const tag = r.tag_name || ''; if (!tag.startsWith(tagPrefix)) continue;
+            const v = tag.slice(tagPrefix.length);
             if (!latVer || selfUpdateCompareVer(v, latVer) > 0) { latVer = v; const a = (r.assets || []).find((x: any) => x.name && x.name.endsWith('.vsix')); if (a) dlUrl = a.browser_download_url; }
         }
         if (!latVer || !dlUrl) return;
-        if (selfUpdateCompareVer(latVer, EXT_VERSION) <= 0) { daoLoopLog('update', `自更新: 已是最新 v${EXT_VERSION}`); return; }
-        daoLoopLog('update', `自更新: 发现 v${latVer}(当前 v${EXT_VERSION})→下载`);
+        if (selfUpdateCompareVer(latVer, curVer) <= 0) { daoLoopLog('update', `自更新: 已是最新 ${modName} v${curVer}`); return; }
+        daoLoopLog('update', `自更新: 发现 ${modName} v${latVer}(当前 v${curVer})→下载`);
         fs.mkdirSync(SELF_UPDATE_DIR, { recursive: true });
-        const vsixPath = path.join(SELF_UPDATE_DIR, `dao-vsix-${latVer}.vsix`);
+        const vsixPath = path.join(SELF_UPDATE_DIR, `${modName}-${latVer}.vsix`);
         if (!(fs.existsSync(vsixPath) && fs.statSync(vsixPath).size > 10000)) {
             let ok = false;
             for (const m of selfUpdateGhMirrors(dlUrl)) { try { if (await selfUpdateDownload(m, vsixPath, 120000)) { ok = true; break; } } catch {} }
@@ -7212,7 +7235,7 @@ async function bridgeSelfUpdateCheck(): Promise<void> {
         const { execSync } = require('child_process');
         try { execSync(`"${cli}" --install-extension "${vsixPath}" --force`, { encoding: 'utf8', timeout: 60000, windowsHide: true }); } catch (e: any) { daoLoopLog('update', `自更新: 安装失败 ${e.message || e}`); return; }
         daoLoopLog('update', `自更新: v${latVer} 安装成功→等待重载`);
-        vscode.window.showInformationMessage(`DAO 插件已更新到 v${latVer}（当前 v${EXT_VERSION}），重载窗口即生效。`, '立即重载', '稍后').then((c) => { if (c === '立即重载') vscode.commands.executeCommand('workbench.action.reloadWindow'); });
+        vscode.window.showInformationMessage(`DAO 插件(${modName})已更新到 v${latVer}（当前 v${curVer}），重载窗口即生效。`, '立即重载', '稍后').then((c) => { if (c === '立即重载') vscode.commands.executeCommand('workbench.action.reloadWindow'); });
         try { for (const f of fs.readdirSync(SELF_UPDATE_DIR)) { if (f.endsWith('.vsix') && f !== path.basename(vsixPath)) try { fs.unlinkSync(path.join(SELF_UPDATE_DIR, f)); } catch {} } } catch {}
     } catch (e: any) { daoLoopLog('update', `自更新: 异常 ${e.message || e}`); }
 }
