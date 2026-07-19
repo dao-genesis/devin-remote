@@ -347,8 +347,13 @@
         status("stage", cat);
         if (cat === "captcha" || cat === "webauthn") {
           status("pause", "需你完成人机验证/硬件密钥, 完成后自动续跑");
-          // 离屏自包含模式无可见页可点 → 回灌明确挑战信号, 由引擎提示用户仅需前台过一次这道关。
-          if (CFG.deliver && !root.__cfDelivered) { root.__cfDelivered = 1; try { root.__CFM && root.__CFM.done(JSON.stringify({ error: "cf_challenge" })); } catch (e) {} }
+          // 离屏自包含模式无可见页可点 → 回灌明确「可执行」挑战信号(非裸 cf_challenge 码), 让引擎/UI
+          //   直接告诉用户该做的那一次最小操作, 而非停在不透明错误。GitHub/CF 登录风控命中人机验证
+          //   (真机实测: 全新会话 WebView 代登录必触发)是外部硬约束·离屏无可见页可点·绝不代按/代解。
+          var chMsg = (cat === "webauthn")
+            ? "cf_challenge: 命中硬件密钥/Passkey 验证·离屏无可见页可点。请在 App 内浏览器用该账号手动登录一次(过这一道验证即可), 之后建 Token/部署 Worker 全自动; 或在「添加」里粘贴一个 Cloudflare API Token 即全程零登录直建。"
+            : "cf_challenge: 命中登录风控人机验证(GitHub 或 Cloudflare)·离屏无可见页可点。请在 App 内浏览器用该账号手动登录一次(过这一道人机验证即可), 之后建 Token/部署 Worker 全自动; 或在「添加」里粘贴一个 Cloudflare API Token 即全程零登录直建。";
+          if (CFG.deliver && !root.__cfDelivered) { root.__cfDelivered = 1; try { root.__CFM && root.__CFM.done(JSON.stringify({ error: chMsg })); } catch (e) {} }
           return;
         }
         if (cat === "gh_login") {

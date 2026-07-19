@@ -1,6 +1,6 @@
 {
-  "versionCode": 368,
-  "versionName": "0.37.263",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.263/DevinCloud-mobile-v0.37.263.apk",
-  "notes": "v0.37.263 · 离屏代登录正本清源(真机实测定位): CF 登录页(dash.cloudflare.com/login)是 React SPA·约需 ~10s 才渲染出账密框; classifyPage 旧逻辑仅凭 host=dash 即在表单渲染前误判 cf_authed→抢先建 Token→未登录态 /api/v4/user 403 提前终结整条登录流(即历史「✗ cf /api/v4/user HTTP 403」真因)。修:classifyPage 排除 /login·/sign-in 路由(表单未出返 unknown 等它渲染再走 cf_login),与 cfMintViaCookie 既有 /login 守卫补齐一致。另:setVal 补 React _valueTracker 复位(受控输入 onChange 不被吞);cf_login 停滞侦测——CF 新版登录页仅认可真人输入(注入账密/合成事件/CDP 打字均无法提交,按钮恒 disabled),连续多拍仍停在登录页即回灌明确可执行提示「手动登一次 或 粘贴 CF API Token」,不再静默耗到超时"
+  "versionCode": 369,
+  "versionName": "0.37.264",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.264/DevinCloud-mobile-v0.37.264.apk",
+  "notes": "v0.37.264 · 真机实测收束(三星 SM-S918U/Android 14/已升 0.37.263): GitHub 账号密码+2FA 离屏 SSO 登 CF 现已越过登录页首帧(0.37.263 的 classifyPage 修复生效·不再秒 403),推进到 GitHub/CF 登录风控的人机验证(cf_challenge)——全新会话 WebView 代登录必触发,属外部硬约束,离屏无可见页可点·绝不代按/代解。改:人机验证/硬件密钥命中时不再回灌不透明 cf_challenge 裸码,改回灌可执行提示「请在 App 内浏览器用该账号手动登一次(过这道人机验证即可)→之后建 Token/部署 Worker 全自动; 或粘贴一个 Cloudflare API Token 即全程零登录直建」,把死胡同变成一步到位的最小操作指引。默认零账号内网穿透(P2P/ntfy mesh)不依赖 CF·不受影响;CF 持久 Worker 属可选增强。"
 }
