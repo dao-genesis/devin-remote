@@ -15244,10 +15244,33 @@ async function devinListMembers(orgId: string, auth1: string): Promise<{ ok: boo
     return { ok: true, items };
 }
 
-async function devinListMcpServers(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+// 帛书·「天下之至柔·驰骋于天下之致坚」— /api/mcp/servers 单发直连从国内弱网机器对 189KB 大目录
+//   常悬挂(实测 >15s 触发面板超时护栏), 而本机同源反代那条(devinCloudProxyRoute·keep-alive 池+
+//   直连优先代理兜底)取同一端点稳定 <1s。故 MCP 目录/已装 一律先走同源反代自取, 悬挂/异常再回落直连。
+//   反代按 ?dao_acct=<当前号邮箱> 注入该号 auth1, 与面板当前号一致。
+async function devinFetchMcpServers(orgId: string, auth1: string): Promise<{ status: number; arr: any[] }> {
+    const parse = (raw: any): any[] => {
+        const j = (raw && typeof raw === 'object') ? raw : (() => { try { return JSON.parse(String(raw || '')); } catch { return null; } })();
+        if (!j) return [];
+        return Array.isArray(j) ? j : (Array.isArray(j.servers) ? j.servers : (Array.isArray(j.installations) ? j.installations : []));
+    };
+    // 1) 同源反代自取(稳态快路)
+    try {
+        if (ws.port && ws.token) {
+            const acct = ws.devinEmail ? ('?dao_acct=' + encodeURIComponent(ws.devinEmail)) : '';
+            const got = await _cloudProbe('/devin-cloud/api/mcp/servers' + acct, ws.token);
+            if (got && got.body) { const arr = parse(got.body); if (arr.length) return { status: 200, arr }; }
+        }
+    } catch { /* 守柔·回落直连 */ }
+    // 2) 直连兜底
     const r = await devinJsonGet(DEVIN_APP + '/api/mcp/servers', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-    if (r.status !== 200) return { ok: false, items: [] };
-    const arr = Array.isArray(r.json) ? r.json : [];
+    return { status: r.status, arr: r.status === 200 ? parse(r.json) : [] };
+}
+
+async function devinListMcpServers(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
+    const g = await devinFetchMcpServers(orgId, auth1);
+    if (g.status !== 200) return { ok: false, items: [] };
+    const arr = g.arr;
     const items = arr.map((m: any) => ({
         name: m.name || m.slug || m.server_id || 'MCP',
         detail: (m.short_description || m.description || '').toString().substring(0, 120),
@@ -15326,10 +15349,9 @@ async function devinListMcpInstallations(orgId: string, auth1: string): Promise<
     // 实测官网真实端点为 GET /api/mcp/servers (旧 /api/mcp/installations GET 返回 405)。
     // 返回项主键为 server_id; 本组织自助安装的自定义 MCP 其 server_id 以 mcp-installation- 起始,
     // marketplace 目录项则以 mcp-marketplace-server- 起始 — 面板「已安装」只取前者。
-    const r = await devinJsonGet(DEVIN_APP + '/api/mcp/servers', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-    if (r.status !== 200) return { ok: false, items: [] };
-    const j = r.json || {};
-    const arr = Array.isArray(j) ? j : (Array.isArray(j.servers) ? j.servers : (Array.isArray(j.installations) ? j.installations : []));
+    const g = await devinFetchMcpServers(orgId, auth1);
+    if (g.status !== 200) return { ok: false, items: [] };
+    const arr = g.arr;
     const items = arr
         .filter((m: any) => String(m.server_id || m.id || '').startsWith('mcp-installation-'))
         .map((m: any) => ({
@@ -15925,10 +15947,9 @@ async function daoReplyMcpTab(reply: (m: any) => void): Promise<void> {
 async function devinListMcpMarketplace(orgId: string, auth1: string): Promise<{ ok: boolean; items?: McpMarketItem[]; status?: number }> {
     // /api/mcp/servers 返回完整目录(82项), 每项含安装模板(transport/command/args/env/url) + is_installed/installation_id,
     // 比轻量 /api/mcp/marketplace-servers 信息更全, 故以此为「整图」来源。
-    const r = await devinJsonGet(DEVIN_APP + '/api/mcp/servers', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-    if (r.status !== 200) return { ok: false, items: [], status: r.status };
-    const j = r.json || {};
-    const arr = Array.isArray(j) ? j : (Array.isArray(j.servers) ? j.servers : []);
+    const g = await devinFetchMcpServers(orgId, auth1);
+    if (g.status !== 200) return { ok: false, items: [], status: g.status };
+    const arr = g.arr;
     const items: McpMarketItem[] = (arr as Array<Record<string, unknown>>).map((m) => ({
         server_id: String(m.server_id || m.id || ''),
         name: String(m.name || m.slug || 'MCP'),
