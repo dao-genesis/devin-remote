@@ -68,7 +68,9 @@ function buildVsix() {
       // 归一·② Proxy Pro 是面板板块而非数据 tab: reloadActiveDataTab 若对其发
       // loadTabData, 宿主必回 'Unknown tab' 并把三模块面板覆写成错误页(实测·solo 板块
       // init 广播即触发) → 把 'proxy' 折入其面板板块早退清单, 与 bridge/backups 等面板板块同列。
-      if (!/reloadActiveDataTab\(\)\{[\s\S]{0,120}?t==='proxy'/.test(code)) {
+      //   源已改白名单(_dataTabs 只放行真·数据 tab, 'proxy' 天然不在内) → 无需再注入早退;
+      //   仅对旧版排除法源码保留幂等注入(兼容回滚)。
+      if (!code.includes('_dataTabs') && !/reloadActiveDataTab\(\)\{[\s\S]{0,120}?t==='proxy'/.test(code)) {
         code = code.replace(
           /(function reloadActiveDataTab\(\)\{\s*var t=S\.tab;\s*if\()/,
           "$1t==='proxy'||",
@@ -200,8 +202,13 @@ function verifyFolds() {
     "__proxyFetchReq",              // 子帧 fetch 桥
     "'getProxyPanel'",              // 免登白名单
     "'proxy'",                      // _solo 白名单 (独立子网页模式)
-    "t==='proxy'||",                // reloadActiveDataTab 面板板块早退
   ]);
+  // reloadActiveDataTab 面板板块早退: 新源为白名单 _dataTabs(proxy 天然排除), 旧源为注入的 t==='proxy'|| 早退 — 二居其一即合格。
+  {
+    const c = fs.readFileSync(path.join(root, "vendor-vsix/out/extension.js"), "utf8");
+    if (!c.includes("_dataTabs") && !c.includes("t==='proxy'||"))
+      throw new Error("[fold-verify] vendor-vsix/out/extension.js 缺 reloadActiveDataTab 护栏(_dataTabs 白名单或 t==='proxy'|| 早退)");
+  }
   must("vendor-flow/extension.js", [
     "board:proxy",                  // 汉堡菜单 PAGES 入口
     "proxy:['🔀','Proxy Pro']",     // BOARD_META 标签
