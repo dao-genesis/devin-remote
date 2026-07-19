@@ -349,6 +349,29 @@ function webProxyStoreCookies(origin: string, setCookie: any): void {
     }
     if (changed) webProxyPersistCookies();
 }
+// 帛书·「善抱者不脱」补登: 账密(+TOTP)隔离档官方登录取得的会话 Cookie 灌进 per-origin 反代罐 →
+//   /__web 反代的 github/cloudflare 官网 iframe 即以登录态运行(overview 靠 auth1 注入, github/cloudflare
+//   靠此 Cookie 补齐, 三处同为「底层跑官网·登录态实时同官网」)。按 host 域后缀匹配把每条 cookie 落到各 origin 罐。
+function webProxySeedCookies(cookies: Array<{ name: string; value: string; domain?: string; path?: string }>, origins: string[]): number {
+    webProxyLoadCookies();
+    let total = 0;
+    for (const origin of origins) {
+        let host = ''; try { host = new URL(origin).hostname.toLowerCase(); } catch { continue; }
+        let jar = webProxyCookieJar.get(origin);
+        if (!jar) {
+            if (webProxyCookieJar.size >= WEB_COOKIE_ORIGIN_MAX) { const k0 = webProxyCookieJar.keys().next().value; if (k0 !== undefined) webProxyCookieJar.delete(k0); }
+            jar = new Map(); webProxyCookieJar.set(origin, jar);
+        }
+        for (const c of (cookies || [])) {
+            if (!c || !c.name || !c.value) continue;
+            const dom = String(c.domain || '').replace(/^\./, '').toLowerCase();
+            if (dom && !(host === dom || host.endsWith('.' + dom))) continue; // 域不匹配该 origin → 跳过
+            jar.set(c.name, c.value); total++;
+        }
+    }
+    if (total) webProxyPersistCookies();
+    return total;
+}
 // 执今之道见小曰明 — Vite 内容哈希静态资源(/assets/*)缓存 (内存 L1 + 磁盘 L2)
 // 哈希变则键变 → 永不陈旧; 免重复穿隧道 → 二次导航秒开。
 // 道·「穿透只传必要核心」: 公网用户的渲染负荷(JS/CSS/字体, 占带宽大头)经反代首取后落盘 L2,
@@ -1971,6 +1994,45 @@ async function daoRelayCredLogin(email: string, password: string, totpSecret?: s
         try { fb = await daoRelayOAuthLogin(); } catch { /* 回退亦失败 */ }
         return { ok: false, error: String(e && e.message || e), fallback: fb && fb.ok ? { url: fb.url } : undefined };
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 站内反代罐「打通官网登录态」(道法自然·无为而无不为): 账密(+TOTP)在【该号专属隔离档】走 github/
+//   cloudflare 官方登录 → 会话 Cookie 灌进 per-origin 反代罐 → /__web 反代的官网 iframe 即以登录态运行,
+//   与 overview 反带(auth1 注入)三处同构。守柔: 命中人机/硬件密钥/Turnstile 即 needUser 交回。不出明文。
+// ═══════════════════════════════════════════════════════════
+async function daoWebCookieLogin(site: string, creds: { login?: string; email?: string; password?: string; otp?: string }): Promise<{ ok: boolean; site: string; seeded?: number; needUser?: boolean; error?: string }> {
+    site = String(site || '').toLowerCase();
+    if (site !== 'github' && site !== 'cloudflare') return { ok: false, site, error: '未知 site(需 github|cloudflare)' };
+    if (!creds || !creds.password) return { ok: false, site, error: '缺账密(github 可用账号池存号·cloudflare 需填账密)' };
+    let mod: any;
+    try { mod = await daoRelayLoadMod('web-cookie-login.mjs'); }
+    catch (e: any) { return { ok: false, site, error: '登录模块缺失: ' + String(e && e.message || e) }; }
+    // 每号专属隔离档 + 代理指纹(复用既有多实例隔离基座·多号并行不串)。
+    const idKey = site === 'github' ? ('ghweb:' + (creds.login || '')) : ('cfweb:' + (creds.email || ''));
+    const safeKey = idKey.replace(/[^a-zA-Z0-9._@-]/g, '_');
+    const profileDir = path.join(DAO_DIR, 'browser-profiles', safeKey);
+    try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* 守柔 */ }
+    const proxy = daoAcctProxy(safeKey);
+    let res: any;
+    try {
+        res = await mod.harvest({
+            site,
+            login: creds.login || creds.email || '', email: creds.email || creds.login || '',
+            pass: creds.password || '', otp: creds.otp || '',
+            profileDir,
+            proxy: proxy && proxy.server ? proxy.server : (typeof proxy === 'string' ? proxy : undefined),
+            headless: true,
+            log: (m: string) => { try { console.log('[web-cookie ' + site + '] ' + m); } catch { /* 守柔 */ } },
+        });
+    } catch (e: any) { return { ok: false, site, error: String(e && e.message || e) }; }
+    if (!res || !res.ok) return { ok: false, site, needUser: !!(res && res.needUser), error: (res && res.error) || '登录失败' };
+    const origins = site === 'github'
+        ? ['https://github.com']
+        : ['https://dash.cloudflare.com', 'https://api.cloudflare.com', 'https://cloudflare.com'];
+    const seeded = webProxySeedCookies(res.cookies || [], origins);
+    try { refreshDaoCloudMiddlePanel(); } catch { /* 守柔 */ }
+    return { ok: true, site, seeded };
 }
 
 function daoFetchJson(u: string, timeoutMs: number): Promise<any> {
@@ -8710,13 +8772,25 @@ function cfSetMode(m){
   rBridgeFull();
 }
 function cfWebReload(){var f=document.getElementById('cfWebFrame');if(f){try{f.src=cfWebUrl()}catch(e){}}}
+// 账密(+2FA)一键打通 Cloudflare 官网登录态: 隔离档官方登录 → 会话 Cookie 灌进反代罐 → 官网 iframe 即登录态。
+function cfWebLogin(){var e=document.getElementById('cfWebEmail'),p=document.getElementById('cfWebPass'),t=document.getElementById('cfWebOtp');var email=e?e.value.trim():'';var pass=p?p.value:'';var otp=t?t.value.trim():'';if(!email||!pass){toast('请先填 Cloudflare 邮箱与密码',false);return}toast('🔑 隔离档官方登录中…(账密+2FA→落会话 Cookie, 约 20-40s; 遇 Turnstile 将交你浏览器代登)',true);cmd('webAuthLogin',{site:'cloudflare',email:email,password:pass,otp:otp||undefined})}
 function cfBar(active){
-  return '<div class="ovwbar">'
+  var h='<div class="ovwbar">'
     +'<button class="btn sm '+(active==='bridge'?'primary':'ghost')+'" onclick="cfSetMode(&#39;bridge&#39;)" title="穿透面板: 内网穿透/持久通道/在线设备/一行接入(DAO Bridge 本职)">☯ 穿透面板</button>'
     +'<button class="btn sm '+(active==='official'?'primary':'ghost')+'" onclick="cfSetMode(&#39;official&#39;)" title="官方原生: 满幅直载同源反代的 dash.cloudflare.com 官网(登录态保持·操作即官网操作)">🌐 Cloudflare 官方原生</button>'
     +(active==='official'?'<button class="btn sm ghost" onclick="cfWebReload()" title="重载官网页">⟳</button>':'')
     +(active==='official'?'<button class="btn sm ghost" onclick="cmd(&#39;openCf&#39;)" title="Turnstile 挡住时回退: 隔离档浏览器打开 dash.cloudflare.com 官网登录">🌐 浏览器代登</button>':'')
     +'</div>';
+  if(active==='official'){
+    h+='<div class="ovwbar" style="gap:4px;flex-wrap:wrap">'
+      +'<span style="font-size:11px;color:var(--muted)">🔑 打通登录态:</span>'
+      +'<input id="cfWebEmail" placeholder="Cloudflare 邮箱" style="font-size:11px;padding:2px 6px;width:160px" />'
+      +'<input id="cfWebPass" type="password" placeholder="密码" style="font-size:11px;padding:2px 6px;width:120px" />'
+      +'<input id="cfWebOtp" placeholder="2FA(可选)" style="font-size:11px;padding:2px 6px;width:90px" />'
+      +'<button class="btn sm primary" onclick="cfWebLogin()" title="账密(+2FA)隔离档官方登录→会话 Cookie 灌进反代罐→官网以登录态运行">🔑 登录官网</button>'
+      +'</div>';
+  }
+  return h;
 }
 function rBridgeOfficial(v){
   v.classList.add('cfweb');
@@ -9655,11 +9729,14 @@ function ghSetMode(m){
   rGitHub();
 }
 function ghWebReload(){var f=document.getElementById('ghWebFrame');if(f){try{f.src=ghWebUrl()}catch(e){}}}
+// 账密+2FA 一键打通 GitHub 官网登录态: 取账号池「账密+2FA 存号」隔离档官方登录 → 会话 Cookie 灌进反代罐 → 官网 iframe 即登录态。
+function ghWebLogin(){var login='';try{var fl=(_ghState().ghFleet||[]);for(var i=0;i<fl.length;i++){if(fl[i].hasCred||fl[i].active){login=fl[i].login;if(fl[i].active)break}}}catch(e){}toast('🔑 隔离档官方登录中…(取账号池账密+2FA→落会话 Cookie, 约 20-40s; 遇人机/设备验证将交你过一次)',true);cmd('webAuthLogin',{site:'github',login:login||undefined})}
 function ghBar(active){
   return '<div class="ovwbar">'
     +'<button class="btn sm '+(active==='official'?'primary':'ghost')+'" onclick="ghSetMode(&#39;official&#39;)" title="官方原生: 底层直跑同源反代的 github.com 官网(登录态保持·操作即官网操作·数据实时同官网)">🌐 官方原生</button>'
     +'<button class="btn sm '+(active==='manage'?'primary':'ghost')+'" onclick="ghSetMode(&#39;manage&#39;)" title="管理视图: 插件增强能力(账号池·组织统管·多 PAT 分布式注入·GitHub MCP)">🛠 管理视图</button>'
     +(active==='official'?'<button class="btn sm ghost" onclick="ghWebReload()" title="重载官网页">⟳</button>':'')
+    +(active==='official'?'<button class="btn sm primary" onclick="ghWebLogin()" title="账号池(账密+2FA 存号)隔离档官方登录→会话 Cookie 灌进反代罐→官网以登录态运行">🔑 登录官网</button>':'')
     +'<button class="btn sm ghost" onclick="ghOpen(&#39;https://github.com/&#39;)" title="本体账号专属隔离档浏览器打开 github.com(已登录该号)">🌐 浏览器</button>'
     +'</div>';
 }
@@ -10091,7 +10168,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'relayCredLogin', 'cfListResources', 'cfRevokeToken', 'cfDeleteWorker', 'cfPoolList', 'cfPoolAdd', 'cfPoolRemove', 'cfPoolResources', 'cfPoolRevokeToken', 'cfPoolDeleteWorker', 'cfPoolMintToken', 'cfPoolCopyToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'relayCredLogin', 'webAuthLogin', 'cfListResources', 'cfRevokeToken', 'cfDeleteWorker', 'cfPoolList', 'cfPoolAdd', 'cfPoolRemove', 'cfPoolResources', 'cfPoolRevokeToken', 'cfPoolDeleteWorker', 'cfPoolMintToken', 'cfPoolCopyToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
     // GitHub 纵向板块独立于 Devin 账号池(自带 PAT 鉴权) — daoGh* 一律免 Devin 登录
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command) && !/^daoGh/.test(String(msg.command || ''))) {
         reply({ type: 'error', msg: 'Not logged in' });
@@ -11776,6 +11853,30 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 else if (r.fallback && r.fallback.url) { try { await vscode.env.clipboard.writeText(r.fallback.url); } catch { /* 守柔 */ } vscode.window.showWarningMessage('纯凭证自动化未完成(' + (r.error || '') + ')。已回退一键授权: 浏览器已打开授权页(链接已复制), 点一次授权即全自动部署。'); }
                 else vscode.window.showErrorMessage('DAO 持久通道打通失败: ' + (r.error || '未知错误'));
                 refreshReply({ type: 'actionResult', command: 'relayCredLogin', ok: !!r.ok, url: r.url, error: r.error, fallbackUrl: r.fallback && r.fallback.url });
+                break;
+            }
+            // 站内反代罐「打通官网登录态」: 账密(+TOTP)隔离档官方登录 github/cloudflare → 会话 Cookie 灌进反代罐 → /__web 官网 iframe 即登录态。
+            //   github 未直接给账密时从账号池(账密+2FA 存号)按 login 取; cloudflare 用面板输入的账密。日志/回包不出明文。
+            case 'webAuthLogin': {
+                const wSite = String(msg.site || '').toLowerCase();
+                const wCreds: { login?: string; email?: string; password?: string; otp?: string } = {
+                    login: msg.login ? String(msg.login) : '', email: msg.email ? String(msg.email) : '',
+                    password: msg.password ? String(msg.password) : '', otp: msg.otp ? String(msg.otp) : '',
+                };
+                if (wSite === 'github' && !wCreds.password) {
+                    try {
+                        const prof = loadInjectProfile();
+                        const want = String(wCreds.login || '').trim().replace(/^@/, '').toLowerCase();
+                        const a = (prof.ghFleet || []).find((x: any) => want ? String(x.login).toLowerCase() === want : (x.cred && x.cred.user));
+                        if (a && a.cred && a.cred.user) { wCreds.login = a.login; wCreds.password = a.cred.pass; wCreds.otp = a.cred.otp || ''; }
+                    } catch { /* 守柔 */ }
+                }
+                vscode.window.showInformationMessage('站内反代: 正在用账密(+2FA)隔离档登录' + (wSite === 'github' ? ' GitHub' : ' Cloudflare') + '官网并打通登录态…');
+                const r = await daoWebCookieLogin(wSite, wCreds);
+                vscode.window[r.ok ? 'showInformationMessage' : 'showWarningMessage']('站内反代登录: ' + (r.ok
+                    ? ('✓ 已打通' + (r.site === 'github' ? ' GitHub' : ' Cloudflare') + '登录态(灌入 ' + r.seeded + ' 条会话 Cookie)· 刷新官网视图即登录态')
+                    : ((r.needUser ? '命中安全挑战/人机验证, 需你在浏览器过一次: ' : '') + (r.error || '失败'))));
+                refreshReply({ type: 'actionResult', command: 'webAuthLogin', ok: !!r.ok, site: r.site, seeded: r.seeded, needUser: !!r.needUser, error: r.error });
                 break;
             }
             case 'relayOAuthRefresh': {
