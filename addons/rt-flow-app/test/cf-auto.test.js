@@ -181,6 +181,13 @@ function ts(name, fn) { return t(name, async () => fn()); }
     assert.ok(src.includes("engine/cf-auto.js") && src.includes("deliver:true"), "cfStartWebAuto 未注入 cf-auto.js / 未开 deliver 模式");
     assert.ok(src.includes("dash.cloudflare.com/login"), "cfStartWebAuto 未从登录页起步 (自包含代登录)");
   });
+  await ts("RelayService.java 凭证代登录前清 CF/GitHub 会话 (多号隔离·钉本次账号·不复用他号登录态)", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/java/ai/devin/rtflow/RelayService.java"), "utf-8");
+    assert.ok(src.includes("cfClearAuthCookies"), "RelayService.java 缺少 cfClearAuthCookies (多号隔离清会话)");
+    assert.ok(src.includes('cfClearAuthCookies(cm, cfg.contains("\\"gh\\""))'), "cfStartWebAuto 未在代登录前清会话 (含 GitHub SSO 时并清 GitHub)");
+    assert.ok(src.includes("expires=Thu, 01 Jan 1970") && src.includes("dash.cloudflare.com"), "cfClearAuthCookies 未按域写过期覆盖 CF 会话 cookie");
+    assert.ok(/includeGithub[\s\S]{0,120}github\.com/.test(src), "cfClearAuthCookies 未在 GitHub SSO 时并清 github.com 会话");
+  });
   await ts("relay-app.js /api/cf-autoprovision 支持账密 web-auto (用户只提供账号)", () => {
     const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/relay-app.js"), "utf-8");
     assert.ok(src.includes("cfWebAuto") && src.includes("web-auto"), "relay-app.js 缺少 cfWebAuto / web-auto 模式");
