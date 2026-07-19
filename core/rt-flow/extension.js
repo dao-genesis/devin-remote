@@ -12969,14 +12969,16 @@ async function _dvAutoBackupRun() {
   const dir = _cfg("devinCloudBackupDir", "") || devinCloud.paths.DC_BACKUP_DEFAULT;
   const mode = _cfg("devinCloudBackupMode", "folder");
   const threshold = Math.max(0, +_cfg("devinCloudAutoBackupThreshold", 3) || 3);
-  // v4.30 · 守柔·止血(正本清源): 破坏性自动化(清理/出库/闲置触发)一律默认关, 用户显式勾选才开。
-  //   v4.9.x 曾把默认翻回开, 与板块提示语「守柔·默认关」自相矛盾, 且闲置触发会水过无痕清理
-  //   有余额账号的远端对话(本地虽留底·远端已毁), 为级联误伤之根。备份(不破坏·只留底)保持默认开。
-  const autoCleanup = !!_cfg("devinCloudAutoCleanup", false);
+  // v4.31 · 对齐手机 APK: 桌面端默认开启「归零账号 备份→清理→出库」自动化(与手机端同源同逻辑)。
+  //   安全护栏一如既往: 仅当 ①额度≤清理阈值(默3) ②该号 72h 冷却窗内无对话更新 ③全量备份经严格校验
+  //   才清理; 出库只在额度真正归零($0·removeThreshold=0)时。闲置触发(idleCleanup·清有余额沉寂号)
+  //   仍默认关 — 有余额账号绝不因沉寂被清。用户可显式关闭(dvAutoCleanup=false)退回仅留底模式。
+  const autoCleanup = !!_cfg("devinCloudAutoCleanup", true);
   // v4.9.6 · 清理阈值默认对齐备份阈值(动态·默3) → 「额度 < 3 即在全量备份校验后自动清理」(用户可调单一阈值 dvThreshold)
   const cleanupThreshold = Math.max(0, +_cfg("devinCloudAutoCleanupThreshold", threshold) || threshold);
-  // v4.9.12 · 归零移除默认开 — 闭合「备份→清理→出库」整套循环: 额度彻底归零的账号在全量备份(严格校验)+清理无残留后自动出库. 取消勾选 (dvRmZero=false) 则仅清痕迹+本地留底·账号保留.
-  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", false);
+  // v4.31 · 归零移除默认开(对齐手机 APK) — 闭合「备份→清理→出库」整套循环: 额度彻底归零的账号在全量备份
+  //   (严格校验)+清理无残留后自动出库, 真正移出账号库(不停留 CAS 中间态). 取消勾选 (dvRmZero=false) 则仅清痕迹+本地留底.
+  const autoRemoveZero = !!_cfg("devinCloudAutoRemoveZeroQuota", true);
   // v4.29 · 守柔·止血: 出库阈值默认 0(仅额度真正归零$0 才出库) —— 旧默认对齐清理阈值($3)
   //   把残留 $0.27~$2 的有效号一并出库, 致大量有余额账号被误移出库(实测几十→寥寥)。
   //   出库=从账号库移除(高破坏), 必须严于清理: 清理可在低额/闲置触发, 出库唯归零。
