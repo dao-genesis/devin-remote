@@ -954,14 +954,14 @@ function test(name, fn) {
     assert.ok(/_ei >= 0 && _store\.remove\(_ei\)/.test(src) && /_evictNow\(acc\.email/.test(src), "归零账号即时 _store.remove 落盘出库");
     assert.ok(/removeEmails\.push\(email\)/.test(src), "即时出库失败回落 removeEmails · 循环外兜底再删");
   });
-  test("extension.js: v4.30 守柔·破坏性自动化默认关 (清理/出库/闲置触发须显式勾选)", () => {
+  test("extension.js: v4.31 对齐手机 APK·归零备份→清理→出库默认开 (安全护栏不变: 唯归零$0出库·闲置不清有余额号)", () => {
     const fs = require("fs");
     const src = fs.readFileSync(require("path").join(__dirname, "..", "extension.js"), "utf8");
-    assert.ok(/const autoCleanup = !!_cfg\("devinCloudAutoCleanup", false\);/.test(src), "autoCleanup 默认须为 false (守柔·止血)");
-    assert.ok(/const autoRemoveZero = !!_cfg\("devinCloudAutoRemoveZeroQuota", false\);/.test(src), "autoRemoveZero 默认须为 false (默认绝不自动出库)");
+    // v4.31: 桌面端对齐手机 APK — 破坏性清理/出库默认开 (受 72h 冷却窗+全量备份校验+归零阈值三重护栏约束)
+    assert.ok(/const autoCleanup = !!_cfg\("devinCloudAutoCleanup", true\);/.test(src), "autoCleanup 默认须为 true (对齐手机 APK)");
+    assert.ok(/const autoRemoveZero = !!_cfg\("devinCloudAutoRemoveZeroQuota", true\);/.test(src), "autoRemoveZero 默认须为 true (闭合备份→清理→出库循环)");
+    // 护栏不变: 闲置触发(清有余额沉寂号)仍默认关 — 有余额账号绝不因沉寂被清
     assert.ok(/_cfg\("devinCloudIdleCleanup", false\)/.test(src), "idleCleanup 默认须为 false (有余额账号绝不因沉寂被清)");
-    assert.ok(!/_cfg\("devinCloudAutoCleanup", true\)/.test(src), "禁止任何处把 autoCleanup 默认翻回 true");
-    assert.ok(!/_cfg\("devinCloudAutoRemoveZeroQuota", true\)/.test(src), "禁止任何处把 autoRemoveZero 默认翻回 true");
     assert.ok(!/_cfg\("devinCloudIdleCleanup", true\)/.test(src), "禁止任何处把 idleCleanup 默认翻回 true");
     // 手动「清理归零账号」按钮出库阈值亦唯归零 $0 (与自动环对齐·残留 $0.x 有效号不误出)
     assert.ok(/const _zqRaw = \+_cfg\("devinCloudAutoRemoveThreshold", 0\);/.test(src), "手动清零出库阈值默认须为 0");
