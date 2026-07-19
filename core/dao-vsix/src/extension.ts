@@ -8516,6 +8516,7 @@ const S={
   tab:'${_solo || 'overview'}',
   data:{sessions:[],knowledge:[],playbooks:[],secrets:[],gitConnections:[]},
   backups:{accounts:[]},
+  bkHideAuto:true,
   locks:{knowledge:[],playbooks:[],secrets:[],mcps:[]}
 };
 function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
@@ -9001,6 +9002,9 @@ function bkRenderPreserve(){
   try{if(box)box.scrollTop=st}catch(e){}
   if(hadFocus){var s2=document.getElementById('bkSearch');if(s2){s2.focus();try{s2.setSelectionRange(caret,caret)}catch(e){}}}
 }
+// 帛书·「守静笃」之二: 同帧不重挂 — 渲染产物与上帧逐字节一致时跳过 innerHTML 重挂,
+//   实时流/后台重扫回推同样数据时 DOM 纹丝不动(不跳/不闪/不丢滚动)。与手机 APK 稳定排布对齐。
+function bkApplyHtml(v,h){if(S._bkLastHtml===h)return;S._bkLastHtml=h;v.innerHTML=h}
 function bkOnLive(d){
   bkMergeLive(d.list,!!d.partial);
   if(!(S.tab==='backups'&&(S.bkView||'recent')==='recent'))return;
@@ -9148,19 +9152,21 @@ function rBackupsData(tree,err){
     // 实时有而备份树无的对话 → 以实时行并入(数量与新鲜度与悬浮窗一致)
     var extra=live.filter(function(li){var k=String(li.sid||'').replace(/^devin-/,'');return k&&!seen[k]&&bkMatch({title:li.title,devinId:k},{email:li.email,accountNo:li.accNo},q)});
     var rows=[];
-    extra.forEach(function(li){rows.push({ts:li.updatedAt||0,auto:bkIsAuto(li.title),k:String(li.sid||li.devinId||''),h:bkLiveRow(li)})});
-    flat.forEach(function(it){rows.push({ts:(it.c.liveTs||it.c.mtime||0),auto:bkIsAuto(it.c.title||it.c.name),k:String(it.c.devinId||(it.i+'-'+it.ci)),h:'<div class="card" style="margin-bottom:4px;padding:6px 8px">'+bkConvRow(it.c,it.i,it.ci,true)+'</div>'})});
+    extra.forEach(function(li){rows.push({ts:li.updatedAt||0,lv:true,auto:bkIsAuto(li.title),k:String(li.sid||li.devinId||''),h:bkLiveRow(li)})});
+    flat.forEach(function(it){rows.push({ts:(it.c.liveTs||it.c.mtime||0),lv:!!it.c.liveTs,auto:bkIsAuto(it.c.title||it.c.name),k:String(it.c.devinId||(it.i+'-'+it.ci)),h:'<div class="card" style="margin-bottom:4px;padding:6px 8px">'+bkConvRow(it.c,it.i,it.ci,true)+'</div>'})});
     // 非本人自动化对话「下沉」(不删): 本人对话恒在前, 自动化沉底; 同档按新鲜度倒序。
+    //   排序以「会话真实时序」为尊(对齐手机 APK): 有实时时序(updatedAt/liveTs)的对话在前,
+    //   仅有备份文件 mtime 的陈年对话沉其后 — 全量备份刷新 mtime 时老对话不再冒充「刚刚」浮顶。
     //   同时间戳按 sid 稳定次序打破平手 → 实时流并入时不再乱跳。可一键隐藏。
-    rows.sort(function(x,y){if(!!x.auto!==!!y.auto)return x.auto?1:-1;if((y.ts||0)!==(x.ts||0))return (y.ts||0)-(x.ts||0);return x.k<y.k?-1:(x.k>y.k?1:0)});
+    rows.sort(function(x,y){if(!!x.auto!==!!y.auto)return x.auto?1:-1;if(!!x.lv!==!!y.lv)return x.lv?-1:1;if((y.ts||0)!==(x.ts||0))return (y.ts||0)-(x.ts||0);return x.k<y.k?-1:(x.k>y.k?1:0)});
     var autoN=rows.filter(function(r){return r.auto}).length;
     var hideAuto=!!S.bkHideAuto;
     if(autoN)h+='<div class="br" style="margin-bottom:8px"><button class="btn sm'+(hideAuto?' primary':' ghost')+'" onclick="bkToggleAuto()" title="疑似非本人自动化对话默认下沉沉底; 点此'+(hideAuto?'显示':'隐藏')+'">'+(hideAuto?'👁 显示自动化':'🙈 隐藏自动化')+' ('+autoN+')</button></div>';
     var shown=hideAuto?rows.filter(function(r){return !r.auto}):rows;
-    if(!shown.length){h+='<div class="empty"><div class="ic">🕒</div><p style="color:var(--muted)">'+(q?'无匹配对话':(hideAuto&&autoN?'仅有自动化对话(已隐藏)':'暂无对话'))+'</p></div>';v.innerHTML=h;return}
+    if(!shown.length){h+='<div class="empty"><div class="ic">🕒</div><p style="color:var(--muted)">'+(q?'无匹配对话':(hideAuto&&autoN?'仅有自动化对话(已隐藏)':'暂无对话'))+'</p></div>';bkApplyHtml(v,h);return}
     shown.slice(0,200).forEach(function(r){h+=r.auto?('<div style="opacity:.6" title="疑似非本人自动化对话(已下沉)">'+r.h+'</div>'):r.h});
     if(shown.length>200)h+='<div style="font-size:10px;color:var(--muted);margin-top:4px">仅显示最近 200 条 (匹配 '+shown.length+')</div>';
-    v.innerHTML=h;return;
+    bkApplyHtml(v,h);return;
   }
   var anyAcct=false;
   // 按账号视图对齐手机 APK: 近期活跃时序降序(取本人对话最新备份时间·忽略自动化干扰),
@@ -9201,7 +9207,7 @@ function rBackupsData(tree,err){
     h+='</div></div>';
   });
   if(q&&!anyAcct)h+='<div class="empty"><div class="ic">🔍</div><p style="color:var(--muted)">无匹配账号/对话</p></div>';
-  v.innerHTML=h;
+  bkApplyHtml(v,h);
 }
 // 帛书·「为而弗恃」: API Key 全程底层自动获取, 面板永不出现手动输入 — 旧 submitCogKey* 已删
 function rHost(){var hc=S.hostCaps||{};var nm=hc.appName||'VS Code';var ct=hc.hasConvTracking;var cp=hc.cascadePlugin;var cascadeOk=ct||cp;var srcLabel=cp&&!(nm.toLowerCase().indexOf('windsurf')>=0||nm.toLowerCase().indexOf('devin')>=0)?' (插件版 dao-desktop)':'';var h='<div class="st">运行环境 · 适配</div><div class="card"><div class="cr"><span class="l">IDE</span><span class="v">'+esc(nm)+esc(srcLabel)+'</span></div><div class="cr"><span class="l">Devin Cloud 全功能</span><span class="v" style="color:var(--success);font-size:10px">✓ 追踪·备份·切号反向注入·K/P/S/MCP·多实例</span></div><div class="cr"><span class="l">Cascade 对话追踪/备份</span><span class="v" style="font-size:10px;color:'+(cascadeOk?'var(--success)':'var(--warn)')+'">'+(cascadeOk?('✓ 可用'+(cp?' · 插件版':'')):'⚠ 此IDE非Cascade·其余全部正常')+'</span></div>'+(hc.cascadeEmail?'<div class="cr"><span class="l">Cascade 登录账号</span><span class="v" style="font-size:10px">'+esc(hc.cascadeEmail)+'</span></div>':'')+'</div>';var f=hc.fused||null;if(f&&(f.account||f.mcp||f.cascadeBackup)){var fa=f.account||{};var fm=(f.mcp&&f.mcp.servers)||null;var fb=f.cascadeBackup||null;var q=function(x){return (x===0||x)?(x+'%'):'—'};h+='<div class="st">Cascade · Devin Desktop 插件版(插件自持真源)</div><div class="card">'+(fa.email?'<div class="cr"><span class="l">账号</span><span class="v" style="font-size:10px">'+esc(fa.name||'')+(fa.name?' · ':'')+esc(fa.email)+'</span></div>':'')+(fa.plan?'<div class="cr"><span class="l">套餐</span><span class="v" style="font-size:10px">'+esc(fa.plan)+'</span></div>':'')+((fa.dailyQuotaPct!==undefined||fa.weeklyQuotaPct!==undefined)?'<div class="cr"><span class="l">配额(日/周)</span><span class="v" style="font-size:10px">'+q(fa.dailyQuotaPct)+' / '+q(fa.weeklyQuotaPct)+'</span></div>':'')+(fb?'<div class="cr"><span class="l">Cascade 对话备份</span><span class="v" style="font-size:10px;color:var(--success)">✓ 共 '+(fb.total||0)+' 条'+(fb.root?(' · '+esc(String(fb.root).split(/[\\\\/]/).slice(-2).join('/'))):'')+'</span></div>':'')+(fm?'<div class="cr"><span class="l">本地 MCP(插件版)</span><span class="v" style="font-size:10px">'+(fm.length?(fm.length+' 个 · '+fm.filter(function(s){return String(s.status||'').toUpperCase().indexOf('RUN')>=0}).length+' 运行中'):'无已配置')+'</span></div>':'')+(fa.updatedAt?'<div class="cr"><span class="l">更新于</span><span class="v" style="font-size:9px;color:var(--muted)">'+esc(String(fa.updatedAt).replace('T',' ').slice(0,19))+'</span></div>':'')+'</div>'}return h}
@@ -15275,7 +15281,35 @@ async function devinListMembers(orgId: string, auth1: string): Promise<{ ok: boo
 //   常悬挂(实测 >15s 触发面板超时护栏), 而本机同源反代那条(devinCloudProxyRoute·keep-alive 池+
 //   直连优先代理兜底)取同一端点稳定 <1s。故 MCP 目录/已装 一律先走同源反代自取, 悬挂/异常再回落直连。
 //   反代按 ?dao_acct=<当前号邮箱> 注入该号 auth1, 与面板当前号一致。
-async function devinFetchMcpServers(orgId: string, auth1: string): Promise<{ status: number; arr: any[] }> {
+//   实测(zhoumac 弱网): 189KB 目录整取一次 ~25s, 超面板 15s 硬时限 → 板块恒显「超时/未安装」,
+//   而云端其实早已装好 — 用户看到的是取数超时, 不是没安装。故加「缓存先行·后台刷新」:
+//   最近一次好目录落盘(~/.dao/dao-mcp-servers-cache.json, 按 org 分键), 面板即刻渲上一份真身,
+//   同时后台取新(in-flight 去重), 到货后自然被下次读取取用 — 与备份树「先出缓存树(秒开)」同法。
+const MCP_SERVERS_CACHE_FILE = path.join(DAO_DIR, 'dao-mcp-servers-cache.json');
+const MCP_SERVERS_CACHE_FRESH_MS = 60 * 1000; // 缓存 1 分钟内视为新鲜, 不触发后台刷新
+const _mcpServersMem: Record<string, { ts: number; arr: any[] }> = {};
+const _mcpServersInflight: Record<string, boolean> = {};
+function _mcpServersCacheGet(orgId: string): { ts: number; arr: any[] } | null {
+    if (_mcpServersMem[orgId]) return _mcpServersMem[orgId];
+    try {
+        const j = JSON.parse(fs.readFileSync(MCP_SERVERS_CACHE_FILE, 'utf8'));
+        const e = j && j[orgId];
+        if (e && Array.isArray(e.arr) && e.arr.length) { _mcpServersMem[orgId] = e; return e; }
+    } catch { /* 无缓存 */ }
+    return null;
+}
+function _mcpServersCachePut(orgId: string, arr: any[]): void {
+    const e = { ts: Date.now(), arr };
+    _mcpServersMem[orgId] = e;
+    try {
+        let j: any = {};
+        try { j = JSON.parse(fs.readFileSync(MCP_SERVERS_CACHE_FILE, 'utf8')) || {}; } catch { /* 新建 */ }
+        j[orgId] = e;
+        fs.mkdirSync(DAO_DIR, { recursive: true });
+        fs.writeFileSync(MCP_SERVERS_CACHE_FILE, JSON.stringify(j), 'utf8');
+    } catch { /* 守柔 */ }
+}
+async function _mcpServersFetchFresh(orgId: string, auth1: string): Promise<{ status: number; arr: any[] }> {
     const parse = (raw: any): any[] => {
         const j = (raw && typeof raw === 'object') ? raw : (() => { try { return JSON.parse(String(raw || '')); } catch { return null; } })();
         if (!j) return [];
@@ -15286,12 +15320,33 @@ async function devinFetchMcpServers(orgId: string, auth1: string): Promise<{ sta
         if (ws.port && ws.token) {
             const acct = ws.devinEmail ? ('?dao_acct=' + encodeURIComponent(ws.devinEmail)) : '';
             const got = await _cloudProbe('/devin-cloud/api/mcp/servers' + acct, ws.token);
-            if (got && got.body) { const arr = parse(got.body); if (arr.length) return { status: 200, arr }; }
+            if (got && got.body) { const arr = parse(got.body); if (arr.length) { _mcpServersCachePut(orgId, arr); return { status: 200, arr }; } }
         }
     } catch { /* 守柔·回落直连 */ }
     // 2) 直连兜底
     const r = await devinJsonGet(DEVIN_APP + '/api/mcp/servers', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-    return { status: r.status, arr: r.status === 200 ? parse(r.json) : [] };
+    const arr = r.status === 200 ? parse(r.json) : [];
+    if (r.status === 200 && arr.length) _mcpServersCachePut(orgId, arr);
+    return { status: r.status, arr };
+}
+// 装/卸后失效该 org 缓存 — 下次读取必取新, 免「刚装好却仍显未安装」的陈列表。
+function _mcpServersCacheInvalidate(orgId: string): void {
+    delete _mcpServersMem[orgId];
+    try {
+        const j = JSON.parse(fs.readFileSync(MCP_SERVERS_CACHE_FILE, 'utf8'));
+        if (j && j[orgId]) { delete j[orgId]; fs.writeFileSync(MCP_SERVERS_CACHE_FILE, JSON.stringify(j), 'utf8'); }
+    } catch { /* 守柔 */ }
+}
+async function devinFetchMcpServers(orgId: string, auth1: string): Promise<{ status: number; arr: any[] }> {
+    const cached = _mcpServersCacheGet(orgId);
+    if (cached) {
+        if (Date.now() - cached.ts > MCP_SERVERS_CACHE_FRESH_MS && !_mcpServersInflight[orgId]) {
+            _mcpServersInflight[orgId] = true;
+            _mcpServersFetchFresh(orgId, auth1).catch(() => { /* 守柔 */ }).finally(() => { _mcpServersInflight[orgId] = false; });
+        }
+        return { status: 200, arr: cached.arr };
+    }
+    return _mcpServersFetchFresh(orgId, auth1);
 }
 
 async function devinListMcpServers(orgId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
@@ -15476,6 +15531,7 @@ async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promi
         const d = j.detail || j.error || j.message || j;
         try { error = typeof d === 'string' ? d : JSON.stringify(d); } catch { error = String(d); }
     }
+    if (ok) _mcpServersCacheInvalidate(orgId);
     return { ok, status: r.status, id: j.id || j.installation_id, error: error || undefined };
 }
 
@@ -15483,7 +15539,9 @@ async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promi
 async function devinDeleteMcp(orgId: string, installationId: string, auth1: string): Promise<{ ok: boolean; status?: number }> {
     const id = installationId.startsWith('mcp-installation-') ? installationId : 'mcp-installation-' + installationId.replace(/^mcp-installation-/, '');
     const r = await devinJsonDelete(DEVIN_APP + '/api/mcp/installations/' + id, { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
-    return { ok: r.status === 200 || r.status === 204, status: r.status };
+    const ok = r.status === 200 || r.status === 204;
+    if (ok) _mcpServersCacheInvalidate(orgId);
+    return { ok, status: r.status };
 }
 
 interface McpMarketItem {
@@ -16497,9 +16555,33 @@ interface InjectProfile {
 function mcpSlug(m: InjectProfileItemM): string {
     return String(m.slug || m.name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
+// 档案坏档自愈 — 实测病灶: 档内多字节正文被截断/乱码 → JSON 解析恒失败 → 整条注入链(含 MCP 全账号安装)
+//   静默退化为空档, 重启也不愈。正法: 坏档隔离为 .corrupt 取证 + 用最近一次好档 .bak 原位恢复;
+//   无 .bak 才空档起步(并记 dao-loops.log 可见可验)。写入侧配套: tmp+rename 原子写 + 同步刷 .bak。
+function _readInjectProfileJson(): any {
+    try {
+        return JSON.parse(fs.readFileSync(INJECT_PROFILE_FILE, 'utf8'));
+    } catch (e) {
+        try {
+            const bak = fs.readFileSync(INJECT_PROFILE_FILE + '.bak', 'utf8');
+            const j = JSON.parse(bak);
+            try { fs.copyFileSync(INJECT_PROFILE_FILE, INJECT_PROFILE_FILE + '.corrupt'); } catch { /* 守柔 */ }
+            fs.writeFileSync(INJECT_PROFILE_FILE, bak, 'utf8');
+            daoLoopLog('inject', '档案损坏 → 已用 .bak 原位自愈 (坏档已隔离为 .corrupt)');
+            return j;
+        } catch { /* 无可用 .bak */ }
+        try {
+            if (fs.existsSync(INJECT_PROFILE_FILE)) {
+                fs.copyFileSync(INJECT_PROFILE_FILE, INJECT_PROFILE_FILE + '.corrupt');
+                daoLoopLog('inject', '档案损坏且无可用 .bak → 坏档已隔离为 .corrupt, 空档起步');
+            }
+        } catch { /* 守柔 */ }
+        throw e;
+    }
+}
 function loadInjectProfile(): InjectProfile {
     try {
-        const j = JSON.parse(fs.readFileSync(INJECT_PROFILE_FILE, 'utf8'));
+        const j = _readInjectProfileJson();
         return {
             enabled: !!j.enabled,
             autoCleanup: j.autoCleanup !== false,
@@ -16577,13 +16659,20 @@ function saveInjectProfile(p: InjectProfile): void {
     // 原样保留, 只覆盖本版本已知字段 — 杜绝「旧窗一次保存把新窗写入的舰队/新数据整体抹掉」。
     let out: any = p;
     try {
-        const raw = JSON.parse(fs.readFileSync(INJECT_PROFILE_FILE, 'utf8'));
+        const raw = _readInjectProfileJson();
         if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
             out = Object.assign({}, raw);
             for (const k of Object.keys(p)) { if ((p as any)[k] !== undefined) out[k] = (p as any)[k]; }
         }
     } catch { /* 无旧档/坏档即直写 */ }
-    try { fs.mkdirSync(DAO_DIR, { recursive: true }); fs.writeFileSync(INJECT_PROFILE_FILE, JSON.stringify(out, null, 2), 'utf8'); } catch { /* 守柔 */ }
+    try {
+        fs.mkdirSync(DAO_DIR, { recursive: true });
+        const txt = JSON.stringify(out, null, 2);
+        const tmp = INJECT_PROFILE_FILE + '.tmp';
+        fs.writeFileSync(tmp, txt, 'utf8');
+        fs.renameSync(tmp, INJECT_PROFILE_FILE);
+        try { fs.writeFileSync(INJECT_PROFILE_FILE + '.bak', txt, 'utf8'); } catch { /* 守柔 */ }
+    } catch { /* 守柔 */ }
     try {
         if (_secretsFingerprint(p) !== prevFp) { try { fs.unlinkSync(INJECT_SIG_FILE); } catch { /* 无缓存即无需清 */ } }
     } catch { /* 守柔 */ }
@@ -16858,7 +16947,7 @@ function daoSyncLocalIdeMcpsIntoProfile(): void {
                 entry = { name: e.name, transport: 'HTTP', url: e.url, installation_scope: 'org' };
                 if (e.headers && Object.keys(e.headers).length) entry.headers = e.headers;
             } else {
-                const port = mcpPortableCloudSpec({ transport: 'STDIO', command: e.command, args: e.args, env_variables: e.env });
+                const port = mcpPortableCloudSpec({ transport: 'STDIO', command: e.command, args: e.args, env_variables: mcpStripHostEnv(e.env) });
                 const pc = String(port.command || '');
                 // 仍含路径分隔符 = 未能可移植(纯本地路径) → 守柔跳过, 不种死条目到全账号。
                 if (!pc || /[\\/]/.test(pc)) continue;
