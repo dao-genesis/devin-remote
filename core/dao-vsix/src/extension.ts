@@ -8560,7 +8560,10 @@ function rc(){if(S.tab==='overview')rO();if(S.tab==='bridge')rBridgeFull();if(S.
 // (该占位故意不标记 loaded) — 此处自动重载, 拉取真实数据, 用户无需再次点击。
 function reloadActiveDataTab(){
   var t=S.tab;
-  if(t==='overview'||t==='bridge'||t==='inject'||t==='switch'||t==='backups'||t==='github')return;
+  // 白名单(而非排除法): 只有真·数据 tab 才发 loadTabData。排除法漏掉新面板板块(如归一版折入的
+  //   'proxy')时宿主必回 Unknown tab → 面板被错误页覆写(实测·Proxy Pro 板块坏之根因)。
+  var _dataTabs={sessions:1,knowledge:1,playbooks:1,secrets:1,integrations:1,usage:1,org:1,mcp:1,automations:1,schedules:1,apikeys:1,profile:1,customization:1};
+  if(!_dataTabs[t])return;
   if(!S.auth.loggedIn||!S.auth.canUseApi)return;
   var v=document.getElementById('v-'+t);
   if(!v||v.dataset.loaded)return;
@@ -8976,6 +8979,9 @@ function bkReadd(i){var a=S.backups.accounts[i];if(!a)return;var em=a.email||(St
 // 借鉴手机版 cpGrp/cpAcc · 复制账密: 邮箱+密码写入剪贴板。密码由宿主本地解析(账号池/备份目录名),
 //   全程不经网页态、不落日志 — 公网 /shell 无从取得, 仅本机用户主动点击触发。
 function bkCopyCred(i){var a=S.backups.accounts[i];if(!a)return;var em=a.email||(String(a.account||'').indexOf('@')>=0?a.account:'');if(!em){toast('该备份无可识别邮箱',false);return}cmd('copyBackupCred',{email:em,account:a.account||''})}
+// 全量备份(对齐手机 APK backupAllAcc): 委托 RT Flow 既有 wam.devinBackupAll — 对全部活跃账号
+//   逐号 对话+知识+剧本+密钥+Git 增量备份落地本地(与自动清理前置备份同一引擎)。
+function bkBackupAll(){toast('全量备份启动…(后台逐号进行·完成后刷新本面板)',true);cmd('wamCmd',{cmd:'wam.devinBackupAll'})}
 // 视图切换: 按账号(分组) ↔ 近期对话(跨账号·按时间倒序)
 function bkSetView(mode){S.bkView=mode;rBackupsData(S.backups,null)}
 // 近期对话·隐藏/显示 非本人自动化对话(默认下沉沉底·不删数据)
@@ -9098,10 +9104,12 @@ function rBackupsData(tree,err){
   if(!accts.length){v.innerHTML='<div class="empty"><div class="ic">📦</div><h3>对话备份</h3><p style="color:var(--muted)">暂无备份</p><p style="font-size:10px;color:var(--muted);word-break:break-all">'+esc((tree&&tree.root)||'')+'</p><div class="br" style="justify-content:center"><button class="btn" onclick="rBackups()">⟳ 刷新</button></div></div>';return}
   var totalConv=accts.reduce(function(s,a){return s+(a.count||0)},0);
   var view=S.bkView||'recent';
-  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="color:var(--muted);font-size:11px">'+accts.length+' 账号 · '+totalConv+' 对话备份</span><button class="btn sm" onclick="rBackups()">⟳</button></div>';
+  // 头部统计对齐手机 APK cloud.html: 含已移出库 / 自动化计数 · 近期活跃优先
+  var _nRm=0;accts.forEach(function(a){if(a.inPool===false)_nRm++});
+  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="color:var(--muted);font-size:11px">共 '+accts.length+' 个备份账号 (含 '+_nRm+' 已移出库) · '+totalConv+' 对话 · 近期活跃优先</span><span style="display:flex;gap:4px"><button class="btn sm ghost" onclick="bkBackupAll()" title="对全部已登录活跃账号立即全量备份(对话+知识+剧本+密钥·与手机版同源)">📥 全量备份</button><button class="btn sm" onclick="rBackups()">⟳</button></span></div>';
   h+='<div class="br" style="margin-bottom:8px"><button class="btn sm'+(view==='recent'?' primary':' ghost')+'" onclick="bkSetView(&#39;recent&#39;)">🕒 近期对话</button><button class="btn sm'+(view==='acct'?' primary':' ghost')+'" onclick="bkSetView(&#39;acct&#39;)">📂 按账号</button></div>';
   var q=S.bkSearch||'';
-  h+='<input id="bkSearch" value="'+esc(q)+'" placeholder="🔍 搜索 账号邮箱 / 对话名 / 对话ID" oninput="bkSearchSet(this.value)" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:6px 8px;background:var(--input,rgba(255,255,255,.06));color:var(--fg);border:1px solid var(--border);border-radius:4px;font-size:12px">';
+  h+='<input id="bkSearch" value="'+esc(q)+'" placeholder="🔍 检索 序号 / 账号邮箱 / 对话名 / 对话ID" oninput="bkSearchSet(this.value)" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:6px 8px;background:var(--input,rgba(255,255,255,.06));color:var(--fg);border:1px solid var(--border);border-radius:4px;font-size:12px">';
   h+='<div style="font-size:10px;color:var(--muted);margin-bottom:8px;word-break:break-all">根: '+esc(tree.root||'')+'</div>';
   if(view==='recent'){
     // 同源: 与悬浮窗「☁ 近期对话」同一数据引擎(dlRecent · 跨账号官网 API 实时聚合) ——
@@ -9128,22 +9136,38 @@ function rBackupsData(tree,err){
     v.innerHTML=h;return;
   }
   var anyAcct=false;
-  accts.forEach(function(a,i){
+  // 按账号视图对齐手机 APK: 近期活跃时序降序(取本人对话最新备份时间·忽略自动化干扰),
+  //   纯自动化账号一律下沉(不删); 同档按序号靠前。序号直搜: 纯数字查询优先精确命中账号序号。
+  var ordered=accts.map(function(a,i){
+    var tHuman=0,tAny=0,nAuto=0,convs=(a.conversations||[]);
+    convs.forEach(function(c){var bt=Math.max(c.liveTs||0,c.mtime||0);if(bt>tAny)tAny=bt;var au=bkIsAuto(c.title||c.name);if(au)nAuto++;else if(bt>tHuman)tHuman=bt});
+    return {a:a,i:i,t:tHuman||tAny||0,allAuto:convs.length>0&&nAuto===convs.length};
+  });
+  ordered.sort(function(x,y){if(x.allAuto!==y.allAuto)return x.allAuto?1:-1;if((y.t||0)!==(x.t||0))return (y.t||0)-(x.t||0);return (x.a.accountNo||99999)-(y.a.accountNo||99999)});
+  if(/^\d+$/.test(q)){var exact=ordered.filter(function(o){return String(o.a.accountNo||'')===q});if(exact.length)ordered=exact;}
+  ordered.forEach(function(o){
+    var a=o.a,i=o.i;
     var aid='bkacc-'+i;
     var label=(a.accountNo?('#'+a.accountNo+' '):'')+(a.email||a.account||'');
-    var acctHit=!q||bkMatch(null,a,q);
+    var acctHit=!q||bkMatch(null,a,q)||String(a.accountNo||'')===q;
     var convs=(a.conversations||[]);
-    var matched=q?convs.map(function(c,ci){return {c:c,ci:ci}}).filter(function(o){return acctHit||bkMatch(o.c,a,q)}):convs.map(function(c,ci){return {c:c,ci:ci}});
+    var matched=q?convs.map(function(c,ci){return {c:c,ci:ci}}).filter(function(mo){return acctHit||bkMatch(mo.c,a,q)}):convs.map(function(c,ci){return {c:c,ci:ci}});
     if(q&&!acctHit&&!matched.length)return; // 检索时该账号无匹配 → 隐藏
     anyAcct=true;
     var expand=!!q; // 检索时自动展开匹配账号
-    h+='<div class="card">';
+    h+='<div class="card"'+(o.allAuto?' title="仅含自动化对话(已下沉)" style="opacity:.65"':'')+'>';
     var archBadge=(a.inPool===false)?'<span style="flex:0 0 auto;font-size:9px;font-weight:700;color:var(--warn);background:rgba(210,153,34,.16);border-radius:4px;padding:1px 5px;margin-left:6px" title="已移出当前账号池·备份仍在本地·可解锁查看/加回">已出库</span>':'';
     h+='<div class="cr" style="cursor:pointer" onclick="bkToggle(&#39;'+aid+'&#39;)"><span class="l" style="font-weight:600;color:var(--fg)">▸ '+esc(label)+archBadge+'</span><span class="v" style="font-size:10px;color:var(--muted)">'+(q?(matched.length+'/'+(a.count||0)):(a.count||0))+' 对话'+(a.hasAccountInfo?' · 账号快照':'')+'</span></div>';
     h+='<div class="br" style="margin-top:4px"><button class="btn sm ghost" onclick="bkReveal('+i+',null)">📂 目录</button><button class="btn sm ghost" onclick="bkDownload('+i+',null)">⬇ 下载账号</button>';
     if(a.inPool||a.canReAdd)h+='<button class="btn sm ghost" onclick="bkCopyCred('+i+')" title="复制该账号 邮箱+密码 到剪贴板(密码本地解析·不经网页态)">🔑 复制账密</button>';
     if(a.inPool===false)h+='<button class="btn sm primary" onclick="bkReadd('+i+')" title="把此出库账号加回当前账号库(按普通新账号处理)">↩ 加回账号库</button>';
     h+='</div>';
+    // 最近对话一行(对齐手机账号卡): 本人优先, 点击即多实例进入该对话官网
+    (function(){
+      var rec=null,recCi=-1,recT=0,recHuman=false;
+      convs.forEach(function(c,ci){var bt=Math.max(c.liveTs||0,c.mtime||0);var au=bkIsAuto(c.title||c.name);if(!au&&(!recHuman||bt>recT)){rec=c;recCi=ci;recT=bt;recHuman=true}else if(!recHuman&&bt>=recT){rec=c;recCi=ci;recT=bt}});
+      if(rec)h+='<div style="font-size:11px;color:var(--fg);margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer" onclick="'+(rec.devinId?('bkOpenConv('+i+','+recCi+')'):('bkConvToggle('+i+','+recCi+')'))+'" title="最近'+(recHuman?'对话':'对话(自动化)')+' · 点击打开">'+(recHuman?'💬':'🤖')+' 最近对话: <b>'+esc(rec.title||rec.name||'(未命名)')+'</b>'+(recT?('<span style="color:var(--muted)"> · '+esc(bkRel(recT))+'</span>'):'')+'</div>';
+    })();
     h+='<div id="'+aid+'" style="display:'+(expand?'block':'none')+';margin-top:6px;border-top:1px solid var(--border);padding-top:6px">';
     matched.slice(0,200).forEach(function(o){h+=bkConvRow(o.c,i,o.ci,false)});
     if(matched.length>200)h+='<div style="font-size:10px;color:var(--muted);margin-top:4px">仅显示前 200 条，更多请打开目录</div>';
@@ -9337,6 +9361,9 @@ function mcpSrcApply(){var chips=document.querySelectorAll('.mcp-src-chip');for(
 // 添加自定义 MCP → 直接装到本账号 (复用市场安装通道 devinAddCustomMcp), 对齐官网 Add custom MCP
 function mcpAddCustom(){sm('添加自定义 MCP (装到本账号)','<input id="m1" placeholder="名称 name (如 GitHub MCP)" style="width:100%;margin:4px 0"><select id="m2" style="width:100%;margin:4px 0"><option value="HTTP">HTTP / SSE (远程 URL)</option><option value="STDIO">STDIO (command/args)</option></select><input id="m3" placeholder="URL (HTTP) 或 command (STDIO, 如 npx)" style="width:100%;margin:4px 0"><input id="m4" placeholder="args 空格分隔 (STDIO) / Authorization 头值 (HTTP)" style="width:100%;margin:4px 0"><input id="m5" placeholder="简介 short_description (可选)" style="width:100%;margin:4px 0"><p style="font-size:10px;color:var(--muted);margin:4px 0">提示: 点下方预设可一键填 GitHub MCP</p><button class="btn sm" onclick="ipMcpPreset(&#39;github&#39;)">GitHub MCP 预设</button>',function(){var n=document.getElementById('m1').value.trim();if(!n)return false;var tr=document.getElementById('m2').value;var f3=document.getElementById('m3').value.trim();var f4=document.getElementById('m4').value.trim();var sd=document.getElementById('m5').value.trim();var spec={name:n,transport:tr,short_description:sd,installation_scope:'org'};if(tr==='STDIO'){spec.command=f3;spec.args=f4?f4.split(' ').filter(Boolean):[];spec.env_variables=[]}else{spec.url=f3;if(f4)spec.headers={Authorization:f4}}toast('安装中…',true);cmd('mcpMarketInstall',{spec:spec})})}
 function rT(tab,items,err,fallbackProxy){
+  // 宿主对非数据 tab 回 'Unknown tab' — 绝不允许它覆写活面板(实测: dao-one 的 Proxy Pro 独立子网页
+  //   曾被此错误页整体覆写成「undefined · Error: Unknown tab」) → 直接忽略。
+  if(err==='Unknown tab')return;
   // ② 容器归一: 独立标签(v-*)已移除的 K/P/S/Git 落主页内 ov-* 容器(integrations→ov-git)
   const v=document.getElementById('v-'+tab)||document.getElementById('ov-'+(tab==='integrations'?'git':tab));if(!v)return;
   // 帛书·「反者道之动也」— 认证策略根本修复
@@ -10181,6 +10208,13 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'relayCredLogin', 'webAuthLogin', 'cfListResources', 'cfRevokeToken', 'cfDeleteWorker', 'cfPoolList', 'cfPoolAdd', 'cfPoolRemove', 'cfPoolResources', 'cfPoolRevokeToken', 'cfPoolDeleteWorker', 'cfPoolMintToken', 'cfPoolCopyToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
     // GitHub 纵向板块独立于 Devin 账号池(自带 PAT 鉴权) — daoGh* 一律免 Devin 登录
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command) && !/^daoGh/.test(String(msg.command || ''))) {
+        // loadTabData 未登录: 回 tabData 错误态(区块显式渲「未登录·可登录/重试」), 而非裸 error toast —
+        //   否则主页九区块全部永停「加载中…」且连环弹 Error: Not logged in(实测)。顺手触发底层自动取证。
+        if (msg.command === 'loadTabData') {
+            reply({ type: 'tabData', tab: msg.tab, items: [], error: '未登录 · 底层凭证获取中, 稍候自动重载或点登录' });
+            try { vscode.commands.executeCommand('dao.devinAutoAcquire'); } catch { /* 守柔 */ }
+            return;
+        }
         reply({ type: 'error', msg: 'Not logged in' });
         return;
     }
@@ -15326,7 +15360,31 @@ function normalizeMcpEnv(env: any): Array<{ key: string; value: string }> {
 }
 
 // 追录: 把一个自定义 MCP 直接注册进官网 (STDIO: command/args/env; HTTP/SSE: url)
+// 帛书·「曲则全」— 本机 IDE STDIO MCP 的 command/args 常指向宿主绝对路径
+//   (node C:\Users\...\node_modules\<pkg>\dist\index.js · --require 本机 helper · --config 本机 json),
+//   原样装到 Devin Cloud 云端必跑不起来(云端无这些文件) → 装云前规整为可移植形态:
+//   识别 node_modules 内包名 → npx -y <pkg>; 剥离本机 --require/--config 管路参数;
+//   env 剥宿主管路(代理/NODE_PATH 等), 只留真·密钥/配置。识别不出包名则原样透出(如本就 npx/uvx)。
+function mcpPortableCloudSpec(spec: any): any {
+    try {
+        if ((spec.transport || 'STDIO').toUpperCase() !== 'STDIO' || spec.marketplace_server_id) return spec;
+        const rawArgs: string[] = (Array.isArray(spec.args) ? spec.args : []).map((a: any) => (a && typeof a === 'object') ? String(a.value ?? '') : String(a ?? ''));
+        const cmd = String(spec.command || '');
+        const looksLocal = /[\\/]/.test(cmd) || rawArgs.some((a) => /node_modules[\\/]/.test(a) || /^[a-zA-Z]:\\/.test(a));
+        if (!looksLocal) return spec;
+        let pkg = '';
+        for (const a of rawArgs) {
+            const m = /node_modules[\\/](@[^\\/]+[\\/][^\\/]+|[^\\/]+)/.exec(a);
+            if (m) { pkg = m[1].replace(/\\/g, '/'); break; }
+        }
+        if (!pkg) return spec;
+        const env = normalizeMcpEnv(spec.env_variables).filter((e) => !MCP_HOST_PLUMBING_ENV.has(String(e.key).toLowerCase()));
+        return { ...spec, command: 'npx', args: ['-y', pkg], env_variables: env };
+    } catch { return spec; }
+}
+
 async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promise<{ ok: boolean; status?: number; id?: string; error?: string }> {
+    spec = mcpPortableCloudSpec(spec);
     const name = String(spec.name || '').trim();
     const slug = String(spec.slug || name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     const transport = (spec.transport || 'STDIO').toUpperCase();
