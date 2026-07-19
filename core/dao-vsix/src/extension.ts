@@ -8775,32 +8775,18 @@ function cfWebReload(){var f=document.getElementById('cfWebFrame');if(f){try{f.s
 // 账密(+2FA)一键打通 Cloudflare 官网登录态: 隔离档官方登录 → 会话 Cookie 灌进反代罐 → 官网 iframe 即登录态。
 function cfWebLogin(){var e=document.getElementById('cfWebEmail'),p=document.getElementById('cfWebPass'),t=document.getElementById('cfWebOtp');var email=e?e.value.trim():'';var pass=p?p.value:'';var otp=t?t.value.trim():'';if(!email||!pass){toast('请先填 Cloudflare 邮箱与密码',false);return}toast('🔑 隔离档官方登录中…(账密+2FA→落会话 Cookie, 约 20-40s; 遇 Turnstile 将交你浏览器代登)',true);cmd('webAuthLogin',{site:'cloudflare',email:email,password:pass,otp:otp||undefined})}
 function cfBar(active){
-  var h='<div class="ovwbar">'
-    +'<button class="btn sm '+(active==='bridge'?'primary':'ghost')+'" onclick="cfSetMode(&#39;bridge&#39;)" title="穿透面板: 内网穿透/持久通道/在线设备/一行接入(DAO Bridge 本职)">☯ 穿透面板</button>'
-    +'<button class="btn sm '+(active==='official'?'primary':'ghost')+'" onclick="cfSetMode(&#39;official&#39;)" title="官方原生: 满幅直载同源反代的 dash.cloudflare.com 官网(登录态保持·操作即官网操作)">🌐 Cloudflare 官方原生</button>'
-    +(active==='official'?'<button class="btn sm ghost" onclick="cfWebReload()" title="重载官网页">⟳</button>':'')
-    +(active==='official'?'<button class="btn sm ghost" onclick="cmd(&#39;openCf&#39;)" title="Turnstile 挡住时回退: 隔离档浏览器打开 dash.cloudflare.com 官网登录">🌐 浏览器代登</button>':'')
-    +'</div>';
-  if(active==='official'){
-    h+='<div class="ovwbar" style="gap:4px;flex-wrap:wrap">'
-      +'<span style="font-size:11px;color:var(--muted)">🔑 打通登录态:</span>'
-      +'<input id="cfWebEmail" placeholder="Cloudflare 邮箱" style="font-size:11px;padding:2px 6px;width:160px" />'
-      +'<input id="cfWebPass" type="password" placeholder="密码" style="font-size:11px;padding:2px 6px;width:120px" />'
-      +'<input id="cfWebOtp" placeholder="2FA(可选)" style="font-size:11px;padding:2px 6px;width:90px" />'
-      +'<button class="btn sm primary" onclick="cfWebLogin()" title="账密(+2FA)隔离档官方登录→会话 Cookie 灌进反代罐→官网以登录态运行">🔑 登录官网</button>'
-      +'</div>';
-  }
-  return h;
+  // 整页 dash.cloudflare.com iframe(官方原生)已废弃: bridge 板块专注内网穿透。CF 官网走本体隔离档浏览器。
+  return '';
 }
 function rBridgeOfficial(v){
-  v.classList.add('cfweb');
-  if(document.getElementById('cfWebFrame'))return;
-  v.innerHTML=cfBar('official')+'<iframe id="cfWebFrame" src="'+esc(cfWebUrl())+'" allow="clipboard-read; clipboard-write"></iframe>';
+  // 旧「Cloudflare 官方原生 iframe」已废弃 → 落回穿透面板。
+  S.cfMode='bridge';
+  rBridgeFull();
 }
 // 内网穿透 · DAO Bridge — 与独立穿透插件 1:1: 状态 + 命名隧道/CloudFlare + 导出文档 + 能力自测。
 function rBridgeFull(){
   var v=document.getElementById('v-bridge');if(!v)return;
-  if(S.cfMode==='official'){rBridgeOfficial(v);return}
+  if(S.cfMode==='official')S.cfMode='bridge';
   v.classList.remove('cfweb');
   var b=S.bridge||{};
   var on=!!b.url;
@@ -9157,18 +9143,16 @@ function ovSetMode(m){
 }
 function ovReload(){var f=document.getElementById('ovWebFrame');if(f){try{f.src=ovWebUrl()}catch(e){}}}
 function ovBar(active){
+  // 反向提取官方配置模块进统一管理面板(不再嵌整页官网 iframe)。右上角已有「官网」入口, 用户需整页
+  //   官网自会点击 → 此处只保留「刷新」。
   return '<div class="ovwbar">'
-    +'<button class="btn sm '+(active==='official'?'primary':'ghost')+'" onclick="ovSetMode(&#39;official&#39;)" title="官方原生: 底层直跑同源反代的 app.devin.ai 官网(当前账号自动登录·数据实时同官网)">🌐 官方原生</button>'
-    +'<button class="btn sm '+(active==='manage'?'primary':'ghost')+'" onclick="ovSetMode(&#39;manage&#39;)" title="管理视图: 插件增强能力(手动锁/导出契约/多实例/注入状态)">🛠 管理视图</button>'
-    +(active==='official'?'<button class="btn sm ghost" onclick="ovReload()" title="重载官网页">⟳</button>':'')
-    +'<button class="btn sm ghost" onclick="cmd(&#39;openRoutedPanel&#39;)" title="IDE 内独立路由面板(多实例)">↗ 独立面板</button>'
-    +'<button class="btn sm ghost" onclick="cmd(&#39;syncBrowser&#39;)" title="电脑浏览器隔离窗口自动登录">🌐 浏览器</button>'
+    +'<button class="btn sm ghost" onclick="ovSetMode(&#39;manage&#39;)" title="刷新当前账号官方配置模块">⟳ 刷新</button>'
     +'</div>';
 }
 function rOOfficial(v){
-  v.classList.add('ovweb');
-  if(document.getElementById('ovWebFrame'))return; // 已挂载 → 不重建(refresh 事件不重载官网页·不丢页内状态)
-  v.innerHTML=ovBar('official')+'<iframe id="ovWebFrame" src="'+esc(ovWebUrl())+'" allow="clipboard-read; clipboard-write"></iframe>';
+  // 反向提取官方配置模块(旧「官方原生 iframe」已废弃): 直接落到管理视图。
+  S.ovMode='manage';
+  rO();
 }
 function rO(){
   const v=document.getElementById('v-overview');
@@ -9177,9 +9161,9 @@ function rO(){
     v.innerHTML='<div class="empty"><div class="ic">🤖</div><h3>Devin Cloud</h3><p style="margin:12px 0">登录以连接您的 Devin Cloud 账户</p><div class="br" style="justify-content:center"><button class="btn primary" onclick="cmd(&#39;devinLogin&#39;)">🔑 登录</button>'+(S.auth.hasWsCreds?'<button class="btn" style="background:#0e639c" onclick="cmd(&#39;devinWindsurfAutoLogin&#39;)">🌀 Windsurf 自动登录</button>':'')+'</div></div>';
     return;
   }
-  // 默认 = 官方原生视图(反带官网·数据实时同官网); 'manage' 才走下方原卡片序列(插件增强能力)
-  if(S.ovMode===undefined)S.ovMode='official';
-  if(S.ovMode==='official'){rOOfficial(v);return}
+  // 默认 = 管理视图(反向提取官方 Profile/Customization/Knowledge/Playbooks/Secrets/Git/Automations/
+  //   Schedules/Blueprints 等官方配置模块进统一面板·改动经官方 API 同步官网), 不再嵌整页官网 iframe。
+  if(S.ovMode===undefined||S.ovMode==='official')S.ovMode='manage';
   v.classList.remove('ovweb');
   let qh='';
   if(S.auth.quota){
@@ -9732,23 +9716,19 @@ function ghWebReload(){var f=document.getElementById('ghWebFrame');if(f){try{f.s
 // 账密+2FA 一键打通 GitHub 官网登录态: 取账号池「账密+2FA 存号」隔离档官方登录 → 会话 Cookie 灌进反代罐 → 官网 iframe 即登录态。
 function ghWebLogin(){var login='';try{var fl=(_ghState().ghFleet||[]);for(var i=0;i<fl.length;i++){if(fl[i].hasCred||fl[i].active){login=fl[i].login;if(fl[i].active)break}}}catch(e){}toast('🔑 隔离档官方登录中…(取账号池账密+2FA→落会话 Cookie, 约 20-40s; 遇人机/设备验证将交你过一次)',true);cmd('webAuthLogin',{site:'github',login:login||undefined})}
 function ghBar(active){
+  // 反向提取官方 GitHub 配置/功能进统一管理面板(不再嵌整页 github.com iframe)。整页官网走本体隔离档浏览器。
   return '<div class="ovwbar">'
-    +'<button class="btn sm '+(active==='official'?'primary':'ghost')+'" onclick="ghSetMode(&#39;official&#39;)" title="官方原生: 底层直跑同源反代的 github.com 官网(登录态保持·操作即官网操作·数据实时同官网)">🌐 官方原生</button>'
-    +'<button class="btn sm '+(active==='manage'?'primary':'ghost')+'" onclick="ghSetMode(&#39;manage&#39;)" title="管理视图: 插件增强能力(账号池·组织统管·多 PAT 分布式注入·GitHub MCP)">🛠 管理视图</button>'
-    +(active==='official'?'<button class="btn sm ghost" onclick="ghWebReload()" title="重载官网页">⟳</button>':'')
-    +(active==='official'?'<button class="btn sm primary" onclick="ghWebLogin()" title="账号池(账密+2FA 存号)隔离档官方登录→会话 Cookie 灌进反代罐→官网以登录态运行">🔑 登录官网</button>':'')
-    +'<button class="btn sm ghost" onclick="ghOpen(&#39;https://github.com/&#39;)" title="本体账号专属隔离档浏览器打开 github.com(已登录该号)">🌐 浏览器</button>'
+    +'<button class="btn sm ghost" onclick="ghOpen(&#39;https://github.com/&#39;)" title="本体账号专属隔离档浏览器打开 github.com(已登录该号)">🌐 浏览器打开官网</button>'
     +'</div>';
 }
 function rGitHubOfficial(v){
-  v.classList.add('ghweb');
-  if(document.getElementById('ghWebFrame'))return;
-  v.innerHTML=ghBar('official')+'<iframe id="ghWebFrame" src="'+esc(ghWebUrl())+'" allow="clipboard-read; clipboard-write"></iframe>';
+  // 反向提取官方配置模块(旧「官方原生 iframe」已废弃): 直接落到管理视图。
+  S.ghMode='manage';
+  rGitHub();
 }
 function rGitHub(){
   var v=document.getElementById('v-github');if(!v)return;
-  if(S.ghMode===undefined)S.ghMode='official';
-  if(S.ghMode==='official'){rGitHubOfficial(v);return}
+  if(S.ghMode===undefined||S.ghMode==='official')S.ghMode='manage';
   v.classList.remove('ghweb');
   var st=_ghState();
   var curPat='';try{var s=(S.injectProfile&&S.injectProfile.secrets)||[];for(var i=0;i<s.length;i++){if(s[i].name==='GITHUB_PAT'){curPat=s[i].value||'';break}}}catch(e){}
