@@ -1536,6 +1536,12 @@ public class RelayService extends Service {
             android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
             cm.setAcceptCookie(true);
             if (Build.VERSION.SDK_INT >= 21) cm.setAcceptThirdPartyCookies(wv, true);
+            // 多号隔离(道法自然·各号独立不相悖): 凭证代登录前先清 CF(+GitHub SSO 则并清 GitHub)会话 cookie,
+            //   使本次离屏登录恒以「本次凭证对应的账号」登入、绝不复用 App 内残留的他号 CF 登录态。
+            //   CookieManager 进程级全局(WebView 无原生分罐), 故靠「按域清 + 重登」实现确定性钉号;
+            //   provisioning 串行(cfProv.phase 门禁), 顺序清+登→各号各得其所。cookie-session 直建走另一路
+            //   (cfStartWebMint·刻意复用 App 内会话), 不受此清理影响。
+            cfClearAuthCookies(cm, cfg.contains("\"gh\""));
             // cf-auto.js 在 cf_authed 建到 Token / 命中挑战 / 出错 时, 经此桥回灌 {token,accountId}|{error}。
             wv.addJavascriptInterface(new Object() {
                 @JavascriptInterface public void done(String json) { cfMintDeliver(reqId, json); }
@@ -1563,6 +1569,41 @@ public class RelayService extends Service {
         } catch (Exception e) {
             cfMintDeliver(reqId, "{\"error\":\"cf_webauto_init_failed\"}");
         }
+    }
+
+    /** 多号隔离用: 按域清除 Cloudflare(及 GitHub SSO 时的 GitHub)会话 cookie, 使凭证代登录恒钉本次账号。
+     *  Android CookieManager 进程级全局、无原生分罐, 故逐 URL 读现有 cookie 名并写「过期」覆盖 (含 host 与
+     *  注册域 .example.com 两种 domain 作用域), 覆盖 HttpOnly 会话/ cf_clearance。仅动 CF/GitHub 域, 不碰他站。 */
+    private void cfClearAuthCookies(android.webkit.CookieManager cm, boolean includeGithub) {
+        try {
+            if (cm == null) cm = android.webkit.CookieManager.getInstance();
+            java.util.ArrayList<String> urls = new java.util.ArrayList<>(java.util.Arrays.asList(
+                "https://dash.cloudflare.com/", "https://cloudflare.com/",
+                "https://www.cloudflare.com/", "https://api.cloudflare.com/",
+                "https://oidc.iam.cfapi.net/"));
+            if (includeGithub) urls.addAll(java.util.Arrays.asList(
+                "https://github.com/", "https://www.github.com/", "https://api.github.com/"));
+            for (String u : urls) {
+                String c = cm.getCookie(u);
+                if (c == null || c.isEmpty()) continue;
+                String host = android.net.Uri.parse(u).getHost();
+                if (host == null) host = "";
+                // 注册域: dash.cloudflare.com → .cloudflare.com (仅当确有父级时)
+                String dot = "";
+                int firstDot = host.indexOf('.');
+                if (firstDot >= 0 && host.indexOf('.', firstDot + 1) > 0) dot = host.substring(firstDot);
+                for (String part : c.split(";")) {
+                    int eq = part.indexOf('=');
+                    String name = (eq >= 0 ? part.substring(0, eq) : part).trim();
+                    if (name.isEmpty()) continue;
+                    String expire = name + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+                    cm.setCookie(u, expire);
+                    cm.setCookie(u, expire + "; domain=" + host);
+                    if (!dot.isEmpty()) cm.setCookie(u, expire + "; domain=" + dot);
+                }
+            }
+            if (Build.VERSION.SDK_INT >= 21) cm.flush();
+        } catch (Exception ignored) {}
     }
 
     /** JS ↔ 原生桥 (引擎页用 window.Native.*) */

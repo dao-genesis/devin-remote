@@ -1,6 +1,6 @@
 {
-  "versionCode": 366,
-  "versionName": "0.37.261",
-  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.261/DevinCloud-mobile-v0.37.261.apk",
-  "notes": "v0.37.261 · 根治账密/会话态离屏建 Token 的 no_cf_session/cf_webauto_timeout: 真机同源 fetch 实测锁定病灶——带 X-Cross-Site-Security:dash 的同源 POST /api/v4/user/tokens 被 CF 403(不带则 200 建成·GET 两态皆 200)；改为同源默认不带该头、仅首次 403 翻转该头重试一次(两态皆通·兼容 CF 未来翻转)。cf-auto.js 与 RelayService.cfMintJs 双路对齐"
+  "versionCode": 367,
+  "versionName": "0.37.262",
+  "url": "https://github.com/dao-genesis/devin-remote/releases/download/rtflow-v0.37.262/DevinCloud-mobile-v0.37.262.apk",
+  "notes": "v0.37.262 · 多账号隔离正本清源: 离屏凭证代登录(web-auto / GitHub SSO)前先按域清 CF(GitHub SSO 时并清 GitHub)会话 cookie, 使每次建 Token/Worker 恒钉「本次凭证对应的账号」——根治「App 内残留某号 CF 登录态时, 换号建站却复用他号」的串号(实测真机 github-sso 曾复用上一 web-auto 号)。Android CookieManager 进程级全局无原生分罐, 故按域清+重登实现确定性钉号; provisioning 串行→各号各得其所。cookie-session 直建走另一路刻意复用 App 内会话, 不受影响"
 }
