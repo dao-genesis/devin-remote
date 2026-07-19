@@ -8330,6 +8330,10 @@ input[type=checkbox],input[type=radio],input[type=range]{background:transparent;
 #v-overview .ovb{break-inside:avoid;-webkit-column-break-inside:avoid;page-break-inside:avoid;display:block;margin:0 0 6px}
 #v-overview .ovb>.st:first-child{margin-top:0}
 #v-overview .ovb>.br{margin-bottom:0}
+/* GitHub 板块·官方原生视图(反带官网): 满幅 iframe 直载同源反代的 github.com — 覆盖默认内边距 */
+#v-github.active.ghweb{padding:0;column-gap:0}
+#v-github.ghweb .ovwbar{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:0 0 6px;flex-shrink:0}
+#v-github.ghweb iframe{flex:1;min-height:0;width:100%;height:auto;border:0;background:#fff;border-radius:6px}
 .toast{position:fixed;bottom:20px;right:20px;padding:8px 16px;border-radius:6px;font-size:12px;z-index:200;animation:fi .2s}
 .toast.hid{display:none}
 .toast.ok{background:var(--success);color:#000}
@@ -9600,8 +9604,39 @@ function ghOnResult(d){
 // v4.20 · GitHub 板块大改 — 账号中心模型(对齐 Devin 切号: 添号 + 账号管理), 左右分栏网格布局。
 //   不再要「主账号凭证」: 账号池里任一账号「设为本体」即以其 PAT 充当 admin(GITHUB_PAT)。
 //   添号三模式: ① PAT ② 登录链接(跳官网) ③ 账密+2FA 任意格式(存号+引导换 PAT, 复用切号解析)。
+// 帛书·「反者道之动」·搬运工反带官网: GitHub 板块默认 = 官方原生视图 — 满幅 iframe 直载同源反代的 github.com
+//   (/__web 逐源 Cookie 罐保持登录态·链接/表单/fetch/XHR 全量改写·操作即官网操作), 与主页反带 app.devin.ai 同构。
+//   原账号池/组织/多 PAT 注入/GitHub MCP 序列降为可切换的管理视图(插件增强能力)。
+function ghWebUrl(){
+  var org=(location.origin&&/^https?:\/\//.test(location.origin))?location.origin:'';
+  var base=org||(S.server.port?('http://localhost:'+S.server.port):'');
+  return base+'/__web?u='+encodeURIComponent('https://github.com/');
+}
+function ghSetMode(m){
+  S.ghMode=m;
+  var v=document.getElementById('v-github');
+  if(v){v.innerHTML='';v.classList.remove('ghweb')}
+  rGitHub();
+}
+function ghWebReload(){var f=document.getElementById('ghWebFrame');if(f){try{f.src=ghWebUrl()}catch(e){}}}
+function ghBar(active){
+  return '<div class="ovwbar">'
+    +'<button class="btn sm '+(active==='official'?'primary':'ghost')+'" onclick="ghSetMode(&#39;official&#39;)" title="官方原生: 底层直跑同源反代的 github.com 官网(登录态保持·操作即官网操作·数据实时同官网)">🌐 官方原生</button>'
+    +'<button class="btn sm '+(active==='manage'?'primary':'ghost')+'" onclick="ghSetMode(&#39;manage&#39;)" title="管理视图: 插件增强能力(账号池·组织统管·多 PAT 分布式注入·GitHub MCP)">🛠 管理视图</button>'
+    +(active==='official'?'<button class="btn sm ghost" onclick="ghWebReload()" title="重载官网页">⟳</button>':'')
+    +'<button class="btn sm ghost" onclick="ghOpen(&#39;https://github.com/&#39;)" title="本体账号专属隔离档浏览器打开 github.com(已登录该号)">🌐 浏览器</button>'
+    +'</div>';
+}
+function rGitHubOfficial(v){
+  v.classList.add('ghweb');
+  if(document.getElementById('ghWebFrame'))return;
+  v.innerHTML=ghBar('official')+'<iframe id="ghWebFrame" src="'+esc(ghWebUrl())+'" allow="clipboard-read; clipboard-write"></iframe>';
+}
 function rGitHub(){
   var v=document.getElementById('v-github');if(!v)return;
+  if(S.ghMode===undefined)S.ghMode='official';
+  if(S.ghMode==='official'){rGitHubOfficial(v);return}
+  v.classList.remove('ghweb');
   var st=_ghState();
   var curPat='';try{var s=(S.injectProfile&&S.injectProfile.secrets)||[];for(var i=0;i<s.length;i++){if(s[i].name==='GITHUB_PAT'){curPat=s[i].value||'';break}}}catch(e){}
   var ob=(S.injectProfile&&S.injectProfile.orgBody)||{};
@@ -9693,7 +9728,7 @@ function rGitHub(){
   h+='</div>';
   h+='</div>'; // /右栏
   h+='</div>'; // /grid
-  v.innerHTML=h;
+  v.innerHTML=ghBar('manage')+h;
   ghRenderGhFleet();ghRenderPatInject();ghRenderMcpOne();cmd('daoGhFleetList',{});cmd('daoGhGetPatCfg',{});cmd('daoGhPatStatus',{});
 }
 // 添号模式切换
