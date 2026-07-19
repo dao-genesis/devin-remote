@@ -15337,7 +15337,31 @@ function normalizeMcpEnv(env: any): Array<{ key: string; value: string }> {
 }
 
 // 追录: 把一个自定义 MCP 直接注册进官网 (STDIO: command/args/env; HTTP/SSE: url)
+// 帛书·「曲则全」— 本机 IDE STDIO MCP 的 command/args 常指向宿主绝对路径
+//   (node C:\Users\...\node_modules\<pkg>\dist\index.js · --require 本机 helper · --config 本机 json),
+//   原样装到 Devin Cloud 云端必跑不起来(云端无这些文件) → 装云前规整为可移植形态:
+//   识别 node_modules 内包名 → npx -y <pkg>; 剥离本机 --require/--config 管路参数;
+//   env 剥宿主管路(代理/NODE_PATH 等), 只留真·密钥/配置。识别不出包名则原样透出(如本就 npx/uvx)。
+function mcpPortableCloudSpec(spec: any): any {
+    try {
+        if ((spec.transport || 'STDIO').toUpperCase() !== 'STDIO' || spec.marketplace_server_id) return spec;
+        const rawArgs: string[] = (Array.isArray(spec.args) ? spec.args : []).map((a: any) => (a && typeof a === 'object') ? String(a.value ?? '') : String(a ?? ''));
+        const cmd = String(spec.command || '');
+        const looksLocal = /[\\/]/.test(cmd) || rawArgs.some((a) => /node_modules[\\/]/.test(a) || /^[a-zA-Z]:\\/.test(a));
+        if (!looksLocal) return spec;
+        let pkg = '';
+        for (const a of rawArgs) {
+            const m = /node_modules[\\/](@[^\\/]+[\\/][^\\/]+|[^\\/]+)/.exec(a);
+            if (m) { pkg = m[1].replace(/\\/g, '/'); break; }
+        }
+        if (!pkg) return spec;
+        const env = normalizeMcpEnv(spec.env_variables).filter((e) => !MCP_HOST_PLUMBING_ENV.has(String(e.key).toLowerCase()));
+        return { ...spec, command: 'npx', args: ['-y', pkg], env_variables: env };
+    } catch { return spec; }
+}
+
 async function devinAddCustomMcp(orgId: string, spec: any, auth1: string): Promise<{ ok: boolean; status?: number; id?: string; error?: string }> {
+    spec = mcpPortableCloudSpec(spec);
     const name = String(spec.name || '').trim();
     const slug = String(spec.slug || name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     const transport = (spec.transport || 'STDIO').toUpperCase();
