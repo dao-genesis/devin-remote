@@ -16523,7 +16523,10 @@ function bridgeCurrentSig(): string {
     const wsName = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0] && vscode.workspace.workspaceFolders[0].name) || '';
     const root = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0] && vscode.workspace.workspaceFolders[0].uri.fsPath) || '';
     let toolN = 0; try { toolN = daoMcpToolDefs().length; } catch { /* 守柔 */ }
-    return [url, tok, String(bridgeMachinePort() || ws.port || ''), mcpUrl, mcpTok, host, wsName, root, EXT_VERSION, String(toolN)].join('|');
+    // 持久化中继(恒定地址)纳入签名: 其 URL/连接态变化(重新部署/切账号/断连)即翻签名 → 反向注入随之刷新,
+    //   令知识库「持久通道」段恒随真实持久通道更新(补齐旧签名只认快速隧道漂移的盲区)。
+    let persistUrl = ''; try { persistUrl = getPersistentRelayUrl(); } catch { /* 守柔 */ }
+    return [url, tok, String(bridgeMachinePort() || ws.port || ''), mcpUrl, mcpTok, host, wsName, root, EXT_VERSION, String(toolN), persistUrl, ws.relayConnected ? '1' : '0'].join('|');
 }
 async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: number; changed: boolean }> {
     if (_bridgeReinjectInflight) return { injected: 0, changed: false };
@@ -16541,15 +16544,26 @@ async function reinjectBridgeToAllAccounts(reason: string): Promise<{ injected: 
         // ① 自愈核心: 探活择优, 采纳「当前真实可达」桥地址为本进程 bridgeUrl, 使注入文档用活地址。
         //   宁可守柔不注, 也不以死地址/(未连接) 覆盖账号库良态 — 根治旧实例/轮换把知识库写死致云端找不到端口。
         const live = await bridgeResolveLiveConn(5000);
+        // 帛书·「URL 与 Token 恒成对」: 注入物恒为探活胜出的那一对(实测鉴权通), 不另取另一域的权威牌。
+        let livePair: { url: string; token: string };
         if (live && live.url) {
             bridgeUrl = live.url; if (!ws.token && live.token) bridgeToken = live.token; // 守恒: 令牌恒以 ws.token 为准, 不被外部候选漂移
+            livePair = { url: live.url, token: live.token || bridgeAuthoritativeToken() };
         } else {
-            try { console.log('[dao] bridge reinject ABORT: 无活桥地址, 守柔不覆盖账号库 (' + reason + ')'); } catch { /* 守柔 */ }
-            daoLoopLog('tunnel', 'reinject ABORT(' + reason + '): 无活地址→守柔不覆盖, 待探活环刷新');
-            return { injected: 0, changed: false };
+            // 反者道之动: 快速隧道全挂时, 若持久化中继(Worker)出站 WSS 已连(裸 /api/* 经中继恒可达),
+            //   仍以其恒定地址作活地址刷新文档 → 根治「快速隧道皆死→知识库持久通道地址永冻旧址→
+            //   云端按库读到死址连不上」的自愈盲区。持久通道本就是恒定备份, 快速通道死时理应顶上,
+            //   而非因「无活快速隧道」整篇 ABORT 令持久段也一并冻死。
+            let persistUrl = ''; try { persistUrl = getPersistentRelayUrl(); } catch { /* 守柔 */ }
+            if (ws.relayConnected && persistUrl) {
+                daoLoopLog('tunnel', 'reinject(' + reason + '): 无活快速隧道→退取在线持久中继 ' + persistUrl + ' 作活地址刷新');
+                livePair = { url: persistUrl, token: bridgeAuthoritativeToken() };
+            } else {
+                try { console.log('[dao] bridge reinject ABORT: 无活桥地址, 守柔不覆盖账号库 (' + reason + ')'); } catch { /* 守柔 */ }
+                daoLoopLog('tunnel', 'reinject ABORT(' + reason + '): 无活地址→守柔不覆盖, 待探活环刷新');
+                return { injected: 0, changed: false };
+            }
         }
-        // 帛书·「URL 与 Token 恒成对」: 注入物恒为探活胜出的那一对(实测鉴权通), 不另取另一域的权威牌。
-        const livePair = { url: live.url, token: live.token || bridgeAuthoritativeToken() };
         // 同步 MCP 档案条目(URL 轮换自更) → 取最新钉住条目
         try { daoSyncDaoMcpIntoProfile(); } catch { /* 守柔 */ }
         const md = bridgeGenerateCloudMd(livePair);
