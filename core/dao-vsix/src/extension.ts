@@ -8323,6 +8323,10 @@ input[type=checkbox],input[type=radio],input[type=range]{background:transparent;
 .ovsec{margin-bottom:6px}
 /* 主页响应式多列: 宽屏左右分块(340px 一列·最多4列), 窄边栏(<340px)自动回落单列·观感不变 · 道法自然 */
 #v-overview.active{display:block;column-gap:16px;columns:340px 4}
+/* 主页·官方原生视图(反带官网): 满幅 iframe 直载同源反代的 app.devin.ai — 覆盖多列布局 */
+#v-overview.active.ovweb{display:flex;flex-direction:column;columns:auto;column-gap:0}
+#v-overview.ovweb .ovwbar{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:0 0 6px;flex-shrink:0}
+#v-overview.ovweb iframe{flex:1;min-height:0}
 #v-overview .ovb{break-inside:avoid;-webkit-column-break-inside:avoid;page-break-inside:avoid;display:block;margin:0 0 6px}
 #v-overview .ovb>.st:first-child{margin-top:0}
 #v-overview .ovb>.br{margin-bottom:0}
@@ -9020,12 +9024,49 @@ function rBackupsData(tree,err){
 }
 // 帛书·「为而弗恃」: API Key 全程底层自动获取, 面板永不出现手动输入 — 旧 submitCogKey* 已删
 function rHost(){var hc=S.hostCaps||{};var nm=hc.appName||'VS Code';var ct=hc.hasConvTracking;var cp=hc.cascadePlugin;var cascadeOk=ct||cp;var srcLabel=cp&&!(nm.toLowerCase().indexOf('windsurf')>=0||nm.toLowerCase().indexOf('devin')>=0)?' (插件版 dao-desktop)':'';var h='<div class="st">运行环境 · 适配</div><div class="card"><div class="cr"><span class="l">IDE</span><span class="v">'+esc(nm)+esc(srcLabel)+'</span></div><div class="cr"><span class="l">Devin Cloud 全功能</span><span class="v" style="color:var(--success);font-size:10px">✓ 追踪·备份·切号反向注入·K/P/S/MCP·多实例</span></div><div class="cr"><span class="l">Cascade 对话追踪/备份</span><span class="v" style="font-size:10px;color:'+(cascadeOk?'var(--success)':'var(--warn)')+'">'+(cascadeOk?('✓ 可用'+(cp?' · 插件版':'')):'⚠ 此IDE非Cascade·其余全部正常')+'</span></div>'+(hc.cascadeEmail?'<div class="cr"><span class="l">Cascade 登录账号</span><span class="v" style="font-size:10px">'+esc(hc.cascadeEmail)+'</span></div>':'')+'</div>';var f=hc.fused||null;if(f&&(f.account||f.mcp||f.cascadeBackup)){var fa=f.account||{};var fm=(f.mcp&&f.mcp.servers)||null;var fb=f.cascadeBackup||null;var q=function(x){return (x===0||x)?(x+'%'):'—'};h+='<div class="st">Cascade · Devin Desktop 插件版(插件自持真源)</div><div class="card">'+(fa.email?'<div class="cr"><span class="l">账号</span><span class="v" style="font-size:10px">'+esc(fa.name||'')+(fa.name?' · ':'')+esc(fa.email)+'</span></div>':'')+(fa.plan?'<div class="cr"><span class="l">套餐</span><span class="v" style="font-size:10px">'+esc(fa.plan)+'</span></div>':'')+((fa.dailyQuotaPct!==undefined||fa.weeklyQuotaPct!==undefined)?'<div class="cr"><span class="l">配额(日/周)</span><span class="v" style="font-size:10px">'+q(fa.dailyQuotaPct)+' / '+q(fa.weeklyQuotaPct)+'</span></div>':'')+(fb?'<div class="cr"><span class="l">Cascade 对话备份</span><span class="v" style="font-size:10px;color:var(--success)">✓ 共 '+(fb.total||0)+' 条'+(fb.root?(' · '+esc(String(fb.root).split(/[\\\\/]/).slice(-2).join('/'))):'')+'</span></div>':'')+(fm?'<div class="cr"><span class="l">本地 MCP(插件版)</span><span class="v" style="font-size:10px">'+(fm.length?(fm.length+' 个 · '+fm.filter(function(s){return String(s.status||'').toUpperCase().indexOf('RUN')>=0}).length+' 运行中'):'无已配置')+'</span></div>':'')+(fa.updatedAt?'<div class="cr"><span class="l">更新于</span><span class="v" style="font-size:9px;color:var(--muted)">'+esc(String(fa.updatedAt).replace('T',' ').slice(0,19))+'</span></div>':'')+'</div>'}return h}
+// 帛书·「搬运工·反带官网」: 主页默认 = 官方原生视图 — 底层直跑同源反代的 app.devin.ai(auth 自动注入·
+//   数据实时同官网·操作即官网操作), 不再自造一套取数逻辑 → 根治「加载中…死态」。
+//   管理视图(原卡片序列)保留为可切换的第二视图(锁/批量等插件增强能力)。
+function ovWebUrl(){
+  var q=S.auth.email?('?dao_acct='+encodeURIComponent(S.auth.email)):'';
+  // 同源优先: /shell 直开(http/https)与 blob 子网页(origin 继承创建者)皆取 location.origin →
+  //   IDE 本机与公网隧道两端同源反代皆可达; webview(vscode-webview://) 才回落 localhost 绝对址。
+  var org=(location.origin&&/^https?:\/\//.test(location.origin))?location.origin:'';
+  var base=org||(S.server.port?('http://localhost:'+S.server.port):'');
+  return base+'/'+q;
+}
+function ovSetMode(m){
+  S.ovMode=m;
+  var v=document.getElementById('v-overview');
+  if(v){v.innerHTML='';v.classList.remove('ovweb')}
+  rO();
+}
+function ovReload(){var f=document.getElementById('ovWebFrame');if(f){try{f.src=ovWebUrl()}catch(e){}}}
+function ovBar(active){
+  return '<div class="ovwbar">'
+    +'<button class="btn sm '+(active==='official'?'primary':'ghost')+'" onclick="ovSetMode(&#39;official&#39;)" title="官方原生: 底层直跑同源反代的 app.devin.ai 官网(当前账号自动登录·数据实时同官网)">🌐 官方原生</button>'
+    +'<button class="btn sm '+(active==='manage'?'primary':'ghost')+'" onclick="ovSetMode(&#39;manage&#39;)" title="管理视图: 插件增强能力(手动锁/导出契约/多实例/注入状态)">🛠 管理视图</button>'
+    +(active==='official'?'<button class="btn sm ghost" onclick="ovReload()" title="重载官网页">⟳</button>':'')
+    +'<button class="btn sm ghost" onclick="cmd(&#39;openRoutedPanel&#39;)" title="IDE 内独立路由面板(多实例)">↗ 独立面板</button>'
+    +'<button class="btn sm ghost" onclick="cmd(&#39;syncBrowser&#39;)" title="电脑浏览器隔离窗口自动登录">🌐 浏览器</button>'
+    +'</div>';
+}
+function rOOfficial(v){
+  v.classList.add('ovweb');
+  if(document.getElementById('ovWebFrame'))return; // 已挂载 → 不重建(refresh 事件不重载官网页·不丢页内状态)
+  v.innerHTML=ovBar('official')+'<iframe id="ovWebFrame" src="'+esc(ovWebUrl())+'" allow="clipboard-read; clipboard-write"></iframe>';
+}
 function rO(){
   const v=document.getElementById('v-overview');
   if(!S.auth.loggedIn){
+    v.classList.remove('ovweb');
     v.innerHTML='<div class="empty"><div class="ic">🤖</div><h3>Devin Cloud</h3><p style="margin:12px 0">登录以连接您的 Devin Cloud 账户</p><div class="br" style="justify-content:center"><button class="btn primary" onclick="cmd(&#39;devinLogin&#39;)">🔑 登录</button>'+(S.auth.hasWsCreds?'<button class="btn" style="background:#0e639c" onclick="cmd(&#39;devinWindsurfAutoLogin&#39;)">🌀 Windsurf 自动登录</button>':'')+'</div></div>';
     return;
   }
+  // 默认 = 官方原生视图(反带官网·数据实时同官网); 'manage' 才走下方原卡片序列(插件增强能力)
+  if(S.ovMode===undefined)S.ovMode='official';
+  if(S.ovMode==='official'){rOOfficial(v);return}
+  v.classList.remove('ovweb');
   let qh='';
   if(S.auth.quota){
     // 配额只显美金 (账号余额) · 去 Day/Week · 仿 rt-flow 最小化 · 道法自然
@@ -9038,7 +9079,7 @@ function rO(){
   }
   // v3.17.4 · 去芜存菁: 主页「注入状态」板块(S/K/P/G ✓✗)已移除 —
   //   反向注入实况以左侧「反向注入」面板 + 底部状态点(Server/Relay/Injected)为准, 主页不再重复呈现。
-  v.innerHTML=rHost()+'<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+'<div class="st">多实例浏览器</div><div class="br"><button class="btn primary" onclick="cmd(&#39;openRoutedPanel&#39;)" title="在 IDE 内打开独立路由面板(多实例·不阻塞·道并行而不相悖)" style="background:#1a7f5a">🖥️ IDE 内路由面板 (多实例)</button><button class="btn" onclick="cmd(&#39;syncBrowser&#39;)" style="background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录(多账号并行隔离)">🌐 电脑浏览器同步 (隔离窗口)</button></div>'+'<div class="st">🧩 插件能力 · API 接口</div><div class="card"><div class="cr"><span class="l" style="font-size:11px;line-height:1.5">插件本体全部功能均以本地 HTTP API 暴露 — 多实例路由 <code>/api/devin/multi/*</code>、MCP 接测/注入 <code>/api/devin/mcp/*</code> 等,可被任意 Agent 调用接管。导出 MD 契约即得全量端点。</span></div></div><div class="br"><button class="btn primary" style="background:#0e639c" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出整个插件全量 API 的 MD 契约 · 供任意 Agent 识别后接管插件底层做基础配置">📄 导出 MD 契约 (全量 API)</button></div>'+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div>';
+  v.innerHTML=ovBar('manage')+rHost()+'<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+'<div class="st">多实例浏览器</div><div class="br"><button class="btn primary" onclick="cmd(&#39;openRoutedPanel&#39;)" title="在 IDE 内打开独立路由面板(多实例·不阻塞·道并行而不相悖)" style="background:#1a7f5a">🖥️ IDE 内路由面板 (多实例)</button><button class="btn" onclick="cmd(&#39;syncBrowser&#39;)" style="background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录(多账号并行隔离)">🌐 电脑浏览器同步 (隔离窗口)</button></div>'+'<div class="st">🧩 插件能力 · API 接口</div><div class="card"><div class="cr"><span class="l" style="font-size:11px;line-height:1.5">插件本体全部功能均以本地 HTTP API 暴露 — 多实例路由 <code>/api/devin/multi/*</code>、MCP 接测/注入 <code>/api/devin/mcp/*</code> 等,可被任意 Agent 调用接管。导出 MD 契约即得全量端点。</span></div></div><div class="br"><button class="btn primary" style="background:#0e639c" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出整个插件全量 API 的 MD 契约 · 供任意 Agent 识别后接管插件底层做基础配置">📄 导出 MD 契约 (全量 API)</button></div>'+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div>';
   // 内网穿透·DAO Bridge 已独立为左侧栏单独板块(data-tab="bridge"→rBridgeFull), 主页不再内嵌;
   // 主页专注单账号信息/操作/注入。
   // ② 去芜存菁: 把「当前账号·手动内容」(Knowledge/Playbooks/Secrets/Git) 直接合进主页
