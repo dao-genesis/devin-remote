@@ -64,9 +64,6 @@ def load_config():
     cfg.setdefault('inner_exe', r'C:\dao_vm\dao_inner_agent.exe')
     cfg.setdefault('rdp_target', '127.0.0.2')
     cfg.setdefault('default_password', 'Vm@2026dao!')
-    # 鸡犬相闻 · 数据共享: one shared data dir every replica account + console can reach
-    # (data shared) while each session still runs isolated (operations isolated).
-    cfg.setdefault('daoshare_dir', r'C:\daoshare')
     # Stealth mode configuration
     cfg.setdefault('stealth_idle_timeout', 300)   # seconds of inactivity before auto-hibernate
     cfg.setdefault('stealth_auto', False)          # auto-hibernate when idle (opt-in)
@@ -83,7 +80,6 @@ INNER_SCRIPT= CFG['inner_script']
 INNER_EXE   = CFG['inner_exe']
 RDP_TARGET  = CFG['rdp_target']
 DEFAULT_PW  = CFG['default_password']
-DAOSHARE_DIR= CFG['daoshare_dir']
 
 # ====== Stealth / Silent mode state ======
 _stealth_state = {
@@ -301,22 +297,6 @@ def deploy_inner_script():
     if os.path.abspath(src) != os.path.abspath(INNER_SCRIPT):
         import shutil; shutil.copyfile(src, INNER_SCRIPT)
 
-def ensure_daoshare():
-    """鸡犬相闻 · 数据共享: provision the cross-session shared data dir so every replica
-    account AND the console share one folder (data shared), while each session still runs
-    under its own identity/desktop (operations isolated) -- 道并行而不相悖. Idempotent;
-    grants BUILTIN\\Users (well-known SID S-1-5-32-545, language-neutral) full control on
-    the whole tree via inheritance so future files are shared too. Never fatal."""
-    path = DAOSHARE_DIR
-    try:
-        os.makedirs(path, exist_ok=True)
-        subprocess.run(['icacls', path, '/grant', '*S-1-5-32-545:(OI)(CI)F', '/T', '/C', '/Q'],
-                       capture_output=True)
-        return {'ok': True, 'path': path}
-    except Exception as e:
-        log.info('daoshare provision skipped: %s', e)
-        return {'ok': False, 'path': path, 'error': str(e)}
-
 def create_vm(name, password=None):
     if name in vms and inner_health(vms[name]['port']):
         return {'ok': True, 'name': name, 'port': vms[name]['port'],
@@ -340,9 +320,6 @@ Write-Output 'user-ok'
     out, err, _ = ps_run(s1)
     if 'user-ok' not in out:
         return {'error': f'user creation failed: {out} {err}'}
-
-    # 鸡犬相闻: make sure the shared data dir exists + is reachable by this new account.
-    ensure_daoshare()
 
     # Skip first-logon OOBE privacy-consent screens so the new account lands on
     # the desktop (otherwise GUI automation stalls on "隐私设置" consent pages).
@@ -794,7 +771,7 @@ def list_vms():
         elif name.lower() in active: info['status'] = 'session_active_agent_down'
         else: info['status'] = 'disconnected'
     return {'vms': {k: {kk: vv for kk, vv in v.items() if kk != 'password'} for k, v in vms.items()},
-            'sessions': out, 'daoshare': DAOSHARE_DIR}
+            'sessions': out}
 
 SNAP_ROOT = r'C:\dao_vm\snapshots'
 
@@ -866,7 +843,7 @@ class HostHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/health':
             self._respond({'status': 'ok', 'role': 'host_daemon', 'vms': len(vms),
-                           'auth': bool(TOKEN), 'daoshare': DAOSHARE_DIR})
+                           'auth': bool(TOKEN)})
         elif self.path == '/vms':
             if not self._auth_ok(): return self._respond({'error': 'unauthorized'}, 401)
             self._respond(list_vms())
@@ -904,8 +881,6 @@ class HostHandler(http.server.BaseHTTPRequestHandler):
             return {'sessions': get_sessions()}
         if action == 'host.health':
             return {'status': 'ok', 'role': 'host_daemon'}
-        if action == 'host.daoshare':
-            return ensure_daoshare()
         if action == 'host.activate_rdp':
             return ensure_rdp_active(body.get('target'), body.get('offscreen', True))
         if action == 'host.multisession':
@@ -1015,8 +990,6 @@ def main():
     threading.Thread(target=_idle_watchdog, daemon=True).start()
     edition = _os_edition()
     log.info('os: %s', edition.get('edition', 'unknown'))
-    # 鸡犬相闻: provision the shared data dir up front so it's ready before any vm.create.
-    log.info('daoshare: %s', ensure_daoshare())
     srv = ThreadedServer(('127.0.0.1', PORT), HostHandler)
     log.info('vm_host_daemon v3 listening on 127.0.0.1:%d (token=%s, stealth_auto=%s)',
              PORT, 'on' if TOKEN else 'off', CFG.get('stealth_auto'))
