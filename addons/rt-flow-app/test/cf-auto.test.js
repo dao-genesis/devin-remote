@@ -219,6 +219,30 @@ function ts(name, fn) { return t(name, async () => fn()); }
     const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/relay-app.js"), "utf-8");
     assert.ok(src.includes("/api/cf-list-tokens") && src.includes("/api/cf-revoke-token") && src.includes("/api/cf-delete-worker"), "relay-app.js 缺少 Token/Worker 统管路由");
   });
+  // ── Turnstile 离屏突破 (道法自然·用户只输账密·零人机验证参与) ──
+  await ts("cf-auto.js visibilityState 覆写 (Turnstile 离屏自动过·突破 hidden 不启动)", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/cf-auto.js"), "utf-8");
+    assert.ok(/defineProperty\(document,\s*'visibilityState'/.test(src), "缺少 visibilityState 覆写 → Turnstile 离屏不启动");
+    assert.ok(/defineProperty\(document,\s*'hidden'/.test(src), "缺少 document.hidden 覆写");
+    assert.ok(src.includes("visibilitychange"), "覆写后未派发 visibilitychange 事件");
+  });
+  await ts("cf-auto.js typeReal 经 execCommand 原生管线输入 (React/CF 反自动化突破)", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/cf-auto.js"), "utf-8");
+    assert.ok(src.includes("var typeReal"), "缺少 typeReal 函数");
+    assert.ok(src.includes("execCommand('insertText'"), "typeReal 未用 execCommand('insertText') 原生编辑管线");
+    // CF 登录/GitHub 登录/2FA 均须改用 typeReal (不再用会被 CF React 忽略的 setVal)
+    const loginSlice = src.slice(src.indexOf('cat === "cf_login"'), src.indexOf('cat === "cf_2fa"'));
+    assert.ok(loginSlice.includes("typeReal(cem") && loginSlice.includes("typeReal(cpw"), "CF 登录未改用 typeReal");
+    assert.ok(/typeReal\(q\("#login_field"\)/.test(src), "GitHub 登录未改用 typeReal");
+  });
+  await ts("cf-auto.js Turnstile 不当硬 captcha·等按钮 enable 再提交 (非阻断式验证)", () => {
+    const src = require("fs").readFileSync(path.join(__dirname, "..", "app/src/main/assets/engine/cf-auto.js"), "utf-8");
+    // captcha 仅 hCaptcha/reCAPTCHA·排除 Turnstile(challenges.cloudflare.com)
+    assert.ok(src.includes("hasTurnstile") && src.includes("challenges.cloudflare.com"), "captcha 检测未区分出 Turnstile");
+    assert.ok(src.includes("hasHardCaptcha"), "captcha 检测未单列 hCaptcha/reCAPTCHA 硬阻断");
+    // 提交前检查按钮是否 enable (Turnstile 完成前恒 disabled·此时应等而非误报失败)
+    assert.ok(/!csb\.disabled/.test(src), "CF 登录提交未检查按钮 disabled 态 (未等 Turnstile 完成)");
+  });
 
   console.log("\ncf-auto.test.js: " + pass + " assertions passed");
 })();
