@@ -74,14 +74,10 @@
 +  h+='<div class="card"><div class="cr"><span class="l">宿主守护</span><span class="v" style="color:'+(hostOk?'var(--success)':'var(--warn)')+'">'+(hostOk?'✓ 就绪 (vm_host_daemon)':(ws.vms?'未运行':'点「刷新」探活'))+'</span></div>';
 +  h+='<div class="cr" style="font-size:11px"><span class="l">共享目录 · 鸡犬相闻</span><span class="v" style="font-family:monospace;color:var(--success)" title="资源共享·会话隔离: 各复制品账号与控制台同读写此目录, 但各自身份/桌面/操作互不干扰(道并行而不相悖)">'+esc((ws.vms&&ws.vms.daoshare)||'C:\\daoshare')+' ↔ 共享·隔离</span></div>';
 +  if(!hostOk)h+='<div class="br" style="margin-top:4px"><button class="btn sm primary" onclick="cmd(&#39;winHostEnsure&#39;)">▶ 启动宿主守护</button></div>';
-+  h+='<div style="display:flex;gap:6px;margin-top:6px"><input id="winVmName" placeholder="独立账号分身(如 vm01·独立SID/profile)" style="flex:1" value="'+esc(ws.vmName||'vm01')+'"/><button class="btn sm primary" onclick="winVmCreate()">＋ 独立账号</button></div>';
-+  // 同账号复制品(replica-of-self): 同一 Windows 账号开出额外隔离会话——鸡犬相闻(profile/数据天然共享·同账号) / 民至老死不相往来(桌面·键鼠·焦点各自独立·同一第三方软件可各会话各跑一实例)。密码仅临时用于开会话·不留存。
-+  h+='<div style="display:flex;gap:6px;margin-top:6px"><input id="winRepPw" type="password" placeholder="当前账号密码 · 开同账号复制品(仅临时·不留存)" style="flex:1"/><button class="btn sm primary" onclick="winReplicaCreate()" title="鸡犬相闻·数据共享 / 民至老死不相往来·操作隔离: 为当前 Windows 账号开出额外隔离会话, 同一第三方软件可各会话各跑一实例(道并行而不相悖)">🧬 同账号复制品</button></div>';
++  h+='<div style="display:flex;gap:6px;margin-top:6px"><input id="winVmName" placeholder="分身名(如 vm01)" style="flex:1" value="'+esc(ws.vmName||'vm01')+'"/><button class="btn sm primary" onclick="winVmCreate()">＋ 新建/连接分身</button></div>';
 +  if(vms.length){for(var vi=0;vi<vms.length;vi++){var vm=vms[vi];
 +    h+='<div class="cr" style="align-items:center;gap:8px;border-top:1px solid var(--border);padding-top:6px;margin-top:6px"><span style="width:8px;height:8px;border-radius:50%;flex:none;background:'+(vm.status==='running'?'var(--success)':'var(--muted)')+'"></span>';
-+    var _isRep=(vm.kind==='replica');var _badge=_isRep?('<span style="font-size:9px;background:rgba(16,185,129,.18);color:var(--success);border-radius:3px;padding:0 5px;margin-left:4px" title="同账号复制品 · 会话隔离 · 数据共享">🧬同号'+(vm.session_id?(' #'+vm.session_id):'')+'</span>'):'';
-+    var _meta=_isRep?('复制品 · '+(vm.replica_of||'当前账号')+(vm.alias?(' · '+vm.alias):'')):(vm.session_user||vm.status||'');
-+    h+='<span style="flex:1"><b style="font-size:12px">'+esc(vm.name)+'</b>'+_badge+' <span style="font-size:10px;color:var(--muted)">'+esc(_meta+(vm.port?(' · :'+vm.port):''))+'</span></span>';
++    h+='<span style="flex:1"><b style="font-size:12px">'+esc(vm.name)+'</b> <span style="font-size:10px;color:var(--muted)">'+esc(vm.session_user||vm.status||'')+(vm.port?(' · :'+vm.port):'')+'</span></span>';
 +    h+='<button class="btn sm primary" style="padding:2px 8px" onclick="cmd(&#39;winOpenDesktop&#39;,{vm:&#39;'+esc(vm.name)+'&#39;})">🖥️ 打开桌面</button>';
 +    h+='<button class="btn sm ghost" style="padding:2px 8px" onclick="winVmDestroy(&#39;'+esc(vm.name)+'&#39;)">✕ 销毁</button></div>';
 +  }}else h+='<div style="font-size:11px;color:var(--muted);margin-top:6px">暂无分身。新建一个即在 IDE 内获得可实时操作的复制品桌面页。</div>';
@@ -92,7 +88,6 @@
 +function winTog(i){var ws=S.win||(S.win={});ws.open=ws.open||{};ws.open[i]=!ws.open[i];var e=document.getElementById('wtool-'+i);if(e)e.style.display=ws.open[i]?'block':'none';}
 +function winExec(){var c=document.getElementById('winCmd');var v=c?c.value.trim():'';if(!v)return;var o=document.getElementById('winOut');if(o)o.textContent='执行中…';cmd('winExec',{cmd:v});}
 +function winVmCreate(){var n=document.getElementById('winVmName');var v=n?n.value.trim():'';if(!v)return;var ws=S.win||(S.win={});ws.vmName=v;cmd('winVmCreate',{name:v});}
-+function winReplicaCreate(){var p=document.getElementById('winRepPw');var pw=p?p.value:'';if(!pw){alert('请输入当前账号密码(仅临时用于开隔离会话·不留存)');return;}if(p)p.value='';cmd('winReplicaCreate',{password:pw});}
 +function winVmDestroy(n){if(!n)return;cmd('winVmDestroy',{name:n});}
 +function rWindowsResult(d){
 +  var ws=S.win||(S.win={});
@@ -161,7 +156,7 @@
 +}
 +async function vmHostList(): Promise<any[]> {
 +    const r = await vmHostApi('/vms', 'GET');
-+    try { const j = JSON.parse(r.text || '{}'); const vv = j.vms || {}; return Object.keys(vv).map((k) => Object.assign({}, vv[k], { name: k })); } catch { return []; }
++    try { const j = JSON.parse(r.text || '{}'); const vv = j.vms || {}; return Object.keys(vv).map((k) => Object.assign({ name: (vv[k].session_user || k) }, vv[k])); } catch { return []; }
 +}
 +// IDE 内多实例复制品桌面页(仿 rt-flow daoMultiInstance·单 webview=一分身): 直接内嵌官方 RDP 前端(mstsc.js·canvas/rle/keyboard)经 rdp-web 网关实时渲染同一 RDP 会话——你与 AI 同源共控。
 +// rdp-web 网关(官方 RDP 线协议 node-rdpjs <-> 浏览器 WebSocket · 环回 · 零 GUI)按需拉起: 根路由探活通即用, 否则以扩展宿主 node 运行时 spawn media/rdp-web/gateway.js(永不注册开机自启)。
@@ -261,17 +256,6 @@
 +                const e0 = await ensureVmHost(true);
 +                if (e0.ok) await vmHostApi('/', 'POST', { action: 'vm.create', name: String(msg.name || 'vm01') });
 +                reply({ type: 'winData', kind: 'vms', hostOk: e0.ok, list: e0.ok ? await vmHostList() : [] });
-+                break;
-+            }
-+            // 同账号复制品 · replica-of-self: 为当前 Windows 账号开出额外隔离会话(同号数据共享·操作隔离)。密码仅临时经环回下发给守护开会话, 不落库。
-+            case 'winReplicaCreate': {
-+                const e0r = await ensureVmHost(true);
-+                let noteR = '';
-+                if (e0r.ok) {
-+                    const rr = await vmHostApi('/', 'POST', { action: 'vm.replica', password: String(msg.password || '') });
-+                    try { const j = JSON.parse(rr.text || '{}'); noteR = j.ok ? ('已开同账号复制品 ' + (j.name || '') + '(' + (j.alias || '') + ') · 会话隔离·数据共享(鸡犬相闻)') : (j.error || rr.text || ''); } catch { noteR = rr.text || ''; }
-+                }
-+                reply({ type: 'winData', kind: 'vms', hostOk: e0r.ok, list: e0r.ok ? await vmHostList() : [], note: noteR });
 +                break;
 +            }
 +            case 'winVmDestroy': {
