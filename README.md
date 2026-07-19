@@ -131,8 +131,7 @@ devin-remote/
 │
 ├── cloud/                    # ★ 板块 3 · 供 Devin Cloud 全链路开发
 │   ├── export-accounts/      # ① 导出其他账号对话全流程（dao_export_all.py + 后端逆向指南）
-│   ├── vm-replica/           # ② Windows 多 RDP 类虚拟机（FreeRDP + MCP 工具集）
-│   └── coldstart/            # ③ 冷启动高效登录流程（coldstart.ps1 + 人启动总纲 + Runbook）
+│   └── coldstart/            # ② 冷启动高效登录流程（coldstart.ps1 + 人启动总纲 + Runbook）
 │
 ├── tools/                    # 共享构建/脚本（pack-vsix · fetch-cloudflared · render_check · gh-approve · sync）
 └── docs/                     # 文档（archive/ 存旧架构正典：CANON 五插件 / REARCH / AUDIT / 实测）
@@ -217,11 +216,7 @@ python cloud/export-accounts/dao_export_all.py --email xxx@gmail.com --password 
 
 **后端逆向指南**：`cloud/export-accounts/BACKEND_GUIDE.md` · **开发经验**：`cloud/export-accounts/DEV_EXPERIENCE.md`
 
-### vm-replica · Windows 多 RDP 类虚拟机
-
-在台式机上复刻 Devin 操作自身虚拟机的全链路能力，底座换成 Windows 多 RDP：底座 = MCP Server 常驻 · 操作层 = FreeRDP + UIA + 截图视觉 · GUI 智能参考 UFO/OmniParser。第三方 MCP 源（playwright-mcp / mcp-servers）按需拉取，见 [`cloud/vm-replica/vendor/VENDOR.md`](cloud/vm-replica/vendor/VENDOR.md)。
-
-**完整文档**：[`cloud/vm-replica/README.md`](cloud/vm-replica/README.md)
+> ⚙️ **vm-replica（Windows 多 RDP / 复制品桌面）已迁出本仓**。devin-remote 只保留归一插件本体（dao-vsix 二合一 + Proxy Pro + rt-flow + dao-bridge）；Windows Agent 的一切延伸开发（多 RDP / 复制品桌面 / 任意环境适配）归位到 [`dao-genesis/Dao-Windows-Agent`](https://github.com/dao-genesis/Dao-Windows-Agent)。
 
 ### coldstart · 冷启动高效登录流程
 
