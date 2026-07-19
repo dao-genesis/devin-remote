@@ -8761,7 +8761,7 @@ function rBridgeRelayCard(r){
 //   或被挡在验证墙——挡住时用同款「浏览器代登」按钮回退到本体隔离档官网登录。bridge 主职是内网穿透, 故默认
 //   仍留穿透面板, 一键切到 CF 官网。
 function cfWebUrl(){
-  var org=(location.origin&&/^https?:\/\//.test(location.origin))?location.origin:'';
+  var org=(location.origin&&/^https?:/.test(location.origin))?location.origin:'';
   var base=org||(S.server.port?('http://localhost:'+S.server.port):'');
   return base+'/__web?u='+encodeURIComponent('https://dash.cloudflare.com/');
 }
@@ -9145,7 +9145,7 @@ function ovWebUrl(){
   var q=S.auth.email?('?dao_acct='+encodeURIComponent(S.auth.email)):'';
   // 同源优先: /shell 直开(http/https)与 blob 子网页(origin 继承创建者)皆取 location.origin →
   //   IDE 本机与公网隧道两端同源反代皆可达; webview(vscode-webview://) 才回落 localhost 绝对址。
-  var org=(location.origin&&/^https?:\/\//.test(location.origin))?location.origin:'';
+  var org=(location.origin&&/^https?:/.test(location.origin))?location.origin:'';
   var base=org||(S.server.port?('http://localhost:'+S.server.port):'');
   return base+'/'+q;
 }
@@ -9718,7 +9718,7 @@ function ghOnResult(d){
 //   (/__web 逐源 Cookie 罐保持登录态·链接/表单/fetch/XHR 全量改写·操作即官网操作), 与主页反带 app.devin.ai 同构。
 //   原账号池/组织/多 PAT 注入/GitHub MCP 序列降为可切换的管理视图(插件增强能力)。
 function ghWebUrl(){
-  var org=(location.origin&&/^https?:\/\//.test(location.origin))?location.origin:'';
+  var org=(location.origin&&/^https?:/.test(location.origin))?location.origin:'';
   var base=org||(S.server.port?('http://localhost:'+S.server.port):'');
   return base+'/__web?u='+encodeURIComponent('https://github.com/');
 }
