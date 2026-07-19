@@ -27,7 +27,7 @@ config persisted to C:\ProgramData\dao_vm\config.json, idempotent ensure(), and
 robust connect via cmdkey + mstsc.
 """
 import http.server, json, subprocess, os, sys, time, threading, secrets
-import traceback, urllib.request, urllib.parse, socketserver, base64, ctypes, logging
+import traceback, urllib.request, socketserver, base64, ctypes, logging
 
 CONFIG_DIR  = r'C:\ProgramData\dao_vm'
 CONFIG_PATH = os.path.join(CONFIG_DIR, 'config.json')
@@ -179,10 +179,6 @@ def inner_launch_cmd():
     return f'"{PYTHON_EXE}" "{INNER_SCRIPT}"'
 
 vms = {}  # {name: {port, status, created_at, password, session_user}}
-# Same-account replica loopback secrets: RAM-ONLY, never persisted, never in list_vms().
-# Held for the replica's lifetime so the LOCAL rdp-web gateway can auth its node-rdpjs
-# connection over 127.0.0.1 without the browser (or disk, or logs) ever seeing the pass.
-_replica_secrets = {}  # {key: {'target': alias, 'user': source, 'password': pw}}
 
 def ps_run(script, timeout=40):
     full = "[Console]::OutputEncoding=[Text.Encoding]::UTF8\n$ProgressPreference='SilentlyContinue'\n" + script
@@ -575,8 +571,6 @@ Write-Output 'cred-ok'
                 'created_at': time.strftime('%Y-%m-%d %H:%M:%S'),
                 'kind': 'replica', 'replica_of': source, 'source_user': source,
                 'alias': alias, 'session_id': None}
-    # RAM-only: lets the local rdp-web gateway render this replica in an IDE tab.
-    _replica_secrets[key] = {'target': alias, 'user': source, 'password': password}
 
     def bring_up():
         # keep this replica's mstsc window active + offscreen so screenshot/input work
@@ -617,7 +611,6 @@ def destroy_vm(name, delete_user=True):
                f"Unregister-ScheduledTask -TaskName 'dao_replica_{src}' -Confirm:$false -ErrorAction SilentlyContinue; "
                f"Remove-Item 'C:\\dao_vm\\start_{name}.bat' -Force -ErrorAction SilentlyContinue")
         vms.pop(name, None)
-        _replica_secrets.pop(name, None)
         return {'ok': True, 'name': name, 'kind': 'replica', 'destroyed': True,
                 'note': 'replica session closed; shared account/profile preserved (no user delete)'}
     # Safety: never log off or delete an ATTACHED account (a real user-owned session).
@@ -863,8 +856,6 @@ def hibernate():
 
     # 6. Clear stored credentials for our RDP target
     ps_run(f"cmdkey /delete:TERMSRV/{RDP_TARGET} 2>$null", timeout=10)
-    # 6b. Wipe all in-memory replica secrets (belt-and-suspenders; destroy_vm already pops each)
-    _replica_secrets.clear()
 
     _stealth_state['mode'] = 'hibernating'
     _stealth_state['hibernate_time'] = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -996,23 +987,6 @@ def list_snapshots(name):
     snaps = sorted(os.listdir(root)) if os.path.isdir(root) else []
     return {'ok': True, 'name': name, 'snapshots': snaps}
 
-def rdp_creds(name):
-    """Resolve the RDP target/user/password for <name>, for the LOCAL rdp-web gateway
-    ONLY (loopback + daemon token). Same-account replicas → their per-session alias +
-    source account + the RAM-only transient pass (so the IDE tab can render them without
-    the browser ever seeing the pass). Independent-account VMs → the static rdp_target +
-    default_password (unchanged legacy path)."""
-    info = vms.get(name, {})
-    if info.get('kind') == 'replica':
-        sec = _replica_secrets.get(name)
-        if not sec:
-            return {'ok': False, 'error': 'replica secret unavailable (recreate the replica)'}
-        return {'ok': True, 'kind': 'replica', 'target': sec['target'],
-                'user': sec['user'], 'password': sec['password']}
-    # legacy independent-account VM: static loopback target + shared default password
-    return {'ok': True, 'kind': 'vm', 'target': RDP_TARGET,
-            'user': name or 'vm01', 'password': DEFAULT_PW}
-
 def proxy(name, body):
     if name not in vms:
         # allow attach-by-port if known
@@ -1038,18 +1012,6 @@ class HostHandler(http.server.BaseHTTPRequestHandler):
         elif self.path == '/vms':
             if not self._auth_ok(): return self._respond({'error': 'unauthorized'}, 401)
             self._respond(list_vms())
-        elif self.path.startswith('/vm/rdpcreds'):
-            if not self._auth_ok(): return self._respond({'error': 'unauthorized'}, 401)
-            # loopback-only: never serve creds outside 127.0.0.0/8
-            client_ip = (self.client_address or ('',))[0]
-            if not client_ip.startswith('127.'):
-                return self._respond({'error': 'rdpcreds only available over loopback'}, 403)
-            qs = urllib.parse.urlparse(self.path).query
-            params = urllib.parse.parse_qs(qs)
-            vm_name = (params.get('name') or [''])[0]
-            if not vm_name:
-                return self._respond({'error': 'name parameter required'}, 400)
-            self._respond(rdp_creds(vm_name))
         else:
             self._respond({'error': 'not found'}, 404)
     def do_POST(self):
