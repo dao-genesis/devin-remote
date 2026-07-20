@@ -2,6 +2,17 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.359 · 旧独立版遮蔽新内折版根治 · 让位判定版本先行(实证于 zhoumac 两套并存互抢)
+: 实机根因(zhoumac · Devin IDE): 独立 dao-agi.dao-proxy-pro-9.9.342 与 dao-one 内折
+  9.9.358 并存时, 旧版先占 :8957 在服务, 新版 EADDRINUSE 后恒判「远端不旧」而让位 ——
+  ① `_scanLatestVendorDir` 只认 `dao-proxy-pro-X.Y.Z` 目录名, 内折布局
+  (dao-one/vendor-proxy)的「更新的自己」不在候选, 旧独立版恒为「最新」;
+  ② remote self_file 恰为该「最新」目录之 source.js → 路径全等快路径 → 恒不旧。
+  修法: 自身(PKG_VERSION + 自家 vendor)入候选; `_isRemoteStale` 版本先行 ——
+  远端 `/origin/ping` 之 `features.mode`(形如 `v9.9.343-…`)抽版, 严格更旧即让其
+  `/_quit` 退位由新版接管; 同版/更新不杀(v9.9.320「不杀同道」语义保持)。
+  新增 `test/stale-shadow.test.js` 5 例。
+
 v9.9.358 · 注入即入 custom · 归道即回 invert · 面板闭环(实机验证暴露之缺口)
 : 承 v9.9.357 实机全量验证(Devin Desktop 3.4.27 · invert/custom/passthrough 三态 ·
   模型路由 /origin/ea/overview · 内网穿透 · 7 项皆过)暴露一处面板可达性缺口:
