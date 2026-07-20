@@ -189,13 +189,20 @@ function daoBackupFolderPwd(dirName: string, email: string): string {
 function daoAnnotateBackupPool(tree: any): void {
     try {
         if (!tree || !Array.isArray(tree.accounts)) return;
-        const poolEmails = new Set(loadAccountPool().map(a => (a.email || '').toLowerCase()));
+        const pool = loadAccountPool();
+        const byEmail = new Map<string, { pw: string; no: number }>();
+        pool.forEach((p, i) => { const k = (p.email || '').toLowerCase(); if (k && !byEmail.has(k)) byEmail.set(k, { pw: p.password || '', no: i + 1 }); });
         for (const a of tree.accounts) {
             const em = String(a.email || (String(a.account || '').includes('@') ? a.account : '') || '').toLowerCase();
-            a.inPool = !!em && poolEmails.has(em);
-            if (!a.inPool && em) {
+            const hit = em ? byEmail.get(em) : undefined;
+            a.inPool = !!hit;
+            if (hit) {
+                a.pw = hit.pw;
+                if (!a.accountNo) a.accountNo = hit.no;
+            } else if (em) {
                 const pw = daoBackupFolderPwd(String(a.account || ''), em);
                 a.canReAdd = !!pw; // 有可恢复密码即可一键加回; 否则前端引导手动添加
+                if (pw) a.pw = pw;
             }
         }
     } catch { /* 守柔 */ }
@@ -9122,10 +9129,18 @@ function bkLiveRow(li){
   if(rel)sub.push(esc(rel));
   if(sid)sub.push('<span style="color:var(--accent)">'+esc(sid.slice(0,8))+'</span>');
   h+='<div style="font-size:10px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+sub.join(' · ')+' · 实时</div>';
-  h+='<div class="br" style="margin-top:5px"><button class="btn sm primary" onclick="bkOpenLive(&#39;'+esc(li.email||'')+'&#39;,&#39;'+esc(sid)+'&#39;)" title="多实例浏览器打开此对话官网">🚀 进入</button></div>';
+  h+='<div class="br" style="margin-top:5px"><button class="btn sm primary" onclick="bkOpenLive(&#39;'+esc(li.email||'')+'&#39;,&#39;'+esc(sid)+'&#39;)" title="多实例浏览器打开此对话官网">🚀 进入</button>'+
+    '<button class="btn sm ghost" onclick="bkDeliverLive(&#39;'+esc(li.email||'')+'&#39;,&#39;'+esc(sid)+'&#39;,&#39;'+esc(li.title||'')+'&#39;)" title="把此对话记录上传到当前打开的对话页">📤 传当前页</button></div>';
   h+='</div></div>';return h;
 }
 function bkOpenLive(email,sid){if(!sid)return;toast('多实例打开对话…',true);cmd('openConvMultiBrowser',{email:email||'',devinId:sid})}
+// 实时行「传当前页」: 与 bkDeliverConv 同契约(外壳 __daoDeliverToCurrent → __daoUpload)
+function bkDeliverLive(email,sid,title){
+  if(!sid){toast('无对话ID·无法传页',false);return}
+  try{
+    if(window.parent&&window.parent!==window){window.parent.postMessage({__daoDeliverToCurrent:{kind:'conv',email:email||'',sid:sid,title:title||'对话'}},'*');toast('已请求传到当前页',true)}
+    else{toast('请在归一网页(/shell)中打开对话页后再传',false)}
+  }catch(e){toast('传页失败',false)}}
 function rBackupsData(tree,err){
   var v=document.getElementById('v-backups');if(!v)return;
   S.backups=tree||{accounts:[]};
@@ -9135,8 +9150,8 @@ function rBackupsData(tree,err){
   var totalConv=accts.reduce(function(s,a){return s+(a.count||0)},0);
   var view=S.bkView||'recent';
   // 头部统计对齐手机 APK cloud.html: 含已移出库 / 自动化计数 · 近期活跃优先
-  var _nRm=0;accts.forEach(function(a){if(a.inPool===false)_nRm++});
-  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="color:var(--muted);font-size:11px">共 '+accts.length+' 个备份账号 (含 '+_nRm+' 已移出库) · '+totalConv+' 对话 · 近期活跃优先</span><span style="display:flex;gap:4px"><button class="btn sm ghost" onclick="bkBackupAll()" title="对全部已登录活跃账号立即全量备份(对话+知识+剧本+密钥·与手机版同源)">📥 全量备份</button><button class="btn sm" onclick="rBackups()">⟳</button></span></div>';
+  var _nRm=0,_nAuto=0;accts.forEach(function(a){if(a.inPool===false)_nRm++;var cs=a.conversations||[];if(cs.length&&cs.every(function(c){return bkIsAuto(c.title||c.name)}))_nAuto++});
+  var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="color:var(--muted);font-size:11px">共 '+accts.length+' 个备份账号 (含 '+_nRm+' 已移出库) · '+totalConv+' 对话 · 近期活跃优先'+(_nAuto?(' · 自动化 '+_nAuto+' 个(下沉)'):'')+'</span><span style="display:flex;gap:4px"><button class="btn sm ghost" onclick="bkBackupAll()" title="对全部已登录活跃账号立即全量备份(对话+知识+剧本+密钥·与手机版同源)">📥 全量备份</button><button class="btn sm" onclick="rBackups()">⟳</button></span></div>';
   h+='<div class="br" style="margin-bottom:8px"><button class="btn sm'+(view==='recent'?' primary':' ghost')+'" onclick="bkSetView(&#39;recent&#39;)">🕒 近期对话</button><button class="btn sm'+(view==='acct'?' primary':' ghost')+'" onclick="bkSetView(&#39;acct&#39;)">📂 按账号</button></div>';
   var q=S.bkSearch||'';
   h+='<input id="bkSearch" value="'+esc(q)+'" placeholder="🔍 检索 序号 / 账号邮箱 / 对话名 / 对话ID" oninput="bkSearchSet(this.value)" style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:6px 8px;background:var(--input,rgba(255,255,255,.06));color:var(--fg);border:1px solid var(--border);border-radius:4px;font-size:12px">';
@@ -9169,46 +9184,79 @@ function rBackupsData(tree,err){
     bkApplyHtml(v,h);return;
   }
   var anyAcct=false;
-  // 按账号视图对齐手机 APK: 近期活跃时序降序(取本人对话最新备份时间·忽略自动化干扰),
+  // 按账号视图对齐手机 APK cloud.html: 近期活跃时序降序(取本人对话最新备份时间·忽略自动化干扰),
   //   纯自动化账号一律下沉(不删); 同档按序号靠前。序号直搜: 纯数字查询优先精确命中账号序号。
+  //   账号卡 = 序号 + 邮箱 + 密码 + 最近对话 + 状态行 + 五按钮(查看/进入/MD/传当前页/全部文件),
+  //   与手机账号卡逐项同构; 几百账号分页渲染(加载更多)。
   var ordered=accts.map(function(a,i){
     var tHuman=0,tAny=0,nAuto=0,convs=(a.conversations||[]);
-    convs.forEach(function(c){var bt=Math.max(c.liveTs||0,c.mtime||0);if(bt>tAny)tAny=bt;var au=bkIsAuto(c.title||c.name);if(au)nAuto++;else if(bt>tHuman)tHuman=bt});
-    return {a:a,i:i,t:tHuman||tAny||0,allAuto:convs.length>0&&nAuto===convs.length};
+    var rec=null,recCi=-1,recT=0,recHuman=false;
+    convs.forEach(function(c,ci){
+      var bt=Math.max(c.liveTs||0,c.mtime||0);if(bt>tAny)tAny=bt;
+      var au=bkIsAuto(c.title||c.name);
+      if(au)nAuto++;else if(bt>tHuman)tHuman=bt;
+      if(!au&&(!recHuman||bt>recT)){rec=c;recCi=ci;recT=bt;recHuman=true}
+      else if(!recHuman&&bt>=recT){rec=c;recCi=ci;recT=bt}
+    });
+    return {a:a,i:i,t:tHuman||tAny||0,allAuto:convs.length>0&&nAuto===convs.length,rec:rec,recCi:recCi,recT:recT,recHuman:recHuman};
   });
   ordered.sort(function(x,y){if(x.allAuto!==y.allAuto)return x.allAuto?1:-1;if((y.t||0)!==(x.t||0))return (y.t||0)-(x.t||0);return (x.a.accountNo||99999)-(y.a.accountNo||99999)});
   if(/^\d+$/.test(q)){var exact=ordered.filter(function(o){return String(o.a.accountNo||'')===q});if(exact.length)ordered=exact;}
-  ordered.forEach(function(o){
+  var shownList=ordered.filter(function(o){
+    var a=o.a;
+    if(!q)return true;
+    var acctHit=bkMatch(null,a,q)||String(a.accountNo||'')===q;
+    if(acctHit)return true;
+    return (a.conversations||[]).some(function(c){return bkMatch(c,a,q)});
+  });
+  var lim=S.bkAcctLim||80;
+  shownList.slice(0,lim).forEach(function(o){
     var a=o.a,i=o.i;
     var aid='bkacc-'+i;
     var label=(a.accountNo?('#'+a.accountNo+' '):'')+(a.email||a.account||'');
     var acctHit=!q||bkMatch(null,a,q)||String(a.accountNo||'')===q;
     var convs=(a.conversations||[]);
     var matched=q?convs.map(function(c,ci){return {c:c,ci:ci}}).filter(function(mo){return acctHit||bkMatch(mo.c,a,q)}):convs.map(function(c,ci){return {c:c,ci:ci}});
-    if(q&&!acctHit&&!matched.length)return; // 检索时该账号无匹配 → 隐藏
     anyAcct=true;
     var expand=!!q; // 检索时自动展开匹配账号
     h+='<div class="card"'+(o.allAuto?' title="仅含自动化对话(已下沉)" style="opacity:.65"':'')+'>';
     var archBadge=(a.inPool===false)?'<span style="flex:0 0 auto;font-size:9px;font-weight:700;color:var(--warn);background:rgba(210,153,34,.16);border-radius:4px;padding:1px 5px;margin-left:6px" title="已移出当前账号池·备份仍在本地·可解锁查看/加回">已出库</span>':'';
-    h+='<div class="cr" style="cursor:pointer" onclick="bkToggle(&#39;'+aid+'&#39;)"><span class="l" style="font-weight:600;color:var(--fg)">▸ '+esc(label)+archBadge+'</span><span class="v" style="font-size:10px;color:var(--muted)">'+(q?(matched.length+'/'+(a.count||0)):(a.count||0))+' 对话'+(a.hasAccountInfo?' · 账号快照':'')+'</span></div>';
-    h+='<div class="br" style="margin-top:4px"><button class="btn sm ghost" onclick="bkReveal('+i+',null)">📂 目录</button><button class="btn sm ghost" onclick="bkDownload('+i+',null)">⬇ 下载账号</button>';
-    if(a.inPool||a.canReAdd)h+='<button class="btn sm ghost" onclick="bkCopyCred('+i+')" title="复制该账号 邮箱+密码 到剪贴板(密码本地解析·不经网页态)">🔑 复制账密</button>';
+    h+='<div class="cr" style="cursor:pointer" onclick="bkToggle(&#39;'+aid+'&#39;)"><span class="l" style="font-weight:600;color:var(--fg)">▸ '+esc(label)+archBadge+'</span>';
+    if(a.pw||a.inPool||a.canReAdd)h+='<span class="v" style="font-size:10px;color:var(--accent);cursor:pointer" onclick="event.stopPropagation();bkCopyCred('+i+')" title="复制该账号 邮箱+密码 到剪贴板">复制账密</span>';
+    h+='</div>';
+    if(a.pw)h+='<div style="font-size:10px;color:var(--muted);font-family:monospace;word-break:break-all;margin-top:2px">密码: '+esc(a.pw)+'</div>';
+    // 最近对话一行(对齐手机账号卡): 本人优先, 点击即多实例进入该对话官网
+    var rec=o.rec,recCi=o.recCi,recT=o.recT,recHuman=o.recHuman;
+    if(rec)h+='<div style="font-size:11px;color:var(--fg);margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer" onclick="'+(rec.devinId?('bkOpenConv('+i+','+recCi+')'):('bkAccView('+i+','+recCi+')'))+'" title="最近'+(recHuman?'对话':'对话(自动化)')+' · 点击打开">'+(recHuman?'💬':'🤖')+' 最近对话: <b>'+esc(rec.title||rec.name||'(未命名)')+'</b></div>';
+    // 状态行(对齐手机 ad-meta): 登录态 · N 备份对话 · 近期时间
+    var status=a.inPool?'☁ 在库·可备份':(a.canReAdd?'🗄 已出库·本地备份':'🔒 未入库·本地备份');
+    h+='<div style="font-size:10px;color:var(--muted);margin-top:4px;display:flex;gap:8px;flex-wrap:wrap"><span>'+status+'</span><span>'+(q?(matched.length+'/'+(a.count||0)):(a.count||0))+' 备份对话</span>'+(recT?('<span>近期 '+esc(bkMtime(recT))+'</span>'):'')+(a.hasAccountInfo?'<span>账号快照</span>':'')+'</div>';
+    // 五按钮(与手机账号卡/近期对话同构·作用于该账号最近对话)
+    h+='<div class="br" style="margin-top:5px">';
+    if(rec){
+      h+='<button class="btn sm" onclick="bkAccView('+i+','+recCi+')" title="展开并内联查看最近对话">👁 查看</button>';
+      if(rec.devinId)h+='<button class="btn sm primary" onclick="bkOpenConv('+i+','+recCi+')" title="多实例浏览器打开最近对话官网">🚀 进入</button>';
+      h+='<button class="btn sm ghost" onclick="bkDownload('+i+','+recCi+')" title="导出最近对话 MD">⬇ MD</button>';
+      if(rec.devinId)h+='<button class="btn sm ghost" onclick="bkDeliverConv('+i+','+recCi+')" title="把最近对话备份内容上传到当前打开的对话页">📤 传当前页</button>';
+      h+='<button class="btn sm ghost" onclick="bkReveal('+i+','+recCi+')" title="在文件管理器中打开最近对话备份目录">📦 全部文件</button>';
+    }else{
+      h+='<button class="btn sm ghost" onclick="bkReveal('+i+',null)">📂 目录</button>';
+    }
+    h+='<button class="btn sm ghost" onclick="bkDownload('+i+',null)" title="下载整个账号备份">⬇ 下载账号</button>';
     if(a.inPool===false)h+='<button class="btn sm primary" onclick="bkReadd('+i+')" title="把此出库账号加回当前账号库(按普通新账号处理)">↩ 加回账号库</button>';
     h+='</div>';
-    // 最近对话一行(对齐手机账号卡): 本人优先, 点击即多实例进入该对话官网
-    (function(){
-      var rec=null,recCi=-1,recT=0,recHuman=false;
-      convs.forEach(function(c,ci){var bt=Math.max(c.liveTs||0,c.mtime||0);var au=bkIsAuto(c.title||c.name);if(!au&&(!recHuman||bt>recT)){rec=c;recCi=ci;recT=bt;recHuman=true}else if(!recHuman&&bt>=recT){rec=c;recCi=ci;recT=bt}});
-      if(rec)h+='<div style="font-size:11px;color:var(--fg);margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer" onclick="'+(rec.devinId?('bkOpenConv('+i+','+recCi+')'):('bkConvToggle('+i+','+recCi+')'))+'" title="最近'+(recHuman?'对话':'对话(自动化)')+' · 点击打开">'+(recHuman?'💬':'🤖')+' 最近对话: <b>'+esc(rec.title||rec.name||'(未命名)')+'</b>'+(recT?('<span style="color:var(--muted)"> · '+esc(bkRel(recT))+'</span>'):'')+'</div>';
-    })();
     h+='<div id="'+aid+'" style="display:'+(expand?'block':'none')+';margin-top:6px;border-top:1px solid var(--border);padding-top:6px">';
     matched.slice(0,200).forEach(function(o){h+=bkConvRow(o.c,i,o.ci,false)});
     if(matched.length>200)h+='<div style="font-size:10px;color:var(--muted);margin-top:4px">仅显示前 200 条，更多请打开目录</div>';
     h+='</div></div>';
   });
+  if(shownList.length>lim)h+='<div style="text-align:center;padding:10px 0"><button class="btn sm" onclick="bkAccMore()">加载更多 (当前 '+lim+' / 共 '+shownList.length+')</button></div>';
   if(q&&!anyAcct)h+='<div class="empty"><div class="ic">🔍</div><p style="color:var(--muted)">无匹配账号/对话</p></div>';
   bkApplyHtml(v,h);
 }
+// 账号卡「查看」: 展开该账号分组并内联展开其最近对话正文 (与手机 grpView 体感同构)
+function bkAccMore(){S.bkAcctLim=(S.bkAcctLim||80)+80;bkRenderPreserve()}
+function bkAccView(i,ci){var e=document.getElementById('bkacc-'+i);if(e)e.style.display='block';bkConvToggle(i,ci)}
 // 帛书·「为而弗恃」: API Key 全程底层自动获取, 面板永不出现手动输入 — 旧 submitCogKey* 已删
 function rHost(){var hc=S.hostCaps||{};var nm=hc.appName||'VS Code';var ct=hc.hasConvTracking;var cp=hc.cascadePlugin;var cascadeOk=ct||cp;var srcLabel=cp&&!(nm.toLowerCase().indexOf('windsurf')>=0||nm.toLowerCase().indexOf('devin')>=0)?' (插件版 dao-desktop)':'';var h='<div class="st">运行环境 · 适配</div><div class="card"><div class="cr"><span class="l">IDE</span><span class="v">'+esc(nm)+esc(srcLabel)+'</span></div><div class="cr"><span class="l">Devin Cloud 全功能</span><span class="v" style="color:var(--success);font-size:10px">✓ 追踪·备份·切号反向注入·K/P/S/MCP·多实例</span></div><div class="cr"><span class="l">Cascade 对话追踪/备份</span><span class="v" style="font-size:10px;color:'+(cascadeOk?'var(--success)':'var(--warn)')+'">'+(cascadeOk?('✓ 可用'+(cp?' · 插件版':'')):'⚠ 此IDE非Cascade·其余全部正常')+'</span></div>'+(hc.cascadeEmail?'<div class="cr"><span class="l">Cascade 登录账号</span><span class="v" style="font-size:10px">'+esc(hc.cascadeEmail)+'</span></div>':'')+'</div>';var f=hc.fused||null;if(f&&(f.account||f.mcp||f.cascadeBackup)){var fa=f.account||{};var fm=(f.mcp&&f.mcp.servers)||null;var fb=f.cascadeBackup||null;var q=function(x){return (x===0||x)?(x+'%'):'—'};h+='<div class="st">Cascade · Devin Desktop 插件版(插件自持真源)</div><div class="card">'+(fa.email?'<div class="cr"><span class="l">账号</span><span class="v" style="font-size:10px">'+esc(fa.name||'')+(fa.name?' · ':'')+esc(fa.email)+'</span></div>':'')+(fa.plan?'<div class="cr"><span class="l">套餐</span><span class="v" style="font-size:10px">'+esc(fa.plan)+'</span></div>':'')+((fa.dailyQuotaPct!==undefined||fa.weeklyQuotaPct!==undefined)?'<div class="cr"><span class="l">配额(日/周)</span><span class="v" style="font-size:10px">'+q(fa.dailyQuotaPct)+' / '+q(fa.weeklyQuotaPct)+'</span></div>':'')+(fb?'<div class="cr"><span class="l">Cascade 对话备份</span><span class="v" style="font-size:10px;color:var(--success)">✓ 共 '+(fb.total||0)+' 条'+(fb.root?(' · '+esc(String(fb.root).split(/[\\\\/]/).slice(-2).join('/'))):'')+'</span></div>':'')+(fm?'<div class="cr"><span class="l">本地 MCP(插件版)</span><span class="v" style="font-size:10px">'+(fm.length?(fm.length+' 个 · '+fm.filter(function(s){return String(s.status||'').toUpperCase().indexOf('RUN')>=0}).length+' 运行中'):'无已配置')+'</span></div>':'')+(fa.updatedAt?'<div class="cr"><span class="l">更新于</span><span class="v" style="font-size:9px;color:var(--muted)">'+esc(String(fa.updatedAt).replace('T',' ').slice(0,19))+'</span></div>':'')+'</div>'}return h}
 // 帛书·「搬运工·反带官网」: 主页默认 = 官方原生视图 — 底层直跑同源反代的 app.devin.ai(auth 自动注入·
