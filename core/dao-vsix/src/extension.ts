@@ -9113,7 +9113,7 @@ function bkIsAuto(x){
     return false;
   }catch(e){return false;}
 }
-// 实时条目行(尚无本地备份) — 与悬浮窗同源 dlRecent 数据; 可直接多实例进入官网对话。
+// 实时条目行(尚无本地备份) — 与悬浮窗同源 dlRecent 数据; 五按钮与悬浮窗/按账号卡统一(查看/进入/MD/传当前页/全部文件)。
 function bkLiveRow(li){
   var si=bkStatusInfo(li.statusClass||li.status);
   var rel=bkRel(li.updatedAt);
@@ -9129,11 +9129,23 @@ function bkLiveRow(li){
   if(rel)sub.push(esc(rel));
   if(sid)sub.push('<span style="color:var(--accent)">'+esc(sid.slice(0,8))+'</span>');
   h+='<div style="font-size:10px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+sub.join(' · ')+' · 实时</div>';
-  h+='<div class="br" style="margin-top:5px"><button class="btn sm primary" onclick="bkOpenLive(&#39;'+esc(li.email||'')+'&#39;,&#39;'+esc(sid)+'&#39;)" title="多实例浏览器打开此对话官网">🚀 进入</button>'+
-    '<button class="btn sm ghost" onclick="bkDeliverLive(&#39;'+esc(li.email||'')+'&#39;,&#39;'+esc(sid)+'&#39;,&#39;'+esc(li.title||'')+'&#39;)" title="把此对话记录上传到当前打开的对话页">📤 传当前页</button></div>';
+  // 五按钮统一(与悬浮窗 daoRenderRecent / 按账号卡 bkConvRow 同构)
+  h+='<div class="br" style="margin-top:5px">';
+  h+='<button class="btn sm" onclick="bkViewLive(&#39;'+esc(li.email||'')+'&#39;,&#39;'+esc(sid)+'&#39;,&#39;'+esc(li.title||'')+'&#39;)" title="内联查看此对话(云端提取)">👁 查看</button>';
+  h+='<button class="btn sm primary" onclick="bkOpenLive(&#39;'+esc(li.email||'')+'&#39;,&#39;'+esc(sid)+'&#39;)" title="多实例浏览器打开此对话官网">🚀 进入</button>';
+  h+='<button class="btn sm ghost" onclick="bkMdLive(&#39;'+esc(li.email||'')+'&#39;,&#39;'+esc(sid)+'&#39;,&#39;'+esc(li.title||'')+'&#39;)" title="导出此对话 MD 到本地">⬇ MD</button>';
+  h+='<button class="btn sm ghost" onclick="bkDeliverLive(&#39;'+esc(li.email||'')+'&#39;,&#39;'+esc(sid)+'&#39;,&#39;'+esc(li.title||'')+'&#39;)" title="把此对话记录上传到当前打开的对话页">📤 传当前页</button>';
+  h+='<button class="btn sm ghost" onclick="bkZipLive(&#39;'+esc(li.email||'')+'&#39;,&#39;'+esc(sid)+'&#39;,&#39;'+esc(li.title||'')+'&#39;)" title="打包全部文件(MD+工作日志+产出文件)">📦 文件</button>';
+  h+='</div>';
   h+='</div></div>';return h;
 }
 function bkOpenLive(email,sid){if(!sid)return;toast('多实例打开对话…',true);cmd('openConvMultiBrowser',{email:email||'',devinId:sid})}
+// 实时行查看(内联): 请求宿主提取对话 MD 后内联展示(与 bkConvToggle 同源渲染)
+function bkViewLive(email,sid,title){if(!sid)return;toast('提取对话中…',true);cmd('dlExportMd',{email:email,sid:sid,title:title,save:false})}
+// 实时行 MD 下载: 请求宿主提取并落盘
+function bkMdLive(email,sid,title){if(!sid)return;toast('下载 MD…',true);cmd('dlExportMd',{email:email,sid:sid,title:title,save:true})}
+// 实时行全部文件(ZIP): 请求宿主打包
+function bkZipLive(email,sid,title){if(!sid)return;toast('打包全部文件…',true);cmd('dlZip',{email:email,sid:sid,title:title})}
 // 实时行「传当前页」: 与 bkDeliverConv 同契约(外壳 __daoDeliverToCurrent → __daoUpload)
 function bkDeliverLive(email,sid,title){
   if(!sid){toast('无对话ID·无法传页',false);return}
@@ -9371,16 +9383,20 @@ function daoLoadOverviewManual(){
   });
   if(document.getElementById('ov-blueprints'))cmd('loadBlueprints');
 }
-// 看门狗: 请求发出后 45s 无 tabData 回包 → 渲染超时错误态(带重试/官方入口), 永不停留「加载中…」
-var _tabWatch={};
+// 看门狗: 请求发出后 25s 无 tabData 回包 → 自动重试一次(静默); 再 25s 仍无回包 → 渲染超时错误态,
+//   永不停留「加载中…」。缩短看门狗时间(45→25s)+自动重试(减少用户手动刷新)。
+var _tabWatch={},_tabRetry={};
 function loadTab(t){
   cmd('loadTabData',{tab:t});
   if(_tabWatch[t])clearTimeout(_tabWatch[t]);
   _tabWatch[t]=setTimeout(function(){
     _tabWatch[t]=0;
     if(S.data[t]&&S.data[t].length)return;
+    // 第一次超时: 自动静默重试
+    if(!_tabRetry[t]){_tabRetry[t]=1;loadTab(t);return}
+    _tabRetry[t]=0;
     rT(t,[], '请求超时 · 官方 API 无响应, 请重试或打开官方页面');
-  },45000);
+  },25000);
 }
 function rBridge(){
   var b=S.bridge;var head='<div class="st">内网穿透 · DAO Bridge</div>';
@@ -9427,7 +9443,14 @@ function mcpInstallLocalAll(auto){var list=(window._mcpIde||[]).map(function(i){
   list.forEach(function(x,j){setTimeout(function(){cmd('mcpMarketInstall',{spec:mcpSpec(x.m)});},j*400);});
   setTimeout(function(){try{list.forEach(function(x){mcpProbe(x.i);});}catch(e){}},list.length*400+1500);}
 // 默认自动直装(每账号一次): MCP 板块打开时把 Devin Desktop 本体内 MCP 自动装到当前账号, 免手点。
-function mcpAutoInstallLocal(){try{var em=(S.auth&&S.auth.email)||'';if(!em)return;var k='dao_mcp_autoinst_'+em;if(localStorage.getItem(k))return;localStorage.setItem(k,String(Date.now()));mcpInstallLocalAll(true);}catch(e){}}
+// 同时触发「装到所有账号」(反向注入) — 确保所有云端账号都同步拥有用户 IDE 内的 MCP。
+function mcpAutoInstallLocal(){try{var em=(S.auth&&S.auth.email)||'';if(!em)return;var k='dao_mcp_autoinst_'+em;if(localStorage.getItem(k))return;localStorage.setItem(k,String(Date.now()));mcpInstallLocalAll(true);mcpAutoInstallAllAccounts();}catch(e){}}
+// 自动装到所有账号(反向注入): 把 Devin Desktop 本体内 MCP 批量注入到所有账号(只触发一次/天)
+function mcpAutoInstallAllAccounts(){try{var k='dao_mcp_autoinst_all';var last=+localStorage.getItem(k)||0;if(Date.now()-last<86400000)return;localStorage.setItem(k,String(Date.now()));var list=(window._mcpIde||[]).map(function(i){return (window._mcp||[])[i]}).filter(function(m){return m&&!m.installed&&!mcpNeedsKey(m)&&mcpInstallSrcOk(m,true)});if(!list.length)return;list.forEach(function(m,j){setTimeout(function(){cmd('mcpInstallAllAccounts',{spec:mcpSpec(m)})},j*2000)});}catch(e){}}
+// 周期自动验证: 每 30 分钟自动接测已装 MCP、刷新目录缓存, 失败状态即时回填面板
+var _mcpVerifyTimer=0;
+function mcpStartPeriodicVerify(){if(_mcpVerifyTimer)return;_mcpVerifyTimer=setInterval(function(){try{if(S.tab!=='mcp')return;cmd('autoMaintainLocalMcp',{});var ide=window._mcpIde||[];if(ide.length)ide.forEach(function(i){mcpProbe(i)})}catch(e){}},1800000);}
+function mcpStopPeriodicVerify(){if(_mcpVerifyTimer){clearInterval(_mcpVerifyTimer);_mcpVerifyTimer=0;}}
 // MCP 工具清单: 真调 tools/list, 内联展开该 MCP 全部可用工具 (再点收起)
 function mcpTools(idx){var m=(window._mcp||[])[idx];if(!m)return;var box=document.getElementById('mcp-tools-'+idx);if(!box)return;if(box.style.display==='block'&&box.getAttribute('data-loaded')){box.style.display='none';return}box.style.display='block';box.innerHTML='<div style="font-size:11px;color:var(--muted)">tools/list 拉取中…</div>';cmd('mcpTools',{idx:idx,spec:mcpSpec(m)});}
 function mcpToolsRender(idx,r){var box=document.getElementById('mcp-tools-'+idx);if(!box)return;box.setAttribute('data-loaded','1');r=r||{};if(!r.ok){box.innerHTML='<div style="font-size:11px;color:var(--danger)">✗ '+esc(r.error||'无法获取工具清单')+'</div>';return}var ts=r.tools||[];var h='<div style="font-size:11px;color:var(--success);margin-bottom:4px">✓ '+ts.length+' 个工具</div><div style="max-height:220px;overflow:auto;background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:4px;padding:6px">';ts.forEach(function(t){h+='<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)"><span style="font-size:11px;font-weight:600;color:var(--accent)">'+esc(t.name||'')+'</span>'+(t.description?('<div style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(t.description)+'">'+esc(String(t.description).slice(0,160))+'</div>'):'')+'</div>'});h+='</div>';box.innerHTML=h;}
@@ -9549,6 +9572,8 @@ function rT(tab,items,err,fallbackProxy){
     setTimeout(function(){try{mcpAutoInstallLocal()}catch(e){}},600);
     // 内化后台: 面板打开即静默自动 修复+实测 本机 MCP(无弹窗·无感自愈)
     setTimeout(function(){try{cmd('autoMaintainLocalMcp',{})}catch(e){}},900);
+    // 启动周期自动验证(30 分钟循环·失败即时回填面板·确保 MCP 持续可用)
+    mcpStartPeriodicVerify();
   }else if(tab==='usage'||tab==='org'||tab==='automations'||tab==='profile'||tab==='customization'||tab==='apikeys'){
     items.forEach(it=>{
       const nm=it.name||it.title||'';const dt=it.detail||'';
