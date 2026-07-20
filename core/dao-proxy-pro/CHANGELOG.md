@@ -2,6 +2,32 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.361 · 反代常驻守护 · 启动抢跑根治(实证于 zhoumac · 每次启动首个 LS 必卡「Connecting to server」)
+: 实机根因(zhoumac · 20260721T000011 逐毫秒时序): 正常关窗清锚 → 下次启动
+  codeium.windsurf(activationEvent `*`)t+19s 即 spawn 首个 LS 指向官方
+  server.codeium.com; dao-one 束大 require 慢 · 反代 t+68s 才绑定; 该机官方直连
+  被墙 → 首 LS 自进程起到监听耗 64s → 60s 启动超时 → wedge → **每次启动必现**。
+  死后自愈(v9.9.330/360)救不了出生即死 —— 根治 = 反代生命周期与 IDE 窗口解耦:
+  ① 新增 `vendor/bundled-origin/standalone-runner.js` 常驻守护: 开机任务先起,
+  扫全部 IDE 安装目录取最新版 source.js 直跑于 :8957(CLI 全功能); 端口已有健康
+  dao 反代则蛰伏不争; 子进程亡(含被新版 `/_quit` 让位)即重扫退避重生。
+  ② `_ensureStandaloneProxy`(activate+20s · win32): runner 自装入 `~/.dao/` +
+  `schtasks /sc onlogon` 幂等注册(ELECTRON_RUN_AS_NODE 复用 ext-host 二进制·
+  用户机无需 node)。③ deactivate 保锚: 常驻守护在编则不清锚 → 锚点跨重启常驻 →
+  首个 LS 出生即连本地反代, 永不再撞官方直连 64s 黑洞。④ source.js
+  `ORIGIN_VERSION_BASE` 提至 v9.9.361: 守护与扩展同版互认(`_isRemoteStale`
+  版本先行)不相杀。新增 `test/standalone-runner.test.js` 3 例。
+
+v9.9.360 · LS wedge 自愈升级 · 命令式重启 no-op 死循环根治(实证于 zhoumac · LS 卡 13 分钟)
+: 实机根因(zhoumac · 20260720T180444 日志): 窗口启动期 LS "exited before sending
+  start data" 后, codeium 扩展状态机卡 "Already waiting for language server
+  start" 死循环 —— 此时 `windsurf.restartLanguageServer` 命令 resolve 成功但内部
+  只记 ERROR、不生新 LS → v9.9.330 wedge 自愈的命令式路径成静默 no-op 且
+  ok=true 永不落 kill 兜底, 每 180s 冷却后再空转一轮 · Cascade 永停
+  「Connecting to server…」。修法: `_lsWedgeStrikes` 连续计数 —— 上一轮命令式
+  自愈后心跳仍断(strike≥2) = 状态机 wedge 实锤 → 跳过命令直接 kill LS 进程令
+  管理器重生; 心跳复流(ls_idle_s<90)即归零。新增 `test/ls-wedge.test.js` 5 例。
+
 v9.9.359 · 旧独立版遮蔽新内折版根治 · 让位判定版本先行(实证于 zhoumac 两套并存互抢)
 : 实机根因(zhoumac · Devin IDE): 独立 dao-agi.dao-proxy-pro-9.9.342 与 dao-one 内折
   9.9.358 并存时, 旧版先占 :8957 在服务, 新版 EADDRINUSE 后恒判「远端不旧」而让位 ——
