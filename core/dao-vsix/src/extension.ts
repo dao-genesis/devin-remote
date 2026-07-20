@@ -9201,7 +9201,7 @@ function rBackupsData(tree,err){
     return {a:a,i:i,t:tHuman||tAny||0,allAuto:convs.length>0&&nAuto===convs.length,rec:rec,recCi:recCi,recT:recT,recHuman:recHuman};
   });
   ordered.sort(function(x,y){if(x.allAuto!==y.allAuto)return x.allAuto?1:-1;if((y.t||0)!==(x.t||0))return (y.t||0)-(x.t||0);return (x.a.accountNo||99999)-(y.a.accountNo||99999)});
-  if(/^\d+$/.test(q)){var exact=ordered.filter(function(o){return String(o.a.accountNo||'')===q});if(exact.length)ordered=exact;}
+  if(/^\\d+$/.test(q)){var exact=ordered.filter(function(o){return String(o.a.accountNo||'')===q});if(exact.length)ordered=exact;}
   var shownList=ordered.filter(function(o){
     var a=o.a;
     if(!q)return true;
