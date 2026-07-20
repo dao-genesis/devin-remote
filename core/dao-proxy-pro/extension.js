@@ -611,6 +611,17 @@ function _scanLatestVendorDir() {
         path: dir,
       });
     }
+    // v9.9.359 · 自身亦是候选 · 折入布局(dao-one/vendor-proxy)目录名无 dao-proxy-pro-X.Y.Z
+    //   → 旧扫描永远看不见「更新的自己」→ 遗留独立旧版恒为「最新」· 新版被旧版遮蔽
+    //   (实证于 zhoumac: 独立 9.9.342 在位 · dao-one 内折 9.9.358 让位于旧版)
+    const selfDir = path.join(__dirname, "vendor", "bundled-origin");
+    if (fs.existsSync(path.join(selfDir, "source.js"))) {
+      candidates.push({
+        name: path.basename(path.dirname(__dirname)) + "/(self)",
+        version: _ownVerTriple(),
+        path: selfDir,
+      });
+    }
     if (candidates.length === 0) return null;
     // 降序: 9.9.21 > 9.9.20 > 9.9.19 ...
     candidates.sort((a, b) => {
@@ -679,6 +690,23 @@ function _cmpVer(a, b) {
   }
   return 0;
 }
+// v9.9.359 · 自身 package.json 版本三元组 (折入布局下自身即最新候选)
+function _ownVerTriple() {
+  const m = String(PKG_VERSION || "0").match(/(\d+)\.(\d+)\.(\d+)/);
+  return m ? [+m[1], +m[2], +m[3]] : [0, 0, 0];
+}
+// v9.9.359 · 从远端 /origin/ping 的 features.mode (形如 "v9.9.343-dao-fa-zi-ran")
+//   抽版本 · 路径抽不出版本时(折入布局/ephemeral)以此为准
+function _verFromPing(ping) {
+  try {
+    const m = String((ping && ping.features && ping.features.mode) || "").match(
+      /\bv?(\d+)\.(\d+)\.(\d+)\b/,
+    );
+    return m ? [+m[1], +m[2], +m[3]] : null;
+  } catch {
+    return null;
+  }
+}
 
 // v9.9.320 · 治本 · 不杀同道 · 七十六章「兵强则不胜·强大居下·柔弱微细居上」
 // _isRemoteStale: 远端 self_file 是否「严格旧于」本地最新版
@@ -689,14 +717,17 @@ function _cmpVer(a, b) {
 //       down server」→ ~30s 后 watchdog 重起自愈 → 表现为反复掉线
 //   药: 路径全等→必不旧(快路径); 否则比对从路径抽取之 semver ·
 //       远端版本 >= 本地最新 → 不旧(同版/更新不杀·不与争); 仅远端严格更旧才让位升级
-function _isRemoteStale(remoteSelfFile) {
+// v9.9.359 · 增 remotePing: 版本先行 · ping.features.mode 可证远端严格更旧时,
+//   路径全等不再豁免(旧快路径正是「旧独立版遮蔽新内折版」之根:新版扫描所得
+//   「最新目录」即旧独立版自身 → 路径必等 → 恒判不旧 → 永远让位)
+function _isRemoteStale(remoteSelfFile, remotePing) {
   if (!remoteSelfFile || typeof remoteSelfFile !== "string") return false;
   const best = _scanLatestVendorDir();
   if (!best) return false;
+  const rv = _verFromPing(remotePing) || _verFromPath(remoteSelfFile);
+  if (rv) return _cmpVer(rv, best.version) < 0; // 仅远端严格更旧才判旧 · 同版/更新不杀
   const expected = path.join(best.path, "source.js").toLowerCase();
   if (remoteSelfFile.toLowerCase() === expected) return false; // 同一文件 · 必不旧
-  const rv = _verFromPath(remoteSelfFile);
-  if (rv) return _cmpVer(rv, best.version) < 0; // 仅远端严格更旧才判旧 · 同版/更新不杀
   // 无法解析远端版本 → 保守退回严格路径比较 (旧行为)
   return true;
 }
@@ -761,8 +792,8 @@ async function _remoteServesEa(port) {
 }
 
 // 远端是否「不兼容」: 非最新 source.js (stale) 或 不提供 ea 能力 (旧/极简变体)
-async function _remoteIncompatible(port, selfFile) {
-  if (_isRemoteStale(selfFile)) return true;
+async function _remoteIncompatible(port, selfFile, ping) {
+  if (_isRemoteStale(selfFile, ping)) return true;
   if (!(await _remoteServesEa(port))) return true;
   return false;
 }
@@ -784,7 +815,7 @@ async function _reusePublishedProxy(mode) {
       (ping.mode === "invert" || ping.mode === "passthrough")
     ) {
       // ★ v9.9.272 · 仅复用「兼容且最新」的反代 · 否则不复用(回退自绑全功能后端)
-      if (await _remoteIncompatible(p, ping.self_file)) {
+      if (await _remoteIncompatible(p, ping.self_file, ping)) {
         L.warn(
           "proxy",
           `published :${p} 不兼容(stale/无ea) → 不复用 · 自绑全功能后端`,
@@ -937,7 +968,7 @@ async function proxyStart(port, mode, _retried, _altAttempts) {
       ) {
         // v9.9.21/272 · 检远端是否「不兼容」(非最新 self_file 或 无 ea 能力) · 不兼容则让位
         // 二十二章「夫唯不争 故莫能与之争」 · 七十六章「兵强则不胜」
-        const incompatible = await _remoteIncompatible(port, ping.self_file);
+        const incompatible = await _remoteIncompatible(port, ping.self_file, ping);
         if (incompatible && !_retried) {
           L.warn(
             "proxy",
@@ -7101,6 +7132,12 @@ if (process.env.DAO_PP_SELFTEST === "1") {
     get termHttp() { return _DAO_TERM_HTTP; },
     get termShared() { return _DAO_TERM_HTTP_SHARED; },
     get termPort() { return _DAO_TERM_HTTP_PORT; },
+    _isRemoteStale,
+    _verFromPing,
+    _verFromPath,
+    _ownVerTriple,
+    _scanLatestVendorDir,
+    _cmpVer,
     _reset() {
       try { if (_DAO_TERM_HTTP && _DAO_TERM_HTTP.close) _DAO_TERM_HTTP.close(); } catch {}
       _DAO_TERM_HTTP = null;
