@@ -174,6 +174,7 @@ let _livePort = null; // 实际绑定端口 (软编码 · 可能为 OS 分配的
 let _extContext = null; // 扩展上下文 · 用于推导本实例 settings.json 路径 (跨产品名)
 let _lastLsRestart = 0; // LS 重启去抖时间戳 · 防多实例重启风暴
 let _lastLsWedgeHeal = 0; // v9.9.330 · 扩展↔LS wedge 自愈去抖时间戳
+let _lsWedgeStrikes = 0; // v9.9.360 · 连续 wedge 自愈未奏效计数 · ≥2 直接升级 kill LS
 // ★ 解锁自愈追踪 · 治"新用户只剩 SWE-1.6 Slow·其余全灰"之莫名顽疾
 let _lsSpawnSeen = false; // 本会话是否见过 language_server spawn
 let _lsRewroteCount = 0; // spawn hook 成功改写 LS 端口的次数 (>0 即 LS 经反代)
@@ -865,26 +866,40 @@ async function _maybeHealLsWedge(ping) {
     const idle = Number(ping.ls_idle_s);
     if (!Number.isFinite(idle)) return; // 旧版 source 无此字段 · 兼容跳过
     if (Number(ping.uptime_s) < 90) return; // proxy 启动危窗 · LS 首连需时 · 不误判
-    if (idle < 90) return; // 正常 ~5s 心跳 · 90s 无流才判 wedge
+    if (idle < 90) {
+      _lsWedgeStrikes = 0; // 心跳已复流 · wedge 已解 · 归零
+      return; // 正常 ~5s 心跳 · 90s 无流才判 wedge
+    }
     const now = Date.now();
     if (now - _lastLsWedgeHeal < 180000) {
       L.info("ls-wedge", `skip heal (cooldown 180s) · ls_idle=${idle}s`);
       return;
     }
     _lastLsWedgeHeal = now;
+    _lsWedgeStrikes++;
     L.warn(
       "ls-wedge",
-      `扩展↔LS 握手疑 wedge · ls_idle=${idle}s (proxy健康·锚定本口) · 触自愈重启 LS`,
+      `扩展↔LS 握手疑 wedge · ls_idle=${idle}s (proxy健康·锚定本口) · 触自愈重启 LS (strike ${_lsWedgeStrikes})`,
     );
+    // v9.9.360 · 治本 · 命令式重启在「Already waiting for language server start」
+    //   死循环中是静默 no-op(命令 resolve 但扩展内部仅记 ERROR·不生新 LS) →
+    //   上一轮命令式自愈后心跳仍断 = 状态机 wedge 实锤 · 直接 kill LS 进程令管理器重生
     let ok = false;
-    try {
-      await vscode.commands.executeCommand("windsurf.restartLanguageServer");
-      ok = true;
-      L.info("ls-wedge", "windsurf.restartLanguageServer 已执行 · 状态机将重置");
-    } catch (e) {
+    if (_lsWedgeStrikes < 2) {
+      try {
+        await vscode.commands.executeCommand("windsurf.restartLanguageServer");
+        ok = true;
+        L.info("ls-wedge", "windsurf.restartLanguageServer 已执行 · 状态机将重置");
+      } catch (e) {
+        L.warn(
+          "ls-wedge",
+          `restartLanguageServer 命令失败(${e && e.message}) · 回落 kill LS 进程`,
+        );
+      }
+    } else {
       L.warn(
         "ls-wedge",
-        `restartLanguageServer 命令失败(${e && e.message}) · 回落 kill LS 进程`,
+        `命令式自愈 ${_lsWedgeStrikes - 1} 轮未复流 · 升级 kill LS 进程强制重生`,
       );
     }
     if (!ok) {
@@ -7132,6 +7147,14 @@ if (process.env.DAO_PP_SELFTEST === "1") {
     get termHttp() { return _DAO_TERM_HTTP; },
     get termShared() { return _DAO_TERM_HTTP_SHARED; },
     get termPort() { return _DAO_TERM_HTTP_PORT; },
+    _maybeHealLsWedge,
+    _lsWedge: {
+      get strikes() { return _lsWedgeStrikes; },
+      set strikes(v) { _lsWedgeStrikes = v; },
+      get last() { return _lastLsWedgeHeal; },
+      set last(v) { _lastLsWedgeHeal = v; },
+      setAnchored(v) { _cachedAnchored = !!v; },
+    },
     _isRemoteStale,
     _verFromPing,
     _verFromPath,

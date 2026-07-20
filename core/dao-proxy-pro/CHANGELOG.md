@@ -2,6 +2,16 @@
 
 > 完整版本历史。详情页（README）保持精简，本文件单列于扩展的 Changelog 标签页。
 
+v9.9.360 · LS wedge 自愈升级 · 命令式重启 no-op 死循环根治(实证于 zhoumac · LS 卡 13 分钟)
+: 实机根因(zhoumac · 20260720T180444 日志): 窗口启动期 LS "exited before sending
+  start data" 后, codeium 扩展状态机卡 "Already waiting for language server
+  start" 死循环 —— 此时 `windsurf.restartLanguageServer` 命令 resolve 成功但内部
+  只记 ERROR、不生新 LS → v9.9.330 wedge 自愈的命令式路径成静默 no-op 且
+  ok=true 永不落 kill 兜底, 每 180s 冷却后再空转一轮 · Cascade 永停
+  「Connecting to server…」。修法: `_lsWedgeStrikes` 连续计数 —— 上一轮命令式
+  自愈后心跳仍断(strike≥2) = 状态机 wedge 实锤 → 跳过命令直接 kill LS 进程令
+  管理器重生; 心跳复流(ls_idle_s<90)即归零。新增 `test/ls-wedge.test.js` 5 例。
+
 v9.9.359 · 旧独立版遮蔽新内折版根治 · 让位判定版本先行(实证于 zhoumac 两套并存互抢)
 : 实机根因(zhoumac · Devin IDE): 独立 dao-agi.dao-proxy-pro-9.9.342 与 dao-one 内折
   9.9.358 并存时, 旧版先占 :8957 在服务, 新版 EADDRINUSE 后恒判「远端不旧」而让位 ——
