@@ -582,6 +582,95 @@ function forceRestartLS() {
   });
 }
 
+// ═══════════════════════════ 反代常驻守护 (v9.9.361) ═══════════════════════════
+// 反者道之动·根因(zhoumac 20260721T000011 逐毫秒实证):
+//   正常关窗清锚 → 下次启动 codeium.windsurf t+19s 即 spawn 首个 LS 指向官方,
+//   而 dao-one 束大 require 慢 · 代理 t+68s 才绑定; 官方直连被墙 → 首 LS 起听耗 64s
+//   → 60s 启动超时 → 「Connecting to server」每次启动必现。死后自愈治不了出生即死。
+// 根治 = 反代生命周期与 IDE 窗口解耦: 开机任务先起 standalone-runner 持有 :8957,
+//   锚点因而可跨重启常驻(见 deactivate 保锚) → 首个 LS 出生即连上本地反代。
+const STANDALONE_DIR = path.join(os.homedir(), ".dao");
+const STANDALONE_JS = path.join(STANDALONE_DIR, "dao-proxy-standalone.js");
+const STANDALONE_CMD = path.join(STANDALONE_DIR, "dao-proxy-standalone.cmd");
+const STANDALONE_TASK = "DaoProxyStandalone";
+
+function _standaloneInstalled() {
+  try {
+    return fs.existsSync(STANDALONE_JS) && fs.existsSync(STANDALONE_CMD);
+  } catch {
+    return false;
+  }
+}
+
+function _ensureStandaloneProxy() {
+  if (process.platform !== "win32") return; // 实证病灶仅 Windows · 他平台不扰
+  try {
+    fs.mkdirSync(STANDALONE_DIR, { recursive: true });
+    const src = path.join(
+      __dirname,
+      "vendor",
+      "bundled-origin",
+      "standalone-runner.js",
+    );
+    if (!fs.existsSync(src)) return;
+    const body = fs.readFileSync(src);
+    let cur = null;
+    try {
+      cur = fs.readFileSync(STANDALONE_JS);
+    } catch {}
+    if (!cur || !cur.equals(body)) {
+      fs.writeFileSync(STANDALONE_JS, body);
+      L.info("standalone", `runner 装入 ${STANDALONE_JS}`);
+    }
+    // .cmd 包装: 以 ext-host 同一 electron 二进制按 node 语义跑 runner (用户机未必有 node)
+    const cmdBody =
+      "@echo off\r\n" +
+      "set ELECTRON_RUN_AS_NODE=1\r\n" +
+      `"${process.execPath}" "${STANDALONE_JS}"\r\n`;
+    let curCmd = null;
+    try {
+      curCmd = fs.readFileSync(STANDALONE_CMD, "utf8");
+    } catch {}
+    if (curCmd !== cmdBody) fs.writeFileSync(STANDALONE_CMD, cmdBody);
+    // 开机任务幂等注册 (当前用户 · 无需管理员)
+    const q = _origSpawn(
+      "schtasks",
+      ["/query", "/tn", STANDALONE_TASK],
+      { stdio: "pipe" },
+    );
+    q.on("close", (code) => {
+      if (code === 0) return; // 已注册
+      const c = _origSpawn(
+        "schtasks",
+        [
+          "/create",
+          "/f",
+          "/sc",
+          "onlogon",
+          "/tn",
+          STANDALONE_TASK,
+          "/tr",
+          `"${STANDALONE_CMD}"`,
+        ],
+        { stdio: "pipe" },
+      );
+      c.on("close", (cc) => {
+        L.info("standalone", `schtasks create exit=${cc} · 开机先于 IDE 持有反代端口`);
+        if (cc === 0) {
+          const r = _origSpawn("schtasks", ["/run", "/tn", STANDALONE_TASK], {
+            stdio: "pipe",
+          });
+          r.on("error", () => {});
+        }
+      });
+      c.on("error", (e) => L.warn("standalone", `schtasks create: ${e.message}`));
+    });
+    q.on("error", (e) => L.warn("standalone", `schtasks query: ${e.message}`));
+  } catch (e) {
+    L.warn("standalone", `ensure fail (non-fatal): ${e && e.message}`);
+  }
+}
+
 // ═══════════════════════════ 源.js 进程内 require ═══════════════════════════
 let _proxyHandle = null; // start() 返回的 handle: { server, port, host, close, getMode, setMode }
 
@@ -4322,6 +4411,11 @@ function activate(ctx) {
       ensureUnlockFlowing();
     }, 22000);
 
+    // ★ v9.9.361 · 反代常驻守护自装 · 开机先于 IDE 持有反代端口 · 根治启动抢跑
+    setTimeout(() => {
+      _ensureStandaloneProxy();
+    }, 20000);
+
     // v9.4.2 · 自 focus dao-container · 强制 resolveWebviewView 触发 · SSR 帛书立现
     // 三十七章: 道恒无名 · 侯王若能守之 · 万物将自化
     // 首装 / 重装 / 更新后 · 侧栏可能默 collapse · 一focus即开 · 主公无需手动
@@ -4782,12 +4876,16 @@ async function deactivate() {
     } catch (e) {
       L.warn("deactivate", `系统级残留归零失败: ${e && e.message}`);
     }
-  } else if (isLocal && lifetime > 30000) {
+  } else if (isLocal && lifetime > 30000 && !_standaloneInstalled()) {
     _clearAnchorFileSync();
     L.info(
       "deactivate",
       `清锚 · lifetime=${Math.round(lifetime / 1000)}s · 正常关闭`,
     );
+  } else if (isLocal && lifetime > 30000) {
+    // ★ v9.9.361 · 常驻守护在编 → 端口释放后数秒内即被 runner 重持 → 锚点跨重启常驻
+    //   首个 LS 出生即连本地反代 · 永不再撞「官方直连 64s 黑洞 → 启动超时」
+    L.info("deactivate", "保锚 · 常驻守护在编 · 锚点跨重启常驻(根治启动抢跑)");
   } else if (isLocal) {
     L.info(
       "deactivate",
