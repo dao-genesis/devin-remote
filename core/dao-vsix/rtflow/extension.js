@@ -1389,9 +1389,15 @@ function daoRenderRecent(){var q=(_dEl('dwQ').value||'').trim().toLowerCase(),bo
   // 无搜索时只渲染最近 DAO_REC_VIEW_MAX 条(DAO_REC 已按 updatedAt 降序;slice 自头取保留原 idx 映射);
   // 有搜索时跨全量匹配。全量历史在「🗂 对话记录(备份)」按号分层。
   var src=q?DAO_REC:DAO_REC.slice(0,DAO_REC_VIEW_MAX);
+  // 序号直搜(对齐手机 daopan.html): 纯数字查询优先精确命中账号序号, 无精确命中才退回全文子串
+  var qNo=/^\d+$/.test(q)?+q:0;
+  var qNoHit=qNo>0&&src.some(function(x){return +x.accNo===qNo;});
   var html='',hidAuto=0;src.forEach(function(it,idx){
     if(it.auto&&!_showAuto&&!q){hidAuto++;return;}
-    if(q){var hay=((it.email||'')+' '+it.title+' '+it.sid+' '+it.accNo).toLowerCase();if(hay.indexOf(q)<0)return;}
+    if(q){
+      if(qNoHit){if(+it.accNo!==qNo)return;}
+      else{var hay=((it.email||'')+' '+it.title+' '+it.sid+' '+it.accNo).toLowerCase();if(hay.indexOf(q)<0)return;}
+    }
     html+='<div class="rc" draggable="false" data-cdrag="1" data-email="'+esc(it.email||'')+'" data-sid="'+esc(it.sid||'')+'" data-title="'+esc(it.title||'')+'"><div class="r1"><span class="acc-no">#'+esc(String(it.accNo))+'</span><span class="st '+esc(it.statusClass||'')+'" title="'+esc(it.status||'')+'"></span><span class="ti" title="'+esc(it.title)+'">'+esc(String(it.title).slice(0,70))+'</span></div>'+
       (it.pv?'<div class="pv">'+esc(it.pv)+'</div>':'')+
       '<div class="meta"><span>'+esc(String(it.email||'').split('@')[0])+'</span>'+(it.status?'<span>'+esc(it.status)+'</span>':'')+(it.updatedAt?'<span>'+daoAgo(it.updatedAt)+'</span>':'')+'</div>'+
