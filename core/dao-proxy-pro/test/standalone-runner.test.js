@@ -22,14 +22,17 @@ function t(name, fn) {
   }
 }
 
-function mk(root, extName, layout) {
+function mk(root, extName, layout, ver) {
   const parts =
     layout === "one"
       ? [extName, "vendor-proxy", "vendor", "bundled-origin"]
       : [extName, "vendor", "bundled-origin"];
   const full = path.join(root, "extensions", ...parts);
   fs.mkdirSync(full, { recursive: true });
-  fs.writeFileSync(path.join(full, "source.js"), "// stub\n");
+  fs.writeFileSync(
+    path.join(full, "source.js"),
+    `const ORIGIN_VERSION_BASE = "v${ver}"; // stub\n`,
+  );
   return full;
 }
 
@@ -41,20 +44,22 @@ t("cmpVer 三元组比较", () => {
   assert.strictEqual(cmpVer([1, 2, 3], [1, 2, 3]), 0);
 });
 
-t("扫描取最新版 · 跨 dao-one/独立布局 · 忽略中间态目录", () => {
+t("扫描取最新版(按内容 ORIGIN_VERSION_BASE · 非目录名) · 忽略中间态目录", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "dao-sr-"));
   const devinRoot = path.join(home, ".devin");
-  mk(devinRoot, "dao.dao-one-2.28.9", "one");
-  mk(devinRoot, "dao.dao-one-2.28.11", "one");
-  mk(devinRoot, "dao-agi.dao-proxy-pro-9.9.342", "pro");
-  mk(devinRoot, "dao.dao-one-3.0.0.obsolete", "one"); // 中间态 · 须忽略
+  const vscodeRoot = path.join(home, ".vscode");
+  // 根因回归: dao-one 目录版号 2.x 体系低于陈年独立版 9.9.342 目录号,
+  // 但其内折 source 实为 9.9.361 —— 必须按内容版号选中 dao-one 内折源
+  mk(devinRoot, "dao.dao-one-2.28.9", "one", "9.9.361");
+  mk(vscodeRoot, "dao-agi.dao-proxy-pro-9.9.342", "pro", "9.9.342");
+  mk(devinRoot, "dao.dao-one-3.0.0.obsolete", "one", "9.9.999"); // 中间态 · 须忽略
   const origHomedir = os.homedir;
   os.homedir = () => home;
   try {
     const best = scanNewestSource();
     assert.ok(best, "应扫到源");
-    assert.deepStrictEqual(best.ver, [9, 9, 342], "独立 pro 版号 9.9.342 数值最大");
-    // dao-one 与独立版属不同版号体系 · 数值比较即可(与扩展侧 _scanLatestVendorDir 同法)
+    assert.deepStrictEqual(best.ver, [9, 9, 361], "内容版号最新者胜(dao-one 内折)");
+    assert.ok(best.file.includes("dao-one-2.28.9"), "选中 dao-one 内折源");
   } finally {
     os.homedir = origHomedir;
   }

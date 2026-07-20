@@ -37,6 +37,19 @@ function log(msg) {
 }
 
 // ── 扫全部 IDE 扩展安装目录 · 取最新版 source.js ──
+// ★ 版号取自 source.js 内容之 ORIGIN_VERSION_BASE, 不取目录名:
+//   dao-one 目录版号是 2.x 体系而其内折 proxy 是 9.9.x 体系 —— 按目录名数值比较
+//   会把陈年独立版 9.9.342 误判为「最新」(实机踩坑实证)。内容版号跨布局同一体系。
+function _verFromSource(file) {
+  try {
+    const head = fs.readFileSync(file, "utf8").slice(0, 65536);
+    const m = head.match(/ORIGIN_VERSION_BASE\s*=\s*"v?(\d+)\.(\d+)\.(\d+)/);
+    return m ? [+m[1], +m[2], +m[3]] : null;
+  } catch {
+    return null;
+  }
+}
+
 function scanNewestSource() {
   const home = os.homedir();
   const roots = [".devin", ".windsurf", ".codeium", ".vscode"].map((d) =>
@@ -56,12 +69,12 @@ function scanNewestSource() {
     }
     for (const name of names) {
       if (/\.(obsolete|disabled|preinstall|backup|bak)/i.test(name)) continue;
-      const m = name.match(/^(?:dao\.dao-one|dao-agi\.dao-proxy-(?:pro|min))-(\d+)\.(\d+)\.(\d+)/);
-      if (!m) continue;
-      const ver = [+m[1], +m[2], +m[3]];
+      if (!/^(?:dao\.dao-one|dao-agi\.dao-proxy-(?:pro|min))-\d+\./.test(name)) continue;
       for (const parts of rel) {
         const f = path.join(root, name, ...parts);
         if (!fs.existsSync(f)) continue;
+        const ver = _verFromSource(f);
+        if (!ver) continue;
         if (!best || cmpVer(ver, best.ver) > 0) best = { ver, file: f };
       }
     }
