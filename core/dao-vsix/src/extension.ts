@@ -9285,6 +9285,10 @@ function ovWebUrl(){
 function ovSetMode(m){
   S.ovMode=m;
   var v=document.getElementById('v-overview');
+  // 「⟳ 刷新」= 强制重建重拉: 清同帧守护签名与面板缓存, 否则下方 rO() 会因同签名就地跳过
+  if(v){try{delete v.dataset.ovSig}catch(e){}}
+  var _mt=['profile','customization','apikeys','knowledge','playbooks','secrets','integrations','automations','schedules'];
+  _mt.forEach(function(t){delete S.data[t]});S.blueprints=null;
   if(v){v.innerHTML='';v.classList.remove('ovweb')}
   rO();
 }
@@ -9295,6 +9299,15 @@ function ovBar(active){
   return '<div class="ovwbar">'
     +'<button class="btn sm ghost" onclick="ovSetMode(&#39;manage&#39;)" title="刷新当前账号官方配置模块">⟳ 刷新</button>'
     +'</div>';
+}
+// 余额值 (含配色/陈旧标记) — 供整建与同签名就地刷新共用
+function _ovBalHtml(){
+  var q=S.auth.quota||{};
+  var bal=(q.overageDollars!=null)?q.overageDollars:null;
+  var balStr=(bal!=null)?('$'+Number(bal).toFixed(2)):'—';
+  var bc=(bal==null)?'var(--muted)':(bal>5?'var(--success)':bal>1?'var(--warn)':'var(--danger)');
+  var stale=!S.auth.quota||(q.overageKnown===false)||(q.overageTs&&(Date.now()-q.overageTs>10*60*1000));
+  return '<span style="color:'+bc+';font-weight:700;font-size:15px">'+balStr+(stale?' <span style="font-size:10px;color:var(--muted);font-weight:400">(待刷新)</span>':'')+'</span>';
 }
 function rOOfficial(v){
   // 反向提取官方配置模块(旧「官方原生 iframe」已废弃): 直接落到管理视图。
@@ -9311,17 +9324,20 @@ function rO(){
   // 默认 = 管理视图(反向提取官方 Profile/Customization/Knowledge/Playbooks/Secrets/Git/Automations/
   //   Schedules/Blueprints 等官方配置模块进统一面板·改动经官方 API 同步官网), 不再嵌整页官网 iframe。
   if(S.ovMode===undefined||S.ovMode==='official')S.ovMode='manage';
-  v.classList.remove('ovweb');
-  let qh='';
-  if(S.auth.quota){
-    // 配额只显美金 (账号余额) · 去 Day/Week · 仿 rt-flow 最小化 · 道法自然
-    const q=S.auth.quota;
-    const bal=(q.overageDollars!=null)?q.overageDollars:null;
-    const balStr=(bal!=null)?('$'+Number(bal).toFixed(2)):'—';
-    const bc=(bal==null)?'var(--muted)':(bal>5?'var(--success)':bal>1?'var(--warn)':'var(--danger)');
-    const stale=(q.overageKnown===false)||(q.overageTs&&(Date.now()-q.overageTs>10*60*1000));
-    qh='<div class="st">余额</div><div class="card"><div class="cr"><span class="l">美金余额</span><span class="v" style="color:'+bc+';font-weight:700;font-size:15px">'+balStr+(stale?' <span style="font-size:10px;color:var(--muted);font-weight:400">(待刷新)</span>':'')+'</span></div>'+(q.planName?'<div class="cr"><span class="l">Plan</span><span class="v">'+esc(q.planName)+'</span></div>':'')+'</div>';
+  // 帛书·「重为轻根·静为躁君」: 同账号同态的重复 init/refresh 不得整片重建主页 —
+  //   整片 innerHTML 重写会把已加载的各 ov-* 面板打回「加载中…」并全部重拉,
+  //   公网慢隧道下即「面板反复闪跳/久停加载中」之根因。同签名 → 只就地刷新余额。
+  var _ovSig=(S.auth.email||'')+'|'+(S.auth.canUseApi?'1':'0')+'|'+(S.ovMode||'');
+  if(v.dataset.ovSig===_ovSig&&document.getElementById('ov-profile')){
+    var _ob=document.getElementById('ovBal');if(_ob)_ob.innerHTML=_ovBalHtml();
+    return;
   }
+  // 换号重建: 面板缓存属旧账号, 必清(否则新号主页渲旧号数据)
+  if((v.dataset.ovAcct||'')!==(S.auth.email||'')){S.data={};S.blueprints=null;}
+  v.dataset.ovSig=_ovSig;v.dataset.ovAcct=S.auth.email||'';
+  v.classList.remove('ovweb');
+  // 配额只显美金 (账号余额) · 去 Day/Week · 仿 rt-flow 最小化 · 道法自然
+  let qh='<div class="st">余额</div><div class="card"><div class="cr"><span class="l">美金余额</span><span class="v" id="ovBal">'+_ovBalHtml()+'</span></div>'+(S.auth.quota&&S.auth.quota.planName?'<div class="cr"><span class="l">Plan</span><span class="v">'+esc(S.auth.quota.planName)+'</span></div>':'')+'</div>';
   // v3.17.4 · 去芜存菁: 主页「注入状态」板块(S/K/P/G ✓✗)已移除 —
   //   反向注入实况以左侧「反向注入」面板 + 底部状态点(Server/Relay/Injected)为准, 主页不再重复呈现。
   v.innerHTML=ovBar('manage')+rHost()+'<div class="st">账户</div><div class="card"><div class="cr"><span class="l">邮箱</span><span class="v">'+esc(S.auth.email)+'</span></div><div class="cr"><span class="l">组织</span><span class="v">'+esc(S.auth.orgName)+'</span></div>'+(S.auth.orgId?'<div class="cr"><span class="l">Org ID</span><span class="v" style="font-size:10px">'+esc(S.auth.orgId)+'</span></div>':'')+'<div class="cr"><span class="l">Token</span><span class="v"><span class="tag devin">'+esc(S.auth.tokenType||S.auth.apiKeyType||'?')+'</span></span></div><div class="cr"><span class="l">API能力</span><span class="v">'+(S.auth.canUseApi?'<span style="color:var(--success)">✓ 完整API访问</span>':'<span style="color:var(--warn)">⚠ 仅Codeium API</span>')+'</div></div>'+qh+'<div class="st">多实例浏览器</div><div class="br"><button class="btn primary" onclick="cmd(&#39;openRoutedPanel&#39;)" title="在 IDE 内打开独立路由面板(多实例·不阻塞·道并行而不相悖)" style="background:#1a7f5a">🖥️ IDE 内路由面板 (多实例)</button><button class="btn" onclick="cmd(&#39;syncBrowser&#39;)" style="background:#6f42c1" title="在电脑浏览器开独立 profile 窗口自动登录(多账号并行隔离)">🌐 电脑浏览器同步 (隔离窗口)</button></div>'+'<div class="st">🧩 插件能力 · API 接口</div><div class="card"><div class="cr"><span class="l" style="font-size:11px;line-height:1.5">插件本体全部功能均以本地 HTTP API 暴露 — 多实例路由 <code>/api/devin/multi/*</code>、MCP 接测/注入 <code>/api/devin/mcp/*</code> 等,可被任意 Agent 调用接管。导出 MD 契约即得全量端点。</span></div></div><div class="br"><button class="btn primary" style="background:#0e639c" onclick="cmd(&#39;exportAgentDoc&#39;)" title="导出整个插件全量 API 的 MD 契约 · 供任意 Agent 识别后接管插件底层做基础配置">📄 导出 MD 契约 (全量 API)</button></div>'+'<div class="st">服务器</div><div class="card"><div class="cr"><span class="l">端口</span><span class="v">'+(S.server.port||'未启动')+'</span></div><div class="cr"><span class="l">Relay</span><span class="v" style="color:'+(S.server.relay?'var(--success)':'var(--muted)')+'">'+(S.server.relay?'✓ '+esc(S.server.relayUrl):'✗ 本地')+'</span></div></div>';
@@ -9379,9 +9395,14 @@ function daoLoadOverviewManual(){
   secs.forEach(function(t){
     var id=(t==='integrations')?'ov-git':'ov-'+t;
     if(!document.getElementById(id))return;
+    // 已有本账号缓存 → 同帧就地渲染, 不重拉不闪「加载中」; 各面板 ⟳ 仍可手动重拉
+    if(S.data[t]&&S.data[t].length){rT(t,S.data[t]);return;}
     loadTab(t);
   });
-  if(document.getElementById('ov-blueprints'))cmd('loadBlueprints');
+  if(document.getElementById('ov-blueprints')){
+    if(S.blueprints)rBlueprintsData(S.blueprints.items||[],S.blueprints.snapCount);
+    else loadBlueprintsWatch();
+  }
 }
 // 看门狗: 请求发出后 25s 无 tabData 回包 → 自动重试一次(静默); 再 25s 仍无回包 → 渲染超时错误态,
 //   永不停留「加载中…」。缩短看门狗时间(45→25s)+自动重试(减少用户手动刷新)。
@@ -9397,6 +9418,16 @@ function loadTab(t){
     _tabRetry[t]=0;
     rT(t,[], '请求超时 · 官方 API 无响应, 请重试或打开官方页面');
   },25000);
+}
+// 环境蓝图同款看门狗: 回包丢失/超时也绝不停留「加载中…」
+function loadBlueprintsWatch(){
+  cmd('loadBlueprints');
+  if(_tabWatch.blueprints)clearTimeout(_tabWatch.blueprints);
+  _tabWatch.blueprints=setTimeout(function(){
+    _tabWatch.blueprints=0;
+    if(S.blueprints)return;
+    rBlueprintsData([],0,'请求超时 · 官方 API 无响应, 请重试或打开官方页面');
+  },45000);
 }
 function rBridge(){
   var b=S.bridge;var head='<div class="st">内网穿透 · DAO Bridge</div>';
@@ -9417,7 +9448,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){if(_tabWatch[d.tab]){clearTimeout(_tabWatch[d.tab]);_tabWatch[d.tab]=0;}S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='bridgeGhAccounts'){S.bridgeGhAccts=d.accounts||[];try{rBridgeFull()}catch(e){}}else if(d.type==='bridgeCfResources'){S.cfResources=d;var _cb=document.getElementById('cfResBox');if(_cb)_cb.innerHTML=rCfResources();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='bridgeCfPool'){S.cfPool=d;var _cp=document.getElementById('cfPoolBox');if(_cp)_cp.innerHTML=rCfPool();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='bridgeCfPoolResources'){S.cfPoolRes=S.cfPoolRes||{};S.cfPoolRes[d.key]=d;var _cpr=document.getElementById('cfPoolBox');if(_cpr)_cpr.innerHTML=rCfPool();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='actionResult'){if(d.command==='setCleanupCooldown'){var _m=document.getElementById('swCdMsg');if(_m){_m.textContent=d.ok?('✓ 已保存 '+(d.hours!=null?d.hours+'h':'')):('✗ '+(d.error||'保存失败'));_m.style.color=d.ok?'var(--success)':'var(--danger)'}if(d.ok&&typeof d.hours==='number')S.cooldownH=d.hours;}else if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='devinAutoAcquire'&&d.ok&&d.canUseApi===false){toast('已获取 Session Token, 但完整 API(cog_ key)不可用',false);renderCredLimited()}else if(d.command==='copyBackupCred'){toast(d.ok?(d.hasPw?'已复制账号+密码':'已复制邮箱(本地无密码)'):'复制失败',d.ok&&d.hasPw)}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){bkOnLive(d)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){if(_tabWatch[d.tab]){clearTimeout(_tabWatch[d.tab]);_tabWatch[d.tab]=0;}S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){if(_tabWatch.blueprints){clearTimeout(_tabWatch.blueprints);_tabWatch.blueprints=0;}if(!d.error)S.blueprints={items:d.items||[],snapCount:d.snapCount||0};rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject()}else if(d.type==='bridgeGhAccounts'){S.bridgeGhAccts=d.accounts||[];try{rBridgeFull()}catch(e){}}else if(d.type==='bridgeCfResources'){S.cfResources=d;var _cb=document.getElementById('cfResBox');if(_cb)_cb.innerHTML=rCfResources();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='bridgeCfPool'){S.cfPool=d;var _cp=document.getElementById('cfPoolBox');if(_cp)_cp.innerHTML=rCfPool();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='bridgeCfPoolResources'){S.cfPoolRes=S.cfPoolRes||{};S.cfPoolRes[d.key]=d;var _cpr=document.getElementById('cfPoolBox');if(_cpr)_cpr.innerHTML=rCfPool();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='actionResult'){if(d.command==='setCleanupCooldown'){var _m=document.getElementById('swCdMsg');if(_m){_m.textContent=d.ok?('✓ 已保存 '+(d.hours!=null?d.hours+'h':'')):('✗ '+(d.error||'保存失败'));_m.style.color=d.ok?'var(--success)':'var(--danger)'}if(d.ok&&typeof d.hours==='number')S.cooldownH=d.hours;}else if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='devinAutoAcquire'&&d.ok&&d.canUseApi===false){toast('已获取 Session Token, 但完整 API(cog_ key)不可用',false);renderCredLimited()}else if(d.command==='copyBackupCred'){toast(d.ok?(d.hasPw?'已复制账号+密码':'已复制邮箱(本地无密码)'):'复制失败',d.ok&&d.hasPw)}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){bkOnLive(d)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
