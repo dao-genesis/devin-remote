@@ -5920,6 +5920,44 @@ async function daoOrgOverview(pat: string): Promise<{ ok: boolean; login?: strin
     return { ok: true, login: u.json.login, name: u.json.name || '', scopes, canAdminOrg, orgs };
 }
 
+// 组织总览(自动展示): 用本体 admin PAT 一次拉齐组织信息 + 成员(标注管理员) + 仓库, 供 GitHub 板块开箱即显。
+//   不需用户手点「拉取仓库/检测」——设了本体号+本体组织即自动铺开整个组织现状。
+async function daoGhOrgFullOverview(pat: string, org: string): Promise<{
+    ok: boolean; error?: string; org?: string;
+    info?: { name: string; login: string; plan: string; publicRepos: number; description: string };
+    members?: { login: string; role: string }[];
+    repos?: { full_name: string; name: string; owner: string; private: boolean; fork: boolean; archived: boolean }[];
+}> {
+    pat = String(pat || '').trim(); org = String(org || '').trim();
+    if (!pat) return { ok: false, error: '未设本体 PAT — 在「② 账号池」选一号「◆ 设为本体」' };
+    if (!org) return { ok: false, error: '未设本体组织 — 在「③ 组织管理」填/选组织名并「💾 设为本体组织」' };
+    const oi = await ghApiRequest('GET', '/orgs/' + encodeURIComponent(org), pat);
+    if (oi.status === 0) return { ok: false, org, error: 'GitHub 不可达(本机网络/代理断)' };
+    if (oi.status !== 200 || !oi.json) return { ok: false, org, error: (oi.json && oi.json.message) || oi.error || ('HTTP ' + oi.status) };
+    const info = {
+        name: String(oi.json.name || oi.json.login || org), login: String(oi.json.login || org),
+        plan: String((oi.json.plan && oi.json.plan.name) || ''), publicRepos: Number(oi.json.public_repos || 0),
+        description: String(oi.json.description || ''),
+    };
+    // 管理员集合(role=admin) → 给成员打管理员标; 再取全量成员。
+    const adminSet = new Set<string>();
+    for (let page = 1; page <= 5; page++) {
+        const r = await ghApiRequest('GET', '/orgs/' + encodeURIComponent(org) + '/members?role=admin&per_page=100&page=' + page, pat);
+        if (r.status !== 200 || !Array.isArray(r.json) || !r.json.length) break;
+        for (const m of r.json) adminSet.add(String(m.login || '').toLowerCase());
+        if (r.json.length < 100) break;
+    }
+    const members: { login: string; role: string }[] = [];
+    for (let page = 1; page <= 10; page++) {
+        const r = await ghApiRequest('GET', '/orgs/' + encodeURIComponent(org) + '/members?per_page=100&page=' + page, pat);
+        if (r.status !== 200 || !Array.isArray(r.json)) break;
+        for (const m of r.json) members.push({ login: String(m.login || ''), role: adminSet.has(String(m.login || '').toLowerCase()) ? 'admin' : 'member' });
+        if (r.json.length < 100) break;
+    }
+    const rr = await daoGhListRepos(pat, org);
+    return { ok: true, org, info, members, repos: rr.ok ? (rr.repos || []) : [] };
+}
+
 // 批量拉手套入组: 对每个 GitHub 用户名 PUT /orgs/{org}/memberships/{login} (role 幂等·限速退避)。
 //   已是成员 → GitHub 返回 state=active(视作成功); 待接受 → state=pending。手套接受邀请后即成成员。
 async function daoOrgInviteMembers(pat: string, org: string, logins: string[], role: string, onProgress?: (done: number, total: number, last: any) => void): Promise<{ ok: boolean; org: string; results: { login: string; ok: boolean; state?: string; error?: string }[] }> {
@@ -9845,6 +9883,10 @@ function ghOnResult(d){
     if(orgs.length){h+='组织(点选为本体): '+orgs.map(function(o){return '<button class="btn sm" onclick="ghPickOrg(&#39;'+esc(o.login)+'&#39;)">'+esc(o.login)+(o.role==='admin'?' ★':'')+'</button>'}).join(' ')}
     else{h+='<span style="color:var(--warn)">暂无组织</span> · 在下方「组织」卡片一键新建。'}
     ghMsg('ghDetectOut',h);
+  }else if(d.kind==='openUrl'){
+    if(!d.ok)toast('✗ 打开网页失败: '+esc(d.error||'')+' · '+esc(d.url||''),false);
+  }else if(d.kind==='orgOverview'){
+    st._orgOvDone=true;st._orgOvLoading=false;st.orgOverview=d;ghRenderOrgOverview(d);
   }else if(d.kind==='repos'){
     if(!d.ok){ghMsg('ghReposOut','<span style="color:var(--danger)">✗ '+esc(d.error||'')+'</span>');return}
     st.repos=d.repos||[];ghMsg('ghReposOut','✓ '+st.repos.length+' 个仓库'+(d.target?(' @ '+esc(d.target)):' (个人+组织)'));ghRenderRepos();
@@ -9943,6 +9985,8 @@ function rGitHub(){
     +'<div class="cr"><span class="l">GitHub MCP 钉住</span><span class="v">'+(_stMcp?'<span style="color:var(--success)">● 已钉</span>':'<span style="color:var(--warn)">○ 未钉</span>')+'</span></div>'
     +'<div class="cr"><span class="l">GitHub 账号池</span><span class="v">'+_fleet.length+' 号 · 有 PAT '+_flOk+'</span></div>'
     +'<div class="br" style="margin-top:4px"><button class="btn sm" onclick="cmd(&#39;getInjectProfile&#39;);cmd(&#39;daoGhFleetList&#39;,{});cmd(&#39;loadTabData&#39;,{tab:&#39;mcp&#39;})">⟳ 刷新状态</button><button class="btn sm primary" onclick="cmd(&#39;daoGhCopyMd&#39;,{})" title="生成+复制 GitHub 管理中心 MD(脱敏·可热接入) — 对照穿透板块 MD 模式">📋 复制管理 MD</button><button class="btn sm ghost" onclick="cmd(&#39;daoGhCopyMd&#39;,{open:true})" title="生成并在编辑器打开 MD">📄 打开 MD</button></div></div>';
+  // 组织总览 · 自动展示(进板即拉: 组织信息+全量成员+全量仓库, 无需手点检测/拉取)
+  h+='<div class="st">🏛 组织总览 (自动展示)</div><div id="ghOrgOverview"></div>';
   // ── 左右分栏网格(IDE 标签宽·充分利用横向; 窄屏自动堆叠) ──
   h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px;align-items:start">';
   // ═══ 左栏: 添号 + 账号池 ═══
@@ -10017,7 +10061,36 @@ function rGitHub(){
   h+='</div>'; // /grid
   v.innerHTML=ghBar('manage')+h;
   ghRenderGhFleet();ghRenderPatInject();ghRenderMcpOne();cmd('daoGhFleetList',{});cmd('daoGhGetPatCfg',{});cmd('daoGhPatStatus',{});
+  // 组织总览: 有缓存先渲染(不闪加载), 同时后台刷新一次
+  ghRenderOrgOverview(st.orgOverview||null);
+  if(!st._orgOvLoading){st._orgOvLoading=true;setTimeout(function(){var s2=_ghState();if(s2._orgOvLoading&&!s2._orgOvDone){s2._orgOvLoading=false;ghRenderOrgOverview({ok:false,error:'读取超时(45s) — GitHub API 无应答'})}},45000);cmd('daoGhOrgOverview',{});}
 }
+// 组织总览 · 渲染(组织信息 + 全量成员 + 全量仓库)
+function ghRenderOrgOverview(d){
+  var v=document.getElementById('ghOrgOverview');if(!v)return;
+  if(!d){v.innerHTML='<div class="card"><p style="font-size:11px;color:var(--muted);margin:2px 0">⏳ 自动载入组织总览(组织·成员·仓库)…</p></div>';return}
+  if(!d.ok){v.innerHTML='<div class="card"><p style="font-size:11px;color:var(--warn);margin:2px 0">✗ '+esc(d.error||'组织总览读取失败')+'</p><div class="br"><button class="btn sm" onclick="ghOrgOverviewLoad()">⟳ 重试</button></div></div>';return}
+  var info=d.info||{};var members=d.members||[];var repos=d.repos||[];
+  var admins=members.filter(function(m){return m.role==='admin'}).length;
+  var privN=repos.filter(function(r){return r.private}).length;
+  var h='<div class="card" style="border-left:3px solid var(--accent2,#c586c0)">';
+  h+='<div class="cr"><span class="l">组织</span><span class="v"><b>'+esc(info.name||d.org||'')+'</b> <span style="color:var(--muted);font-size:10px">@'+esc(info.login||d.org||'')+(info.plan?(' · '+esc(info.plan)):'')+'</span></span></div>';
+  if(info.description)h+='<div class="cr"><span class="l">简介</span><span class="v" style="font-size:10px">'+esc(info.description)+'</span></div>';
+  h+='<div class="cr"><span class="l">成员</span><span class="v">'+members.length+' 人 · 管理员 '+admins+'</span></div>';
+  h+='<div class="cr"><span class="l">仓库</span><span class="v">'+repos.length+' 个 · 私有 '+privN+' · 公开 '+(repos.length-privN)+'</span></div>';
+  h+='<div class="br" style="margin-top:4px"><button class="btn sm" onclick="ghOrgOverviewLoad()">⟳ 刷新总览</button><button class="btn sm ghost" onclick="ghOpenOrgHome()" title="打开组织主页(优先本体账号隔离档·已登录)">🌐 组织主页</button></div>';
+  h+='<div class="st" style="margin-top:8px">成员 ('+members.length+')</div><div style="max-height:180px;overflow:auto;border:1px solid var(--border);border-radius:4px;padding:2px 6px">';
+  if(!members.length)h+='<p style="font-size:11px;color:var(--muted);margin:2px 0">（无成员或 PAT 无读成员权限）</p>';
+  members.forEach(function(m){h+='<div class="cr"><span class="l" style="font-size:11px">'+(m.role==='admin'?'<span style="color:var(--warn)" title="管理员">★</span> ':'')+esc(m.login)+'</span><span class="v" style="font-size:10px;color:var(--muted)">'+esc(m.role||'member')+' · <a href="#" onclick="ghOpen(&#39;https://github.com/'+esc(m.login)+'&#39;);return false">主页</a></span></div>'});
+  h+='</div>';
+  h+='<div class="st" style="margin-top:8px">仓库 ('+repos.length+')</div><div style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:4px;padding:2px 6px">';
+  if(!repos.length)h+='<p style="font-size:11px;color:var(--muted);margin:2px 0">（组织暂无仓库）</p>';
+  repos.forEach(function(r){h+='<div class="cr"><span class="l" style="font-size:11px">'+(r.private?'🔒':'🌐')+' '+esc(r.name)+(r.fork?' <span style="color:var(--muted);font-size:10px">fork</span>':'')+(r.archived?' <span style="color:var(--muted);font-size:10px">归档</span>':'')+'</span><span class="v" style="font-size:10px"><a href="#" onclick="ghOpen(&#39;https://github.com/'+esc(r.full_name)+'&#39;);return false">打开</a></span></div>'});
+  h+='</div></div>';
+  v.innerHTML=h;
+}
+function ghOrgOverviewLoad(){var st=_ghState();st._orgOvDone=false;st._orgOvLoading=true;var v=document.getElementById('ghOrgOverview');if(v)v.innerHTML='<div class="card"><p style="font-size:11px;color:var(--muted);margin:2px 0">⏳ 载入组织总览…</p></div>';setTimeout(function(){var s2=_ghState();if(s2._orgOvLoading&&!s2._orgOvDone){s2._orgOvLoading=false;ghRenderOrgOverview({ok:false,error:'读取超时(45s) — GitHub API 无应答'})}},45000);cmd('daoGhOrgOverview',{})}
+function ghOpenOrgHome(){var st=_ghState();var ov=st.orgOverview||{};var org=ov.org||(((S.injectProfile||{}).orgBody||{}).org||'');if(!org){toast('未设本体组织',false);return}var fl=(st.ghFleet||[]);var a=fl.filter(function(x){return x.active&&x.hasPat})[0];if(a){ghFleetOpen(a.login,'/orgs/'+org)}else{ghOpen('https://github.com/orgs/'+org+'/repositories')}}
 // 添号模式切换
 function ghAddMode(m){var st=_ghState();st.addMode=m;rGitHub()}
 // ⑤ 持久化 Worker · GitHub 板块入口(复用穿透板块同一后端命令, 状态两板同步)
@@ -10981,6 +11054,14 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 reply({ type: 'daoGhResult', kind: 'overview', ...r, orgBody: prof.orgBody || null, patPresent: !!pat });
                 break;
             }
+            case 'daoGhOrgOverview': {
+                const prof = loadInjectProfile();
+                const pat = String(msg.pat || '').trim() || String((prof.secrets.find(s => s.name === 'GITHUB_PAT') || { value: '' }).value || '').trim();
+                const org = String(msg.org || '').trim() || String((prof.orgBody && prof.orgBody.org) || '').trim();
+                const r = await daoGhOrgFullOverview(pat, org);
+                reply({ type: 'daoGhResult', kind: 'orgOverview', ...r });
+                break;
+            }
             case 'daoGhListRepos': {
                 const prof = loadInjectProfile();
                 const pat = String(msg.pat || '').trim() || String((prof.secrets.find(s => s.name === 'GITHUB_PAT') || { value: '' }).value || '').trim();
@@ -11126,8 +11207,19 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             }
             case 'daoGhOpenUrl': {
                 // 登录链接/建 PAT/建组织 网页直达(免用户手动找路径)。
-                try { vscode.env.openExternal(vscode.Uri.parse(String(msg.url || 'https://github.com'))); } catch { /* 守柔 */ }
-                reply({ type: 'daoGhResult', kind: 'openUrl', ok: true, url: String(msg.url || '') });
+                // openExternal 在部分 webview/远端宿主会静默失败 → 双通道兜底(系统默认浏览器直开), 并如实回报结果。
+                const _u = String(msg.url || 'https://github.com');
+                const cp = require('child_process') as typeof import('child_process');
+                let _opened = false;
+                try { _opened = !!(await vscode.env.openExternal(vscode.Uri.parse(_u))); } catch { /* 守柔 */ }
+                if (!_opened) {
+                    try {
+                        if (process.platform === 'win32') { cp.spawn('cmd.exe', ['/c', 'start', '', _u], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); _opened = true; }
+                        else if (process.platform === 'darwin') { cp.spawn('open', [_u], { detached: true, stdio: 'ignore' }).unref(); _opened = true; }
+                        else { cp.spawn('xdg-open', [_u], { detached: true, stdio: 'ignore' }).unref(); _opened = true; }
+                    } catch { /* 守柔 */ }
+                }
+                reply({ type: 'daoGhResult', kind: 'openUrl', ok: _opened, url: _u, error: _opened ? undefined : '系统无可用浏览器打开方式' });
                 break;
             }
             case 'daoGhFleetAdd': {
@@ -16049,11 +16141,14 @@ async function daoProbeMcp(spec: any): Promise<{ ok: boolean; status: number; la
     const firstScript = args.find(a => /\.(js|mjs|cjs|py)$/i.test(a) && (path.isAbsolute(a) || a.indexOf('\\') >= 0 || a.indexOf('/') >= 0));
     if (firstScript) {
         try {
-            if (fs.existsSync(firstScript)) return { ok: true, status: 1, label: '可调用', detail: '运行时 ' + path.basename(resolved) + ' + 脚本就绪: ' + firstScript };
-            return { ok: false, status: 0, label: '脚本缺失', detail: '运行时在, 但目标脚本不存在: ' + firstScript };
+            if (!fs.existsSync(firstScript)) return { ok: false, status: 0, label: '脚本缺失', detail: '运行时在, 但目标脚本不存在: ' + firstScript };
         } catch { /* 守柔 */ }
     }
-    return { ok: true, status: 1, label: '命令可用', detail: cmd + ' → ' + resolved };
+    // 「可调用」不许虚标: 真起进程 → JSON-RPC initialize + tools/list, 以真实工具数为准。
+    const v = await daoVerifyMcpStdio(spec, 15000);
+    if (v.ok) return { ok: true, status: 1, label: '已连通·' + v.toolCount + ' 工具', detail: '实跑 ' + path.basename(resolved) + ' → initialize + tools/list 应答, 工具 ' + v.toolCount + ' 个' };
+    if (String(v.error || '') === 'timeout') return { ok: false, status: 0, label: '进程无应答', detail: '进程可起但 15s 内无 tools/list 应答(可能需网络/凭证)' };
+    return { ok: false, status: 0, label: '启动失败', detail: '进程启动/协议失败: ' + String(v.error || '').slice(0, 120) };
 }
 
 // MCP tab 数据装配 — 解耦本机 IDE 扫描与官网 API 成败: 本机 MCP 纯本地无需鉴权恒先列(与 IDE 一对一),
