@@ -8571,6 +8571,9 @@ function lkIs(kind,name){var a=(S.locks||{})[kind]||[];return a.some(function(x)
 function lkToggle(kind,name){cmd('toggleManualLock',{kind:kind,name:name})}
 function lkBtn(kind,name){var on=lkIs(kind,name);return '<button class="btn sm" style="'+(on?'color:var(--success);border-color:var(--success)':'color:var(--muted)')+'" title="'+(on?'已锁定 · 反向注入不会覆盖此条目(保留你的改写版)':'未锁定 · 点击锁定以防被反向注入覆盖')+'" onclick="lkToggle(&#39;'+kind+'&#39;,&#39;'+esc(name)+'&#39;)">'+(on?'🔒锁':'🔓')+'</button>'}
 // 面板内修改知识(正文直接可见可编辑) — 取代原生 InputBox/临时文档(多窗口下弹不出/看不到内容)。
+// 主页 Customization 官方可改项写回: 布尔开关即点即写; 文本/数字弹窗改值 — 与官网同一 API
+function ovCustSet(key,val){toast('保存中… '+key,true);cmd('devinSetCustomization',{key:key,value:(val==='true'?true:val==='false'?false:val)})}
+function ovCustEdit(i){var it=(window._custItems||[])[i];if(!it||!it.key)return;var bodyHtml='<label style="font-size:11px;color:var(--muted)">'+esc(it.name||it.key)+'</label><input id="m1" value="'+esc(String(it.value==null?'':it.value))+'" style="width:100%;margin:4px 0" autocomplete="off"><p style="font-size:10px;color:var(--muted);margin:4px 0">留空 = 恢复官方默认。改动经官方组织设置 API 同源写回官网。</p>';sm('✏️ 官方设置 · '+esc(it.name||it.key),bodyHtml,function(){var v=document.getElementById('m1').value.trim();var out=(it.kind==='num')?(v===''?null:Number(v)):(v===''?null:v);if(it.kind==='num'&&v!==''&&isNaN(out)){toast('须为数字',false);return false}toast('保存中… '+it.key,true);cmd('devinSetCustomization',{key:it.key,value:out})})}
 function kEdit(id){var it=(S.data.knowledge||[]).find(function(k){return String(k.id)===String(id)});if(!it){toast('未找到该知识条目',false);return}var ro=(it.can_write===false);var bodyHtml='<label style="font-size:11px;color:var(--muted)">名称</label><input id="m1" '+(ro?'disabled':'')+' value="'+esc(it.name||'')+'" style="width:100%;margin:4px 0"><label style="font-size:11px;color:var(--muted)">正文 body (Markdown)</label><textarea id="m2" '+(ro?'disabled':'')+' style="width:100%;height:220px;margin:4px 0;font-family:monospace;white-space:pre">'+esc(it.body||'')+'</textarea><label style="font-size:11px;color:var(--muted)">触发描述 trigger (何时检索)</label><input id="m3" '+(ro?'disabled':'')+' value="'+esc(it.trigger_description||it.trigger||'')+'" style="width:100%;margin:4px 0">'+(ro?'<p style="font-size:10px;color:var(--warn);margin:4px 0">此为平台内置只读条目(note_type=builtin), 无法修改/删除。</p>':'');sm('✏️ 修改知识 · '+esc(it.name||''),bodyHtml,function(){if(ro)return;var n=document.getElementById('m1').value.trim();if(!n){toast('名称不能为空',false);return false}var b=document.getElementById('m2').value;var t=document.getElementById('m3').value.trim();cmd('devinEditKnowledgeInline',{id:String(id),name:n,body:b,trigger:t});toast('保存中…',true)})}
 function sw(t){
   S.tab=t;
@@ -9643,7 +9646,20 @@ function rT(tab,items,err,fallbackProxy){
     setTimeout(function(){try{cmd('autoMaintainLocalMcp',{})}catch(e){}},900);
     // 启动周期自动验证(30 分钟循环·失败即时回填面板·确保 MCP 持续可用)
     mcpStartPeriodicVerify();
-  }else if(tab==='usage'||tab==='org'||tab==='automations'||tab==='profile'||tab==='customization'||tab==='apikeys'){
+  }else if(tab==='customization'){
+    // 官方能改的都能改: 布尔=点击即翻转; 文本/数字=✏️ 弹窗改值 — 全部经官方组织设置 API 同源写回
+    window._custItems=items;
+    items.forEach((it,i)=>{
+      const nm=it.name||'';const dt=it.detail||'';
+      let ctl='';
+      if(it.key&&it.kind==='bool'){
+        ctl='<button class="btn sm '+(it.value?'primary':'ghost')+'" onclick="ovCustSet(&#39;'+esc(it.key)+'&#39;,'+(it.value?'false':'true')+')" title="点击切换(官方同源写回)">'+(it.value?'● 开':'○ 关')+'</button>';
+      }else if(it.key){
+        ctl='<button class="btn sm ghost" onclick="ovCustEdit('+i+')" title="修改(官方同源写回)">✏️</button>';
+      }
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px;display:flex;align-items:center;gap:4px">'+(it.kind!=='bool'&&dt?'<span style="color:var(--muted)">'+esc(dt)+'</span>':'')+ctl+'</span></div></div>';
+    });
+  }else if(tab==='usage'||tab==='org'||tab==='automations'||tab==='profile'||tab==='apikeys'){
     items.forEach(it=>{
       const nm=it.name||it.title||'';const dt=it.detail||'';
       const st=it.connected!==undefined?(it.connected?'<span style="color:var(--success)">● on</span>':'<span style="color:var(--muted)">○ off</span>'):'';
@@ -11623,6 +11639,19 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 refreshReply({ type: 'actionResult', command: 'devinEditPlaybook', ok: r.ok });
                 break;
             }
+            case 'devinSetCustomization': {
+                // 官方能改的都能改: 主页 Customization 开关/模式/数值 → 官方组织设置 API 同源写回
+                const ck = String(msg.key || '');
+                if (!ws.devinOrgId || !ck) { refreshReply({ type: 'actionResult', command: 'devinSetCustomization', ok: false, error: '未登录或缺字段' }); break; }
+                const rSet = await devinUpdateOrgSettings(ws.devinOrgId, { [ck]: msg.value }, ws.devinAuth1);
+                if (!rSet.ok) vscode.window.showErrorMessage('官方设置修改失败: ' + ck + ' · ' + (rSet.error || ''));
+                refreshReply({ type: 'actionResult', command: 'devinSetCustomization', ok: rSet.ok, error: rSet.error });
+                try {
+                    const cur = await devinGetCustomization(ws.devinOrgId, ws.devinAuth1);
+                    if (cur.ok) reply({ type: 'tabData', tab: 'customization', items: cur.items || [] });
+                } catch { /* 守柔 */ }
+                break;
+            }
             case 'devinEditSecret': {
                 // Secret 值不可读(write-only) → 仅改新值(可同时改名)
                 const oldName = String(msg.name || '');
@@ -13013,6 +13042,44 @@ function devinJsonPatch(targetUrl: string, headers: any, body: any, timeoutMs?: 
         const makeRequest = (hostname: string, port: number, path: string, h: any) => {
             const mod: any = hostname === '127.0.0.1' ? http : https;
             const req = mod.request({ hostname, port, path, method: 'PATCH', headers: h, timeout: timeoutMs || 15000, rejectUnauthorized: false }, (res: any) => {
+                let d = '';
+                res.on('data', (c: Buffer) => d += c.toString());
+                res.on('end', () => { try { resolve({ status: res.statusCode, json: JSON.parse(d), text: d }); } catch { resolve({ status: res.statusCode, json: null, text: d }); } });
+            });
+            req.on('error', (e) => resolve({ status: 0, json: null, text: e.message }));
+            req.on('timeout', () => { req.destroy(); resolve({ status: 0, json: null, text: 'timeout' }); });
+            req.write(data);
+            req.end();
+        };
+        const reqHeaders = Object.assign({ 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': DEVIN_UA, 'Content-Length': data.length }, headers || {});
+        const direct = () => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders);
+        const viaProxy = () => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }));
+        const origResolve = resolve;
+        if (needsProxy) {
+            const attemptDirect = (tries: number) => {
+                resolve = ((r: any) => {
+                    if (r && r.status === 0 && u.hostname === 'app.devin.ai' && tries < 2) { setTimeout(() => attemptDirect(tries + 1), 300 * (tries + 1)); return; }
+                    if (r && r.status === 0 && detectedProxyPort) { resolve = origResolve; viaProxy(); return; }
+                    origResolve(r);
+                }) as any;
+                direct();
+            };
+            attemptDirect(0);
+        } else {
+            direct();
+        }
+    });
+}
+
+// PUT — 与 devinJsonPatch 同构, 仅方法不同。用于官方组织设置整份回写(服务端不认 PATCH 时)。
+function devinJsonPut(targetUrl: string, headers: any, body: any, timeoutMs?: number): Promise<any> {
+    return new Promise((resolve) => {
+        const data = Buffer.from(asciiSafeJson(body), 'utf8');
+        const u = new URL(targetUrl);
+        const needsProxy = u.hostname === 'app.devin.ai' || u.hostname.endsWith('windsurf.com') || u.hostname === 'register.windsurf.com';
+        const makeRequest = (hostname: string, port: number, path: string, h: any) => {
+            const mod: any = hostname === '127.0.0.1' ? http : https;
+            const req = mod.request({ hostname, port, path, method: 'PUT', headers: h, timeout: timeoutMs || 15000, rejectUnauthorized: false }, (res: any) => {
                 let d = '';
                 res.on('data', (c: Buffer) => d += c.toString());
                 res.on('end', () => { try { resolve({ status: res.statusCode, json: JSON.parse(d), text: d }); } catch { resolve({ status: res.statusCode, json: null, text: d }); } });
@@ -15450,21 +15517,37 @@ async function devinGetCustomization(orgId: string, auth1: string): Promise<{ ok
     const r = await devinJsonGet(DEVIN_APP + '/api/organizations/' + orgId + '/settings', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status !== 200 || !r.json) return { ok: false, items: [] };
     const s = r.json;
+    // 官方能改的都能改: 每项带 key/kind/value, 前端据此渲染可写控件(布尔=开关·文本/数字=✏️)。
     const items = [
-        { name: 'Devin 版本 Default version', detail: s.default_devin_version_override || '(官方默认)' },
-        { name: '默认平台 Platform', detail: s.default_platform || '(官方默认 · Linux)' },
-        { name: '搜索模式 Search mode', detail: s.default_search_mode || '—' },
-        { name: 'PR 署名 Open as', detail: s.pr_open_as || '—' },
-        { name: 'PR 开草稿 Draft PRs', detail: s.pr_create_as_draft ? '开' : '关', connected: !!s.pr_create_as_draft },
-        { name: 'PR 仅提及 Mention only', detail: s.pr_mention_only ? '开' : '关', connected: !!s.pr_mention_only },
-        { name: '自动 Review Auto-reviewer', detail: s.pr_auto_reviewer ? '开' : '关', connected: !!s.pr_auto_reviewer },
-        { name: 'Secure Mode 安全模式', detail: s.secure_mode ? '开' : '关', connected: !!s.secure_mode },
-        { name: 'Computer Use 桌面操控', detail: s.computer_use ? '开' : '关', connected: !!s.computer_use },
-        { name: '批量会话上限 Max batch', detail: String(s.max_batch_sessions != null ? s.max_batch_sessions : '—') },
-        { name: '快照自动构建 Snapshot auto-build', detail: s.snapshot_auto_build ? '开' : '关', connected: !!s.snapshot_auto_build },
-        { name: 'Wiki 自动刷新', detail: (s.wiki_auto_refresh || '—') + ' · effort ' + (s.wiki_effort_level || '—') },
+        { name: 'Devin 版本 Default version', detail: s.default_devin_version_override || '(官方默认)', key: 'default_devin_version_override', kind: 'text', value: s.default_devin_version_override || '' },
+        { name: '默认平台 Platform', detail: s.default_platform || '(官方默认 · Linux)', key: 'default_platform', kind: 'text', value: s.default_platform || '' },
+        { name: '搜索模式 Search mode', detail: s.default_search_mode || '—', key: 'default_search_mode', kind: 'text', value: s.default_search_mode || '' },
+        { name: 'PR 署名 Open as', detail: s.pr_open_as || '—', key: 'pr_open_as', kind: 'text', value: s.pr_open_as || '' },
+        { name: 'PR 开草稿 Draft PRs', detail: s.pr_create_as_draft ? '开' : '关', connected: !!s.pr_create_as_draft, key: 'pr_create_as_draft', kind: 'bool', value: !!s.pr_create_as_draft },
+        { name: 'PR 仅提及 Mention only', detail: s.pr_mention_only ? '开' : '关', connected: !!s.pr_mention_only, key: 'pr_mention_only', kind: 'bool', value: !!s.pr_mention_only },
+        { name: '自动 Review Auto-reviewer', detail: s.pr_auto_reviewer ? '开' : '关', connected: !!s.pr_auto_reviewer, key: 'pr_auto_reviewer', kind: 'bool', value: !!s.pr_auto_reviewer },
+        { name: 'Secure Mode 安全模式', detail: s.secure_mode ? '开' : '关', connected: !!s.secure_mode, key: 'secure_mode', kind: 'bool', value: !!s.secure_mode },
+        { name: 'Computer Use 桌面操控', detail: s.computer_use ? '开' : '关', connected: !!s.computer_use, key: 'computer_use', kind: 'bool', value: !!s.computer_use },
+        { name: '批量会话上限 Max batch', detail: String(s.max_batch_sessions != null ? s.max_batch_sessions : '—'), key: 'max_batch_sessions', kind: 'num', value: s.max_batch_sessions != null ? s.max_batch_sessions : '' },
+        { name: '快照自动构建 Snapshot auto-build', detail: s.snapshot_auto_build ? '开' : '关', connected: !!s.snapshot_auto_build, key: 'snapshot_auto_build', kind: 'bool', value: !!s.snapshot_auto_build },
+        { name: 'Wiki 自动刷新', detail: s.wiki_auto_refresh || '—', key: 'wiki_auto_refresh', kind: 'text', value: s.wiki_auto_refresh || '' },
+        { name: 'Wiki effort', detail: s.wiki_effort_level || '—', key: 'wiki_effort_level', kind: 'text', value: s.wiki_effort_level || '' },
     ];
     return { ok: true, items };
+}
+
+// 官方组织设置写回(与官网同源端点): PATCH 部分字段; 服务端不认 PATCH 时回落 GET 合并 + PUT 整份。
+async function devinUpdateOrgSettings(orgId: string, patch: any, auth1: string): Promise<{ ok: boolean; error?: string }> {
+    const hdr = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    const url = DEVIN_APP + '/api/organizations/' + orgId + '/settings';
+    let r = await devinJsonPatch(url, hdr, patch);
+    if (r.status === 404 || r.status === 405) {
+        const cur = await devinJsonGet(url, hdr);
+        const merged = Object.assign({}, (cur && cur.json) || {}, patch);
+        r = await devinJsonPut(url, hdr, merged);
+    }
+    const ok = r.status >= 200 && r.status < 300;
+    return ok ? { ok: true } : { ok: false, error: 'HTTP ' + r.status + ' ' + String(r.text || '').slice(0, 120) };
 }
 
 async function devinGetApiKeyStatus(orgId: string, userId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
