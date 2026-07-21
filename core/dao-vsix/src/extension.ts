@@ -11235,6 +11235,16 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 const prof = loadInjectProfile();
                 const org = (prof.orgBody && prof.orgBody.org) || '';
                 const orgPat = String((prof.secrets.find(s => s.name === 'GITHUB_PAT') || { value: '' }).value || '').trim();
+                // 存流秒出: 先用本地档(ghFleet)零网络秒渲染账号池(含上次缓存的 org/acct 状态),
+                //   再后台逐号核对 org membership/账号状态后二次覆盖 — 根治"21 号×2 往返串行→板块卡数十秒才出账号"。
+                const localFleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
+                const localRows = localFleet.map(a => ({
+                    login: a.login, role: a.role || 'member', note: a.note || '', addedAt: a.addedAt || '',
+                    hasPat: !!(a.pat && a.pat.trim()), hasCred: !!((a as any).cred && (a as any).cred.user),
+                    active: !!(a.pat && orgPat && a.pat.trim() === orgPat), pending: (a as any).verify === 'pending',
+                    orgState: (a as any).orgState, orgRole: (a as any).orgRole, acctState: (a as any).acctState
+                }));
+                reply({ type: 'daoGhResult', kind: 'fleetGh', ok: true, org, accounts: localRows, partial: true });
                 const rows = await daoGhFleetList(orgPat, org);
                 reply({ type: 'daoGhResult', kind: 'fleetGh', ok: true, org, accounts: rows });
                 break;

@@ -2636,6 +2636,12 @@ async function _daoPool(items, conc, fn) {
   async function w() { while (idx < n) { const i = idx++; try { await fn(items[i]); } catch (e) {} } }
   const ws = []; for (let c = 0; c < conc; c++) ws.push(w()); await Promise.all(ws);
 }
+// 宿主级近期对话磁盘缓存(对齐手机 APK recentConvAll 设备聚合·存流秒出最终态):
+//   按账号存上次爬到的近期对话 → 打开悬浮窗零网络先回推全账号最终态快照(含已移出库账号·守柔保留),
+//   后台逐号刷新就地覆盖 — 根治「先显旧对话→跳来跳去→分钟级才稳定」。
+const DAO_REC_CACHE_FILE = path.join(os.homedir(), ".dao", "recent-conv-cache.json");
+function _daoRecCacheLoad() { try { const j = JSON.parse(fs.readFileSync(DAO_REC_CACHE_FILE, "utf8")); return (j && j.byEmail) || {}; } catch (e) { return {}; } }
+function _daoRecCacheSave(byEmail) { try { fs.mkdirSync(path.dirname(DAO_REC_CACHE_FILE), { recursive: true }); fs.writeFileSync(DAO_REC_CACHE_FILE, JSON.stringify({ ts: Date.now(), byEmail }), "utf8"); } catch (e) {} }
 async function _daoDownloadData(m, reply) {
   const t = m && m.type;
   if (t === "dlRecent") {
@@ -2645,17 +2651,21 @@ async function _daoDownloadData(m, reply) {
     const perAcc = Math.max(1, Math.min(20, Number(m.perAcc) || 12));
     // 流式增量(对齐手机 daopan.html): 每账号回来即合并去重排序回推一次(节流~250ms),
     //   末尾再回推一次 partial:false。前端先用缓存秒开, 收到增量持续刷新 → 不再等全量阻塞。
-    const out = [];
+    const byEmail = _daoRecCacheLoad();
     let doneN = 0, lastPaint = 0;
     const covered = Object.create(null);
     const emit = (partial) => {
-      const sorted = out.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      const flat = [];
+      for (const k in byEmail) { const rs = byEmail[k]; if (Array.isArray(rs)) for (const r of rs) flat.push(r); }
+      const sorted = flat.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
       const seen = Object.create(null), ded = [];
       for (const it of sorted) { if (it.sid && seen[it.sid]) continue; if (it.sid) seen[it.sid] = 1; ded.push(it); }
       // covered = 本轮已真刷过的账号(含返回 0 对话者) → 前端据此只替换这些号的行, 其余保留缓存, 消除「先缩后涨」的跳伞。
       reply({ type: "dlRecentData", list: ded.slice(0, 80), accounts: emails.length, partial: !!partial, done: doneN, total: emails.length, covered: Object.keys(covered) });
     };
     if (!emails.length) { reply({ type: "dlRecentData", list: [], accounts: 0, partial: false, done: 0, total: 0, covered: [] }); return true; }
+    // 秒出最终态: 磁盘缓存有货即先整包回推(covered 空 → 前端只并入不清行) — 首屏即为上次最终态, 不再从零涨。
+    if (Object.keys(byEmail).length) { try { emit(true); } catch (e) {} }
     // 同源·首屏即见最新: 先以对话追踪聚合(_dvStatusAgg)合成实时条目立即回推(covered 空 → 前端只并入不清缓存),
     //   打开即见正在运行/最新对话, 不等逐号 API 爬完(旧病灶: 首屏先显十几小时前的缓存旧对话)。
     try {
@@ -2679,10 +2689,12 @@ async function _daoDownloadData(m, reply) {
         if (auth && auth.auth1) {
           const ls = await devinCloud.listSessions(auth, perAcc);
           if (ls && ls.ok) {
+            const rows = [];
             (ls.sessions || []).forEach((s) => {
               const sid = s.devin_id || s.session_id || s.id; if (!sid) return;
-              out.push({ email, accNo: noOf(email), sid, title: s.title || s.name || s.prompt || sid, pv: _daoPreviewOf(s), status: s.status || s.activity_status || "", statusClass: devinCloud.classifySession(s), updatedAt: _daoRecencyMs(s), auto: !!(devinCloud.isAutoConv && devinCloud.isAutoConv(s)) });
+              rows.push({ email, accNo: noOf(email), sid, title: s.title || s.name || s.prompt || sid, pv: _daoPreviewOf(s), status: s.status || s.activity_status || "", statusClass: devinCloud.classifySession(s), updatedAt: _daoRecencyMs(s), auto: !!(devinCloud.isAutoConv && devinCloud.isAutoConv(s)) });
             });
+            byEmail[String(email).toLowerCase()] = rows; // 真刷成功才覆盖该号缓存; 失败守柔保留上次数据
           }
         }
       } catch (e) {}
@@ -2692,6 +2704,7 @@ async function _daoDownloadData(m, reply) {
       if (now - lastPaint > 250) { lastPaint = now; emit(true); }
     });
     emit(false);
+    _daoRecCacheSave(byEmail);
     return true;
   }
   if (t === "dlExportMd") {
