@@ -8572,8 +8572,12 @@ function lkToggle(kind,name){cmd('toggleManualLock',{kind:kind,name:name})}
 function lkBtn(kind,name){var on=lkIs(kind,name);return '<button class="btn sm" style="'+(on?'color:var(--success);border-color:var(--success)':'color:var(--muted)')+'" title="'+(on?'已锁定 · 反向注入不会覆盖此条目(保留你的改写版)':'未锁定 · 点击锁定以防被反向注入覆盖')+'" onclick="lkToggle(&#39;'+kind+'&#39;,&#39;'+esc(name)+'&#39;)">'+(on?'🔒锁':'🔓')+'</button>'}
 // 面板内修改知识(正文直接可见可编辑) — 取代原生 InputBox/临时文档(多窗口下弹不出/看不到内容)。
 // 主页 Customization 官方可改项写回: 布尔开关即点即写; 文本/数字弹窗改值 — 与官网同一 API
-function ovCustSet(key,val){toast('保存中… '+key,true);cmd('devinSetCustomization',{key:key,value:(val==='true'?true:val==='false'?false:val)})}
-function ovCustEdit(i){var it=(window._custItems||[])[i];if(!it||!it.key)return;var bodyHtml='<label style="font-size:11px;color:var(--muted)">'+esc(it.name||it.key)+'</label><input id="m1" value="'+esc(String(it.value==null?'':it.value))+'" style="width:100%;margin:4px 0" autocomplete="off"><p style="font-size:10px;color:var(--muted);margin:4px 0">留空 = 恢复官方默认。改动经官方组织设置 API 同源写回官网。</p>';sm('✏️ 官方设置 · '+esc(it.name||it.key),bodyHtml,function(){var v=document.getElementById('m1').value.trim();var out=(it.kind==='num')?(v===''?null:Number(v)):(v===''?null:v);if(it.kind==='num'&&v!==''&&isNaN(out)){toast('须为数字',false);return false}toast('保存中… '+it.key,true);cmd('devinSetCustomization',{key:it.key,value:out})})}
+function ovCustSet(key,val){var nv=(val==='true'?true:val==='false'?false:val);
+  // 乐观回显·即时翻转(帛书「反者道之动」): 点击即改本地态并就地重渲, 官方写回结果由随后的
+  //   tabData(customization) 回读校准(失败即回落官方真值) — 不再干等 30s-1min 两趟跨网往返。
+  try{var _its=window._custItems||[];for(var _i=0;_i<_its.length;_i++){if(_its[_i].key===key){_its[_i].value=nv;break;}}rT('customization',_its);}catch(e){}
+  toast('保存中… '+key,true);cmd('devinSetCustomization',{key:key,value:nv})}
+function ovCustEdit(i){var it=(window._custItems||[])[i];if(!it||!it.key)return;var bodyHtml='<label style="font-size:11px;color:var(--muted)">'+esc(it.name||it.key)+'</label><input id="m1" value="'+esc(String(it.value==null?'':it.value))+'" style="width:100%;margin:4px 0" autocomplete="off"><p style="font-size:10px;color:var(--muted);margin:4px 0">留空 = 恢复官方默认。改动经官方组织设置 API 同源写回官网。</p>';sm('✏️ 官方设置 · '+esc(it.name||it.key),bodyHtml,function(){var v=document.getElementById('m1').value.trim();var out=(it.kind==='num')?(v===''?null:Number(v)):(v===''?null:v);if(it.kind==='num'&&v!==''&&isNaN(out)){toast('须为数字',false);return false}try{var _its=window._custItems||[];for(var _j=0;_j<_its.length;_j++){if(_its[_j].key===it.key){_its[_j].value=out;break;}}rT('customization',_its);}catch(e){}toast('保存中… '+it.key,true);cmd('devinSetCustomization',{key:it.key,value:out})})}
 function kEdit(id){var it=(S.data.knowledge||[]).find(function(k){return String(k.id)===String(id)});if(!it){toast('未找到该知识条目',false);return}var ro=(it.can_write===false);var bodyHtml='<label style="font-size:11px;color:var(--muted)">名称</label><input id="m1" '+(ro?'disabled':'')+' value="'+esc(it.name||'')+'" style="width:100%;margin:4px 0"><label style="font-size:11px;color:var(--muted)">正文 body (Markdown)</label><textarea id="m2" '+(ro?'disabled':'')+' style="width:100%;height:220px;margin:4px 0;font-family:monospace;white-space:pre">'+esc(it.body||'')+'</textarea><label style="font-size:11px;color:var(--muted)">触发描述 trigger (何时检索)</label><input id="m3" '+(ro?'disabled':'')+' value="'+esc(it.trigger_description||it.trigger||'')+'" style="width:100%;margin:4px 0">'+(ro?'<p style="font-size:10px;color:var(--warn);margin:4px 0">此为平台内置只读条目(note_type=builtin), 无法修改/删除。</p>':'');sm('✏️ 修改知识 · '+esc(it.name||''),bodyHtml,function(){if(ro)return;var n=document.getElementById('m1').value.trim();if(!n){toast('名称不能为空',false);return false}var b=document.getElementById('m2').value;var t=document.getElementById('m3').value.trim();cmd('devinEditKnowledgeInline',{id:String(id),name:n,body:b,trigger:t});toast('保存中…',true)})}
 function sw(t){
   S.tab=t;
@@ -8664,8 +8668,8 @@ function rSwitchData(d){
   // 清理额度归零账号: 备份→清理→出库 一气呵成
   h+='<div class="st" style="margin-top:12px">🌊 额度归零清理</div>';
   h+='<div class="card"><div style="font-size:11px;color:var(--muted);margin-bottom:6px">对所有额度归零账号: <b style="color:var(--fg)">全量备份对话 → 清理数据 → 移出账号库</b>，一气呵成。</div>';
-  h+='<button class="btn sm danger" onclick="if(confirm(&#39;将对所有额度归零账号执行: 备份→清理→出库(不可逆)。确认?&#39;))cmd(&#39;cleanupZeroQuota&#39;)">🌊 清理并出库归零账号</button>';
-  h+='<button class="btn sm" onclick="if(confirm(&#39;对全部账号立即: 备份→归零→出库(无模态·一气呵成)。确认?&#39;))cmd(&#39;cleanupImmediate&#39;)" title="立即清理(参手机版·无模态): 全部账号 先备份→归零→出库">⚡ 立即清理(全部)</button></div>';
+  h+='<button class="btn sm danger" onclick="daoConfirm(&#39;将对所有额度归零账号执行: 备份→清理→出库(不可逆)。确认?&#39;,function(){cmd(&#39;cleanupZeroQuota&#39;)})">🌊 清理并出库归零账号</button>';
+  h+='<button class="btn sm" onclick="daoConfirm(&#39;对全部账号立即: 备份→归零→出库(无模态·一气呵成)。确认?&#39;,function(){cmd(&#39;cleanupImmediate&#39;)})" title="立即清理(参手机版·无模态): 全部账号 先备份→归零→出库">⚡ 立即清理(全部)</button></div>';
   // 出库保留时长可调 (对齐手机 APK · 默认 72h · 页面直调)
   var _cdH=(typeof S.cooldownH==='number')?S.cooldownH:72;
   h+='<div class="st" style="margin-top:12px">⏳ 出库保留时长</div>';
@@ -8754,8 +8758,8 @@ function rCfResources(){
   }
   return h;
 }
-function cfRevoke(id,name){if(!id)return;if(!confirm('撤销 API Token「'+name+'」？此操作不可逆。'))return;if(S.cfResources)S.cfResources.loading=true;var b=document.getElementById('cfResBox');if(b)b.innerHTML=rCfResources();cmd('cfRevokeToken',{id:id});}
-function cfDelWorker(name,active){if(!name)return;var m=active?'「'+name+'」是当前持久通道 Worker，删除后公网穿透会断开（可重建）。确定删除？':'删除 Worker「'+name+'」？此操作不可逆。';if(!confirm(m))return;if(S.cfResources)S.cfResources.loading=true;var b=document.getElementById('cfResBox');if(b)b.innerHTML=rCfResources();cmd('cfDeleteWorker',{name:name});}
+function cfRevoke(id,name){if(!id)return;daoConfirm('撤销 API Token「'+name+'」？此操作不可逆。',function(){if(S.cfResources)S.cfResources.loading=true;var b=document.getElementById('cfResBox');if(b)b.innerHTML=rCfResources();cmd('cfRevokeToken',{id:id});});}
+function cfDelWorker(name,active){if(!name)return;var m=active?'「'+name+'」是当前持久通道 Worker，删除后公网穿透会断开（可重建）。确定删除？':'删除 Worker「'+name+'」？此操作不可逆。';daoConfirm(m,function(){if(S.cfResources)S.cfResources.loading=true;var b=document.getElementById('cfResBox');if(b)b.innerHTML=rCfResources();cmd('cfDeleteWorker',{name:name});});}
 // 🗂️ CF 账号池 · 多号统管(电脑端做得比手机端更全): 粘贴任意格式多号→识号入池→逐号列/撤 Token·列/删 Worker。
 //   凭证仅落后端 ~/.dao/cf-pool.json, 前端只见 email/accountId/cred 类型等非密元数据。
 function rCfPool(){
@@ -8800,11 +8804,11 @@ function rCfPoolRes(d,kb){
 function _cfKeyFromB64(kb){try{return decodeURIComponent(escape(atob(kb)));}catch(e){return kb;}}
 function cfPoolAdd(){var t=document.getElementById('cfPoolIn');if(!t||!t.value.trim())return;cmd('cfPoolAdd',{text:t.value});t.value='';}
 function cfPoolRes(kb){var key=_cfKeyFromB64(kb);S.cfPoolRes=S.cfPoolRes||{};S.cfPoolRes[key]={loading:true,ok:true};var b=document.getElementById('cfPoolBox');if(b)b.innerHTML=rCfPool();cmd('cfPoolResources',{key:key});}
-function cfPoolDel(kb){if(!confirm('从池中移出该账号？(仅本地移除，不影响云端资源)'))return;cmd('cfPoolRemove',{key:_cfKeyFromB64(kb)});}
-function cfPoolMint(kb){if(!confirm('用该账号自己的凭证在其 Cloudflare 上新建一枚「权限拉满」的 API Token？(纯后端·无需登录官网·落盘可复制)'))return;cmd('cfPoolMintToken',{key:_cfKeyFromB64(kb)});}
+function cfPoolDel(kb){daoConfirm('从池中移出该账号？(仅本地移除，不影响云端资源)',function(){cmd('cfPoolRemove',{key:_cfKeyFromB64(kb)})});}
+function cfPoolMint(kb){daoConfirm('用该账号自己的凭证在其 Cloudflare 上新建一枚「权限拉满」的 API Token？(纯后端·无需登录官网·落盘可复制)',function(){cmd('cfPoolMintToken',{key:_cfKeyFromB64(kb)})});}
 function cfPoolCopyToken(kb){cmd('cfPoolCopyToken',{key:_cfKeyFromB64(kb)});}
-function cfPoolRevoke(kb,id,name){if(!id)return;if(!confirm('撤销 API Token「'+name+'」？此操作不可逆。'))return;cmd('cfPoolRevokeToken',{key:_cfKeyFromB64(kb),id:id});}
-function cfPoolDelWorker(kb,name,active){if(!name)return;var m=active?'「'+name+'」是当前持久通道 Worker，删除后公网穿透会断开（可重建）。确定删除？':'删除 Worker「'+name+'」？此操作不可逆。';if(!confirm(m))return;cmd('cfPoolDeleteWorker',{key:_cfKeyFromB64(kb),name:name});}
+function cfPoolRevoke(kb,id,name){if(!id)return;daoConfirm('撤销 API Token「'+name+'」？此操作不可逆。',function(){cmd('cfPoolRevokeToken',{key:_cfKeyFromB64(kb),id:id})});}
+function cfPoolDelWorker(kb,name,active){if(!name)return;var m=active?'「'+name+'」是当前持久通道 Worker，删除后公网穿透会断开（可重建）。确定删除？':'删除 Worker「'+name+'」？此操作不可逆。';daoConfirm(m,function(){cmd('cfPoolDeleteWorker',{key:_cfKeyFromB64(kb),name:name})});}
 function rBridgeRelayCard(r){
   var h='<div class="st" style="margin-top:2px">⭐ 持久通道 · 一次登录全自动打通<span style="font-size:10px;color:var(--muted);font-weight:normal"> · 你自己的固定 Worker 地址·永不漂</span></div>';
   if(r&&r.active&&r.url){
@@ -8821,7 +8825,7 @@ function rBridgeRelayCard(r){
     h+='<button class="btn sm primary" onclick="cmd(&#39;copyRelayInfo&#39;)" title="一键复制完整接入信息: 恒定地址 + Token + Auth 头 + 快速通道/mesh 兜底">📋 复制接入信息</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;relayOAuthRefresh&#39;)" title="刷新 Token: 用 refresh_token 续期并重部署 Worker(自愈·轮换令牌)"'+(r.oauth?'':' disabled style="opacity:.5"')+'>↻ 刷新 Token</button>';
     h+='<button class="btn sm" onclick="cmd(&#39;relayRestart&#39;)" title="重启 Worker 通道(断开重连); 连不上则自动升级为从零重建·后端自愈">🔄 重启 Worker</button>';
-    h+='<button class="btn sm danger" onclick="if(confirm(&#39;撤销 Cloudflare 授权并删除本持久通道，回退到快速隧道/mesh？&#39;))cmd(&#39;relayOAuthLogout&#39;)">🗑 删除通道/切号</button></div>';
+    h+='<button class="btn sm danger" onclick="daoConfirm(&#39;撤销 Cloudflare 授权并删除本持久通道，回退到快速隧道/mesh？&#39;,function(){cmd(&#39;relayOAuthLogout&#39;)})">🗑 删除通道/切号</button></div>';
     // 🗂️ 管理 Token / Worker(移植手机 APK 统管): 列/撤该 CF 账号的 API Token、列/删 Worker, 一页解决, 不另开页面。
     h+='<div class="st" style="margin-top:10px;font-size:12px">🗂️ 管理 Token / Worker<span style="font-size:10px;color:var(--muted);font-weight:normal"> · 本账号下的凭证与部署</span><button class="btn sm ghost" style="float:right;margin-top:-2px;padding:2px 8px" onclick="cmd(&#39;cfListResources&#39;)">⟳ 加载/刷新</button></div>';
     h+='<div id="cfResBox" class="card">'+rCfResources()+'</div>';
@@ -8939,7 +8943,7 @@ function rBridgeFull(){
   if(cfOn)h+='<div class="cr"><span class="l">CloudFlare</span><span class="v" style="color:var(--success)">✓ 已绑定凭证'+(b.cfEmail?(' · '+esc(b.cfEmail)):'')+(b.named?'（命名隧道·固定域名）':'')+'</span></div>';
   h+='<input id="cfKey" type="password" placeholder="API Token · 或 邮箱+Global API Key · 或 账号----密码----2FA（自动识别）" style="width:100%;margin:3px 0;padding:5px 7px;box-sizing:border-box;background:var(--input);color:var(--input-fg);border:1px solid var(--border);border-radius:4px">';
   h+='<div class="br" style="margin-top:4px"><button class="btn sm primary" onclick="relayCfSmartGo()" title="自动识别 token/账密/GlobalAPIKey→取账号→保证子域→wrangler deploy→落盘置顶, 全后台自动">🚀 全自动打通（任意格式）</button>';
-  if(cfOn)h+='<button class="btn sm danger" onclick="if(confirm(&#39;退出账号并清空全部 CloudFlare 凭证残留(含 cert.pem)，回到无账号快速隧道？&#39;))cmd(&#39;bridgeLogout&#39;)">🚪 退出/重置</button>';
+  if(cfOn)h+='<button class="btn sm danger" onclick="daoConfirm(&#39;退出账号并清空全部 CloudFlare 凭证残留(含 cert.pem)，回到无账号快速隧道？&#39;,function(){cmd(&#39;bridgeLogout&#39;)})">🚪 退出/重置</button>';
   h+='</div>';
   h+='</div>';
   // ── 代登 Cloudflare · 用 GitHub 账号(账密+2FA 已存号)后端代操作 → 隔离档链式代填建 API Token(守柔不代提交) ──
@@ -9490,6 +9494,10 @@ function rBridge(){
 function sm(title,bodyHtml,onOk){document.getElementById('mc').innerHTML='<h3>'+title+'</h3>'+bodyHtml+'<div class="mb"><button class="btn ghost" onclick="hm()">取消</button><button class="btn primary" onclick="doOk()">确定</button></div>';document.getElementById('mo').classList.remove('hid');window._onOk=onOk}
 function hm(){document.getElementById('mo').classList.add('hid')}
 function doOk(){if(window._onOk&&window._onOk()!==false)hm()}
+// 帛书·「知止不殆」: VS Code webview 屏蔽原生 window.confirm/alert(恒返 false·静默无弹窗) —
+//   凡 if(confirm(...))cmd(...) 的按钮在 IDE 内一律「点了没反应」(GitHub 删号/移组、MCP 卸载等
+//   实测全废之真因)。改走面板内模态 daoConfirm, IDE webview 与公网浏览器两端皆真实可确认。
+function daoConfirm(msg,onYes){sm('⚠️ 请确认','<p style="font-size:12px;line-height:1.7;color:var(--fg);white-space:pre-wrap;margin:6px 0">'+esc(String(msg||''))+'</p>',function(){try{onYes&&onYes();}catch(e){}return true;});}
 function toast(msg,ok){const t=document.getElementById('toast');t.textContent=msg;t.className='toast '+(ok?'ok':'err');setTimeout(()=>t.classList.add('hid'),3000)}
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
@@ -9500,9 +9508,9 @@ function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m
 function mcpAct(idx,action){
   var m=(window._mcp||[])[idx];if(!m)return;
   if(action==='install'){toast('安装中…',true);cmd('mcpMarketInstall',{spec:mcpSpec(m)});}
-  else if(action==='uninstall'){if(confirm('卸载 '+(m.name||'')+' ?'))cmd('mcpUninstall',{id:m.installationId});}
+  else if(action==='uninstall'){daoConfirm('卸载 '+(m.name||'')+' ?',function(){cmd('mcpUninstall',{id:m.installationId})});}
   else if(action==='profile'){cmd('mcpAddProfile',{spec:mcpSpec(m)});}
-  else if(action==='all'){if(confirm('一键批量装「'+String(m.name||'').replace(/^★ /,'')+'」到所有账号(反向注入)?'))cmd('mcpInstallAllAccounts',{spec:mcpSpec(m)});}
+  else if(action==='all'){daoConfirm('一键批量装「'+String(m.name||'').replace(/^★ /,'')+'」到所有账号(反向注入)?',function(){cmd('mcpInstallAllAccounts',{spec:mcpSpec(m)})});}
 }
 // MCP 接测: 实际探测连通性 (HTTP initialize / STDIO 命令解析), 结果回填卡片状态 span
 function mcpProbe(idx){var m=(window._mcp||[])[idx];if(!m)return;var s=document.getElementById('mcp-probe-'+idx);if(s){s.style.color='var(--warn)';s.textContent='· 测试中…';}cmd('mcpProbe',{idx:idx,spec:mcpSpec(m)});}
@@ -9562,7 +9570,7 @@ function rT(tab,items,err,fallbackProxy){
   }
   if(!items.length){v.innerHTML='<div class="empty"><div class="ic">'+({sessions:'💬',knowledge:'📚',playbooks:'📋',secrets:'🔑',integrations:'🔗',usage:'📊',org:'🏢',mcp:'🧩',automations:'⚙️',schedules:'📅',profile:'👤',customization:'🎛️',apikeys:'🔐'}[tab]||'🌐')+'</div><h3>'+({sessions:'Sessions',knowledge:'Knowledge',playbooks:'Playbooks',secrets:'Secrets',integrations:'Integrations',usage:'Usage 用量',org:'组织成员',mcp:'MCP 服务器',automations:'Automations',schedules:'Schedules 定时',profile:'Profile 身份',customization:'Customization 偏好',apikeys:'API Keys'}[tab]||tab)+'</h3><p style="margin:8px 0;color:var(--muted)">No items found</p><div class="br" style="justify-content:center"><button class="btn" onclick="loadTab(&#39;'+tab+'&#39;)">⟳ 重试</button><button class="btn ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐 Open in Devin</button></div></div>';return}
   // ★ v1.0.1 · 各tab添加新建按钮 · 帛书·「道生一·一生二」
-  const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>',automations:'<button class="btn sm danger" onclick="if(confirm(&#39;确认清除本账号官网全部自动化?此操作不可撤销&#39;))cmd(&#39;clearAutomations&#39;)">🧹 清除全部</button>'};
+  const createBtns={sessions:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSession&#39;)">+ Session</button>',knowledge:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateKnowledge&#39;)">+ Knowledge</button>',playbooks:'<button class="btn sm primary" onclick="cmd(&#39;devinCreatePlaybook&#39;)">+ Playbook</button>',secrets:'<button class="btn sm primary" onclick="cmd(&#39;devinCreateSecret&#39;)">+ Secret</button>',integrations:'<button class="btn sm primary" onclick="cmd(&#39;devinConnectGit&#39;)">+ GitHub PAT</button>',automations:'<button class="btn sm danger" onclick="daoConfirm(&#39;确认清除本账号官网全部自动化?此操作不可撤销&#39;,function(){cmd(&#39;clearAutomations&#39;)})">🧹 清除全部</button>'};
   let h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="color:var(--muted);font-size:11px">'+items.length+' items</span><div class="br">'+(createBtns[tab]||'')+'<button class="btn sm" onclick="loadTab(&#39;'+tab+'&#39;)">⟳</button><button class="btn sm ghost" onclick="cmd(&#39;openDevinPage&#39;,{page:&#39;'+tab+'&#39;})">🌐</button></div></div>';
   if(tab==='sessions'){
     items.forEach(s=>{
@@ -9790,8 +9798,8 @@ function ghRenderFleet(){
 function ghFleetAdd(){var t=(document.getElementById('ghFleetLines')||{}).value||'';if(!t.trim()){toast('填至少一行 login PAT / PAT',false);return}var role=(document.getElementById('ghFleetRole')||{}).value||'member';ghMsg('ghFleetAddOut','⏳ 逐个校验 PAT 并加入舰队(限速)…');cmd('daoGhFleetAdd',{lines:t,role:role})}
 function ghFleetRefresh(){ghMsg('ghFleetAddOut','⏳ 拉取舰队并核对组织角色…');cmd('daoGhFleetList',{})}
 function ghFleetRole(login,role){if(!login)return;toast('⏳ '+login+' → '+(role==='admin'?'管理者':'成员'),true);cmd('daoGhFleetRole',{login:login,role:role})}
-function ghFleetRemoveOrg(login){if(!login)return;if(typeof confirm==='function'&&!confirm('把 '+login+' 移出本体组织?'))return;cmd('daoGhFleetRemoveOrg',{login:login})}
-function ghFleetForget(login){if(!login)return;if(typeof confirm==='function'&&!confirm('从本地舰队删除 '+login+'?(不影响其 GitHub 账号)'))return;cmd('daoGhFleetForget',{login:login})}
+function ghFleetRemoveOrg(login){if(!login)return;daoConfirm('把 '+login+' 移出本体组织?',function(){cmd('daoGhFleetRemoveOrg',{login:login})})}
+function ghFleetForget(login){if(!login)return;daoConfirm('从本地舰队删除 '+login+'?(不影响其 GitHub 账号)',function(){cmd('daoGhFleetForget',{login:login})})}
 function ghAssistLogin(login){if(!login)return;toast('🚀 隔离档续登(自动填充·守柔不提交): '+login,true);cmd('daoGhFleetAssistLogin',{login:login})}
 function ghFleetOpenPat(login){if(!login)return;toast('🔑 该号隔离档打开建 PAT('+((_ghState().patCfg||{}).expDays===0?'永不过期':(((_ghState().patCfg||{}).expDays||30)+'天'))+'): '+login,true);cmd('daoGhFleetOpenPat',{login:login})}
 function ghFleetOpen(login,p){if(!login)return;toast('🌐 该号隔离档打开官网'+(p&&p!=='/'?(' '+p):'')+': '+login,true);cmd('daoGhFleetOpenUrl',{login:login,path:p||'/'})}
@@ -11657,10 +11665,12 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             case 'devinSetCustomization': {
                 // 官方能改的都能改: 主页 Customization 开关/模式/数值 → 官方组织设置 API 同源写回
                 const ck = String(msg.key || '');
-                if (!ws.devinOrgId || !ck) { refreshReply({ type: 'actionResult', command: 'devinSetCustomization', ok: false, error: '未登录或缺字段' }); break; }
+                // 乐观回显已在前端就地翻转: 此处不再 refreshReply(全量 init 重广播·慢隧道下即卡顿之源),
+                //   只回轻量 actionResult + 随后回读官方真值(tabData)校准前端。
+                if (!ws.devinOrgId || !ck) { reply({ type: 'actionResult', command: 'devinSetCustomization', ok: false, error: '未登录或缺字段' }); break; }
                 const rSet = await devinUpdateOrgSettings(ws.devinOrgId, { [ck]: msg.value }, ws.devinAuth1);
                 if (!rSet.ok) vscode.window.showErrorMessage('官方设置修改失败: ' + ck + ' · ' + (rSet.error || ''));
-                refreshReply({ type: 'actionResult', command: 'devinSetCustomization', ok: rSet.ok, error: rSet.error });
+                reply({ type: 'actionResult', command: 'devinSetCustomization', ok: rSet.ok, error: rSet.error });
                 try {
                     const cur = await devinGetCustomization(ws.devinOrgId, ws.devinAuth1);
                     if (cur.ok) reply({ type: 'tabData', tab: 'customization', items: cur.items || [] });
@@ -17233,6 +17243,11 @@ function daoResolveMcpEndpoint(): { url: string; token: string } | null {
     //   实时生成 64 工具)。本实例自有隧道空/死时诚实回 null(守柔·待探活环重起, 不注死址)。
     const base = bridgeEffectiveUrl();
     if (/^https?:\/\//.test(base)) return { url: base.replace(/\/+$/, '') + '/mcp', token: bridgeEffectiveToken() };
+    // 守柔·恒通: 快速隧道空/死(1015 限流期常态)时回落持久中继 — Worker 按 Bearer 令牌路由任意路径,
+    //   POST <worker 源>/mcp 即达本体 /mcp(JSON-RPC 实测 200)。中继恒定不漂, 反注端点从此不再随隧道死。
+    const relay = String(ws.publicUrl || '');
+    const rm = relay.match(/^(https?:\/\/[^/]+)\/relay\//);
+    if (rm) return { url: rm[1] + '/mcp', token: bridgeEffectiveToken() };
     // 回退(保守兼容): 仅当自有隧道暂不可知且旧网关确有可达地址(极少)时沿用之。
     try {
         if (fs.existsSync(DAO_MCP_PUBLIC_FILE)) {
