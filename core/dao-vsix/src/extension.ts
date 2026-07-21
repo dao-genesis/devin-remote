@@ -8571,6 +8571,9 @@ function lkIs(kind,name){var a=(S.locks||{})[kind]||[];return a.some(function(x)
 function lkToggle(kind,name){cmd('toggleManualLock',{kind:kind,name:name})}
 function lkBtn(kind,name){var on=lkIs(kind,name);return '<button class="btn sm" style="'+(on?'color:var(--success);border-color:var(--success)':'color:var(--muted)')+'" title="'+(on?'已锁定 · 反向注入不会覆盖此条目(保留你的改写版)':'未锁定 · 点击锁定以防被反向注入覆盖')+'" onclick="lkToggle(&#39;'+kind+'&#39;,&#39;'+esc(name)+'&#39;)">'+(on?'🔒锁':'🔓')+'</button>'}
 // 面板内修改知识(正文直接可见可编辑) — 取代原生 InputBox/临时文档(多窗口下弹不出/看不到内容)。
+// 主页 Customization 官方可改项写回: 布尔开关即点即写; 文本/数字弹窗改值 — 与官网同一 API
+function ovCustSet(key,val){toast('保存中… '+key,true);cmd('devinSetCustomization',{key:key,value:(val==='true'?true:val==='false'?false:val)})}
+function ovCustEdit(i){var it=(window._custItems||[])[i];if(!it||!it.key)return;var bodyHtml='<label style="font-size:11px;color:var(--muted)">'+esc(it.name||it.key)+'</label><input id="m1" value="'+esc(String(it.value==null?'':it.value))+'" style="width:100%;margin:4px 0" autocomplete="off"><p style="font-size:10px;color:var(--muted);margin:4px 0">留空 = 恢复官方默认。改动经官方组织设置 API 同源写回官网。</p>';sm('✏️ 官方设置 · '+esc(it.name||it.key),bodyHtml,function(){var v=document.getElementById('m1').value.trim();var out=(it.kind==='num')?(v===''?null:Number(v)):(v===''?null:v);if(it.kind==='num'&&v!==''&&isNaN(out)){toast('须为数字',false);return false}toast('保存中… '+it.key,true);cmd('devinSetCustomization',{key:it.key,value:out})})}
 function kEdit(id){var it=(S.data.knowledge||[]).find(function(k){return String(k.id)===String(id)});if(!it){toast('未找到该知识条目',false);return}var ro=(it.can_write===false);var bodyHtml='<label style="font-size:11px;color:var(--muted)">名称</label><input id="m1" '+(ro?'disabled':'')+' value="'+esc(it.name||'')+'" style="width:100%;margin:4px 0"><label style="font-size:11px;color:var(--muted)">正文 body (Markdown)</label><textarea id="m2" '+(ro?'disabled':'')+' style="width:100%;height:220px;margin:4px 0;font-family:monospace;white-space:pre">'+esc(it.body||'')+'</textarea><label style="font-size:11px;color:var(--muted)">触发描述 trigger (何时检索)</label><input id="m3" '+(ro?'disabled':'')+' value="'+esc(it.trigger_description||it.trigger||'')+'" style="width:100%;margin:4px 0">'+(ro?'<p style="font-size:10px;color:var(--warn);margin:4px 0">此为平台内置只读条目(note_type=builtin), 无法修改/删除。</p>':'');sm('✏️ 修改知识 · '+esc(it.name||''),bodyHtml,function(){if(ro)return;var n=document.getElementById('m1').value.trim();if(!n){toast('名称不能为空',false);return false}var b=document.getElementById('m2').value;var t=document.getElementById('m3').value.trim();cmd('devinEditKnowledgeInline',{id:String(id),name:n,body:b,trigger:t});toast('保存中…',true)})}
 function sw(t){
   S.tab=t;
@@ -9191,6 +9194,11 @@ function bkDeliverLive(email,sid,title){
     if(window.parent&&window.parent!==window){window.parent.postMessage({__daoDeliverToCurrent:{kind:'conv',email:email||'',sid:sid,title:title||'对话'}},'*');toast('已请求传到当前页',true)}
     else{toast('请在归一网页(/shell)中打开对话页后再传',false)}
   }catch(e){toast('传页失败',false)}}
+// 实时行回包: 提取(save=false)→弹窗内联正文; 落盘(save=true)→提示文件名+路径
+ function rDlExport(d){
+  if(!d.ok){toast('提取失败: '+(d.error||'未知'),false);return}
+  if(d.save){toast('✓ MD 已保存: '+(d.name||d.path||''),true);return}
+  sm('👁 '+esc(d.title||d.sid||'对话'),'<div style="max-height:60vh;overflow:auto;background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:4px;padding:8px;font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-word;text-align:left">'+esc(d.md||'')+'</div>',null)}
 function rBackupsData(tree,err){
   var v=document.getElementById('v-backups');if(!v)return;
   S.backups=tree||{accounts:[]};
@@ -9486,7 +9494,7 @@ function toast(msg,ok){const t=document.getElementById('toast');t.textContent=ms
 function usb(){const ds=document.getElementById('ds'),dr=document.getElementById('dr'),di=document.getElementById('di'),sp=document.getElementById('sp');if(ds)ds.className='dot '+(S.server.port?'on':'off');if(dr)dr.className='dot '+(S.server.relay?'on':'off');if(di)di.className='dot '+(S.inject&&S.inject.secret&&S.inject.knowledge&&S.inject.playbook?'on':'off');if(sp)sp.textContent=S.server.port?':'+S.server.port:'off'}
 // 顶部徽章实时同步 — 帛书·「反者道之动」: 账号一切, 徽章随之, 永不老旧
 function uhd(){const ab=document.getElementById('ab');if(ab){ab.textContent=S.auth.loggedIn?('✓ '+(S.auth.email||'').split('@')[0]):'未连接';ab.className='b '+(S.auth.loggedIn?'ok':'off')}const ob=document.getElementById('ob');if(ob){if(S.auth.orgName){ob.textContent=S.auth.orgName;ob.style.display=''}else{ob.style.display='none'}}}
-window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){if(_tabWatch[d.tab]){clearTimeout(_tabWatch[d.tab]);_tabWatch[d.tab]=0;}S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='blueprintsData'){if(_tabWatch.blueprints){clearTimeout(_tabWatch.blueprints);_tabWatch.blueprints=0;}if(!d.error)S.blueprints={items:d.items||[],snapCount:d.snapCount||0};rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject();try{ghStatusSync()}catch(e){}}else if(d.type==='bridgeGhAccounts'){S.bridgeGhAccts=d.accounts||[];try{rBridgeFull()}catch(e){}}else if(d.type==='bridgeCfResources'){S.cfResources=d;var _cb=document.getElementById('cfResBox');if(_cb)_cb.innerHTML=rCfResources();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='bridgeCfPool'){S.cfPool=d;var _cp=document.getElementById('cfPoolBox');if(_cp)_cp.innerHTML=rCfPool();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='bridgeCfPoolResources'){S.cfPoolRes=S.cfPoolRes||{};S.cfPoolRes[d.key]=d;var _cpr=document.getElementById('cfPoolBox');if(_cpr)_cpr.innerHTML=rCfPool();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='actionResult'){if(d.command==='setCleanupCooldown'){var _m=document.getElementById('swCdMsg');if(_m){_m.textContent=d.ok?('✓ 已保存 '+(d.hours!=null?d.hours+'h':'')):('✗ '+(d.error||'保存失败'));_m.style.color=d.ok?'var(--success)':'var(--danger)'}if(d.ok&&typeof d.hours==='number')S.cooldownH=d.hours;}else if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='devinAutoAcquire'&&d.ok&&d.canUseApi===false){toast('已获取 Session Token, 但完整 API(cog_ key)不可用',false);renderCredLimited()}else if(d.command==='copyBackupCred'){toast(d.ok?(d.hasPw?'已复制账号+密码':'已复制邮箱(本地无密码)'):'复制失败',d.ok&&d.hasPw)}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){bkOnLive(d)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
+window.addEventListener('message',e=>{const d=e.data;if(!d)return;if(d.__wamRelay){cmd('wamRelay',{msg:d.__wamRelay});return;}if(d.type==='wamInitHtml'){rWamMount(d.html,d.warn);return;}if(d.type==='wamHost'){var _wm=d.msg||{};if(_wm.type==='__wamRebuild'){if(!_wm.force&&Date.now()-_wamRebuildTs<10000)return;_wamRebuildTs=Date.now();rWamMount(_wm.html);}else{_wamToFrame(_wm);}return;}if(d.type==='init'){Object.assign(S.auth,d.auth||{});Object.assign(S.server,d.server||{});S.inject=d.inject||S.inject;if(d.injectStatus!==undefined)S.injectStatus=d.injectStatus;if(d.bridge!==undefined)S.bridge=d.bridge;if(d.hostCaps)S.hostCaps=d.hostCaps;uhd();usb();rc();reloadActiveDataTab()}else if(d.type==='tabData'){if(_tabWatch[d.tab]){clearTimeout(_tabWatch[d.tab]);_tabWatch[d.tab]=0;}S.data[d.tab]=d.items||[];if(d.locks)S.locks=d.locks;rT(d.tab,d.items||[],d.error,d.fallbackProxy);if(d.tab==='secrets')rInjectLiveSecrets();if(d.tab==='mcp'){try{var _gm=document.getElementById('ghMcpMirror');var _vm2=document.getElementById('v-mcp');if(_gm&&_vm2)_gm.innerHTML=_vm2.innerHTML}catch(e){}}}else if(d.type==='sessionDetail'){rSD(d)}else if(d.type==='gotoTab'){try{sw(d.tab||'overview')}catch(e){}}else if(d.type==='gotoBoard'){try{sw(d.board||'overview')}catch(e){}}else if(d.type==='switchData'){rSwitchData(d)}else if(d.type==='backupsData'){rBackupsData(d.tree||{accounts:[]},d.error)}else if(d.type==='backupConv'){rBackupConv(d)}else if(d.type==='dlExportData'){rDlExport(d)}else if(d.type==='dlZipDone'){toast(d.ok?('✓ 已打包: '+(d.name||d.path||'')):('打包失败: '+(d.error||'未知')),d.ok)}else if(d.type==='blueprintsData'){if(_tabWatch.blueprints){clearTimeout(_tabWatch.blueprints);_tabWatch.blueprints=0;}if(!d.error)S.blueprints={items:d.items||[],snapCount:d.snapCount||0};rBlueprintsData(d.items||[],d.snapCount,d.error)}else if(d.type==='injectProfile'){S.injectProfile=d.profile||S.injectProfile;rInject();try{ghStatusSync()}catch(e){}}else if(d.type==='bridgeGhAccounts'){S.bridgeGhAccts=d.accounts||[];try{rBridgeFull()}catch(e){}}else if(d.type==='bridgeCfResources'){S.cfResources=d;var _cb=document.getElementById('cfResBox');if(_cb)_cb.innerHTML=rCfResources();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='bridgeCfPool'){S.cfPool=d;var _cp=document.getElementById('cfPoolBox');if(_cp)_cp.innerHTML=rCfPool();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='bridgeCfPoolResources'){S.cfPoolRes=S.cfPoolRes||{};S.cfPoolRes[d.key]=d;var _cpr=document.getElementById('cfPoolBox');if(_cpr)_cpr.innerHTML=rCfPool();if(d.toast)toast(d.toast,d.toastOk!==false);}else if(d.type==='actionResult'){if(d.command==='setCleanupCooldown'){var _m=document.getElementById('swCdMsg');if(_m){_m.textContent=d.ok?('✓ 已保存 '+(d.hours!=null?d.hours+'h':'')):('✗ '+(d.error||'保存失败'));_m.style.color=d.ok?'var(--success)':'var(--danger)'}if(d.ok&&typeof d.hours==='number')S.cooldownH=d.hours;}else if(d.command==='injectDiagnose'&&d.text){toast(d.text,d.ok);rInject()}else if(d.command==='devinAutoAcquire'&&d.ok&&d.canUseApi===false){toast('已获取 Session Token, 但完整 API(cog_ key)不可用',false);renderCredLimited()}else if(d.command==='copyBackupCred'){toast(d.ok?(d.hasPw?'已复制账号+密码':'已复制邮箱(本地无密码)'):'复制失败',d.ok&&d.hasPw)}else if(d.command==='reAddBackupAccount'){if(d.ok){toast('已加回账号库: '+(d.email||''),true)}else if(d.needManual){toast('未能恢复密码, 请用「添加账号」手动加回'+(d.email?(': '+d.email):''),false);cmd('wamCmd',{cmd:'wam.addAccount'})}else{toast('加回失败',false)}}else if(d.command==='devinSetCustomization'){toast(d.ok?'✓ 官方设置已改·已同步官网':('✗ 官方拒绝: '+(d.error||'未知错误')),d.ok)}else{toast(d.command+' '+(d.ok?'✓':'✗'),d.ok)}if(d.ok){if((d.command==='toggleManualLock'||d.command==='devinEditKnowledgeInline'||d.command==='mcpMarketInstall'||d.command==='mcpUninstall'||d.command==='clearAutomations')&&S.tab){if(S.tab==='overview'){daoLoadOverviewManual()}else if(S.tab==='switch'||S.tab==='backups'){/* 守柔: 切号/对话 tab 非 loadTabData 数据源, 不重载避免 Unknown tab */}else if(S.tab==='github'){cmd('loadTabData',{tab:'mcp'})/* GitHub 板块 MCP 镜像随操作刷新 · 双端同步 */}else{cmd('loadTabData',{tab:S.tab})}}else if(S.tab!=='inject'){rc()}}}else if(d.type==='daoOrgResult'){orgOnResult(d)}else if(d.type==='daoOrgProgress'){orgOnProgress(d)}else if(d.type==='daoGhResult'){ghOnResult(d)}else if(d.type==='daoGhProgress'){ghOnProgress(d)}else if(d.type==='mcpProbeResult'){mcpProbeRender(d.idx,d.result)}else if(d.type==='bridgeTestResult'){var bo=document.getElementById('bridgeOut');if(bo)bo.textContent='['+d.op+'] '+(d.ok?'✓':'✗')+' '+(d.text||'')}else if(d.type==='bridgeAgents'){S.bridgeAgents={loaded:true,host:d.host,online:d.online,agents:d.agents||[]};var bae=document.getElementById('bridgeAgents');if(bae)bae.innerHTML=rBridgeAgents()}else if(d.type==='recentLiveData'){bkOnLive(d)}else if(d.type==='mcpToolsResult'){mcpToolsRender(d.idx,d.result)}else if(d.type==='error'){toast('Error: '+d.msg,false)}});
 // MCP 卡片动作: 装到本账号 / 卸载 / 加入反向注入档案(批量) — 帛书·「图难于其易」
 function mcpSpec(m){return {marketplace_server_id:m.marketplace_server_id,slug:m.slug,name:String(m.name||'').replace(/^★ /,''),transport:m.transport,short_description:m.detail,command:m.command,args:m.args,env_variables:m.env_variables,url:m.url,headers:m.headers,installation_scope:m.installation_scope,requires_custom_oauth_credentials:m.requiresOauth};}
 function mcpAct(idx,action){
@@ -9643,7 +9651,20 @@ function rT(tab,items,err,fallbackProxy){
     setTimeout(function(){try{cmd('autoMaintainLocalMcp',{})}catch(e){}},900);
     // 启动周期自动验证(30 分钟循环·失败即时回填面板·确保 MCP 持续可用)
     mcpStartPeriodicVerify();
-  }else if(tab==='usage'||tab==='org'||tab==='automations'||tab==='profile'||tab==='customization'||tab==='apikeys'){
+  }else if(tab==='customization'){
+    // 官方能改的都能改: 布尔=点击即翻转; 文本/数字=✏️ 弹窗改值 — 全部经官方组织设置 API 同源写回
+    window._custItems=items;
+    items.forEach((it,i)=>{
+      const nm=it.name||'';const dt=it.detail||'';
+      let ctl='';
+      if(it.key&&it.kind==='bool'){
+        ctl='<button class="btn sm '+(it.value?'primary':'ghost')+'" onclick="ovCustSet(&#39;'+esc(it.key)+'&#39;,'+(it.value?'false':'true')+')" title="点击切换(官方同源写回)">'+(it.value?'● 开':'○ 关')+'</button>';
+      }else if(it.key){
+        ctl='<button class="btn sm ghost" onclick="ovCustEdit('+i+')" title="修改(官方同源写回)">✏️</button>';
+      }
+      h+='<div class="card"><div class="cr"><span class="l" style="font-weight:500;color:var(--fg)">'+esc(nm)+'</span><span class="v" style="font-size:11px;display:flex;align-items:center;gap:4px">'+(it.kind!=='bool'&&dt?'<span style="color:var(--muted)">'+esc(dt)+'</span>':'')+ctl+'</span></div></div>';
+    });
+  }else if(tab==='usage'||tab==='org'||tab==='automations'||tab==='profile'||tab==='apikeys'){
     items.forEach(it=>{
       const nm=it.name||it.title||'';const dt=it.detail||'';
       const st=it.connected!==undefined?(it.connected?'<span style="color:var(--success)">● on</span>':'<span style="color:var(--muted)">○ off</span>'):'';
@@ -10423,7 +10444,7 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
     const reply = (d: any) => postMiddle(d);
     const refreshReply = (d: any) => { refreshDaoCloudMiddlePanel(); reply(d); };
     // Auth gate — allow these commands without login (登录/取证类与无凭证只读命令不得被拦, 否则空态成死码)
-    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'relayCredLogin', 'webAuthLogin', 'cfListResources', 'cfRevokeToken', 'cfDeleteWorker', 'cfPoolList', 'cfPoolAdd', 'cfPoolRemove', 'cfPoolResources', 'cfPoolRevokeToken', 'cfPoolDeleteWorker', 'cfPoolMintToken', 'cfPoolCopyToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'injectDiagnose'];
+    const noAuthNeeded = ['devinLogin', 'devinWindsurfAutoLogin', 'devinAutoAcquire', 'devinManualLogin', 'refresh', 'startServer', 'stopServer', 'regenerateToken', 'openBrowser', 'syncBrowser', 'openDevinPage', 'openBlueprintDetail', 'loadBlueprints', 'copy', 'copyBridgeUrl', 'copyBridgeToken', 'copyBridgeInfo', 'bridgeRefreshToken', 'openBridgeMd', 'copyBridgeShell', 'bridgeStart', 'bridgeStartNamed', 'bridgeStop', 'bridgeRestart', 'bridgeReset', 'bridgeExportCloudMd', 'bridgeExportLocalMd', 'bridgeCopyCloudMd', 'bridgeInjectKnowledge', 'openCf', 'bridgeCfLogin', 'bridgeCfBrowserLogin', 'bridgeLogout', 'relayOAuthLogin', 'relayOAuthRefresh', 'relayOAuthLogout', 'copyRelayUrl', 'copyRelayToken', 'copyRelayInfo', 'relayRestart', 'relayRebuild', 'relayProvisionToken', 'relayGhAutoLogin', 'relayCredLogin', 'webAuthLogin', 'cfListResources', 'cfRevokeToken', 'cfDeleteWorker', 'cfPoolList', 'cfPoolAdd', 'cfPoolRemove', 'cfPoolResources', 'cfPoolRevokeToken', 'cfPoolDeleteWorker', 'cfPoolMintToken', 'cfPoolCopyToken', 'bridgeHealth', 'bridgeExec', 'bridgeListAgents', 'copyBridgeJoin', 'getInjectProfile', 'setInjectProfile', 'loadSwitch', 'setCleanupCooldown', 'switchToAccount', 'routeAccount', 'openConvMultiBrowser', 'wamCmd', 'cleanupZeroQuota', 'cleanupImmediate', 'wamInit', 'wamRelay', 'loadBackups', 'readBackupConv', 'revealBackupDir', 'exportBackup', 'unlockBackupZip', 'reAddBackupAccount', 'copyBackupCred', 'mcpProbe', 'mcpTools', 'mcpSetAuth', 'copyMcpMd', 'autoMaintainLocalMcp', 'openRoutedPanel', 'loadRecentLive', 'dlExportMd', 'dlZip', 'injectDiagnose'];
     // GitHub 纵向板块独立于 Devin 账号池(自带 PAT 鉴权) — daoGh* 一律免 Devin 登录
     if (!ws.devinAuth1 && !noAuthNeeded.includes(msg.command) && !/^daoGh/.test(String(msg.command || ''))) {
         // loadTabData 未登录: 回 tabData 错误态(区块显式渲「未登录·可登录/重试」), 而非裸 error toast —
@@ -10471,6 +10492,16 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                         await fn({ type: 'dlRecent', perAcc: 12 }, (x: any) => { try { if (x && x.type === 'dlRecentData') reply({ type: 'recentLiveData', list: x.list || [], partial: !!x.partial }); } catch { /* 守柔 */ } });
                     } else reply({ type: 'recentLiveData', list: [], partial: false });
                 } catch { try { reply({ type: 'recentLiveData', list: [], partial: false }); } catch { /* 守柔 */ } }
+                break;
+            }
+            case 'dlExportMd': case 'dlZip': {
+                // 备份板块实时行 查看/MD/文件 — 与悬浮窗同一数据引擎(rt-flow _daoDownloadData), 回包原样透传(dlExportData/dlZipDone)
+                try {
+                    const int: any = _rtflowModule && _rtflowModule._internals;
+                    const fn = int && int._daoDownloadData;
+                    if (typeof fn === 'function') await fn(Object.assign({}, msg, { type: msg.command, noReveal: true }), (x: any) => { try { reply(x); } catch { /* 守柔 */ } });
+                    else reply({ type: msg.command === 'dlZip' ? 'dlZipDone' : 'dlExportData', ok: false, save: !!msg.save, sid: msg.sid, error: 'rt-flow 引擎未就绪' });
+                } catch (e: any) { try { reply({ type: msg.command === 'dlZip' ? 'dlZipDone' : 'dlExportData', ok: false, save: !!msg.save, sid: msg.sid, error: String(e?.message || e) }); } catch { /* 守柔 */ } }
                 break;
             }
             // ── 切号模块 (全功能面板第2网页 · 内嵌真 WAM 切号面板 buildHtml) ──
@@ -11621,6 +11652,19 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
                 if (r.ok) { vscode.window.showInformationMessage('Playbook 已修改: ' + (newTitle || item.title)); setManualLock(ws.devinOrgId, 'playbooks', newTitle || String(item.title), true); }
                 else vscode.window.showErrorMessage('Playbook 修改失败');
                 refreshReply({ type: 'actionResult', command: 'devinEditPlaybook', ok: r.ok });
+                break;
+            }
+            case 'devinSetCustomization': {
+                // 官方能改的都能改: 主页 Customization 开关/模式/数值 → 官方组织设置 API 同源写回
+                const ck = String(msg.key || '');
+                if (!ws.devinOrgId || !ck) { refreshReply({ type: 'actionResult', command: 'devinSetCustomization', ok: false, error: '未登录或缺字段' }); break; }
+                const rSet = await devinUpdateOrgSettings(ws.devinOrgId, { [ck]: msg.value }, ws.devinAuth1);
+                if (!rSet.ok) vscode.window.showErrorMessage('官方设置修改失败: ' + ck + ' · ' + (rSet.error || ''));
+                refreshReply({ type: 'actionResult', command: 'devinSetCustomization', ok: rSet.ok, error: rSet.error });
+                try {
+                    const cur = await devinGetCustomization(ws.devinOrgId, ws.devinAuth1);
+                    if (cur.ok) reply({ type: 'tabData', tab: 'customization', items: cur.items || [] });
+                } catch { /* 守柔 */ }
                 break;
             }
             case 'devinEditSecret': {
@@ -13013,6 +13057,44 @@ function devinJsonPatch(targetUrl: string, headers: any, body: any, timeoutMs?: 
         const makeRequest = (hostname: string, port: number, path: string, h: any) => {
             const mod: any = hostname === '127.0.0.1' ? http : https;
             const req = mod.request({ hostname, port, path, method: 'PATCH', headers: h, timeout: timeoutMs || 15000, rejectUnauthorized: false }, (res: any) => {
+                let d = '';
+                res.on('data', (c: Buffer) => d += c.toString());
+                res.on('end', () => { try { resolve({ status: res.statusCode, json: JSON.parse(d), text: d }); } catch { resolve({ status: res.statusCode, json: null, text: d }); } });
+            });
+            req.on('error', (e) => resolve({ status: 0, json: null, text: e.message }));
+            req.on('timeout', () => { req.destroy(); resolve({ status: 0, json: null, text: 'timeout' }); });
+            req.write(data);
+            req.end();
+        };
+        const reqHeaders = Object.assign({ 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': DEVIN_UA, 'Content-Length': data.length }, headers || {});
+        const direct = () => makeRequest(u.hostname, parseInt(u.port) || 443, u.pathname + u.search, reqHeaders);
+        const viaProxy = () => makeRequest('127.0.0.1', detectedProxyPort, targetUrl, Object.assign({}, reqHeaders, { Host: u.hostname }));
+        const origResolve = resolve;
+        if (needsProxy) {
+            const attemptDirect = (tries: number) => {
+                resolve = ((r: any) => {
+                    if (r && r.status === 0 && u.hostname === 'app.devin.ai' && tries < 2) { setTimeout(() => attemptDirect(tries + 1), 300 * (tries + 1)); return; }
+                    if (r && r.status === 0 && detectedProxyPort) { resolve = origResolve; viaProxy(); return; }
+                    origResolve(r);
+                }) as any;
+                direct();
+            };
+            attemptDirect(0);
+        } else {
+            direct();
+        }
+    });
+}
+
+// PUT — 与 devinJsonPatch 同构, 仅方法不同。用于官方组织设置整份回写(服务端不认 PATCH 时)。
+function devinJsonPut(targetUrl: string, headers: any, body: any, timeoutMs?: number): Promise<any> {
+    return new Promise((resolve) => {
+        const data = Buffer.from(asciiSafeJson(body), 'utf8');
+        const u = new URL(targetUrl);
+        const needsProxy = u.hostname === 'app.devin.ai' || u.hostname.endsWith('windsurf.com') || u.hostname === 'register.windsurf.com';
+        const makeRequest = (hostname: string, port: number, path: string, h: any) => {
+            const mod: any = hostname === '127.0.0.1' ? http : https;
+            const req = mod.request({ hostname, port, path, method: 'PUT', headers: h, timeout: timeoutMs || 15000, rejectUnauthorized: false }, (res: any) => {
                 let d = '';
                 res.on('data', (c: Buffer) => d += c.toString());
                 res.on('end', () => { try { resolve({ status: res.statusCode, json: JSON.parse(d), text: d }); } catch { resolve({ status: res.statusCode, json: null, text: d }); } });
@@ -15450,21 +15532,69 @@ async function devinGetCustomization(orgId: string, auth1: string): Promise<{ ok
     const r = await devinJsonGet(DEVIN_APP + '/api/organizations/' + orgId + '/settings', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
     if (r.status !== 200 || !r.json) return { ok: false, items: [] };
     const s = r.json;
+    // pr_create_as_draft 是用户级偏好(官网也读 users/info.preferences) — 以用户偏好为准, 缺失时回落组织字段。
+    try {
+        const ui = await devinJsonGet(DEVIN_APP + '/api/users/info', { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId });
+        const prefs = ui && ui.json && (ui.json.preferences || (ui.json.user && ui.json.user.preferences));
+        if (prefs && prefs.pr_create_as_draft !== undefined) s.pr_create_as_draft = !!prefs.pr_create_as_draft;
+    } catch { /* 守柔 */ }
+    // 官方能改的都能改: 每项带 key/kind/value, 前端据此渲染可写控件(布尔=开关·文本/数字=✏️)。
     const items = [
-        { name: 'Devin 版本 Default version', detail: s.default_devin_version_override || '(官方默认)' },
-        { name: '默认平台 Platform', detail: s.default_platform || '(官方默认 · Linux)' },
+        { name: 'Devin 版本 Default version', detail: s.default_devin_version_override || '(官方默认)', key: 'default_devin_version_override', kind: 'text', value: s.default_devin_version_override || '' },
+        { name: '默认平台 Platform', detail: s.default_platform || '(官方默认 · Linux)', key: 'default_platform', kind: 'text', value: s.default_platform || '' },
         { name: '搜索模式 Search mode', detail: s.default_search_mode || '—' },
-        { name: 'PR 署名 Open as', detail: s.pr_open_as || '—' },
-        { name: 'PR 开草稿 Draft PRs', detail: s.pr_create_as_draft ? '开' : '关', connected: !!s.pr_create_as_draft },
-        { name: 'PR 仅提及 Mention only', detail: s.pr_mention_only ? '开' : '关', connected: !!s.pr_mention_only },
-        { name: '自动 Review Auto-reviewer', detail: s.pr_auto_reviewer ? '开' : '关', connected: !!s.pr_auto_reviewer },
-        { name: 'Secure Mode 安全模式', detail: s.secure_mode ? '开' : '关', connected: !!s.secure_mode },
-        { name: 'Computer Use 桌面操控', detail: s.computer_use ? '开' : '关', connected: !!s.computer_use },
-        { name: '批量会话上限 Max batch', detail: String(s.max_batch_sessions != null ? s.max_batch_sessions : '—') },
-        { name: '快照自动构建 Snapshot auto-build', detail: s.snapshot_auto_build ? '开' : '关', connected: !!s.snapshot_auto_build },
-        { name: 'Wiki 自动刷新', detail: (s.wiki_auto_refresh || '—') + ' · effort ' + (s.wiki_effort_level || '—') },
+        { name: 'PR 署名 Open as', detail: s.pr_open_as || '—', key: 'pr_open_as', kind: 'text', value: s.pr_open_as || '' },
+        { name: 'PR 开草稿 Draft PRs', detail: s.pr_create_as_draft ? '开' : '关', connected: !!s.pr_create_as_draft, key: 'pr_create_as_draft', kind: 'bool', value: !!s.pr_create_as_draft },
+        { name: 'PR 仅提及 Mention only', detail: s.pr_mention_only ? '开' : '关', connected: !!s.pr_mention_only, key: 'pr_mention_only', kind: 'bool', value: !!s.pr_mention_only },
+        { name: '自动 Review Auto-reviewer', detail: s.pr_auto_reviewer ? '开' : '关', connected: !!s.pr_auto_reviewer, key: 'pr_auto_reviewer', kind: 'bool', value: !!s.pr_auto_reviewer },
+        { name: 'Secure Mode 安全模式', detail: s.secure_mode ? '开' : '关', connected: !!s.secure_mode, key: 'secure_mode', kind: 'bool', value: !!s.secure_mode },
+        { name: 'Computer Use 桌面操控', detail: s.computer_use ? '开' : '关', connected: !!s.computer_use, key: 'computer_use', kind: 'bool', value: !!s.computer_use },
+        { name: '批量会话上限 Max batch', detail: String(s.max_batch_sessions != null ? s.max_batch_sessions : '—'), key: 'max_batch_sessions', kind: 'num', value: s.max_batch_sessions != null ? s.max_batch_sessions : '' },
+        { name: '快照自动构建 Snapshot auto-build', detail: s.snapshot_auto_build ? '开' : '关', connected: !!s.snapshot_auto_build, key: 'snapshot_auto_build', kind: 'bool', value: !!s.snapshot_auto_build },
+        { name: 'Wiki 自动刷新', detail: s.wiki_auto_refresh || '—', key: 'wiki_auto_refresh', kind: 'text', value: s.wiki_auto_refresh || '' },
+        { name: 'Wiki effort', detail: s.wiki_effort_level || '—', key: 'wiki_effort_level', kind: 'text', value: s.wiki_effort_level || '' },
     ];
     return { ok: true, items };
+}
+
+// 官方组织设置写回 · 与官网 SPA 完全同源的按项端点(实测 /settings 本体不认 PATCH/PUT/POST 均 405):
+//   secure_mode → PATCH secure-mode{enabled}; computer_use/pr-mention-only/pr-auto-reviewer/snapshot-auto-build → PUT {enabled};
+//   pr_open_as → PUT pr-open-as{open_as}; max_batch_sessions → PUT max-batch-sessions{limit};
+//   default_devin_version_override → PUT default-devin-version-override{version}; default_platform → PUT default-platform{platform};
+//   wiki_auto_refresh → PUT wiki-auto-refresh{auto_refresh}; wiki_effort_level → PUT wiki-effort-level{effort_level};
+//   pr_create_as_draft 为用户级偏好 → PUT users/info{preferences:{pr_create_as_draft}}。
+const DEVIN_ORG_SETTING_ROUTES: { [k: string]: { path: string; method: 'PUT' | 'PATCH'; field: string } } = {
+    secure_mode: { path: 'secure-mode', method: 'PATCH', field: 'enabled' },
+    computer_use: { path: 'computer-use', method: 'PUT', field: 'enabled' },
+    pr_mention_only: { path: 'pr-mention-only', method: 'PUT', field: 'enabled' },
+    pr_auto_reviewer: { path: 'pr-auto-reviewer', method: 'PUT', field: 'enabled' },
+    snapshot_auto_build: { path: 'snapshot-auto-build', method: 'PUT', field: 'enabled' },
+    pr_open_as: { path: 'pr-open-as', method: 'PUT', field: 'open_as' },
+    max_batch_sessions: { path: 'max-batch-sessions', method: 'PUT', field: 'limit' },
+    default_devin_version_override: { path: 'default-devin-version-override', method: 'PUT', field: 'version' },
+    default_platform: { path: 'default-platform', method: 'PUT', field: 'platform' },
+    wiki_auto_refresh: { path: 'wiki-auto-refresh', method: 'PUT', field: 'auto_refresh' },
+    wiki_effort_level: { path: 'wiki-effort-level', method: 'PUT', field: 'effort_level' },
+};
+async function devinUpdateOrgSettings(orgId: string, patch: any, auth1: string): Promise<{ ok: boolean; error?: string }> {
+    const hdr = { Authorization: 'Bearer ' + auth1, 'x-cog-org-id': orgId };
+    let r: any = null;
+    for (const key of Object.keys(patch || {})) {
+        const val = patch[key];
+        if (key === 'pr_create_as_draft') {
+            r = await devinJsonPut(DEVIN_APP + '/api/users/info', hdr, { preferences: { pr_create_as_draft: !!val } });
+        } else {
+            const route = DEVIN_ORG_SETTING_ROUTES[key];
+            if (!route) return { ok: false, error: '官方无此设置写入端点(只读): ' + key };
+            const url = DEVIN_APP + '/api/organizations/' + orgId + '/' + route.path;
+            const body = { [route.field]: val };
+            r = route.method === 'PATCH' ? await devinJsonPatch(url, hdr, body) : await devinJsonPut(url, hdr, body);
+        }
+        if (!(r && r.status >= 200 && r.status < 300)) {
+            return { ok: false, error: key + ' HTTP ' + (r && r.status) + ' ' + String((r && r.text) || '').slice(0, 120) };
+        }
+    }
+    return { ok: true };
 }
 
 async function devinGetApiKeyStatus(orgId: string, userId: string, auth1: string): Promise<{ ok: boolean; items?: any[] }> {
