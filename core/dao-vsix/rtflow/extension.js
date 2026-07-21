@@ -932,7 +932,7 @@ html.m #hint{font-size:14px;padding:18px}
   <div class="dwh" id="dwHead"><span>💬</span><span class="t" id="dwTitle">对话备份</span><button class="dwx" id="dwClose">✕ 关闭</button></div>
   <div class="dwtabs"><div class="dwtab on" id="dwTabR">☁ 近期对话</div><div class="dwtab" id="dwTabB">🗂 对话记录(备份)</div></div>
   <div class="dwbar" id="dwBarR"><input class="srch" id="dwQ" placeholder="检索 账号 / 对话名称…" autocomplete="off"/><button class="mini" id="dwRefresh">🔄 刷新</button></div>
-  <div class="dwbar" id="dwBarB" style="display:none"><input class="srch" id="dwBQ" placeholder="检索 序号 / 账号 / 密码 / 对话名称…" autocomplete="off"/><button class="mini" id="dwBRefresh">🔄 刷新</button><button class="mini" id="dwBAuto" title="显示/隐藏自动化内容(只隐不删)">🤖 自动化</button><button class="mini" id="dwRoot">📁 根目录</button></div>
+  <div class="dwbar" id="dwBarB" style="display:none"><input class="srch" id="dwBQ" placeholder="检索 序号 / 账号 / 密码 / 对话名称…" autocomplete="off"/><button class="mini" id="dwBAll" title="对全部已登录活跃账号立即全量备份(对话+知识+剧本·与手机版同源)">📥 全量备份</button><button class="mini" id="dwBRefresh">🔄 刷新</button><button class="mini" id="dwBAuto" title="显示/隐藏自动化内容(只隐不删)">🤖 自动化</button><button class="mini" id="dwRoot">📁 根目录</button></div>
   <div class="dwbody">
     <div class="dwview on" id="dwViewR"><div class="tip">跨全部已登录账号 · 近期更新对话 · ⬇MD 秒存 · 📦全部文件含产出 · <b>拖对话卡到网页</b>即上传该对话内容到当前网页上传框(🌐进入=在网页打开)</div><div id="dwRecent"><div class="empty">加载中…</div></div></div>
     <div class="dwview" id="dwViewB"><div id="dwBackup"><div class="empty">加载中…</div></div></div>
@@ -1641,6 +1641,7 @@ _dEl('dwQ').oninput=daoRenderRecent;
 _dEl('dwBQ').oninput=function(){_daoBkQ=this.value;daoRenderBackup();};
 _dEl('dwRoot').onclick=function(){var r=_bkLibRoot||(_bkTree&&_bkTree.root);if(r)vscode.postMessage({type:'shellRevealFile',path:r});};
 _dEl('dwBRefresh').onclick=function(){_bkLib=null;daoLoadBackup();};
+_dEl('dwBAll').onclick=function(){daoToast('📥 全量备份启动…(后台逐号进行·完成后可🔄刷新)');vscode.postMessage({type:'bkBackupAll'});};
 _dEl('dwBAuto').onclick=daoToggleAuto;
 _dEl('cvBack').onclick=daoHideCv;
 // 悬浮窗拖拽(按标题栏)
@@ -2640,7 +2641,7 @@ async function shellHandleMessage(sid, m) {
         send({ type: 'bridgeState', data: data || null });
         return;
       }
-      case 'dlRecent': case 'dlExportMd': case 'dlZip': case 'bkLib': case 'bkAccSessions':
+      case 'dlRecent': case 'dlExportMd': case 'dlZip': case 'bkLib': case 'bkAccSessions': case 'bkBackupAll':
         // 外部浏览器 /shell 侧: 不触发 IDE 机器的 revealFileInOS(旧病灶: 弹空白页/无感定位), 结果以回推+toast 明示。
         await _daoDownloadData(Object.assign({}, m, { noReveal: true }), send); return;
       case 'mrDownload': {
@@ -2814,6 +2815,12 @@ async function _daoDownloadData(m, reply) {
     });
     emit(false);
     _daoRecCacheSave(byEmail);
+    return true;
+  }
+  // 📥 全量备份(对齐手机 APK backupAllAcc / 板块 bkBackupAll): 复用既有 wam.devinBackupAll, 后台逐号进行
+  if (t === "bkBackupAll") {
+    try { vscode.commands.executeCommand("wam.devinBackupAll"); } catch (e) {}
+    reply({ type: "toast", text: "📥 全量备份已启动 · 后台逐号进行(进度见 IDE 通知)" });
     return true;
   }
   if (t === "dlExportMd") {
@@ -3042,7 +3049,7 @@ function _wireMultiPanel(panel) {
         try { panel.webview.postMessage({ type: "open", id: "web:" + Date.now().toString(36), url: abs, label: (m.label || m.url) }); } catch (e) {}
         return;
       }
-      if (m.type === "dlRecent" || m.type === "dlExportMd" || m.type === "dlZip" || m.type === "bkLib" || m.type === "bkAccSessions") {
+      if (m.type === "dlRecent" || m.type === "dlExportMd" || m.type === "dlZip" || m.type === "bkLib" || m.type === "bkAccSessions" || m.type === "bkBackupAll") {
         await _daoDownloadData(m, (x) => { try { panel.webview.postMessage(x); } catch (e) {} });
         return;
       }
