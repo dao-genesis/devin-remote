@@ -802,7 +802,14 @@ html.m #hint{font-size:14px;padding:18px}
 #daowin .cvtab .nm{overflow:hidden;text-overflow:ellipsis;max-width:120px}
 #daowin .cvtab .x{color:#6e7681;font-weight:700;padding:0 1px}
 #daowin .cvacts{display:flex;gap:6px;padding:5px 8px;border-bottom:1px solid #21262d;flex:0 0 auto}
-#daowin .cvbody{flex:1;overflow:auto;padding:12px 12px 50px;white-space:pre-wrap;word-break:break-word;font:12.5px/1.6 ui-monospace,Consolas,monospace;color:#cdd3de}
+#daowin .cvbody{flex:1;overflow:auto;padding:12px 12px 50px;word-break:break-word;font:12.5px/1.6 ui-monospace,Consolas,monospace;color:#cdd3de}
+#daowin .cvb{margin:8px 0;padding:8px 10px;border-radius:8px;white-space:pre-wrap}
+#daowin .cvb .h{font-weight:700;font-size:11px;color:#8b94a2;margin-bottom:4px;white-space:nowrap}
+#daowin .cvb.u{background:#11304d;border:1px solid #1f6feb44}
+#daowin .cvb.d{background:#161b22;border:1px solid #2a313c}
+#daowin .cvbody details{margin:6px 0;border:1px dashed #2a313c;border-radius:7px;padding:4px 8px}
+#daowin .cvbody summary{cursor:pointer;font-size:11px;color:#8b94a2}
+#daowin .cvbody pre{white-space:pre-wrap;background:#0d1117;border:1px solid #232a33;border-radius:6px;padding:6px 8px;margin:4px 0;overflow:auto;max-height:280px}
 .dtoast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(8px);background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:9px 16px;font-size:13px;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;z-index:99999;max-width:90%;box-shadow:0 8px 30px rgba(0,0,0,.5)}
 .dtoast.show{opacity:1;transform:translateX(-50%) translateY(0)}.dtoast.fail{border-color:#f85149}.dtoast.ok{border-color:#3fb950}
 .tbtn.faved{color:#f0b400}
@@ -925,7 +932,7 @@ html.m #hint{font-size:14px;padding:18px}
   <div class="dwh" id="dwHead"><span>💬</span><span class="t" id="dwTitle">对话备份</span><button class="dwx" id="dwClose">✕ 关闭</button></div>
   <div class="dwtabs"><div class="dwtab on" id="dwTabR">☁ 近期对话</div><div class="dwtab" id="dwTabB">🗂 对话记录(备份)</div></div>
   <div class="dwbar" id="dwBarR"><input class="srch" id="dwQ" placeholder="检索 账号 / 对话名称…" autocomplete="off"/><button class="mini" id="dwRefresh">🔄 刷新</button></div>
-  <div class="dwbar" id="dwBarB" style="display:none"><input class="srch" id="dwBQ" placeholder="检索 账号 / 备份名称…" autocomplete="off"/><button class="mini" id="dwRoot">📁 根目录</button></div>
+  <div class="dwbar" id="dwBarB" style="display:none"><input class="srch" id="dwBQ" placeholder="检索 序号 / 账号 / 密码 / 对话名称…" autocomplete="off"/><button class="mini" id="dwBRefresh">🔄 刷新</button><button class="mini" id="dwBAuto" title="显示/隐藏自动化内容(只隐不删)">🤖 自动化</button><button class="mini" id="dwRoot">📁 根目录</button></div>
   <div class="dwbody">
     <div class="dwview on" id="dwViewR"><div class="tip">跨全部已登录账号 · 近期更新对话 · ⬇MD 秒存 · 📦全部文件含产出 · <b>拖对话卡到网页</b>即上传该对话内容到当前网页上传框(🌐进入=在网页打开)</div><div id="dwRecent"><div class="empty">加载中…</div></div></div>
     <div class="dwview" id="dwViewB"><div id="dwBackup"><div class="empty">加载中…</div></div></div>
@@ -1264,8 +1271,8 @@ function renderDownloads(){if(!_bkTree){showOverlay('⬇ 下载','<div class="em
 var DAO_REC=[],CV_TABS=[],CV_ACT=-1,_daoBkQ='',_convDrag=null,_convDragActive=false,_bkOpen={};
 // 自动化对话默认隐藏(对齐手机 daopan.html: 只隐不删·搜索时不隐免漏检)
 var _showAuto=false;try{_showAuto=localStorage.getItem('dao.showAutoConv')==='1';}catch(e){}
-function daoToggleAuto(){_showAuto=!_showAuto;try{localStorage.setItem('dao.showAutoConv',_showAuto?'1':'0');}catch(e){}daoRenderRecent();}
-var DAO_REC_VIEW_MAX=34; // 近期对话(☁)无搜索时只显示最近此条数(对齐手机 APK·精简);全量按号分层在「🗂 对话记录(备份)」
+function daoToggleAuto(){_showAuto=!_showAuto;try{localStorage.setItem('dao.showAutoConv',_showAuto?'1':'0');}catch(e){}daoRenderRecent();try{daoRenderBackup();}catch(e){}}
+var DAO_REC_VIEW_MAX=40; // 近期对话(☁)无搜索时只显示最近此条数(对齐手机 daopan.html MAXREC=40);全量按号分层在「🗂 对话记录(备份)」
 function _dEl(id){return document.getElementById(id);}
 function daoToast(msg,bad){var t=_dEl('daotoast');if(!t)return;t.textContent=msg;t.className='dtoast show'+(bad?' fail':' ok');clearTimeout(t._tm);t._tm=setTimeout(function(){t.className='dtoast';},2200);}
 function daoAgo(ms){if(!ms)return'';var d=Date.now()-ms;if(d<0)d=0;var mn=Math.floor(d/60000);if(mn<1)return'刚刚';if(mn<60)return mn+'分钟前';var h=Math.floor(mn/60);if(h<24)return h+'小时前';var dd=Math.floor(h/24);if(dd<30)return dd+'天前';try{return new Date(ms).toLocaleDateString();}catch(e){return'';}}
@@ -1390,8 +1397,8 @@ function daoRenderRecent(){var q=(_dEl('dwQ').value||'').trim().toLowerCase(),bo
   // 有搜索时跨全量匹配。全量历史在「🗂 对话记录(备份)」按号分层。
   var src=q?DAO_REC:DAO_REC.slice(0,DAO_REC_VIEW_MAX);
   // 序号直搜(对齐手机 daopan.html): 纯数字查询优先精确命中账号序号, 无精确命中才退回全文子串
-  var qNo=/^\d+$/.test(q)?+q:0;
-  var qNoHit=qNo>0&&src.some(function(x){return +x.accNo===qNo;});
+  var qNo=/^[0-9]+$/.test(q)?+q:0;
+  var qNoHit=qNo>0&&src.some(function(x){return +x.accNo===qNo;}); // 纯数字检索 → 命中账号序号
   var html='',hidAuto=0;src.forEach(function(it,idx){
     if(it.auto&&!_showAuto&&!q){hidAuto++;return;}
     if(q){
@@ -1401,11 +1408,11 @@ function daoRenderRecent(){var q=(_dEl('dwQ').value||'').trim().toLowerCase(),bo
     html+='<div class="rc" draggable="false" data-cdrag="1" data-email="'+esc(it.email||'')+'" data-sid="'+esc(it.sid||'')+'" data-title="'+esc(it.title||'')+'"><div class="r1"><span class="acc-no">#'+esc(String(it.accNo))+'</span><span class="st '+esc(it.statusClass||'')+'" title="'+esc(it.status||'')+'"></span><span class="ti" title="'+esc(it.title)+'">'+esc(String(it.title).slice(0,70))+'</span></div>'+
       (it.pv?'<div class="pv">'+esc(it.pv)+'</div>':'')+
       '<div class="meta"><span>'+esc(String(it.email||'').split('@')[0])+'</span>'+(it.status?'<span>'+esc(it.status)+'</span>':'')+(it.updatedAt?'<span>'+daoAgo(it.updatedAt)+'</span>':'')+'</div>'+
-      '<div class="acts"><span class="b" data-act="view" data-idx="'+idx+'">👁 查看</span><span class="b" data-act="enter" data-idx="'+idx+'" title="切到该账号并在网页端打开此对话">🌐 进入</span><span class="b" data-act="md" data-idx="'+idx+'">⬇ MD</span><span class="b pri" data-act="zip" data-idx="'+idx+'">📦 全部文件</span><span class="b" data-act="up" data-idx="'+idx+'" title="上传此对话内容(MD)到当前打开的网页上传框(对齐手机 APK·免拖拽)">⬆ 传网页</span></div></div>';});
+      '<div class="acts"><span class="b" data-act="view" data-idx="'+idx+'">👁 查看</span><span class="b" data-act="enter" data-idx="'+idx+'" title="切到该账号并在网页端打开此对话">🌐 进入</span><span class="b" data-act="md" data-idx="'+idx+'">⬇ MD</span><span class="b" data-act="up" data-idx="'+idx+'" title="把本对话记录(含取数指引)注入当前网页的上传框">⬆ 传到当前页</span><span class="b pri" data-act="zip" data-idx="'+idx+'">📦 全部文件</span></div></div>';});
   if(!q&&(hidAuto>0||_showAuto)){html='<div class="empty" style="padding:8px 0;font-size:12px">'+(_showAuto?'自动化对话已展开':'已隐藏 '+hidAuto+' 个自动化对话')+' · <a href="javascript:void 0" data-autotoggle="1" style="color:#58a6ff;cursor:pointer">'+(_showAuto?'收起':'显示')+'</a></div>'+html;}
   if(!q&&DAO_REC.length>DAO_REC_VIEW_MAX){html+='<div style="text-align:center;padding:12px 0 4px"><button class="mini" data-recmore="1">加载更多 (当前 '+Math.min(DAO_REC_VIEW_MAX,DAO_REC.length)+' / 共 '+DAO_REC.length+')</button></div><div class="empty" style="padding:2px 4px 8px;line-height:1.5">搜索可跨全部 · 全量历史见 🗂 对话记录(备份)</div>';}
   box.innerHTML=html||'<div class="empty">无匹配 · 清空搜索查看全部</div>';try{box.scrollTop=_sc;}catch(e){}}
-function daoEnter(idx){var it=DAO_REC[idx];if(!it)return;vscode.postMessage({type:'openCloudPage',path:'sessions/'+String(it.sid||'').replace(/^devin-/,''),label:it.title});daoToast('已请求打开 · '+String(it.email||'').split('@')[0]);}
+function daoEnter(idx){var it=DAO_REC[idx];if(!it)return;vscode.postMessage({type:'openCloudPage',path:'sessions/'+String(it.sid||'').replace(/^devin-/,'')+(it.email?'?dao_acct='+encodeURIComponent(it.email):''),label:it.title});daoToast('已切到 '+String(it.email||'').split('@')[0]+' · 打开网页对话');}
 function daoMd(idx){var it=DAO_REC[idx];if(!it)return;daoToast('下载 MD…');vscode.postMessage({type:'dlExportMd',email:it.email,sid:it.sid,title:it.title,save:true});}
 function daoZip(idx){var it=DAO_REC[idx];if(!it)return;daoToast('打包全部文件…(增量补全·稍候定位)');vscode.postMessage({type:'dlZip',email:it.email,sid:it.sid,title:it.title});}
 function daoView(idx){var it=DAO_REC[idx];if(!it)return;var ex=-1;for(var i=0;i<CV_TABS.length;i++){if(CV_TABS[i].sid===it.sid){ex=i;break;}}
@@ -1423,53 +1430,150 @@ function daoRenderCv(){var tabsEl=_dEl('cvTabs'),bodyEl=_dEl('cvBody'),actEl=_dE
   tabsEl.innerHTML=h;var cur=CV_TABS[CV_ACT];
   if(!cur){bodyEl.textContent='';actEl.innerHTML='';return;}
   actEl.innerHTML='<span class="b" data-cvact="md" data-i="'+CV_ACT+'">⬇ MD</span><span class="b pri" data-cvact="zip" data-i="'+CV_ACT+'">📦 全部文件</span>';
-  bodyEl.textContent=cur.loading?'提取对话中…':(cur.md||'(空)');bodyEl.scrollTop=0;}
+  if(cur.loading){bodyEl.textContent='提取对话中…';}else{bodyEl.innerHTML=_cvRich(cur.md||'(空)');}bodyEl.scrollTop=0;}
+// 对话富渲染(对齐手机 APK exportSessionRich 多气泡): 据 MD 结构化标题分段 → 👤/🤖 气泡 + 💭思考/🔧工具折叠
+ function _cvRich(md){
+  var lines=String(md||'').split('\\n'),out='',cur=null;
+  function _body(t){var s=esc(t.replace(/^\\n+|\\n+$/g,''));
+    // 代码围栏(\x60×3) → pre(保留原文); 引用前缀去 '> '
+    s=s.replace(/\x60\x60\x60([\\s\\S]*?)\x60\x60\x60/g,function(_,c){return '<pre>'+c.replace(/^\\n+|\\n+$/g,'')+'</pre>';});
+    s=s.replace(/^&gt; ?/gm,'');
+    return s;}
+  function flush(){if(!cur)return;
+    if(cur.k==='user')out+='<div class="cvb u"><div class="h">👤 '+esc(cur.h)+'</div><div class="t">'+_body(cur.t)+'</div></div>';
+    else if(cur.k==='devin')out+='<div class="cvb d"><div class="h">🤖 '+esc(cur.h)+'</div><div class="t">'+_body(cur.t)+'</div></div>';
+    else if(cur.k==='think')out+='<details><summary>💭 思考 '+esc(cur.h)+'</summary><div class="t" style="white-space:pre-wrap">'+_body(cur.t)+'</div></details>';
+    else out+='<details><summary>'+esc(cur.h)+'</summary><div class="t" style="white-space:pre-wrap">'+_body(cur.t)+'</div></details>';
+    cur=null;}
+  for(var i=0;i<lines.length;i++){var L=lines[i],m;
+    if((m=/^## 👤 (.*)$/.exec(L))){flush();cur={k:'user',h:m[1],t:''};continue;}
+    if((m=/^## 🤖 (.*)$/.exec(L))){flush();cur={k:'devin',h:m[1],t:''};continue;}
+    if((m=/^### 💭 思考(.*)$/.exec(L))){flush();cur={k:'think',h:m[1],t:''};continue;}
+    if((m=/^### (.*)$/.exec(L))){flush();cur={k:'tool',h:m[1],t:''};continue;}
+    if(/^# 对话: /.test(L)&&!cur){out+='<div class="cvb d"><div class="h">'+esc(L.replace(/^# /,''))+'</div></div>';continue;}
+    if(!cur){if(L.trim())out+='<div style="color:#8b94a2;font-size:11px">'+esc(L)+'</div>';continue;}
+    cur.t+=(cur.t?'\\n':'')+L;}
+  flush();return out||esc(md);}
 function daoCvMd(ti){var t=CV_TABS[ti];if(!t)return;daoToast('下载 MD…');vscode.postMessage({type:'dlExportMd',email:t.email,sid:t.sid,title:t.title,save:true});}
 function daoCvZip(ti){var t=CV_TABS[ti];if(!t)return;daoToast('打包全部文件…');vscode.postMessage({type:'dlZip',email:t.email,sid:t.sid,title:t.title});}
-function daoLoadBackup(){if(!_bkTree)_dEl('dwBackup').innerHTML='<div class="empty">正在扫描本地备份…</div>';vscode.postMessage({type:'shellBackups'});}
-function daoRenderBackup(){var box=_dEl('dwBackup');if(!box)return;if(!_bkTree){box.innerHTML='<div class="empty">正在扫描…</div>';return;}
-  // 一级目录=账号文件夹(默认折叠·点开看该号对话), 对齐手机版悬浮窗分层逻辑; 搜索时自动展开命中账号。
-  var accs=(_bkTree.accounts||[]).slice();var q=(_daoBkQ||'').trim().toLowerCase(),na=0,nc=0,body='';
-  // 账号按其最新对话时间降序 → 最近用过的号置顶 (对齐手机版"最新在前", 根治"看不到最新对话")。
-  function _accLatest(a){var cs=a&&a.conversations||[],m=0;for(var j=0;j<cs.length;j++){var t=+cs[j].mtime||0;if(t>m)m=t;}return m;}
-  accs.sort(function(x,y){return _accLatest(y)-_accLatest(x);});
-  for(var i=0;i<accs.length;i++){var a=accs[i];var em=String(a.email||a.account||'');var accHit=em.toLowerCase().indexOf(q)>=0;
-    var rows=(a.conversations||[]).filter(function(c){return !q||accHit||String(c.title||c.name||c.devinId||'').toLowerCase().indexOf(q)>=0;});
-    rows.sort(function(x,y){return (+y.mtime||0)-(+x.mtime||0);}); // 号内对话按最新时间降序
-    if(!rows.length)continue;na++;nc+=rows.length;
-    var key=String(a.account||em||i).toLowerCase();var open=q?true:!!_bkOpen[key];
-    // 最活跃 = 号内最新对话标题(rows 已按 mtime 降序), 作为账号副标签, 一眼知该号在忙什么。
-    var topC=rows[0]||{};var topT=String(topC.title||topC.name||topC.devinId||'').trim();
-    body+='<div class="bkacc" data-bkacc="'+esc(key)+'" data-bkemail="'+esc(em)+'" title="双击复制账号+密码" style="display:flex;align-items:center;gap:7px;margin-top:7px;padding:8px 10px;background:#11161d;border:1px solid #232a33;border-radius:7px;cursor:pointer;user-select:none">'
-      +'<span style="width:12px;flex:none;color:#7d8794;font-size:11px">'+(open?'▾':'▸')+'</span>'
-      +'<span style="flex:none">📁</span>'
-      +'<span style="flex:1;min-width:0">'
-        +'<span style="display:block;font-size:12.5px;color:#cdd3de;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(em)+'">'+esc(em||'(未命名账号)')+'</span>'
-        +(topT?'<span style="display:block;font-size:10.5px;color:#7d8794;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px" title="最活跃对话: '+esc(topT)+'">🗨 '+esc(topT.slice(0,46))+'</span>':'')
-      +'</span>'
-      +'<span style="flex:none;font-size:11px;color:#8b94a2;background:#1b2129;border:1px solid #2a313b;border-radius:10px;padding:1px 8px">'+rows.length+' 对话</span>'
-      +'<span class="b" data-bkcopy="'+esc(em)+'" title="复制账号+密码">📋</span>'
-      +'<span class="b" data-reveal="'+esc(a.dir||'')+'" title="打开账号文件夹">📂</span></div>';
-    if(open){body+='<div style="padding-left:6px;border-left:2px solid #232a33;margin:2px 0 4px 6px">';
-      for(var k=0;k<rows.length;k++){var c=rows[k];
-        body+='<div class="rc" draggable="false" data-cdrag="1" data-email="'+esc(em)+'" data-sid="'+esc(c.devinId||'')+'" data-title="'+esc(c.title||c.name||c.devinId||'')+'"><div class="r1"><span class="ti" title="'+esc(c.title||c.name||c.devinId||'')+'">'+esc(c.title||c.name||c.devinId||'(未命名)')+'</span></div><div class="meta"><span>'+_bkWhen(c.mtime)+(c.eventCount?(' · '+c.eventCount+' 事件'):'')+'</span></div>'+
-          '<div class="acts">'+(c.hasHtml?'<span class="b pri" data-open="'+esc(c.htmlPath||'')+'">打开正文</span>':'')+'<span class="b" data-reveal="'+esc(c.path||c.htmlPath||a.dir||'')+'">文件夹</span></div></div>';}
-      body+='</div>';}}
-  box.innerHTML=body||'<div class="empty">无备份记录 · 先在「💬对话备份」板块备份或开启自动备份</div>';
-  var ttl=_dEl('dwTitle');if(ttl)ttl.textContent='下载 / 备份库 ('+na+'账号·'+nc+'对话'+(q?'·已筛':'')+')';}
+// 🗂 对话记录(备份) · 账号备份库(对齐手机 APK cloud.html 本源): 一级=账号目录(永久序号/账密/移出库/登录态/最近对话预览/五按钮),
+//   二级=该号全部对话(已登录云端实时 200 条优先 · 移出/未登录回本地备份), 自动化-only 账号下沉不删。
+var _bkLib=null,_bkLibRoot='',_bkView='accts',_bkCur=null,_bkSess=null,_bkSessCloud=false,_bkCloudFail=false,_bkPage=1,_bkViewCache=[];var BK_PAGE=60;
+function daoLoadBackup(){if(!_bkLib)_dEl('dwBackup').innerHTML='<div class="empty">加载账号备份库…</div>';vscode.postMessage({type:'bkLib'});}
+function _bkBack(){_bkView='accts';_bkCur=null;_bkSess=null;_bkSessCloud=false;_bkCloudFail=false;daoRenderBackup();}
+function _bkCopy(g){if(!g)return;var t=String(g.email||'')+'\\n'+String(g.password||'');var done=false;
+  try{navigator.clipboard.writeText(t);done=true;}catch(e){}
+  if(!done){vscode.postMessage({type:'copyCredEmail',email:g.email});return;}
+  daoToast('📋 已复制账号+密码 · '+String(g.email||'').split('@')[0]);}
+function _bkLocalSorted(g){return ((g&&g.conversations)||[]).slice().sort(function(x,y){return (+y.mtime||0)-(+x.mtime||0);});}
+// 账号级五按钮的目标对话: 云端最近对话(缓存)优先, 无则该号最新本地备份
+function _bkAccTarget(g){if(!g)return null;
+  if(g.recent&&g.recent.sid)return{email:g.email,sid:g.recent.sid,title:g.recent.title||g.recent.sid};
+  var c=_bkLocalSorted(g)[0];if(!c)return null;
+  return{email:g.email,sid:c.devinId||'',title:c.title||c.name||c.devinId||'',html:c.hasHtml?c.htmlPath:'',path:c.path||''};}
+function _cvOpen(email,sid,title){var ex=-1;for(var i=0;i<CV_TABS.length;i++){if(CV_TABS[i].sid===sid){ex=i;break;}}
+  if(ex>=0)CV_ACT=ex;else{CV_TABS.push({email:email,sid:sid,title:title||sid,md:'',loading:true});CV_ACT=CV_TABS.length-1;}
+  _dEl('cv').className='on';daoRenderCv();if(ex<0)vscode.postMessage({type:'dlExportMd',email:email,sid:sid,title:title,save:false});}
+// 会话/账号级五按钮统一行为(查看/进入/MD/传网页/全部文件): 有 sid 走云端真源, 无 sid 落本地备份文件
+function _bkFive(a,tgt){if(!tgt){daoToast('该号暂无可操作对话',true);return;}
+  var email=tgt.email||'',sid=String(tgt.sid||''),title=tgt.title||'';
+  if(a==='view'){if(sid){_cvOpen(email,sid,title);}else if(tgt.html){vscode.postMessage({type:'shellOpenFile',path:tgt.html});}else daoToast('此备份无可视正文(无会话ID/无正文文件)',true);}
+  else if(a==='enter'){if(!sid){daoToast('无会话ID · 无法在网页打开',true);return;}
+    vscode.postMessage({type:'openCloudPage',path:'sessions/'+sid.replace(/^devin-/,'')+'?dao_acct='+encodeURIComponent(email),label:title});
+    daoToast('已切到 '+email.split('@')[0]+' · 打开网页对话');}
+  else if(a==='md'){if(sid){daoToast('下载 MD…');vscode.postMessage({type:'dlExportMd',email:email,sid:sid,title:title,save:true});}
+    else if(tgt.path){vscode.postMessage({type:'shellRevealFile',path:tgt.path});}else daoToast('无会话ID · 无法导出',true);}
+  else if(a==='up'){if(!sid){daoToast('无会话ID · 无法上传',true);return;}
+    if(_daoUploadToActive({kind:'conv',email:email,sid:sid,title:title})){daoToast('⏳ 上传此对话到当前网页 · '+String(title||sid).slice(0,24));try{daoClose();}catch(e){}}}
+  else if(a==='zip'){if(sid){daoToast('打包全部文件…(增量补全·稍候定位)');vscode.postMessage({type:'dlZip',email:email,sid:sid,title:title});}
+    else if(tgt.path){vscode.postMessage({type:'shellRevealFile',path:tgt.path});}else daoToast('无会话ID · 无法打包',true);}}
+function _bkFiveBtns(pfx,i){return '<div class="acts">'
+  +'<span class="b" data-'+pfx+'="view" data-i="'+i+'">👁 查看</span>'
+  +'<span class="b" data-'+pfx+'="enter" data-i="'+i+'" title="切到该账号并在网页端打开此对话">🌐 进入</span>'
+  +'<span class="b" data-'+pfx+'="md" data-i="'+i+'">⬇ MD</span>'
+  +'<span class="b" data-'+pfx+'="up" data-i="'+i+'" title="把此对话记录注入当前网页的上传框">⬆ 传到当前页</span>'
+  +'<span class="b pri" data-'+pfx+'="zip" data-i="'+i+'">📦 全部文件</span></div>';}
+function _bkOpenGrp(i){var g=_bkViewCache[i];if(!g)return;
+  _bkCur=g;_bkView='sess';_bkSess=null;_bkSessCloud=false;_bkCloudFail=false;daoRenderBackup();
+  if(g.logged)vscode.postMessage({type:'bkAccSessions',email:g.email});}
+function daoRenderBackup(){var box=_dEl('dwBackup');if(!box)return;var _sc=box.scrollTop;
+  if(_bkView==='sess'&&_bkCur){_bkRenderSess(box);return;}
+  if(!_bkLib){box.innerHTML='<div class="empty">加载账号备份库…</div>';return;}
+  var q=(_daoBkQ||'').trim().toLowerCase(),qNo=/^[0-9]+$/.test(q)?+q:0;
+  var list=_bkLib.filter(function(g){
+    if(!q)return _showAuto||!g.allAuto;
+    if(qNo&&+g.no===qNo)return true;
+    var hay=(String(g.email||'')+' '+String(g.password||'')+' '+String(g.orgName||'')+' '+String((g.recent&&g.recent.title)||'')+' '+String(g.no||'')).toLowerCase();
+    return hay.indexOf(q)>=0;});
+  if(qNo&&list.some(function(g){return +g.no===qNo;}))list=list.filter(function(g){return +g.no===qNo;});
+  _bkViewCache=list;
+  var nRemoved=_bkLib.filter(function(g){return g.removed;}).length,nAuto=_bkLib.filter(function(g){return g.allAuto;}).length;
+  var html='<div class="tip">以备份为本源 · 全机历史账号(含已移出库) · 按近期活跃时序'+(nRemoved?' · 移出库 '+nRemoved+' 号(守柔保留)':'')+(nAuto&&!_showAuto&&!q?' · 已下沉 '+nAuto+' 个自动化-only 号':'')+'</div>';
+  list.slice(0,BK_PAGE*_bkPage).forEach(function(g,i){
+    var tags='';
+    if(g.removed)tags+='<span style="flex:none;font-size:10px;color:#f48771;border:1px solid #5a2d28;border-radius:8px;padding:0 6px;margin-left:4px">已移出库</span>';
+    if(g.allAuto)tags+='<span style="flex:none;font-size:10px;color:#8b94a2;border:1px solid #2a313b;border-radius:8px;padding:0 6px;margin-left:4px">自动化</span>';
+    html+='<div class="rc" data-bkgrp="'+i+'" style="cursor:pointer" title="点击进入 · 查看该号全部对话">'
+      +'<div class="r1"><span class="acc-no"'+(g.removed?' style="color:#f48771;border-color:#5a2d28"':'')+'>'+(g.removed&&!g.no?'移':'#'+esc(String(g.no||'?')))+'</span><span class="ti" title="'+esc(g.email)+'">'+esc(g.email||'(未命名账号)')+'</span>'+tags+'</div>'
+      +(g.password?'<div class="meta"><span>🔑 '+esc(g.password)+'</span><span class="b" data-bkcp="'+i+'" title="复制账号+密码">📋 复制账密</span></div>':'')
+      +(g.recent&&g.recent.title?'<div class="pv" title="'+esc(g.recent.title)+'">🗨 '+esc(String(g.recent.title).slice(0,60))+(g.recent.pv?' · '+esc(String(g.recent.pv).slice(0,50)):'')+'</div>':'')
+      +'<div class="meta"><span>'+(g.logged?'☁ 已登录':(g.count?'🗄 本地备份':'🔒 未登录'))+'</span><span>'+(g.count||0)+' 备份对话</span>'+(g.orgName?'<span>'+esc(g.orgName)+'</span>':'')+(g.t?'<span>'+daoAgo(g.t)+'</span>':'')+(g.dir?'<span class="b" data-reveal="'+esc(g.dir)+'">📂</span>':'')+'</div>'
+      +_bkFiveBtns('bkacct',i)+'</div>';});
+  if(list.length>BK_PAGE*_bkPage)html+='<div style="text-align:center;padding:12px 0 4px"><button class="mini" data-bkmore="1">加载更多 (当前 '+(BK_PAGE*_bkPage)+' / 共 '+list.length+')</button></div>';
+  if(!list.length)html+='<div class="empty">'+(q?'无匹配 · 清空搜索查看全部':'无账号备份 · 先在 🔀切号 面板登录账号或在「💬对话备份」板块备份')+'</div>';
+  box.innerHTML=html;try{box.scrollTop=_sc;}catch(e){}
+  var ttl=_dEl('dwTitle');if(ttl)ttl.textContent='对话记录(备份) · '+_bkLib.length+' 账号'+(nRemoved?' · 含移出 '+nRemoved:'');}
+function _bkRenderSess(box){var g=_bkCur,q=(_daoBkQ||'').trim().toLowerCase();
+  var head='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><button class="mini" data-bkback="1">‹ 返回账号目录</button>'
+    +'<span style="flex:1;min-width:0;font-size:12px;color:#cdd3de;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(g.removed&&!g.no?'移':'#'+esc(String(g.no||'?')))+' '+esc(g.email)+(g.removed?' <span style="color:#f48771">已移出库</span>':'')+'</span>'
+    +(g.password?'<span class="b" data-bkcpcur="1" title="复制账号+密码">📋 账密</span>':'')+'</div>';
+  var rows,cloud=_bkSessCloud&&Array.isArray(_bkSess);
+  if(g.logged&&!cloud&&!_bkCloudFail){box.innerHTML=head+'<div class="empty">拉取云端对话…(失败自动回本地备份)</div>';return;}
+  var html=head,hidAuto=0,n=0;
+  if(cloud){
+    _bkSess.forEach(function(s,i){
+      if(s.auto&&!_showAuto&&!q){hidAuto++;return;}
+      if(q&&(String(s.title||'')+' '+String(s.sid||'')).toLowerCase().indexOf(q)<0)return;n++;
+      html+='<div class="rc" draggable="false" data-cdrag="1" data-email="'+esc(g.email)+'" data-sid="'+esc(s.sid)+'" data-title="'+esc(s.title||'')+'">'
+        +'<div class="r1"><span class="st '+esc(s.statusClass||'')+'" title="'+esc(s.status||'')+'"></span><span class="ti" title="'+esc(s.title||'')+'">'+esc(String(s.title||s.sid).slice(0,70))+'</span></div>'
+        +(s.pv?'<div class="pv">'+esc(s.pv)+'</div>':'')
+        +'<div class="meta">'+(s.status?'<span>'+esc(s.status)+'</span>':'')+(s.updatedAt?'<span>'+daoAgo(s.updatedAt)+'</span>':'')+'<span>☁ 云端</span></div>'
+        +_bkFiveBtns('bksess',i)+'</div>';});
+    if(hidAuto)html='<div class="empty" style="padding:6px 0;font-size:12px">已隐藏 '+hidAuto+' 个自动化对话 · <a href="javascript:void 0" data-autotoggle="1" style="color:#58a6ff;cursor:pointer">显示</a></div>'+html;
+  }else{
+    if(g.logged&&_bkCloudFail)html+='<div class="empty" style="padding:4px 0 8px;font-size:11px">云端拉取失败 · 已回退本地备份</div>';
+    var lc=_bkLocalSorted(g);
+    lc.forEach(function(c,i){
+      var t=c.title||c.name||c.devinId||'(未命名)';
+      if(q&&String(t).toLowerCase().indexOf(q)<0)return;n++;
+      html+='<div class="rc" draggable="false" '+(c.devinId?'data-cdrag="1" ':'')+'data-email="'+esc(g.email)+'" data-sid="'+esc(c.devinId||'')+'" data-title="'+esc(t)+'" data-html="'+esc(c.hasHtml?(c.htmlPath||''):'')+'" data-path="'+esc(c.path||'')+'">'
+        +'<div class="r1"><span class="ti" title="'+esc(t)+'">'+esc(String(t).slice(0,70))+'</span></div>'
+        +'<div class="meta"><span>'+_bkWhen(c.mtime)+(c.eventCount?(' · '+c.eventCount+' 事件'):'')+'</span><span>🗄 本地备份</span></div>'
+        +_bkFiveBtns('bkloc',i)+'</div>';});
+  }
+  if(!n)html+='<div class="empty">'+(q?'无匹配':'此号暂无对话备份')+'</div>';
+  box.innerHTML=html;
+  var ttl=_dEl('dwTitle');if(ttl)ttl.textContent=esc(g.email).split('@')[0]+' · '+n+' 对话'+(cloud?'(云端)':'(本地)');}
 // 事件委托(CSP 安全): 所有悬浮窗内点击统一在 #daowin 上处理
-_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal],[data-bkcopy],[data-bkacc],[data-autotoggle],[data-recmore]');if(!el)return;
+_dEl('daowin').addEventListener('click',function(e){var el=e.target.closest&&e.target.closest('[data-act],[data-cv],[data-cvact],[data-open],[data-reveal],[data-bkcopy],[data-autotoggle],[data-recmore],[data-bkgrp],[data-bkcp],[data-bkcpcur],[data-bkback],[data-bkmore],[data-bkacct],[data-bksess],[data-bkloc]');if(!el)return;
   if(el.hasAttribute('data-autotoggle')){daoToggleAuto();return;}
-  if(el.hasAttribute('data-recmore')){DAO_REC_VIEW_MAX+=34;daoRenderRecent();return;} // 加载更多分页(对齐手机 daopan.html loadMore)
+  if(el.hasAttribute('data-recmore')){DAO_REC_VIEW_MAX+=40;daoRenderRecent();return;} // 加载更多分页(对齐手机 daopan.html MAXREC_STEP=40)
   var bcp=el.getAttribute('data-bkcopy');if(bcp!=null){e.stopPropagation();vscode.postMessage({type:'copyCredEmail',email:bcp});return;}
-  var bk=el.getAttribute('data-bkacc');if(bk!=null){_bkOpen[bk]=!_bkOpen[bk];daoRenderBackup();return;}
+  if(el.hasAttribute('data-bkback')){_bkBack();return;}
+  if(el.hasAttribute('data-bkmore')){_bkPage++;daoRenderBackup();return;}
+  var bcp2=el.getAttribute('data-bkcp');if(bcp2!=null){e.stopPropagation();_bkCopy(_bkViewCache[+bcp2]);return;}
+  if(el.hasAttribute('data-bkcpcur')){e.stopPropagation();_bkCopy(_bkCur);return;}
+  var bga=el.getAttribute('data-bkacct');if(bga){e.stopPropagation();_bkFive(bga,_bkAccTarget(_bkViewCache[+el.getAttribute('data-i')]));return;}
+  var bgs=el.getAttribute('data-bksess');if(bgs){e.stopPropagation();var s=(_bkSess||[])[+el.getAttribute('data-i')];if(s&&_bkCur)_bkFive(bgs,{email:_bkCur.email,sid:s.sid,title:s.title});return;}
+  var bgl=el.getAttribute('data-bkloc');if(bgl){e.stopPropagation();var lc=_bkLocalSorted(_bkCur)[+el.getAttribute('data-i')];if(lc&&_bkCur)_bkFive(bgl,{email:_bkCur.email,sid:lc.devinId||'',title:lc.title||lc.name||lc.devinId||'',html:lc.hasHtml?(lc.htmlPath||''):'',path:lc.path||''});return;}
+  var bk=el.getAttribute('data-bkgrp');if(bk!=null){_bkOpenGrp(+bk);return;}
   var a=el.getAttribute('data-act');if(a){var idx=+el.getAttribute('data-idx');if(a==='view')daoView(idx);else if(a==='enter')daoEnter(idx);else if(a==='md')daoMd(idx);else if(a==='zip')daoZip(idx);else if(a==='up'){var _it=DAO_REC[idx];if(_it){if(_daoUploadToActive({kind:'conv',email:_it.email,sid:_it.sid,title:_it.title})){daoToast('⏳ 上传此对话到当前网页 · '+String(_it.title||_it.sid||'').slice(0,24));try{daoClose();}catch(_e){}}}}return;}
   var cv=el.getAttribute('data-cv');if(cv){var ci=+el.getAttribute('data-i');if(cv==='act')daoActCv(ci);else if(cv==='close'){e.stopPropagation();daoCloseCv(ci);}return;}
   var cva=el.getAttribute('data-cvact');if(cva){var cj=+el.getAttribute('data-i');if(cva==='md')daoCvMd(cj);else daoCvZip(cj);return;}
   var op=el.getAttribute('data-open');if(op){vscode.postMessage({type:'shellOpenFile',path:op});return;}
   var rv=el.getAttribute('data-reveal');if(rv){vscode.postMessage({type:'shellRevealFile',path:rv});return;}});
-// 备份库账号行双击 → 复制账号+密码(对齐手机版双击复制); 双击同时触发两次单击=展开再收起, 净无副作用。
-_dEl('daowin').addEventListener('dblclick',function(e){var el=e.target.closest&&e.target.closest('[data-bkemail]');if(!el)return;var em=el.getAttribute('data-bkemail');if(em){e.preventDefault();vscode.postMessage({type:'copyCredEmail',email:em});}});
+// 备份库账号卡双击 → 复制账号+密码(对齐手机版双击复制)
+_dEl('daowin').addEventListener('dblclick',function(e){var el=e.target.closest&&e.target.closest('[data-bkgrp]');if(!el)return;e.preventDefault();_bkCopy(_bkViewCache[+el.getAttribute('data-bkgrp')]);});
 // ── 归一 · 拖拽上传到当前网页 (下载文件 / 近期对话 MD → 投递当前账号网页上传框) ──
 //   外壳同源可靠接住 drop(#convdrop 覆盖网页区)→ postMessage 命令该标签内嵌桥(/__daobridge.js)
 //   fetch /__dlfile|/__convmd 取字节 → feed 落上传框。不依赖跨 iframe 原生 DnD(webview 跨源 iframe 不稳)。
@@ -1535,7 +1639,9 @@ _dEl('dwTabB').onclick=function(){daoTab('backup');};
 _dEl('dwRefresh').onclick=daoLoadRecent;
 _dEl('dwQ').oninput=daoRenderRecent;
 _dEl('dwBQ').oninput=function(){_daoBkQ=this.value;daoRenderBackup();};
-_dEl('dwRoot').onclick=function(){if(_bkTree&&_bkTree.root)vscode.postMessage({type:'shellRevealFile',path:_bkTree.root});};
+_dEl('dwRoot').onclick=function(){var r=_bkLibRoot||(_bkTree&&_bkTree.root);if(r)vscode.postMessage({type:'shellRevealFile',path:r});};
+_dEl('dwBRefresh').onclick=function(){_bkLib=null;daoLoadBackup();};
+_dEl('dwBAuto').onclick=daoToggleAuto;
 _dEl('cvBack').onclick=daoHideCv;
 // 悬浮窗拖拽(按标题栏)
 (function(){var w=_dEl('daowin'),hd=_dEl('dwHead'),dx=0,dy=0,drag=false;if(!w||!hd)return;
@@ -1811,7 +1917,9 @@ window.addEventListener('message',function(ev){var m=ev.data||{};
   else if(m.type==='gotoBoard'){try{openBoard(m.board||'home');}catch(e){}}
   else if(m.type==='restoreTabs'){try{restoreTabs(m.tabs);}catch(e){}}
   else if(m.type==='cloudHost'){_boardHostAll(m.msg||{});}
-  else if(m.type==='shellBackupsData'){_bkTree=m.tree||{root:'',accounts:[]};if(OV.className){if(_bkMode==='dl')renderDownloads();else if(_bkMode==='bk')renderBkLib();}try{daoRenderBackup();}catch(e){}}
+  else if(m.type==='shellBackupsData'){_bkTree=m.tree||{root:'',accounts:[]};if(OV.className){if(_bkMode==='dl')renderDownloads();else if(_bkMode==='bk')renderBkLib();}}
+  else if(m.type==='bkLibData'){_bkLib=m.accounts||[];_bkLibRoot=m.root||'';if(m.error&&!_bkLib.length){var _bb=_dEl('dwBackup');if(_bb)_bb.innerHTML='<div class="empty">账号备份库加载失败: '+esc(m.error)+'</div>';}else{try{daoRenderBackup();}catch(e){}}}
+  else if(m.type==='bkAccSessionsData'){if(_bkView==='sess'&&_bkCur&&String(_bkCur.email||'').toLowerCase()===String(m.email||'').toLowerCase()){if(m.ok){_bkSess=m.sessions||[];_bkSessCloud=true;daoToast('✓ '+_bkSess.length+' 个云端对话');}else{_bkSess=null;_bkSessCloud=false;_bkCloudFail=true;}try{daoRenderBackup();}catch(e){}}}
   else if(m.type==='shellDownloadsData'){DAO_DL=m.list||[];dlRender();}
   else if(m.__daoMediaList){try{_mrOnList(m);}catch(e){}}
   else if(m.type==='dlRecentData'){try{daoOnRecent(m);}catch(e){}}
@@ -2532,7 +2640,7 @@ async function shellHandleMessage(sid, m) {
         send({ type: 'bridgeState', data: data || null });
         return;
       }
-      case 'dlRecent': case 'dlExportMd': case 'dlZip':
+      case 'dlRecent': case 'dlExportMd': case 'dlZip': case 'bkLib': case 'bkAccSessions':
         // 外部浏览器 /shell 侧: 不触发 IDE 机器的 revealFileInOS(旧病灶: 弹空白页/无感定位), 结果以回推+toast 明示。
         await _daoDownloadData(Object.assign({}, m, { noReveal: true }), send); return;
       case 'mrDownload': {
@@ -2646,7 +2754,8 @@ async function _daoDownloadData(m, reply) {
   const t = m && m.type;
   if (t === "dlRecent") {
     const accs = (_store && _store.accounts) || [];
-    const noOf = (email) => { const i = accs.findIndex((a) => String(a.email).toLowerCase() === String(email).toLowerCase()); return i >= 0 ? i + 1 : "?"; };
+    // 不在账号库 = 已移出库(移出总账回灌 · 守柔保留): 序号标「移」, 行不消失
+    const noOf = (email) => { const i = accs.findIndex((a) => String(a.email).toLowerCase() === String(email).toLowerCase()); return i >= 0 ? i + 1 : "移"; };
     let emails = []; try { emails = devinCloud.cachedEmails() || []; } catch (e) {}
     const perAcc = Math.max(1, Math.min(20, Number(m.perAcc) || 12));
     // 流式增量(对齐手机 daopan.html): 每账号回来即合并去重排序回推一次(节流~250ms),
@@ -2738,6 +2847,89 @@ async function _daoDownloadData(m, reply) {
       if (one && one.zip) { if (!m.noReveal) { try { await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(one.zip)); } catch (e) {} } reply({ type: "dlZipDone", ok: true, sid, name: path.basename(one.zip), path: one.zip }); }
       else reply({ type: "dlZipDone", ok: false, sid, error: "打包失败" });
     } catch (e) { reply({ type: "dlZipDone", ok: false, sid, error: String((e && e.message) || e) }); }
+    return true;
+  }
+  // 🗂 对话记录(备份) · 账号备份库(对齐手机 APK cloud.html 本源): 三源并集 =
+  //   本地备份树(不可变档案·主源) + 账号库(无备份夹的活跃号也并入) + 移出号(备份夹不在库=已移出·守柔保留)。
+  //   每号带 永久序号/密码/登录态/最近对话预览/近期活跃时序, 自动化-only 账号下沉不删。
+  if (t === "bkLib") {
+    try {
+      let root; try { root = vscode.workspace.getConfiguration("wam").get("devinCloudBackupDir"); } catch (e) {}
+      const tree = devinCloud.listBackups(root || undefined);
+      const accs = (_store && _store.accounts) || [];
+      const inLib = new Map();
+      accs.forEach((a, i) => { const k = String(a.email || "").toLowerCase(); if (k) inLib.set(k, { a, no: i + 1 }); });
+      const recCache = _daoRecCacheLoad();
+      const out = [], seen = new Set();
+      const recentOf = (em) => {
+        const rows = recCache[em];
+        if (!Array.isArray(rows) || !rows.length) return { rc: null, allAuto: false };
+        let rc = null;
+        for (const r of rows) { if (!r.auto) { rc = r; break; } }
+        return { rc: rc || rows[0], allAuto: !rc && rows.length > 0 };
+      };
+      for (const b of tree.accounts || []) {
+        const email = String(b.email || b.account || "");
+        const em = email.toLowerCase();
+        const hit = em ? inLib.get(em) : null;
+        // 密码: 在库取库(真源); 移出号从备份夹名 <编号>_<邮箱本地名>_<密码> 表层解析(留影快照)
+        let pwd = hit ? (hit.a.password || "") : "";
+        if (!pwd) { const seg = String(b.account || "").split("_"); if (seg.length >= 3 && /^\d+$/.test(seg[0])) pwd = seg.slice(2).join("_"); }
+        let auth = null; try { auth = devinCloud.getCachedAuth(email); } catch (e) {}
+        const convs = (b.conversations || []).slice();
+        let latest = 0; for (const c of convs) { const mt = +c.mtime || 0; if (mt > latest) latest = mt; }
+        const ra = recentOf(em);
+        out.push({
+          email, no: hit ? hit.no : (b.accountNo || 0), password: pwd,
+          removed: !hit, logged: !!(auth && auth.auth1), orgName: (auth && (auth.orgName || auth.orgId)) || "",
+          dir: b.dir || "", count: convs.length, conversations: convs, allAuto: ra.allAuto,
+          t: Math.max(latest, ra.rc ? (ra.rc.updatedAt || 0) : 0, hit ? (hit.a.lastActiveAt || hit.a.addedAt || 0) : 0),
+          recent: ra.rc ? { sid: ra.rc.sid, title: ra.rc.title || "", pv: ra.rc.pv || "", updatedAt: ra.rc.updatedAt || 0, auto: !!ra.rc.auto } : null,
+        });
+        if (em) seen.add(em);
+      }
+      accs.forEach((a, i) => {
+        const email = String(a.email || ""); const em = email.toLowerCase();
+        if (!em || seen.has(em)) return;
+        let auth = null; try { auth = devinCloud.getCachedAuth(email); } catch (e) {}
+        const ra = recentOf(em);
+        out.push({
+          email, no: i + 1, password: a.password || "", removed: false,
+          logged: !!(auth && auth.auth1), orgName: (auth && (auth.orgName || auth.orgId)) || "",
+          dir: "", count: 0, conversations: [], allAuto: ra.allAuto,
+          t: Math.max(a.lastActiveAt || a.addedAt || 0, ra.rc ? (ra.rc.updatedAt || 0) : 0),
+          recent: ra.rc ? { sid: ra.rc.sid, title: ra.rc.title || "", pv: ra.rc.pv || "", updatedAt: ra.rc.updatedAt || 0, auto: !!ra.rc.auto } : null,
+        });
+      });
+      out.sort((x, y) => {
+        if (!!x.allAuto !== !!y.allAuto) return x.allAuto ? 1 : -1;
+        if ((y.t || 0) !== (x.t || 0)) return (y.t || 0) - (x.t || 0);
+        return (x.no || 99999) - (y.no || 99999);
+      });
+      reply({ type: "bkLibData", ok: true, root: tree.root || "", accounts: out });
+    } catch (e) { reply({ type: "bkLibData", ok: false, root: "", accounts: [], error: String((e && e.message) || e) }); }
+    return true;
+  }
+  // 账号二级页: 已登录号优先云端实时对话(最多 200 条·对齐手机 openGrp), 失败回本地备份(前端兜底)。
+  if (t === "bkAccSessions") {
+    const email = String(m.email || "");
+    try {
+      const auth = await _resolveAuthForEmail(email);
+      if (auth && auth.auth1) {
+        const ls = await devinCloud.listSessions(auth, 200);
+        if (ls && ls.ok) {
+          const rows = [];
+          (ls.sessions || []).forEach((s) => {
+            const sid = s.devin_id || s.session_id || s.id; if (!sid) return;
+            rows.push({ sid, title: s.title || s.name || s.prompt || sid, pv: _daoPreviewOf(s), status: s.status || s.activity_status || "", statusClass: devinCloud.classifySession(s), updatedAt: _daoRecencyMs(s), auto: !!(devinCloud.isAutoConv && devinCloud.isAutoConv(s)) });
+          });
+          rows.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+          reply({ type: "bkAccSessionsData", email, ok: true, sessions: rows });
+          return true;
+        }
+      }
+      reply({ type: "bkAccSessionsData", email, ok: false, error: auth && auth.auth1 ? "云端拉取失败" : "账号未解锁(无 auth1)" });
+    } catch (e) { reply({ type: "bkAccSessionsData", email, ok: false, error: String((e && e.message) || e) }); }
     return true;
   }
   return false;
@@ -2850,7 +3042,7 @@ function _wireMultiPanel(panel) {
         try { panel.webview.postMessage({ type: "open", id: "web:" + Date.now().toString(36), url: abs, label: (m.label || m.url) }); } catch (e) {}
         return;
       }
-      if (m.type === "dlRecent" || m.type === "dlExportMd" || m.type === "dlZip") {
+      if (m.type === "dlRecent" || m.type === "dlExportMd" || m.type === "dlZip" || m.type === "bkLib" || m.type === "bkAccSessions") {
         await _daoDownloadData(m, (x) => { try { panel.webview.postMessage(x); } catch (e) {} });
         return;
       }
