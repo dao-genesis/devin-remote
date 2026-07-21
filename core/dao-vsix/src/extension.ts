@@ -17243,6 +17243,11 @@ function daoResolveMcpEndpoint(): { url: string; token: string } | null {
     //   实时生成 64 工具)。本实例自有隧道空/死时诚实回 null(守柔·待探活环重起, 不注死址)。
     const base = bridgeEffectiveUrl();
     if (/^https?:\/\//.test(base)) return { url: base.replace(/\/+$/, '') + '/mcp', token: bridgeEffectiveToken() };
+    // 守柔·恒通: 快速隧道空/死(1015 限流期常态)时回落持久中继 — Worker 按 Bearer 令牌路由任意路径,
+    //   POST <worker 源>/mcp 即达本体 /mcp(JSON-RPC 实测 200)。中继恒定不漂, 反注端点从此不再随隧道死。
+    const relay = String(ws.publicUrl || '');
+    const rm = relay.match(/^(https?:\/\/[^/]+)\/relay\//);
+    if (rm) return { url: rm[1] + '/mcp', token: bridgeEffectiveToken() };
     // 回退(保守兼容): 仅当自有隧道暂不可知且旧网关确有可达地址(极少)时沿用之。
     try {
         if (fs.existsSync(DAO_MCP_PUBLIC_FILE)) {
