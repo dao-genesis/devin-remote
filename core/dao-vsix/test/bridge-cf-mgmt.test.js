@@ -51,7 +51,7 @@ ok(/reply\(\{ type: 'bridgeCfResources'/.test(src), "回包 type=bridgeCfResourc
 
 // ⑤ 前端: 渲染 + 撤销/删除确认 + 仅在已打通(active)卡片内出现。
 ok(/function rCfResources\(\)/.test(src), "前端 rCfResources() 渲染 Token/Worker 清单");
-ok(/function cfRevoke\(id,name\)/.test(src) && /confirm\('撤销 API Token/.test(src), "撤销 Token 前二次确认(不可逆)");
+ok(/function cfRevoke\(id,name\)/.test(src) && /(daoConfirm|confirm)\('撤销 API Token/.test(src), "撤销 Token 前二次确认(不可逆)");
 ok(/function cfDelWorker\(name,active\)/.test(src) && /当前持久通道 Worker/.test(src), "删当前通道 Worker 有强警示确认");
 ok(/id="cfResBox"/.test(src) && /cmd\(&#39;cfListResources&#39;\)/.test(src), "已打通卡片内挂『管理 Token/Worker』区 + 加载按钮");
 ok(/d\.type==='bridgeCfResources'/.test(src), "前端 message 处理 bridgeCfResources → 刷新 cfResBox");

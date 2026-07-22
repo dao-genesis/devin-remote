@@ -2718,7 +2718,7 @@ function isAppProxyPassthrough(route: string): boolean {
             '/api/terminal', '/api/diagnostics', '/api/definitions', '/api/references', '/api/symbols',
             '/api/git/', '/api/agents', '/api/commands', '/api/tools', '/api/devin', '/api/workspaces',
             '/api/agent-doc', '/api/manifest', '/api/bridge-state', '/api/next', '/api/signal-info',
-            '/api/signal-start', '/api/signal-stop', '/api/cap', '/api/input', '/api/relay'];
+            '/api/signal-start', '/api/signal-stop', '/api/cap', '/api/input', '/api/relay', '/api/gh'];
         return !daoApiPrefixes.some(p => route === p || route.startsWith(p + '/') || route === p.replace(/\/$/, ''));
     }
     // 帛书·「执天之行」官网根挂载: dao 自身 HTTP 仅占用 /api/*, 故其余所有根路径
@@ -4362,6 +4362,34 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
         case '/api/commands': {
             const cmds = await vscode.commands.getCommands(true);
             return { commands: cmds, count: cmds.length };
+        }
+        // ═══ GitHub 舰队/PAT 后端持久化管理(脱离 webview·经内网穿透即可驱动·兜底) ═══
+        //   与 GitHub 板块内按钮同源逻辑, 但走 HTTP → 即便 IDE 面板未开/关闭, 后端仍可
+        //   持续核验有效性并去芜存菁(实时状态·清封号/失效/孤儿)。需鉴权(不入免 token 白名单)。
+        case '/api/gh/pat-status': {
+            return daoGhPatStatus();
+        }
+        case '/api/gh/validate': {
+            const _raw = await readBody(req);
+            let b: any = {}; try { b = _raw ? JSON.parse(_raw) : {}; } catch { /* 守柔 */ }
+            const logins = Array.isArray(b.logins) ? b.logins : [];
+            const vr = await daoGhValidatePats(logins);
+            return { ...vr, status: daoGhPatStatus() };
+        }
+        case '/api/gh/prune': {
+            const _raw = await readBody(req);
+            let b: any = {}; try { b = _raw ? JSON.parse(_raw) : {}; } catch { /* 守柔 */ }
+            const r = await daoGhPruneStalePats(b.dropDeadFleet !== false);
+            return { ...r, status: daoGhPatStatus() };
+        }
+        case '/api/gh/forget': {
+            const _raw = await readBody(req);
+            let b: any = {}; try { b = _raw ? JSON.parse(_raw) : {}; } catch { /* 守柔 */ }
+            const login = String(b.login || '').trim();
+            if (!login) return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'login required' }) };
+            const r = daoGhFleetForget(login);
+            if (r.prunedSecret || r.wasPrimary) { try { await daoBatchInjectAllAccounts(); } catch { /* 守柔 */ } }
+            return { ...r, status: daoGhPatStatus() };
         }
         case '/api/tools': {
             // 守柔·畸形入参不崩(旧: 空/非法 JSON 或缺 tool → JSON.parse/解构抛错 → 500)。
@@ -6227,19 +6255,17 @@ function daoGhFleetForget(login: string): { ok: boolean; prunedSecret?: string; 
 // 一键清理「失效/孤儿/封号」PAT: 从 security 移除 GITHUB_PAT_<LOGIN> 中——
 //   ① 孤儿(舰队已无此 login) ② 封号(acctState=suspended) ③ 失效(patState=invalid) 三类,
 //   再全池重注同步。不动主 GITHUB_PAT 之外的非本机制密钥。返回被清明细供前端回显。
-async function daoGhPruneStalePats(): Promise<{ ok: boolean; removed: { name: string; login: string; reason: string }[]; okCount: number; total: number }> {
+async function daoGhPruneStalePats(dropDeadFleet: boolean = true): Promise<{ ok: boolean; removed: { name: string; login: string; reason: string }[]; droppedAccounts: { login: string; reason: string }[]; okCount: number; total: number }> {
     const prof = loadInjectProfile();
     if (!Array.isArray(prof.secrets)) prof.secrets = [];
     const fleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
+    const isSuspended = (rec: any) => String(rec.acctState || '') === 'suspended' || String(rec.patState || '') === 'suspended';
+    const isInvalid = (rec: any) => String(rec.patState || '') === 'invalid';
     // login → 该号 per-secret 名 + 状态
     const byName = new Map<string, { login: string; suspended: boolean; invalid: boolean }>();
     for (const a of fleet) {
         const rec: any = a;
-        byName.set(_ghPatSecretName(a.login), {
-            login: a.login,
-            suspended: String(rec.acctState || '') === 'suspended',
-            invalid: String(rec.patState || '') === 'invalid'
-        });
+        byName.set(_ghPatSecretName(a.login), { login: a.login, suspended: isSuspended(rec), invalid: isInvalid(rec) });
     }
     const removed: { name: string; login: string; reason: string }[] = [];
     prof.secrets = prof.secrets.filter(s => {
@@ -6250,9 +6276,18 @@ async function daoGhPruneStalePats(): Promise<{ ok: boolean; removed: { name: st
         if (meta.invalid) { removed.push({ name: s.name, login: meta.login, reason: 'PAT 失效(invalid)' }); return false; }
         return true;
     });
+    // 去芜存菁: 封号(GET /user 恒 403)账号已不可修复 → 连舰队条目一并移除, 使 GitHub 板块只留正常号。
+    //   PAT 失效(401)可能仅是过期/吊销·账号本身或可续用 → 只清其注入残留, 保留舰队条目待续登重建。
+    const droppedAccounts: { login: string; reason: string }[] = [];
+    if (dropDeadFleet) {
+        prof.ghFleet = fleet.filter(a => {
+            if (isSuspended(a as any)) { droppedAccounts.push({ login: a.login, reason: '封号(suspended·不可修复)' }); return false; }
+            return true;
+        });
+    }
     saveInjectProfile(prof);
     const r = await daoBatchInjectAllAccounts();
-    return { ok: true, removed, okCount: r.okCount, total: r.total };
+    return { ok: true, removed, droppedAccounts, okCount: r.okCount, total: r.total };
 }
 // ── GitHub 板块 · 半登录账号「续登助手」(隔离档·守柔不无头) ─────────────────
 // 「账密+2FA」存号后是半登录(有凭证·无 PAT)。旧路径只能靠用户在默认浏览器手动登录再建 PAT,
@@ -6723,9 +6758,9 @@ function daoGhPatStatus(): { ok: boolean; primary: string; injectedCount: number
         const acctState = String(rec.acctState || '');
         const patState = String(rec.patState || '');
         // 可注入 = 有 PAT 且非封号 且 PAT 未被判失效(未验证/离线仍允许注入·仅红标提示, 死号/失效硬禁).
-        const injectable = !!pat && acctState !== 'suspended' && patState !== 'invalid';
-        const skipReason = !pat ? '无 PAT' : (acctState === 'suspended' ? '封号' : (patState === 'invalid' ? 'PAT 失效' : ''));
-        return { login: a.login, role: a.role || 'member', hasPat: !!pat, hasCred: !!(a.cred && a.cred.user), pending: (a as any).verify === 'pending', patPrefix: _ghMaskPat(pat), injected, primary: isPrimary, secretName, acctState, injectable, skipReason, patState, patExpiresAt: String(rec.patExpiresAt || ''), patScopes: String(rec.patScopes || ''), patCheckedAt: Number(rec.patCheckedAt || 0) };
+        const injectable = !!pat && acctState !== 'suspended' && patState !== 'invalid' && patState !== 'suspended';
+        const skipReason = !pat ? '无 PAT' : ((acctState === 'suspended' || patState === 'suspended') ? '封号' : (patState === 'invalid' ? 'PAT 失效' : ''));
+        return { login: a.login, role: a.role || 'member', hasPat: !!pat, hasCred: !!(a.cred && a.cred.user), pending: (a as any).verify === 'pending', patPrefix: _ghMaskPat(pat), injected, primary: isPrimary, secretName, acctState, injectable, skipReason, patState: String(rec.patState || ''), patExpiresAt: String(rec.patExpiresAt || ''), patScopes: String(rec.patScopes || ''), patCheckedAt: Number(rec.patCheckedAt || 0) };
     });
     return { ok: true, primary: (accounts.find(a => a.primary) || { login: '' }).login, injectedCount: accounts.filter(a => a.injected).length, injectableCount: accounts.filter(a => a.injectable).length, total: accounts.length, accounts };
 }
@@ -6744,11 +6779,14 @@ async function daoGhValidatePats(logins: string[]): Promise<{ ok: boolean; check
         let state = 'offline';
         if (r.status === 200) state = 'valid';
         else if (r.status === 401) state = 'invalid';
+        else if (r.status === 403) state = 'suspended'; // 账号被 GitHub 封停/标记 → GET /user 恒 403(有别于 401 的 PAT 失效)。
         else if (r.status > 0) state = 'error_' + r.status;
         if (state !== 'offline') {
             rec.patState = state;
             rec.patCheckedAt = Date.now();
-            if (r.status === 200) { rec.patExpiresAt = String(r.tokenExpiration || ''); rec.patScopes = String(r.scopes || ''); }
+            // 实时校验即账号存活权威源: 覆盖此前基于组织成员关系的陈旧 acctState(常把好号误标 offline/suspended)。
+            if (r.status === 200) { rec.acctState = 'active'; rec.patExpiresAt = String(r.tokenExpiration || ''); rec.patScopes = String(r.scopes || ''); }
+            else if (r.status === 403) rec.acctState = 'suspended';
         }
         results.push({ login: a.login, state, expiresAt: String(rec.patExpiresAt || ''), ...(r.error ? { error: r.error } : {}) });
         await _ghSleep(300);
@@ -9948,7 +9986,7 @@ function ghRenderPatInject(){var st=_ghState();var v=document.getElementById('gh
   h+='<p style="font-size:10px;color:var(--muted);margin:4px 0 0">已注入 '+ic+'/'+(ps.total||0)+' · 可注入(排除封号/失效) '+injc+' · 主 PAT: '+esc(st.patPrimary||ps.primary||'(未定·取所选第一枚)')+'</p>';
   v.innerHTML=h;}
 // 一键清理 security 里「封号/失效/孤儿」PAT — 死号不再占注入位(反者道之动)。
-function ghPatPruneStale(){daoConfirm('从 security 一键清除「封号 / PAT 失效 / 孤儿(舰队已无此号)」的 GITHUB_PAT_&lt;LOGIN&gt; 条目?<br><span style="color:var(--muted);font-size:11px">不动主 GITHUB_PAT 之外的其他密钥。建议先点「🔍 批量验证」核实有效性再清。</span>',function(){ghMsg('ghPatInjectOut','⏳ 清理失效/孤儿/封号 PAT 中…');cmd('daoGhPruneStalePats',{})})}
+function ghPatPruneStale(){daoConfirm('一键去芜存菁?<br>① 从 security 清除「封号 / PAT 失效 / 孤儿」的 GITHUB_PAT_&lt;LOGIN&gt; 条目;<br>② 从 GitHub 板块<b>移除封号死号</b>(GET /user 恒 403·不可修复)——只留正常号。<br><span style="color:var(--muted);font-size:11px">不动主 GITHUB_PAT 之外的其他密钥;PAT 失效(401)号保留待续登重建。建议先点「🔍 批量验证」核实有效性再清。</span>',function(){ghMsg('ghPatInjectOut','⏳ 清理失效/孤儿/封号 + 移除死号中…');cmd('daoGhPruneStalePats',{})})}
 function ghPatSelToggle(login,on){var st=_ghState();st.patSel=st.patSel||{};if(on)st.patSel[login]=true;else delete st.patSel[login];}
 function ghPatSetPrimary(login){var st=_ghState();st.patPrimary=login;st.patSel=st.patSel||{};st.patSel[login]=true;ghRenderPatInject();}
 function ghPatValidateAll(){var st=_ghState();var ps=st.patStatus;var n=(ps&&ps.accounts)?ps.accounts.filter(function(a){return a.hasPat}).length:0;if(!n){toast('账号池无 PAT 可验',false);return}ghMsg('ghPatInjectOut','⏳ 批量验证中('+n+' 枚·逐号 GET /user)…');cmd('daoGhValidatePats',{logins:[]})}
@@ -10032,7 +10070,7 @@ function ghOnResult(d){
     // 进板自动核验一次: 有 PAT 但从未验证(patState 空)的账号, 后台跑一次批量验证使有效性即时可见(无需手点)。
     if(!st._patAutoVald){var unv=(d.accounts||[]).filter(function(a){return a.hasPat&&!a.patState});if(unv.length){st._patAutoVald=true;ghMsg('ghPatInjectOut','⏳ 首次进板自动核验 '+unv.length+' 枚 PAT 有效性(逐号 GET /user)…');cmd('daoGhValidatePats',{logins:[]})}}}
   else if(d.kind==='validatePats'){var rs=(d.results||[]);ghMsg('ghPatInjectOut','🔍 批量验证 '+(d.checked||0)+' 枚: '+rs.map(function(x){return esc(x.login)+'('+esc(x.state)+')'}).join(', '));}
-  else if(d.kind==='prunePats'){var rm=(d.removed||[]);ghMsg('ghPatInjectOut',rm.length?('<span style="color:var(--success)">🧹 已清理 '+rm.length+' 枚失效/孤儿/封号 PAT → 重注同步 '+(d.okCount||0)+'/'+(d.total||0)+' 账号</span><br>'+rm.map(function(x){return '✗ '+esc(x.login||x.name)+' ('+esc(x.reason)+')'}).join('<br>')):'<span style="color:var(--muted)">无失效/孤儿/封号 PAT 可清(security 已干净)</span>');cmd('getInjectProfile');}
+  else if(d.kind==='prunePats'){var rm=(d.removed||[]);var da=(d.droppedAccounts||[]);var _pm='';if(rm.length||da.length){_pm='<span style="color:var(--success)">🧹 已清理 '+rm.length+' 枚失效/孤儿/封号 PAT'+(da.length?(' · 并从 GitHub 板块移除 '+da.length+' 个封号死号'):'')+' → 重注同步 '+(d.okCount||0)+'/'+(d.total||0)+' 账号</span>';if(rm.length)_pm+='<br>'+rm.map(function(x){return '✗ PAT '+esc(x.login||x.name)+' ('+esc(x.reason)+')'}).join('<br>');if(da.length)_pm+='<br>'+da.map(function(x){return '🗑 号 '+esc(x.login)+' ('+esc(x.reason)+')'}).join('<br>');}else{_pm='<span style="color:var(--muted)">无失效/孤儿/封号可清(GitHub 板块与 security 已干净)</span>';}ghMsg('ghPatInjectOut',_pm);cmd('getInjectProfile');cmd('daoGhFleetList',{});cmd('daoGhPatStatus',{});}
   else if(d.kind==='injectPats'){
     if(d.ok){var inj=(d.injected||[]);var sk=(d.skipped||[]);ghMsg('ghPatInjectOut','<span style="color:var(--success)">✓ 多 PAT 分布式注入: '+inj.length+' 枚 → 已同步 '+(d.okCount||0)+'/'+(d.total||0)+' 账号 · 主 PAT: '+esc(d.primary||'')+'</span>'+(inj.length?'<br>注入: '+inj.map(function(x){return esc(x)}).join(', '):'')+(sk.length?('<br><span style="color:var(--warn)">跳过: '+sk.map(function(x){return esc(x.login)+'('+esc(x.reason)+')'}).join(', ')+'</span>'):''));cmd('getInjectProfile');cmd('daoGhPatStatus',{})}
     else ghMsg('ghPatInjectOut','<span style="color:var(--danger)">✗ '+esc(d.error||'注入失败')+'</span>');
