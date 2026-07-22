@@ -72,7 +72,7 @@ ok(/reply\(\{ type: 'bridgeCfPool'/.test(src) && /reply\(\{ type: 'bridgeCfPoolR
 // ⑧ 前端: 渲染池 + 识号入池 + 逐号管理资源 + 撤/删二次确认 + message 处理。
 ok(/function rCfPool\(\)/.test(src) && /function rCfPoolRes\(/.test(src), "前端 rCfPool()/rCfPoolRes() 渲染池与逐号资源");
 ok(/function cfPoolAdd\(\)/.test(src) && /cmd\('cfPoolAdd'/.test(src), "识号入池调 cfPoolAdd");
-ok(/function cfPoolRevoke\(kb,id,name\)/.test(src) && /confirm\('撤销 API Token/.test(src), "撤销 Token 前二次确认(不可逆)");
+ok(/function cfPoolRevoke\(kb,id,name\)/.test(src) && /(daoConfirm|confirm)\('撤销 API Token/.test(src), "撤销 Token 前二次确认(不可逆)");
 ok(/function cfPoolDelWorker\(kb,name,active\)/.test(src) && /当前持久通道 Worker/.test(src), "删当前通道 Worker 有强警示确认");
 ok(/id="cfPoolBox"/.test(src) && /d\.type==='bridgeCfPool'/.test(src) && /d\.type==='bridgeCfPoolResources'/.test(src), "面板挂 CF 账号池区 + message 处理刷新");
 
