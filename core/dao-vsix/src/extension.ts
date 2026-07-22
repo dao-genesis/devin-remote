@@ -6197,12 +6197,62 @@ async function daoGhFleetRemoveFromOrg(orgPat: string, org: string, login: strin
     return { ok: false, error: (r.json && r.json.message) || r.error || ('HTTP ' + r.status) };
 }
 // 从本地舰队存档移除(封号/换号)。
-function daoGhFleetForget(login: string): { ok: boolean } {
+function daoGhFleetForget(login: string): { ok: boolean; prunedSecret?: string; wasPrimary?: boolean } {
     login = String(login || '').trim().replace(/^@/, '');
     const prof = loadInjectProfile();
+    // 删本地舰队条目前, 先记住其 PAT — 用于联动清理 security 里 GITHUB_PAT_<LOGIN>(以及若它正是主 PAT 则一并清主).
+    const gone = (prof.ghFleet || []).find(a => a.login.toLowerCase() === login.toLowerCase());
+    const gonePat = gone ? String((gone as any).pat || '').trim() : '';
     prof.ghFleet = (prof.ghFleet || []).filter(a => a.login.toLowerCase() !== login.toLowerCase());
+    // 联动清理: 删号即删其反向注入残留(否则封号/删号后 PAT 仍常驻 security 成孤儿, 见 GITHUB_PAT_FERRYHEALT 病灶).
+    const perName = _ghPatSecretName(login);
+    let prunedSecret: string | undefined;
+    let wasPrimary = false;
+    if (Array.isArray(prof.secrets)) {
+        const before = prof.secrets.length;
+        prof.secrets = prof.secrets.filter(s => s.name !== perName);
+        if (prof.secrets.length < before) prunedSecret = perName;
+        // 若被删号的 PAT 恰是当前主 GITHUB_PAT → 主 PAT 亦失效, 清空以免继续用死号 PAT 绑 MCP.
+        if (gonePat) {
+            const pri = prof.secrets.find(s => s.name === DAO_PAT_SECRET_NAME);
+            if (pri && String(pri.value || '').trim() === gonePat) {
+                prof.secrets = prof.secrets.filter(s => s.name !== DAO_PAT_SECRET_NAME);
+                wasPrimary = true;
+            }
+        }
+    }
     saveInjectProfile(prof);
-    return { ok: true };
+    return { ok: true, prunedSecret, wasPrimary };
+}
+// 一键清理「失效/孤儿/封号」PAT: 从 security 移除 GITHUB_PAT_<LOGIN> 中——
+//   ① 孤儿(舰队已无此 login) ② 封号(acctState=suspended) ③ 失效(patState=invalid) 三类,
+//   再全池重注同步。不动主 GITHUB_PAT 之外的非本机制密钥。返回被清明细供前端回显。
+async function daoGhPruneStalePats(): Promise<{ ok: boolean; removed: { name: string; login: string; reason: string }[]; okCount: number; total: number }> {
+    const prof = loadInjectProfile();
+    if (!Array.isArray(prof.secrets)) prof.secrets = [];
+    const fleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
+    // login → 该号 per-secret 名 + 状态
+    const byName = new Map<string, { login: string; suspended: boolean; invalid: boolean }>();
+    for (const a of fleet) {
+        const rec: any = a;
+        byName.set(_ghPatSecretName(a.login), {
+            login: a.login,
+            suspended: String(rec.acctState || '') === 'suspended',
+            invalid: String(rec.patState || '') === 'invalid'
+        });
+    }
+    const removed: { name: string; login: string; reason: string }[] = [];
+    prof.secrets = prof.secrets.filter(s => {
+        if (!/^GITHUB_PAT_/.test(s.name)) return true; // 只碰本机制 per-account 密钥, 主 GITHUB_PAT/他类密钥不动.
+        const meta = byName.get(s.name);
+        if (!meta) { removed.push({ name: s.name, login: '', reason: '孤儿(舰队已无此号)' }); return false; }
+        if (meta.suspended) { removed.push({ name: s.name, login: meta.login, reason: '封号(suspended)' }); return false; }
+        if (meta.invalid) { removed.push({ name: s.name, login: meta.login, reason: 'PAT 失效(invalid)' }); return false; }
+        return true;
+    });
+    saveInjectProfile(prof);
+    const r = await daoBatchInjectAllAccounts();
+    return { ok: true, removed, okCount: r.okCount, total: r.total };
 }
 // ── GitHub 板块 · 半登录账号「续登助手」(隔离档·守柔不无头) ─────────────────
 // 「账密+2FA」存号后是半登录(有凭证·无 PAT)。旧路径只能靠用户在默认浏览器手动登录再建 PAT,
@@ -6659,7 +6709,7 @@ function _ghMaskPat(pat: string): string {
     return p ? (p.slice(0, 7) + '…(脱敏)') : '';
 }
 // 各账号 PAT 状态(非密): 供 security/GitHub 板块渲染「可多选注入」清单。
-function daoGhPatStatus(): { ok: boolean; primary: string; injectedCount: number; total: number; accounts: { login: string; role: string; hasPat: boolean; hasCred: boolean; pending: boolean; patPrefix: string; injected: boolean; primary: boolean; secretName: string }[] } {
+function daoGhPatStatus(): { ok: boolean; primary: string; injectedCount: number; injectableCount: number; total: number; accounts: { login: string; role: string; hasPat: boolean; hasCred: boolean; pending: boolean; patPrefix: string; injected: boolean; primary: boolean; secretName: string; acctState: string; injectable: boolean; skipReason: string; patState: string; patExpiresAt: string; patScopes: string; patCheckedAt: number }[] } {
     const prof = loadInjectProfile();
     const fleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
     const primaryVal = String((prof.secrets.find(s => s.name === DAO_PAT_SECRET_NAME) || { value: '' }).value || '').trim();
@@ -6670,9 +6720,14 @@ function daoGhPatStatus(): { ok: boolean; primary: string; injectedCount: number
         const isPrimary = !!pat && !!primaryVal && pat === primaryVal;
         const injected = (!!pat && perVal === pat) || isPrimary;
         const rec: any = a;
-        return { login: a.login, role: a.role || 'member', hasPat: !!pat, hasCred: !!(a.cred && a.cred.user), pending: (a as any).verify === 'pending', patPrefix: _ghMaskPat(pat), injected, primary: isPrimary, secretName, patState: String(rec.patState || ''), patExpiresAt: String(rec.patExpiresAt || ''), patScopes: String(rec.patScopes || ''), patCheckedAt: Number(rec.patCheckedAt || 0) };
+        const acctState = String(rec.acctState || '');
+        const patState = String(rec.patState || '');
+        // 可注入 = 有 PAT 且非封号 且 PAT 未被判失效(未验证/离线仍允许注入·仅红标提示, 死号/失效硬禁).
+        const injectable = !!pat && acctState !== 'suspended' && patState !== 'invalid';
+        const skipReason = !pat ? '无 PAT' : (acctState === 'suspended' ? '封号' : (patState === 'invalid' ? 'PAT 失效' : ''));
+        return { login: a.login, role: a.role || 'member', hasPat: !!pat, hasCred: !!(a.cred && a.cred.user), pending: (a as any).verify === 'pending', patPrefix: _ghMaskPat(pat), injected, primary: isPrimary, secretName, acctState, injectable, skipReason, patState, patExpiresAt: String(rec.patExpiresAt || ''), patScopes: String(rec.patScopes || ''), patCheckedAt: Number(rec.patCheckedAt || 0) };
     });
-    return { ok: true, primary: (accounts.find(a => a.primary) || { login: '' }).login, injectedCount: accounts.filter(a => a.injected).length, total: accounts.length, accounts };
+    return { ok: true, primary: (accounts.find(a => a.primary) || { login: '' }).login, injectedCount: accounts.filter(a => a.injected).length, injectableCount: accounts.filter(a => a.injectable).length, total: accounts.length, accounts };
 }
 // 批量验证 PAT: 逐号用其自身 PAT 打 GET /user, 落非密元数据(patState/patExpiresAt/patScopes/patCheckedAt)到舰队存档。
 //   未验证通过绝不冒称有效: 200→valid · 401→invalid(失效/吊销/过期) · 网络失败→offline(状态不明·不覆盖旧证)。
@@ -6716,6 +6771,10 @@ async function daoGhInjectPats(logins: string[], primary: string, prune: boolean
         if (!a) { skipped.push({ login: lg, reason: '不在账号池' }); continue; }
         const pat = String(a.pat || '').trim();
         if (!pat) { skipped.push({ login: lg, reason: '无 PAT(先建 PAT)' }); continue; }
+        // 死号/失效硬禁: 封号或 PAT 已验证失效者绝不注入(前端已 disable, 此处后端再守一道·反者道之动).
+        const rec: any = a;
+        if (String(rec.acctState || '') === 'suspended') { skipped.push({ login: a.login, reason: '封号(suspended)·不注入' }); continue; }
+        if (String(rec.patState || '') === 'invalid') { skipped.push({ login: a.login, reason: 'PAT 失效(invalid)·不注入' }); continue; }
         const name = _ghPatSecretName(a.login);
         const ex = prof.secrets.find(s => s.name === name);
         if (ex) ex.value = pat; else prof.secrets.push({ name, value: pat });
@@ -9801,9 +9860,9 @@ function ghFleetRole(login,role){if(!login)return;toast('⏳ '+login+' → '+(ro
 function ghFleetRemoveOrg(login){if(!login)return;daoConfirm('把 '+login+' 移出本体组织?',function(){cmd('daoGhFleetRemoveOrg',{login:login})})}
 function ghFleetForget(login){if(!login)return;daoConfirm('从本地舰队删除 '+login+'?(不影响其 GitHub 账号)',function(){cmd('daoGhFleetForget',{login:login})})}
 function ghAssistLogin(login){if(!login)return;toast('🚀 隔离档续登(自动填充·守柔不提交): '+login,true);cmd('daoGhFleetAssistLogin',{login:login})}
-function ghFleetOpenPat(login){if(!login)return;toast('🔑 该号隔离档打开建 PAT('+((_ghState().patCfg||{}).expDays===0?'永不过期':(((_ghState().patCfg||{}).expDays||30)+'天'))+'): '+login,true);cmd('daoGhFleetOpenPat',{login:login})}
-function ghFleetOpen(login,p){if(!login)return;toast('🌐 该号隔离档打开官网'+(p&&p!=='/'?(' '+p):'')+': '+login,true);cmd('daoGhFleetOpenUrl',{login:login,path:p||'/'})}
-function ghFleetMintPat(login){if(!login)return;toast('⚡ 全自动建 PAT(隔离档官方登录→建经典 PAT→落舰队·约 1-2 分钟): '+login,true);cmd('daoGhFleetMintPat',{login:login})}
+function ghFleetOpenPat(login){if(!login)return;ghMsg('gh-ad-'+ghSafe(login),'⏳ 正在该号隔离档启动浏览器打开建 PAT 页…(首启拉起 Chromium 约数秒)');cmd('daoGhFleetOpenPat',{login:login})}
+function ghFleetOpen(login,p){if(!login)return;ghMsg('gh-ad-'+ghSafe(login),'⏳ 正在该号隔离档启动浏览器打开'+((p&&p!=='/')?esc(p):'官网')+'…(首启拉起 Chromium 约数秒)');cmd('daoGhFleetOpenUrl',{login:login,path:p||'/'})}
+function ghFleetMintPat(login){if(!login)return;ghMsg('gh-ad-'+ghSafe(login),'⏳ 全自动建 PAT 中(隔离档官方登录→建经典 PAT→落舰队→自动注入 security·约 1-2 分钟)…撞人机/设备验证会暂停交回你');cmd('daoGhFleetMintPat',{login:login})}
 // PAT 通用配置窗: 先拉当前配置(含全量 scope 清单)再弹窗渲染。
 function ghPatCfgOpen(){_ghState().patCfgWantShow=true;toast('⏳ 载入 PAT 通用配置…',true);cmd('daoGhGetPatCfg',{})}
 function ghPatCfgShow(d){
@@ -9866,13 +9925,18 @@ function ghRenderPatInject(){var st=_ghState();var v=document.getElementById('gh
   var sel=st.patSel||{};var h='';
   accts.forEach(function(a){
     var lg=esc(a.login);var sid=ghSafe(a.login);
-    var can=a.hasPat;
+    // 可注入 = 后端 injectable(有 PAT·非封号·PAT 未判失效); 老回包无该字段时回落 hasPat.
+    var can=(a.injectable!=null)?!!a.injectable:!!a.hasPat;
     var st2=a.injected?'<span style="color:var(--success)" title="已注入 security">✓ 已注入</span>':(a.hasPat?'<span style="color:var(--warn)">待注入</span>':'<span style="color:var(--muted)">无 PAT</span>');
     if(a.primary)st2+=' · <span style="color:var(--success)" title="当前主 PAT(GITHUB_PAT/绑 MCP)">◆ 主</span>';
+    // 账号级封号/失效硬标(死号不该继续做注入候选)。
+    if(a.acctState==='suspended')st2+=' · <span style="color:var(--danger)" title="GitHub 账号已封停·不可注入">⛔封号</span>';
     if(a.pending)st2+=' · <span style="color:var(--warn)">⏳待验证</span>';
     if(a.patState==='valid'){var exp='';if(a.patExpiresAt){var dl=Math.ceil((new Date(a.patExpiresAt).getTime()-Date.now())/86400000);exp=isFinite(dl)?(' · 余'+dl+'天'):''}st2+=' · <span style="color:var(--success)" title="'+esc(a.patExpiresAt||'无过期信息')+'">✓有效'+exp+'</span>';}
     else if(a.patState==='invalid')st2+=' · <span style="color:var(--danger)" title="401: 失效/吊销/过期">✗失效</span>';
     else if(a.patState&&a.patState.indexOf('error_')===0)st2+=' · <span style="color:var(--warn)">'+esc(a.patState)+'</span>';
+    else if(a.hasPat&&!a.patState)st2+=' · <span style="color:var(--muted)" title="尚未验证·点「批量验证」核实有效性">?未验</span>';
+    if(!can&&a.skipReason)st2+=' · <span style="color:var(--muted)">('+esc(a.skipReason)+'·不注入)</span>';
     var checked=(can&&sel[a.login])?' checked':'';
     var pre=a.patPrefix?('<code style="font-size:10px">'+esc(a.patPrefix)+'</code>'):'<span style="color:var(--muted);font-size:10px">—</span>';
     h+='<div class="cr" style="padding:3px 0">';
@@ -9880,13 +9944,15 @@ function ghRenderPatInject(){var st=_ghState();var v=document.getElementById('gh
     h+='<span class="v" style="font-size:11px">'+st2+(can?(' <button class="btn sm" onclick="ghPatSetPrimary(&#39;'+lg+'&#39;)" title="设为主 PAT(注入时写 GITHUB_PAT + 绑 MCP)">'+(st.patPrimary===a.login?'◉主':'○设主')+'</button>'):'')+'</span>';
     h+='</div>';
   });
-  var ic=(ps.injectedCount||0);
-  h+='<p style="font-size:10px;color:var(--muted);margin:4px 0 0">已注入 '+ic+'/'+(ps.total||0)+' · 主 PAT: '+esc(st.patPrimary||ps.primary||'(未定·取所选第一枚)')+'</p>';
+  var ic=(ps.injectedCount||0);var injc=(ps.injectableCount!=null?ps.injectableCount:'?');
+  h+='<p style="font-size:10px;color:var(--muted);margin:4px 0 0">已注入 '+ic+'/'+(ps.total||0)+' · 可注入(排除封号/失效) '+injc+' · 主 PAT: '+esc(st.patPrimary||ps.primary||'(未定·取所选第一枚)')+'</p>';
   v.innerHTML=h;}
+// 一键清理 security 里「封号/失效/孤儿」PAT — 死号不再占注入位(反者道之动)。
+function ghPatPruneStale(){daoConfirm('从 security 一键清除「封号 / PAT 失效 / 孤儿(舰队已无此号)」的 GITHUB_PAT_&lt;LOGIN&gt; 条目?<br><span style="color:var(--muted);font-size:11px">不动主 GITHUB_PAT 之外的其他密钥。建议先点「🔍 批量验证」核实有效性再清。</span>',function(){ghMsg('ghPatInjectOut','⏳ 清理失效/孤儿/封号 PAT 中…');cmd('daoGhPruneStalePats',{})})}
 function ghPatSelToggle(login,on){var st=_ghState();st.patSel=st.patSel||{};if(on)st.patSel[login]=true;else delete st.patSel[login];}
 function ghPatSetPrimary(login){var st=_ghState();st.patPrimary=login;st.patSel=st.patSel||{};st.patSel[login]=true;ghRenderPatInject();}
 function ghPatValidateAll(){var st=_ghState();var ps=st.patStatus;var n=(ps&&ps.accounts)?ps.accounts.filter(function(a){return a.hasPat}).length:0;if(!n){toast('账号池无 PAT 可验',false);return}ghMsg('ghPatInjectOut','⏳ 批量验证中('+n+' 枚·逐号 GET /user)…');cmd('daoGhValidatePats',{logins:[]})}
-function ghPatInjectAll(on){var st=_ghState();var ps=st.patStatus;if(!ps||!ps.accounts)return;st.patSel={};if(on)ps.accounts.forEach(function(a){if(a.hasPat)st.patSel[a.login]=true});ghRenderPatInject();}
+function ghPatInjectAll(on){var st=_ghState();var ps=st.patStatus;if(!ps||!ps.accounts)return;st.patSel={};if(on)ps.accounts.forEach(function(a){var can=(a.injectable!=null)?!!a.injectable:!!a.hasPat;if(can)st.patSel[a.login]=true});ghRenderPatInject();}
 function ghPatInjectSel(){var st=_ghState();var sel=st.patSel||{};var logins=Object.keys(sel).filter(function(k){return sel[k]});if(!logins.length){toast('先勾选至少一个有 PAT 的账号',false);return}ghMsg('ghPatInjectOut','⏳ 多 PAT 分布式注入中('+logins.length+' 枚)…');cmd('daoGhInjectPats',{logins:logins,primary:st.patPrimary||'',prune:true})}
 // ④ 仅 GitHub MCP 一条(非整个 MCP 板块镜像) · 与 MCP 板块双端同源(同一条 injectProfile.mcps 条目)
 function ghBearerNorm(v){return String(v||'').replace(/^(Bearer\s+)+/i,'')}
@@ -9953,16 +10019,20 @@ function ghOnResult(d){
   else if(d.kind==='fleetRemoveOrg'){if(d.ok){toast('✓ '+d.login+' 已移出组织',true);cmd('daoGhFleetList',{})}else toast('✗ '+esc(d.error||'移出失败'),false);}
   else if(d.kind==='fleetForget'){if(d.ok){toast('✓ 已从舰队删除 '+d.login,true);cmd('daoGhFleetList',{})}}
   else if(d.kind==='assistLogin'){if(d.ok)toast('✓ 已在 '+d.login+' 隔离档打开 GitHub 登录'+(d.hasOtp?'·2FA已填充':'')+' · 核对后手动登入',true);else toast('✗ '+esc(d.error||'续登失败'),false);}
-  else if(d.kind==='fleetOpenPat'){if(d.ok)toast('✓ 已在 '+d.login+' 隔离档打开建 PAT 页(scope '+((d.scopes||[]).length)+' 项·'+(d.expDays===0?'永不过期':((d.expDays==null?30:d.expDays)+'天'))+'·助手已预勾)',true);else toast('✗ 打开建 PAT 页失败',false);}
-  else if(d.kind==='fleetMintPat'){if(d.ok){toast('✓ '+d.login+' 已全自动建 PAT 并落舰队('+(d.role==='admin'?'管理者':'成员')+')',true);cmd('daoGhFleetList',{});}else if(d.needUser){toast('⚠ '+d.login+' 撞人机/设备验证 → 请改点「🚀 续登」半自动登入后再「🔑 建 PAT」: '+(d.error||''),false);}else toast('✗ '+d.login+' 自动建 PAT 失败: '+(d.error||''),false);}
+  else if(d.kind==='fleetOpenPat'){var _op=document.getElementById('gh-ad-'+ghSafe(d.login||''));if(d.ok){var _m1='<span style="color:var(--success)">✓ 已在 '+esc(d.login||'')+' 隔离档打开建 PAT 页(scope '+((d.scopes||[]).length)+' 项·'+(d.expDays===0?'永不过期':((d.expDays==null?30:d.expDays)+'天'))+'·助手已预勾)。<br>若没看到浏览器窗口, 请检查是否被其他窗口遮挡/最小化。</span>';if(_op)_op.innerHTML=_m1;toast('✓ '+d.login+' 已打开建 PAT 页',true)}else{var _e1='<span style="color:var(--danger)">✗ 打开建 PAT 页失败: '+esc(d.error||'未找到可用浏览器/隔离档启动失败')+'</span>';if(_op)_op.innerHTML=_e1;toast('✗ 打开建 PAT 页失败: '+esc(d.error||''),false)}}
+  else if(d.kind==='fleetOpenUrl'){var _ou=document.getElementById('gh-ad-'+ghSafe(d.login||''));if(d.ok){var _m2='<span style="color:var(--success)">✓ 已在 '+esc(d.login||'')+' 隔离档打开 '+esc(d.url||d.path||'官网')+'。<br>若没看到窗口: 可能被遮挡/最小化, 或该号隔离档尚未登录(打开后请在窗口内核对当前登录账号是否为本号)。</span>';if(_ou)_ou.innerHTML=_m2;toast('✓ '+d.login+' 已打开官网/页面',true)}else{var _e2='<span style="color:var(--danger)">✗ 打开失败: '+esc(d.error||'未找到可用浏览器/隔离档启动失败')+' · '+esc(d.url||d.path||'')+'</span>';if(_ou)_ou.innerHTML=_e2;toast('✗ 打开网页失败: '+esc(d.error||''),false)}}
+  else if(d.kind==='fleetMintPat'){var _mp=document.getElementById('gh-ad-'+ghSafe(d.login||''));if(d.ok){var _mm='<span style="color:var(--success)">✓ '+esc(d.login||'')+' 已全自动建 PAT 并落舰队('+(d.role==='admin'?'管理者':'成员')+') · 正在自动注入 security…</span>';if(_mp)_mp.innerHTML=_mm;toast('✓ '+d.login+' 已建 PAT, 自动注入 security 中',true);cmd('daoGhFleetList',{});cmd('daoGhInjectPats',{logins:[d.login],primary:'',prune:false});}else if(d.needUser){var _mn='<span style="color:var(--warn)">⚠ 撞人机/设备验证 — 请改点「🚀 续登」半自动登入后再「🔑 建 PAT」。'+esc(d.error||'')+'</span>';if(_mp)_mp.innerHTML=_mn;toast('⚠ '+d.login+' 撞验证, 请改「续登」',false);}else{var _mf='<span style="color:var(--danger)">✗ 自动建 PAT 失败: '+esc(d.error||'')+'</span>';if(_mp)_mp.innerHTML=_mf;toast('✗ '+d.login+' 自动建 PAT 失败: '+(d.error||''),false);}}
   else if(d.kind==='patCfg'){st.patCfg={scopes:d.scopes||[],expDays:(d.expDays==null?30:d.expDays)};if(st.patCfgWantShow){st.patCfgWantShow=false;ghPatCfgShow(d);}}
   else if(d.kind==='patCfgSaved'){st.patCfg={scopes:d.scopes||[],expDays:(d.expDays==null?30:d.expDays)};toast('✓ PAT 通用配置已保存(scope '+((d.scopes||[]).length)+' 项·'+(d.expDays===0?'永不过期':d.expDays+'天')+')',true);}
   else if(d.kind==='injectPat'){
     if(d.ok){ghMsg('ghInjectOut','<span style="color:var(--success)">✓ GITHUB_PAT 已存入注入清单(security)+钉住 GitHub MCP · 已同步 '+(d.okCount||0)+'/'+(d.total||0)+' 账号</span>');cmd('getInjectProfile')}
     else ghMsg('ghInjectOut','<span style="color:var(--danger)">✗ '+esc(d.error||'注入失败')+'</span>');
   }
-  else if(d.kind==='patStatus'){st.patStatus=d;if(!st.patPrimary&&d.primary)st.patPrimary=d.primary;ghRenderPatInject();}
+  else if(d.kind==='patStatus'){st.patStatus=d;if(!st.patPrimary&&d.primary)st.patPrimary=d.primary;ghRenderPatInject();
+    // 进板自动核验一次: 有 PAT 但从未验证(patState 空)的账号, 后台跑一次批量验证使有效性即时可见(无需手点)。
+    if(!st._patAutoVald){var unv=(d.accounts||[]).filter(function(a){return a.hasPat&&!a.patState});if(unv.length){st._patAutoVald=true;ghMsg('ghPatInjectOut','⏳ 首次进板自动核验 '+unv.length+' 枚 PAT 有效性(逐号 GET /user)…');cmd('daoGhValidatePats',{logins:[]})}}}
   else if(d.kind==='validatePats'){var rs=(d.results||[]);ghMsg('ghPatInjectOut','🔍 批量验证 '+(d.checked||0)+' 枚: '+rs.map(function(x){return esc(x.login)+'('+esc(x.state)+')'}).join(', '));}
+  else if(d.kind==='prunePats'){var rm=(d.removed||[]);ghMsg('ghPatInjectOut',rm.length?('<span style="color:var(--success)">🧹 已清理 '+rm.length+' 枚失效/孤儿/封号 PAT → 重注同步 '+(d.okCount||0)+'/'+(d.total||0)+' 账号</span><br>'+rm.map(function(x){return '✗ '+esc(x.login||x.name)+' ('+esc(x.reason)+')'}).join('<br>')):'<span style="color:var(--muted)">无失效/孤儿/封号 PAT 可清(security 已干净)</span>');cmd('getInjectProfile');}
   else if(d.kind==='injectPats'){
     if(d.ok){var inj=(d.injected||[]);var sk=(d.skipped||[]);ghMsg('ghPatInjectOut','<span style="color:var(--success)">✓ 多 PAT 分布式注入: '+inj.length+' 枚 → 已同步 '+(d.okCount||0)+'/'+(d.total||0)+' 账号 · 主 PAT: '+esc(d.primary||'')+'</span>'+(inj.length?'<br>注入: '+inj.map(function(x){return esc(x)}).join(', '):'')+(sk.length?('<br><span style="color:var(--warn)">跳过: '+sk.map(function(x){return esc(x.login)+'('+esc(x.reason)+')'}).join(', ')+'</span>'):''));cmd('getInjectProfile');cmd('daoGhPatStatus',{})}
     else ghMsg('ghPatInjectOut','<span style="color:var(--danger)">✗ '+esc(d.error||'注入失败')+'</span>');
@@ -10054,7 +10124,7 @@ function rGitHub(){
   // ②· security 多 PAT 分布式注入
   h+='<div class="st">🔐 多 PAT 分布式注入 (security)</div><div class="card">';
   h+='<p style="font-size:10px;color:var(--muted);line-height:1.6;margin:2px 0 6px">勾选多个账号, 把各自 PAT <b>同时</b>反向注入 security(每号一条 <code>GITHUB_PAT_&lt;LOGIN&gt;</code> + 主号写 <code>GITHUB_PAT</code>)——分布式管理, 彻底规避「只能注一枚 PAT」的单点。选「主」的 PAT 兼容 GitHub MCP/组织统管。PAT 明文只在后端, 此处仅显脱敏前缀与状态。</p>';
-  h+='<div class="br" style="margin:2px 0 6px"><button class="btn sm" onclick="ghPatInjectAll(true)" title="全选所有有 PAT 的账号">全选有PAT</button><button class="btn sm" onclick="ghPatInjectAll(false)">清空</button><button class="btn sm primary" onclick="ghPatInjectSel()" title="把勾选账号的 PAT 一并反向注入 security(多 PAT 分布式)">💉 注入所选到 security</button><button class="btn sm ghost" onclick="cmd(&#39;daoGhPatStatus&#39;,{})">⟳ 刷新状态</button><button class="btn sm ghost" onclick="ghPatValidateAll()" title="逐号用其自身 PAT 打 GitHub /user 验证有效性与过期时间(非密元数据)">🔍 批量验证</button></div>';
+  h+='<div class="br" style="margin:2px 0 6px"><button class="btn sm" onclick="ghPatInjectAll(true)" title="全选所有可注入账号(自动跳过封号/失效)">全选可注入</button><button class="btn sm" onclick="ghPatInjectAll(false)">清空</button><button class="btn sm primary" onclick="ghPatInjectSel()" title="把勾选账号的 PAT 一并反向注入 security(多 PAT 分布式)">💉 注入所选到 security</button><button class="btn sm ghost" onclick="cmd(&#39;daoGhPatStatus&#39;,{})">⟳ 刷新状态</button><button class="btn sm ghost" onclick="ghPatValidateAll()" title="逐号用其自身 PAT 打 GitHub /user 验证有效性与过期时间(非密元数据)">🔍 批量验证</button><button class="btn sm danger" onclick="ghPatPruneStale()" title="一键从 security 清掉「封号/失效/孤儿」PAT — 死号不再占注入位">🧹 清理失效/孤儿</button></div>';
   h+='<div id="ghPatInjectList"></div>';
   h+='<div id="ghPatInjectOut" style="font-size:11px;line-height:1.6;margin-top:4px"></div></div>';
   h+='</div>'; // /左栏
@@ -11314,7 +11384,19 @@ async function handleMiddlePanelMessage(msg: any, context: vscode.ExtensionConte
             }
             case 'daoGhFleetForget': {
                 const r = daoGhFleetForget(String(msg.login || ''));
+                // 联动清理若动了 security(删了该号 PAT 或清了主 PAT) → 全池重注同步, 使反向注入即时一致.
+                if (r.prunedSecret || r.wasPrimary) { try { await daoBatchInjectAllAccounts(); } catch { /* 守柔 */ } }
                 reply({ type: 'daoGhResult', kind: 'fleetForget', login: String(msg.login || ''), ...r });
+                reply({ type: 'daoGhResult', kind: 'patStatus', ...daoGhPatStatus() });
+                break;
+            }
+            case 'daoGhPruneStalePats': {
+                // 一键清理失效/孤儿/封号 PAT — 完毕回最新状态清单.
+                await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '清理失效/孤儿/封号 PAT…' }, async () => {
+                    const r = await daoGhPruneStalePats();
+                    reply({ type: 'daoGhResult', kind: 'prunePats', ...r });
+                    reply({ type: 'daoGhResult', kind: 'patStatus', ...daoGhPatStatus() });
+                });
                 break;
             }
             case 'daoGhFleetAssistLogin': {
