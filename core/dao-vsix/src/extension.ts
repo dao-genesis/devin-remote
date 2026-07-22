@@ -17090,6 +17090,10 @@ function loadInjectProfile(): InjectProfile {
                 cred: (a && a.cred && typeof a.cred === 'object') ? { user: String(a.cred.user || ''), pass: String(a.cred.pass || ''), otp: String(a.cred.otp || '') } : undefined,
                 ...(a && a.acctState ? { acctState: String(a.acctState) } : {}),
                 ...(a && a.acctCheckedAt ? { acctCheckedAt: String(a.acctCheckedAt) } : {}),
+                ...(a && a.patState ? { patState: String(a.patState) } : {}),
+                ...(a && a.patCheckedAt ? { patCheckedAt: Number(a.patCheckedAt) || 0 } : {}),
+                ...(a && a.patExpiresAt ? { patExpiresAt: String(a.patExpiresAt) } : {}),
+                ...(a && a.patScopes ? { patScopes: String(a.patScopes) } : {}),
             })).filter((a: any) => a.login) : undefined,
             // GitHub 建 PAT 账号池通用配置(scope + 有效期): 保存经 saveInjectProfile 落档, 读取须原样带回,
             // 否则 daoGhGetPatCfg 恒见 undefined → 永远回退默认(全 scope + 30 天), 通用配置形同虚设。
