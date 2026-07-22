@@ -6253,13 +6253,16 @@ function daoGhFleetForget(login: string): { ok: boolean; prunedSecret?: string; 
     return { ok: true, prunedSecret, wasPrimary };
 }
 // 一键清理「失效/孤儿/封号」PAT: 从 security 移除 GITHUB_PAT_<LOGIN> 中——
-//   ① 孤儿(舰队已无此 login) ② 封号(acctState=suspended) ③ 失效(patState=invalid) 三类,
+//   ① 孤儿(舰队已无此 login) ② 封号(patState=suspended·GET /user 恒 403) ③ 失效(patState=invalid) 三类,
 //   再全池重注同步。不动主 GITHUB_PAT 之外的非本机制密钥。返回被清明细供前端回显。
+//   ⚠ 判「封号/失效」唯以 patState(该号自身 PAT 打 GET /user 的权威存活态)为准 —— 绝不用 acctState:
+//   acctState 出自组织成员关系探测(/users/<login>·10min TTL 缓存·后台自刷), 会把「PAT 有效但非本组织成员」
+//   的正常号误标 suspended → 若据此清理会误删活号(实测曾误删 valid 的 bigmikajia、漏删已封的 adhanwanc0rlee)。
 async function daoGhPruneStalePats(dropDeadFleet: boolean = true): Promise<{ ok: boolean; removed: { name: string; login: string; reason: string }[]; droppedAccounts: { login: string; reason: string }[]; okCount: number; total: number }> {
     const prof = loadInjectProfile();
     if (!Array.isArray(prof.secrets)) prof.secrets = [];
     const fleet = Array.isArray(prof.ghFleet) ? prof.ghFleet : [];
-    const isSuspended = (rec: any) => String(rec.acctState || '') === 'suspended' || String(rec.patState || '') === 'suspended';
+    const isSuspended = (rec: any) => String(rec.patState || '') === 'suspended';
     const isInvalid = (rec: any) => String(rec.patState || '') === 'invalid';
     // login → 该号 per-secret 名 + 状态
     const byName = new Map<string, { login: string; suspended: boolean; invalid: boolean }>();
@@ -6758,8 +6761,10 @@ function daoGhPatStatus(): { ok: boolean; primary: string; injectedCount: number
         const acctState = String(rec.acctState || '');
         const patState = String(rec.patState || '');
         // 可注入 = 有 PAT 且非封号 且 PAT 未被判失效(未验证/离线仍允许注入·仅红标提示, 死号/失效硬禁).
-        const injectable = !!pat && acctState !== 'suspended' && patState !== 'invalid' && patState !== 'suspended';
-        const skipReason = !pat ? '无 PAT' : ((acctState === 'suspended' || patState === 'suspended') ? '封号' : (patState === 'invalid' ? 'PAT 失效' : ''));
+        // 可注入/封号判定唯以 patState(权威 PAT 存活态)为准: acctState 出自组织成员探测·会误标非成员的正常号,
+        //   不参与「封号」硬判(仅作展示)。有 PAT 且 PAT 未被判 invalid/suspended 即可注入(未验证/离线仍放行·仅红标提示)。
+        const injectable = !!pat && patState !== 'invalid' && patState !== 'suspended';
+        const skipReason = !pat ? '无 PAT' : (patState === 'suspended' ? '封号' : (patState === 'invalid' ? 'PAT 失效' : ''));
         return { login: a.login, role: a.role || 'member', hasPat: !!pat, hasCred: !!(a.cred && a.cred.user), pending: (a as any).verify === 'pending', patPrefix: _ghMaskPat(pat), injected, primary: isPrimary, secretName, acctState, injectable, skipReason, patState: String(rec.patState || ''), patExpiresAt: String(rec.patExpiresAt || ''), patScopes: String(rec.patScopes || ''), patCheckedAt: Number(rec.patCheckedAt || 0) };
     });
     return { ok: true, primary: (accounts.find(a => a.primary) || { login: '' }).login, injectedCount: accounts.filter(a => a.injected).length, injectableCount: accounts.filter(a => a.injectable).length, total: accounts.length, accounts };
@@ -6810,8 +6815,9 @@ async function daoGhInjectPats(logins: string[], primary: string, prune: boolean
         const pat = String(a.pat || '').trim();
         if (!pat) { skipped.push({ login: lg, reason: '无 PAT(先建 PAT)' }); continue; }
         // 死号/失效硬禁: 封号或 PAT 已验证失效者绝不注入(前端已 disable, 此处后端再守一道·反者道之动).
+        //   唯以 patState(该号 PAT 打 GET /user 的权威存活态)为准 —— 不用 acctState(组织成员探测·会误标非成员的活号).
         const rec: any = a;
-        if (String(rec.acctState || '') === 'suspended') { skipped.push({ login: a.login, reason: '封号(suspended)·不注入' }); continue; }
+        if (String(rec.patState || '') === 'suspended') { skipped.push({ login: a.login, reason: '封号(suspended)·不注入' }); continue; }
         if (String(rec.patState || '') === 'invalid') { skipped.push({ login: a.login, reason: 'PAT 失效(invalid)·不注入' }); continue; }
         const name = _ghPatSecretName(a.login);
         const ex = prof.secrets.find(s => s.name === name);
