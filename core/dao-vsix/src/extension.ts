@@ -4391,6 +4391,40 @@ async function handleRouteInternal(route: string, url: URL, req: any, token: str
             if (r.prunedSecret || r.wasPrimary) { try { await daoBatchInjectAllAccounts(); } catch { /* 守柔 */ } }
             return { ...r, status: daoGhPatStatus() };
         }
+        case '/api/gh/fleet-add': {
+            // 添号(脱离 webview·穿透驱动): 与「统一添号入口」daoGhAccountAdd 同源 —— text 可混合
+            //   PAT 行(ghp_/github_pat_)与账密行(login----pass----2FA), mode 仅作歧义行兜底偏好。
+            const _raw = await readBody(req);
+            let b: any = {}; try { b = _raw ? JSON.parse(_raw) : {}; } catch { /* 守柔 */ }
+            const text = String(b.text || b.lines || '').trim();
+            if (!text) return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'text required' }) };
+            const r = await daoGhAccountAdd(text, b.role === 'admin' ? 'admin' : 'member', String(b.mode || ''));
+            return { ...r, status: daoGhPatStatus() };
+        }
+        case '/api/gh/mint': {
+            // 全自动建 PAT(脱离 webview·穿透驱动): 该号账密+TOTP 在专属隔离档官方登录→官网建经典 PAT→落舰队。
+            //   守柔撞真·人机/设备/硬件密钥挑战即 needUser 交回。默认 headless, 传 headless:false 走有头。
+            const _raw = await readBody(req);
+            let b: any = {}; try { b = _raw ? JSON.parse(_raw) : {}; } catch { /* 守柔 */ }
+            const login = String(b.login || '').trim();
+            if (!login) return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'login required' }) };
+            const r = await daoGhCredMint(login, { headless: b.headless === false ? false : true });
+            return { ...r, status: daoGhPatStatus() };
+        }
+        case '/api/gh/inject': {
+            // 多 PAT 分布式注入(脱离 webview·穿透驱动): 选中账号 PAT 逐条注 security(GITHUB_PAT_<LOGIN>)
+            //   + 主 PAT(GITHUB_PAT=primary) + 钉 GitHub MCP。logins 缺省→注入全部有 PAT 的号。
+            const _raw = await readBody(req);
+            let b: any = {}; try { b = _raw ? JSON.parse(_raw) : {}; } catch { /* 守柔 */ }
+            let logins: string[] = Array.isArray(b.logins) ? b.logins.map((s: any) => String(s || '')).filter(Boolean) : [];
+            if (!logins.length) {
+                const prof = loadInjectProfile();
+                logins = (Array.isArray(prof.ghFleet) ? prof.ghFleet : []).filter(a => String(a.pat || '').trim()).map(a => a.login);
+            }
+            if (!logins.length) return { _proxy: true, status: 400, contentType: 'application/json; charset=utf-8', body: JSON.stringify({ ok: false, error: 'no accounts with PAT to inject' }) };
+            const r = await daoGhInjectPats(logins, String(b.primary || ''), b.prune === true);
+            return { ...r, status: daoGhPatStatus() };
+        }
         case '/api/tools': {
             // 守柔·畸形入参不崩(旧: 空/非法 JSON 或缺 tool → JSON.parse/解构抛错 → 500)。
             //   畸形请求应答 400 明因, 不污染 500(500 专供真·服务端异常)。
@@ -6249,6 +6283,7 @@ function daoGhFleetForget(login: string): { ok: boolean; prunedSecret?: string; 
             }
         }
     }
+    (prof as any)._ghFleetReplace = true;  // 显式删号: 整表替换以真删(不走 upsert 合并)
     saveInjectProfile(prof);
     return { ok: true, prunedSecret, wasPrimary };
 }
@@ -6288,6 +6323,7 @@ async function daoGhPruneStalePats(dropDeadFleet: boolean = true): Promise<{ ok:
             return true;
         });
     }
+    (prof as any)._ghFleetReplace = true;  // 显式清枯/去封号: 整表替换以真删(不走 upsert 合并)
     saveInjectProfile(prof);
     const r = await daoBatchInjectAllAccounts();
     return { ok: true, removed, droppedAccounts, okCount: r.okCount, total: r.total };
@@ -17150,8 +17186,21 @@ function saveInjectProfile(p: InjectProfile): void {
         if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
             out = Object.assign({}, raw);
             for (const k of Object.keys(p)) { if ((p as any)[k] !== undefined) out[k] = (p as any)[k]; }
+            // 舰队防丢更新(lost-update)根治 — 帛书·「善抱者不脱」: ghFleet 是高频独立增改的列表,
+            //   历史病灶是「载 11 → 增 3 = 14 存盘」与某后台环「载 11(旧快照·跨 await)→ 存 11」相互覆盖,
+            //   令刚添/刚建 PAT 的号被整体抹掉。故非「权威整表替换」的保存, ghFleet 一律按 login 合并 upsert:
+            //   以磁盘现存为底、p 内同名者覆盖、p 未含者原样保留 → 绝不误删他路刚写入的号。
+            //   仅显式删号/清枯(daoGhFleetForget/daoGhPruneStalePats)置 _ghFleetReplace=true 走整表替换以真删。
+            if (!(p as any)._ghFleetReplace && Array.isArray(raw.ghFleet) && Array.isArray((p as any).ghFleet)) {
+                const byLogin = new Map<string, any>();
+                for (const a of raw.ghFleet) { const k = String((a && a.login) || '').trim().toLowerCase(); if (k) byLogin.set(k, a); }
+                for (const a of (p as any).ghFleet) { const k = String((a && a.login) || '').trim().toLowerCase(); if (k) byLogin.set(k, a); }
+                out.ghFleet = Array.from(byLogin.values());
+            }
         }
     } catch { /* 无旧档/坏档即直写 */ }
+    // 瞬态合并标记不落盘(仅指示本次保存的 ghFleet 语义)。
+    if (out && typeof out === 'object') { try { delete out._ghFleetReplace; } catch { /* 守柔 */ } }
     try {
         fs.mkdirSync(DAO_DIR, { recursive: true });
         const txt = JSON.stringify(out, null, 2);
