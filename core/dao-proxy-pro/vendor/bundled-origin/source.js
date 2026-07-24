@@ -307,7 +307,7 @@ function _originGetProxyAgent(isHttps) {
 const PORT = parseInt(process.env.ORIGIN_PORT || "8889", 10);
 // v9.6.1 · 反者道之动 · 远曰反 · 回归 v9.1.2 之全前端按钮 (七按钮: 道/官/实/原/编/复/卸 + dots/customBadge)
 // 以 v9.1.2 本源哲学为锚 · 守大常不动 · 五细节皆成: isAlreadyInverted · _rawTape+all_fields · 部署不 kill · 前端按钮回归
-const ORIGIN_VERSION_BASE = "v9.9.361"; // v9.9.361 · 反代常驻守护(standalone-runner 开机持有端口·与扩展同版互认不相杀·根治启动抢跑「Connecting to server」) · v9.9.357 · custom模式SP不替换根治(源级替换链 modifySPProto/preview/observe/INFER_STRIP 由「仅invert」扩为「invert+custom」·custom无自编文本则透传绝不回落经藏·副路亦隔离·终结「自编未平替、官方SP在顶+阴符经在底重复带一份」) · v9.9.356 · 自定义SP隔离替换根治(custom输出附DAO-CUSTOM-SP标记·dao_router增强路径识别即不再追加经藏·用户自编平替阴符经·增强文本亦优先自编) · v9.9.355 · v9.9.355 · 提示缓存命中率根治(对照Anthropic扩展TTL 1h+beta extended-cache-ttl·治SWE-1.6 Slow慢链路5min断档 · OpenAI prompt_cache_key稳定前缀签名钉缓存节点·跨轮尾变键不变) · v9.9.353 · 官方直通502根治收官(stale优先于配额·_classifyOfficialErr保序·precondition不误吞·实证反代真通) · v9.9.352 · 陈旧会话/版本失配自愈(_isStaleSessionErr+_invalidateStaleFrames·424 stale_session·不狂重试坏帧) · v9.9.351 · 模型反代用量记账归一(反代 /v1/* 第三方渠道调用的 tokens/缓存命中并入路由器同一张用量表·面板「用量与成本」可见·dao_router 暴露 recordUsage·runtime 透传 routerRecordUsage·revproxy 经 deps.recordUsage 记账) · v9.9.350 · 根治「runtime not loaded」·健壮解析外接api目录(非ASCII名坏亦凭内容命中)+ea/*惰性自愈 · v9.9.349 · ACP spawn hook 增识 bash 包裹型(bash.exe --login -c 'devin.exe acp ...')·实证 DESKTOP-MASTER reload 后 IDE 经 Git bash login shell 间接拉起 devin.exe·旧 regex 漏网致鉴权锚定失效 · // v9.9.348 · 内网穿透反脆弱三件套(移植 dao-vsix): ① 指数退避(trycloudflare 限流→5s×2^n最多5min·URL注册成功即归零) ② 宽限期45s(新隧道注册中不误判死亡) ③ 冷却期25s(防密集重启)。前端面板增退避/宽限实时状态。handoff.md 增自愈要点详解 · v9.9.347 · 内网穿透对齐二合一本源: ① 激活自动连接(去中心化默认·开机即拉起零账号快速隧道/命名隧道·治「没有自动连接好」; 手动停止落 userstop 旗真停·24h 安全自复; 优先级 固定中继>命名隧道>快速隧道) ② 模型反代专属 Agent 交接文档 GET /origin/revproxy/handoff.md(实时含公网URL/Key/三条开通路/自愈要点·面向「反代→内网穿透→公网无感直调」链路接管·④面板底部 复制/下载/预览) ③ endpoint.json 增 revproxy.handoff_url · v9.9.346 · 捆绑 ACP 代理·实证收口(DESKTOP-MASTER): ① GetCliTeamSettings 归 PASSTHROUGH(原 LOCAL_AUTH 发 gRPC 帧·chisel 按 Connect 裸 protobuf 解 → 首字 0x00=tag0 → "invalid tag value: 0" → "Failed to fetch team settings"; 改真端成帧回真 TeamSettings·解码必过) ② dao-acp-stdio-proxy.js 永久版健康门控自注入 WINDSURF_API_SERVER_URL=本地反代(覆盖已装 v9.9.334 无需 reload·spawn 每次重读) · v9.9.345 · 捆绑 ACP 代理(devin.exe/chisel)鉴权本地锚定·根治「Connecting to server」残余(LS 侧早已反代·唯捆绑 ACP 代理仍直连官方取 GetCliTeamSettings·官方经 VPN 偶发 >3s → "Team settings refresh timed out after 3000ms" → 前端永卡; 解: spawn-hook 反代健康时注入 WINDSURF_API_SERVER_URL=本地 8937 + NO_PROXY 纳入 127.0.0.1 → 团队设置即刻本地 gRPC OK·鉴权必过·与官方可达性彻底解耦; fail-safe 仅反代健康时改写·否则原样直连; 五十二章「既得其母 以知其子」) · v9.9.344 · 座席鉴权本地兜底·根治「Connecting to server」(SeatManagement/Heartbeat 归 LOCAL_AUTH → 本地即答 gRPC OK status=0·彻底解耦官方可达性; GetUserStatus 仍走 PASSTHROUGH 真解锁·推理仍 BYOK/INFER_STRIP·不夺其真; 反者道之动·釜底抽薪) · v9.9.343 · ⑤内网穿透 第五模块归一(移植 dao-bridge workers.dev 固定中继: 一个 CF API Token 零域名自动部署中继 Worker 到用户账号·出站长连 RelayClient 派回反代 /v1/*·永不轮换持久化·开机自愈; 退出/解绑硬化-即使数据损坏也可清后重绑; 独立会话 pp- 前缀+workers-relay-proxypro.json → 与独立 dao-bridge/dao-one 三插件共存无冲突; handoff.md 反代底层API公网通道改造) · v9.9.342 · 内网穿透大修(移植 dao-bridge 核心: 代理探测7端口+注入·二进制--version验证·断点续传·CONNECT代理隧道下载·6路镜像回退·看门狗15s·resetProxy·命名空间隔离 cloudflared-proxypro.*) · v9.9.339 · 反者道之动·补全(外接api 路由流式亦撤秒数硬限·dao_router 两处 provider 请求 setTimeout(0)+keepalive·revproxy setTimeout(0)+keepalive·routed 模型长推理不再 120s 掐断·AI 自然而止) · v9.9.338 · 反者道之动(撤销一切秒数硬限·两处 H2 stream 超时归零·H1 requestTimeout=0·唯下游离场才回收·AI 自然而止·道并行而不相悖) · v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
+const ORIGIN_VERSION_BASE = "v9.9.362"; // v9.9.362 · 根治「连接不上官方服务器」(官方 H2/gRPC 长连改经系统/VPN 代理 HTTP CONNECT 隧道·抗 GFW RST·_getH2Session 代理预热入池 + _OriginTunnelAgent 同源纯 net+tls) + 鉴权/状态类 RPC 本地韧性兜底(_replyAuthResilient·回放上次官方 GetUserStatus/空 gRPC OK·前端不登出·彻底解耦官方可达性) · v9.9.361 · 反代常驻守护(standalone-runner 开机持有端口·与扩展同版互认不相杀·根治启动抢跑「Connecting to server」) · v9.9.357 · custom模式SP不替换根治(源级替换链 modifySPProto/preview/observe/INFER_STRIP 由「仅invert」扩为「invert+custom」·custom无自编文本则透传绝不回落经藏·副路亦隔离·终结「自编未平替、官方SP在顶+阴符经在底重复带一份」) · v9.9.356 · 自定义SP隔离替换根治(custom输出附DAO-CUSTOM-SP标记·dao_router增强路径识别即不再追加经藏·用户自编平替阴符经·增强文本亦优先自编) · v9.9.355 · v9.9.355 · 提示缓存命中率根治(对照Anthropic扩展TTL 1h+beta extended-cache-ttl·治SWE-1.6 Slow慢链路5min断档 · OpenAI prompt_cache_key稳定前缀签名钉缓存节点·跨轮尾变键不变) · v9.9.353 · 官方直通502根治收官(stale优先于配额·_classifyOfficialErr保序·precondition不误吞·实证反代真通) · v9.9.352 · 陈旧会话/版本失配自愈(_isStaleSessionErr+_invalidateStaleFrames·424 stale_session·不狂重试坏帧) · v9.9.351 · 模型反代用量记账归一(反代 /v1/* 第三方渠道调用的 tokens/缓存命中并入路由器同一张用量表·面板「用量与成本」可见·dao_router 暴露 recordUsage·runtime 透传 routerRecordUsage·revproxy 经 deps.recordUsage 记账) · v9.9.350 · 根治「runtime not loaded」·健壮解析外接api目录(非ASCII名坏亦凭内容命中)+ea/*惰性自愈 · v9.9.349 · ACP spawn hook 增识 bash 包裹型(bash.exe --login -c 'devin.exe acp ...')·实证 DESKTOP-MASTER reload 后 IDE 经 Git bash login shell 间接拉起 devin.exe·旧 regex 漏网致鉴权锚定失效 · // v9.9.348 · 内网穿透反脆弱三件套(移植 dao-vsix): ① 指数退避(trycloudflare 限流→5s×2^n最多5min·URL注册成功即归零) ② 宽限期45s(新隧道注册中不误判死亡) ③ 冷却期25s(防密集重启)。前端面板增退避/宽限实时状态。handoff.md 增自愈要点详解 · v9.9.347 · 内网穿透对齐二合一本源: ① 激活自动连接(去中心化默认·开机即拉起零账号快速隧道/命名隧道·治「没有自动连接好」; 手动停止落 userstop 旗真停·24h 安全自复; 优先级 固定中继>命名隧道>快速隧道) ② 模型反代专属 Agent 交接文档 GET /origin/revproxy/handoff.md(实时含公网URL/Key/三条开通路/自愈要点·面向「反代→内网穿透→公网无感直调」链路接管·④面板底部 复制/下载/预览) ③ endpoint.json 增 revproxy.handoff_url · v9.9.346 · 捆绑 ACP 代理·实证收口(DESKTOP-MASTER): ① GetCliTeamSettings 归 PASSTHROUGH(原 LOCAL_AUTH 发 gRPC 帧·chisel 按 Connect 裸 protobuf 解 → 首字 0x00=tag0 → "invalid tag value: 0" → "Failed to fetch team settings"; 改真端成帧回真 TeamSettings·解码必过) ② dao-acp-stdio-proxy.js 永久版健康门控自注入 WINDSURF_API_SERVER_URL=本地反代(覆盖已装 v9.9.334 无需 reload·spawn 每次重读) · v9.9.345 · 捆绑 ACP 代理(devin.exe/chisel)鉴权本地锚定·根治「Connecting to server」残余(LS 侧早已反代·唯捆绑 ACP 代理仍直连官方取 GetCliTeamSettings·官方经 VPN 偶发 >3s → "Team settings refresh timed out after 3000ms" → 前端永卡; 解: spawn-hook 反代健康时注入 WINDSURF_API_SERVER_URL=本地 8937 + NO_PROXY 纳入 127.0.0.1 → 团队设置即刻本地 gRPC OK·鉴权必过·与官方可达性彻底解耦; fail-safe 仅反代健康时改写·否则原样直连; 五十二章「既得其母 以知其子」) · v9.9.344 · 座席鉴权本地兜底·根治「Connecting to server」(SeatManagement/Heartbeat 归 LOCAL_AUTH → 本地即答 gRPC OK status=0·彻底解耦官方可达性; GetUserStatus 仍走 PASSTHROUGH 真解锁·推理仍 BYOK/INFER_STRIP·不夺其真; 反者道之动·釜底抽薪) · v9.9.343 · ⑤内网穿透 第五模块归一(移植 dao-bridge workers.dev 固定中继: 一个 CF API Token 零域名自动部署中继 Worker 到用户账号·出站长连 RelayClient 派回反代 /v1/*·永不轮换持久化·开机自愈; 退出/解绑硬化-即使数据损坏也可清后重绑; 独立会话 pp- 前缀+workers-relay-proxypro.json → 与独立 dao-bridge/dao-one 三插件共存无冲突; handoff.md 反代底层API公网通道改造) · v9.9.342 · 内网穿透大修(移植 dao-bridge 核心: 代理探测7端口+注入·二进制--version验证·断点续传·CONNECT代理隧道下载·6路镜像回退·看门狗15s·resetProxy·命名空间隔离 cloudflared-proxypro.*) · v9.9.339 · 反者道之动·补全(外接api 路由流式亦撤秒数硬限·dao_router 两处 provider 请求 setTimeout(0)+keepalive·revproxy setTimeout(0)+keepalive·routed 模型长推理不再 120s 掐断·AI 自然而止) · v9.9.338 · 反者道之动(撤销一切秒数硬限·两处 H2 stream 超时归零·H1 requestTimeout=0·唯下游离场才回收·AI 自然而止·道并行而不相悖) · v9.9.337 · 流续不断(H2 stream 超时 180s→600s·H2 session keepalive ping 45s·GOAWAY 优雅排水·H1 requestTimeout 600s·对话中断根治) · v9.9.336 · 根源突破(LSP/补全PASSTHROUGH流量亦采鉴权信封·信封陈旧才缓冲探采·新鲜即纯流式直透·IDE任一活跃即保鲜·彻底脱Cascade对话依赖) · v9.9.335 · 自主保鲜闭环(envelope采得即自动合成全鉴权回放帧·rewrites从IDE活跃自然自增) · v9.9.334 · 守真突破(活鉴权信封·任一inference请求采信封) · v9.9.333 · 会话鉴权保鲜 · 五十七章「我无为也 而民自化」
 // 印 153 · 唯变所适 · 软编码归宗 · 二十五章「逝曰远 远曰反」· 七十六章「兵强则不胜」
 // 病: 多 ext-host 共端口 :8937 · 旧版 in-process proxy 持续 listen · self_file 锁死旧版目录
 //     → 即便装毕新版 vsix · /ping 仍返 v9.9.19/v9.9.20 之 self_file · canon_name 走旧映射
@@ -7655,6 +7655,60 @@ _loadFullModelCatalog();
  * 道义: 三十五章「往而不害」· 补充不破坏 · 原有模型保留
  *       「执大象 天下往」· 全量模型即大象 · 执之则天下往
  */
+// ★ v9.9.362 · 鉴权/状态/配置类 RPC 韧性兜底 (官方长连 RST/代理预热时不硬失败·前端不登出)
+//   病灶: GetUserStatus / 登录(RegisterUser) / GetCommandModelConfigs 走 PASSTHROUGH →
+//     proxyToCloud, 官方 H2 一 RST 即回 502/ECONNRESET → 前端「连接不上官方服务器」并登出。
+//   药(母子相守): 这些「前端据以判定已连接/已鉴权」的一元 RPC, 官方暂不可达时不抛错 —— 有
+//     上次官方 GetUserStatus 真响应则原样回放(守其母·保 Pro 身份与模型), 否则回空 gRPC OK
+//     (LS 仅验 grpc-status=0 即认已连接)。推理仍走 BYOK/路由器, 故 Cascade 全程可用、彻底
+//     解耦官方可达性。非鉴权类(补全等)不入此集 → 照旧 502 由客户端自然重试, 不夺其真。
+const _AUTH_RESILIENT_RE =
+  /GetUserStatus|GetCommandModelConfigs|GetCascadeModelConfigs|GetUserSettings|RegisterUser|RefreshToken|GetAuthToken|Login/i;
+function _isAuthResilientRpc(u) {
+  try {
+    return _AUTH_RESILIENT_RE.test(_rpcName(u));
+  } catch (_) {
+    return false;
+  }
+}
+let _lastGoodUserStatus = null; // { buf, ct, ce, at } · 最近一次官方 200 GetUserStatus(解锁后)
+function _replyAuthResilient(req, res, rid) {
+  try { req.resume(); } catch (_) {} // 排空入站体·防 socket 悬挂
+  const url = req.url || "";
+  const rpc = _rpcName(url);
+  // GetUserStatus: 优先回放上次真官方响应(守其母) · 30 分钟内视为可用
+  if (
+    /GetUserStatus/i.test(rpc) &&
+    _lastGoodUserStatus &&
+    _lastGoodUserStatus.buf &&
+    Date.now() - (_lastGoodUserStatus.at || 0) < 30 * 60 * 1000
+  ) {
+    try {
+      if (res.headersSent) return true;
+      const h = {
+        "content-type": _lastGoodUserStatus.ct || "application/proto",
+      };
+      if (_lastGoodUserStatus.ce) h["content-encoding"] = _lastGoodUserStatus.ce;
+      h["content-length"] = String(_lastGoodUserStatus.buf.length);
+      res.writeHead(200, h);
+      res.write(_lastGoodUserStatus.buf);
+      try {
+        res.addTrailers({ "grpc-status": "0", "grpc-message": "" });
+      } catch (_) {}
+      res.end();
+      log(
+        `#${rid} [auth-resilient] ${rpc} → 回放上次官方响应 ${_lastGoodUserStatus.buf.length}B (官方长连暂断·守其母不登出)`,
+      );
+      return true;
+    } catch (e) {
+      log(`#${rid} [auth-resilient] 回放失败: ${e.message} → 转空 gRPC OK`);
+    }
+  }
+  // 无 last-good → 空 gRPC OK(前端仅验 grpc-status=0 即认已连接·不抛 ECONNRESET)
+  _replyGrpcOk(res, rid, rpc);
+  return true;
+}
+
 function proxyToCloudWithModelUnlock(req, res, rid) {
   const rpcName = (req.url || "").split("/").pop() || "?";
   const unlockEnabled = _isModelUnlockEnabled();
@@ -7885,16 +7939,8 @@ const _h2Sessions = {};
 // 根因: 云端 H2 session 空闲超阈即发 GOAWAY → 活跃流式推理被中断 → 对话截断
 // 药: 每 45s ping 一次 · 保鲜 session · 无活跃流时自然 idle close
 const _H2_PING_INTERVAL = 45000;
-function _getH2Session(host) {
-  const key = host;
-  const s = _h2Sessions[key];
-  if (s && !s.closed && !s.destroyed && !s._daoGoaway) return s;
-  if (s && (s._daoGoaway || s.closed || s.destroyed)) {
-    try { if (s._daoPingTimer) clearInterval(s._daoPingTimer); } catch {}
-  }
-  log(`[h2] connect https://${host}:${CLOUD_PORT}`);
-  const session = http2.connect(`https://${host}:${CLOUD_PORT}`);
-  // keepalive ping
+// session 通用监听装配 (ping / error / close / goaway) · 直连与代理隧道共用
+function _h2WireSession(session, host, key) {
   session._daoPingTimer = setInterval(() => {
     try {
       if (session.closed || session.destroyed) {
@@ -7928,6 +7974,129 @@ function _getH2Session(host) {
     session._daoGoaway = true;
     delete _h2Sessions[key];
   });
+}
+
+// ★ v9.9.362 · 官方 H2 长连经系统/VPN 代理隧道 (根治「连接不上官方服务器」· 反者道之动)
+//   病灶(根因·实证于笔记本 zhoumac): _getH2Session 一律 http2.connect 直连官方 →
+//     官方 H2/gRPC 长连在本网络(GFW)被 RST 切断 → GetUserStatus / 登录(RegisterUser) /
+//     GetCommandModelConfigs 皆 "read ECONNRESET" → 前端登出、永报「连接不上官方服务器」。
+//     注: 短 GET 探活可达(404)不代表 H2 长连可用 —— 前者秒断秒建, 后者持久流才遭 RST。
+//   药(既得其母以知其子): 若系统/WinINET 配了代理(如本机 Vortex :7890·实证对官方可达),
+//     官方 H2 改走 HTTP CONNECT 隧道(与 _OriginTunnelAgent 同源·纯 net+tls·无外部依赖),
+//     长连稳定不被 RST → 登录/状态/配置/推理全链路真通官方。
+//   道并行不相悖: 隧道须先建好(异步)方能 http2.connect(createConnection 返成品 TLS socket);
+//     故代理会话「预热」异步入池, 冷未命中当次抛 _daoWarming → 上层鉴权类 RPC 本地韧性兜底
+//     (见 _replyAuthResilient), 待预热成 (~亚秒) 后续请求即拿真官方数据; 预热失败(无代理/
+//     代理坏)则回退直连(不劣于旧) + 60s 冷却不空转。天之道利而不害。
+function _h2TunnelConnect(host, port, purl, cb) {
+  let u;
+  try {
+    u = new URL(purl);
+  } catch (e) {
+    return cb(e);
+  }
+  const proxyHost = u.hostname;
+  const proxyPort = parseInt(u.port || "80", 10);
+  const raw = net.connect(proxyPort, proxyHost);
+  let settled = false;
+  let buf = "";
+  const fail = (e) => {
+    if (settled) return;
+    settled = true;
+    try { raw.destroy(); } catch {}
+    cb(e);
+  };
+  raw.once("error", fail);
+  raw.setTimeout(20000, () => fail(new Error("dao h2 proxy tunnel timeout")));
+  raw.on("connect", () => {
+    raw.write(
+      `CONNECT ${host}:${port} HTTP/1.1\r\nHost: ${host}:${port}\r\n\r\n`,
+    );
+  });
+  const onData = (chunk) => {
+    buf += chunk.toString("binary");
+    if (buf.indexOf("\r\n\r\n") === -1) return;
+    raw.removeListener("data", onData);
+    const statusLine = buf.split("\r\n")[0];
+    if (!/ 200 /.test(statusLine)) {
+      fail(new Error("dao h2 CONNECT rejected: " + statusLine));
+      return;
+    }
+    raw.setTimeout(0);
+    raw.removeListener("error", fail);
+    const tlsSock = _tls.connect(
+      {
+        socket: raw,
+        servername: host,
+        ALPNProtocols: ["h2"],
+        rejectUnauthorized: true,
+      },
+      () => {
+        if (!settled) {
+          settled = true;
+          cb(null, tlsSock);
+        }
+      },
+    );
+    tlsSock.once("error", (e) => {
+      if (!settled) {
+        settled = true;
+        cb(e);
+      }
+    });
+  };
+  raw.on("data", onData);
+}
+const _h2Warming = {};
+const _h2ProxyFailed = {}; // host -> ts 上次代理预热失败(回退直连冷却)
+function _h2StartProxyWarm(host, purl) {
+  if (_h2Warming[host]) return;
+  _h2Warming[host] = true;
+  log(`[h2] proxy warm ${host} 经系统代理 …`);
+  _h2TunnelConnect(host, CLOUD_PORT, purl, (err, tlsSock) => {
+    _h2Warming[host] = false;
+    if (err) {
+      _h2ProxyFailed[host] = Date.now();
+      log(`[h2] proxy warm ${host} 失败 → 回退直连: ${err.message}`);
+      return;
+    }
+    try {
+      const session = http2.connect(`https://${host}:${CLOUD_PORT}`, {
+        createConnection: () => tlsSock,
+      });
+      _h2WireSession(session, host, host);
+      _h2Sessions[host] = session;
+      delete _h2ProxyFailed[host];
+      log(`[h2] proxy warm ${host} 成功 · 官方长连经系统代理隧道(抗 RST)`);
+    } catch (e) {
+      _h2ProxyFailed[host] = Date.now();
+      try { tlsSock.destroy(); } catch {}
+      log(`[h2] proxy warm ${host} http2.connect 失败: ${e.message}`);
+    }
+  });
+}
+function _getH2Session(host) {
+  const key = host;
+  const s = _h2Sessions[key];
+  if (s && !s.closed && !s.destroyed && !s._daoGoaway) return s;
+  if (s && (s._daoGoaway || s.closed || s.destroyed)) {
+    try { if (s._daoPingTimer) clearInterval(s._daoPingTimer); } catch {}
+  }
+  // 代理隧道优先(官方长连抗 RST): 有系统代理 且 非本机 且 未在失败冷却期 →
+  //   预热异步入池, 当次抛 _daoWarming(上层鉴权类 RPC 本地兜底·非鉴权类走 502 由客户端自然重试)
+  const purl = _originResolveProxyUrl();
+  const failedAt = _h2ProxyFailed[key] || 0;
+  const proxyUsable =
+    purl && !_originIsLocalHost(host) && Date.now() - failedAt > 60000;
+  if (proxyUsable) {
+    _h2StartProxyWarm(host, purl);
+    const e = new Error("h2_proxy_warming");
+    e._daoWarming = true;
+    throw e;
+  }
+  log(`[h2] connect https://${host}:${CLOUD_PORT}`);
+  const session = http2.connect(`https://${host}:${CLOUD_PORT}`);
+  _h2WireSession(session, host, key);
   _h2Sessions[key] = session;
   return session;
 }
@@ -7949,6 +8118,15 @@ function proxyToCloud(req, res, overrideBody, _rid) {
   try {
     session = _getH2Session(route.host);
   } catch (e) {
+    // ★ v9.9.362 · 代理隧道预热中(_daoWarming)或建连失败: 鉴权/状态类 RPC 本地韧性兜底
+    //   → 前端不登出、不报「连接不上官方服务器」; 预热成后续请求即拿真官方数据。
+    if (_isAuthResilientRpc(req.url)) {
+      log(
+        `#${_rid} [h2] ${e._daoWarming ? "代理预热中" : "建连失败"}(${e.message}) → 鉴权类本地兜底`,
+      );
+      _replyAuthResilient(req, res, _rid);
+      return;
+    }
     log(`[h2] session create fail: ${e.message}`);
     if (!res.headersSent) res.writeHead(502);
     try {
@@ -8060,6 +8238,15 @@ function proxyToCloud(req, res, overrideBody, _rid) {
               const h = { ...resHeaders };
               delete h["content-length"];
               h["content-length"] = String(outBuf.length);
+              // ★ v9.9.362 · 缓存本次官方真响应(守其母·连同其编码) · 供官方长连暂断时原样回放不登出
+              try {
+                _lastGoodUserStatus = {
+                  buf: outBuf,
+                  ct: h["content-type"] || "application/proto",
+                  ce: h["content-encoding"] || "",
+                  at: Date.now(),
+                };
+              } catch (_) {}
               res.writeHead(status, h);
               res.end(outBuf);
             } catch (e) {
@@ -8145,6 +8332,14 @@ function proxyToCloud(req, res, overrideBody, _rid) {
     log(`upstream h2 error ${req.method} ${req.url}: ${e.message}`);
     _upClosed = true; // 已错 · 无需再 cancel
     if (!res.headersSent) {
+      // ★ v9.9.362 · 官方流中途 RST(ECONNRESET 等)且未出头: 鉴权/状态类本地韧性兜底
+      //   → 彻底解耦官方可达性 · 前端不登出、不报「连接不上官方服务器」。
+      if (_isAuthResilientRpc(req.url)) {
+        try {
+          _replyAuthResilient(req, res, _rid);
+        } catch (_) {}
+        return;
+      }
       try {
         res.writeHead(502);
       } catch {}
@@ -10407,5 +10602,13 @@ module.exports = {
     _brgLoadRelayCfg,
     _brgSaveRelayCfg,
     _brgRelayState,
+    // ★ v9.9.362 · 官方 H2 经代理隧道 + 鉴权类韧性兜底 (离线可测)
+    _h2TunnelConnect,
+    _isAuthResilientRpc,
+    _replyAuthResilient,
+    _originResolveProxyUrl,
+    _originIsLocalHost,
+    _setLastGoodUserStatusForTest: (v) => { _lastGoodUserStatus = v; },
+    _getLastGoodUserStatusForTest: () => _lastGoodUserStatus,
   },
 };
