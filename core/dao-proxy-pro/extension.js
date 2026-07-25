@@ -178,6 +178,7 @@ let _lsWedgeStrikes = 0; // v9.9.360 · 连续 wedge 自愈未奏效计数 · �
 // ★ 解锁自愈追踪 · 治"新用户只剩 SWE-1.6 Slow·其余全灰"之莫名顽疾
 let _lsSpawnSeen = false; // 本会话是否见过 language_server spawn
 let _lsRewroteCount = 0; // spawn hook 成功改写 LS 端口的次数 (>0 即 LS 经反代)
+const _lsChildPids = new Set(); // 本窗口 spawn 的 LS 子进程 PID (重启只杀己窗 · 不越窗杀)
 let _unlockHealDone = false; // 解锁自愈仅一次 · 不连环杀 LS
 
 // ═══════════════════════════ ACP 模式 (印222) ═══════════════════════════
@@ -445,6 +446,11 @@ function installSpawnHook() {
       }
     } else {
       maybeRewriteLsArgs(cmd, a);
+      if (typeof cmd === "string" && /language_server/.test(cmd)) {
+        const child = _origSpawn.apply(this, arguments);
+        _trackLsChild(child);
+        return child;
+      }
     }
     return _origSpawn.apply(this, arguments);
   };
@@ -538,47 +544,91 @@ function removeSpawnHook() {
 // ═══════════════════════════ LS 重启 ═══════════════════════════
 // 仅由用户显式命令触发 (cmdInvert / deactivate); 不在 activate 调用 (真药 D)
 // 第六十四章「为者败之」: activate 不主动干预 LS, 留待自然重启或用户意愿
+function _trackLsChild(child) {
+  try {
+    if (child && child.pid) {
+      _lsChildPids.add(child.pid);
+      child.once("exit", () => _lsChildPids.delete(child.pid));
+    }
+  } catch {}
+}
+
+// 只杀本窗口的 LS: 先用 spawn hook 记录的子进程 PID; 无则按父进程=本 ext-host 查。
+// 永不按 IMAGENAME/用户名广域杀 — 多窗口时会击杀别窗健康 LS, 令其 Cascade 反复断连。
 function forceRestartLS() {
   return new Promise((resolve) => {
     const plat = process.platform;
-    let cmd, args;
+    const finishKill = (pids) => {
+      pids = pids.filter((p) => Number.isFinite(p) && p > 0);
+      if (!pids.length) {
+        L.info("restart-ls", `${plat} 本窗口无 LS 子进程 · 不越窗杀 (skip)`);
+        resolve(false);
+        return;
+      }
+      let cmd, args;
+      if (plat === "win32") {
+        cmd = "taskkill";
+        args = ["/F"];
+        for (const p of pids) args.push("/PID", String(p));
+      } else {
+        cmd = "kill";
+        args = ["-9", ...pids.map(String)];
+      }
+      const proc = _origSpawn(cmd, args, { stdio: "pipe" });
+      let out = "";
+      proc.stdout?.on("data", (d) => (out += d));
+      proc.stderr?.on("data", (d) => (out += d));
+      proc.on("close", (code) => {
+        L.info(
+          "restart-ls",
+          `${plat} ${cmd} pids=[${pids.join(",")}] exit=${code} ${out.trim().slice(0, 200)}`,
+        );
+        resolve(code === 0 || code === 128);
+      });
+      proc.on("error", (e) => {
+        L.warn("restart-ls", e.message);
+        resolve(false);
+      });
+    };
+    if (_lsChildPids.size) {
+      finishKill([..._lsChildPids]);
+      return;
+    }
     if (plat === "win32") {
-      const userName = os.userInfo().username;
-      cmd = "taskkill";
-      args = [
-        "/F",
-        "/FI",
-        "IMAGENAME eq language_server_windows_x64.exe",
-        "/FI",
-        `USERNAME eq ${userName}`,
-      ];
+      const ps = _origSpawn(
+        "powershell",
+        [
+          "-NoProfile",
+          "-Command",
+          `(Get-CimInstance Win32_Process -Filter "name='language_server_windows_x64.exe' and ParentProcessId=${process.pid}").ProcessId`,
+        ],
+        { stdio: "pipe", windowsHide: true },
+      );
+      let buf = "";
+      ps.stdout?.on("data", (d) => (buf += d));
+      ps.on("close", () =>
+        finishKill(buf.split(/\s+/).map((s) => parseInt(s, 10))),
+      );
+      ps.on("error", () => finishKill([]));
     } else {
       const binName =
         plat === "darwin"
           ? "language_server_macos_arm"
           : "language_server_linux_x64";
-      cmd = "pkill";
-      args = ["-f", binName];
-      try {
-        const uid = String(os.userInfo().uid);
-        if (uid && uid !== "-1") args.unshift("-u", uid);
-      } catch {}
-    }
-    const proc = _origSpawn(cmd, args, { stdio: "pipe" });
-    let out = "";
-    proc.stdout?.on("data", (d) => (out += d));
-    proc.stderr?.on("data", (d) => (out += d));
-    proc.on("close", (code) => {
-      L.info(
-        "restart-ls",
-        `${plat} ${cmd} exit=${code} ${out.trim().slice(0, 200)}`,
+      const proc = _origSpawn(
+        "pkill",
+        ["-9", "-P", String(process.pid), "-f", binName],
+        { stdio: "pipe" },
       );
-      resolve(code === 0 || code === 128 || (plat !== "win32" && code === 1));
-    });
-    proc.on("error", (e) => {
-      L.warn("restart-ls", e.message);
-      resolve(false);
-    });
+      proc.on("close", (code) => {
+        L.info("restart-ls", `${plat} pkill -P ${process.pid} exit=${code}`);
+        resolve(code === 0);
+      });
+      proc.on("error", (e) => {
+        L.warn("restart-ls", e.message);
+        resolve(false);
+      });
+    }
   });
 }
 
