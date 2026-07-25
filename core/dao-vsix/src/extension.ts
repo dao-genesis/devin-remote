@@ -17016,7 +17016,11 @@ async function devinBatchInjectRun(accounts: DaoBatchAccount[]): Promise<DaoBatc
             if (res.ok) daoBatchProgress!.ok++;
             daoBatchProgress!.results.push(res);
             daoBatchProgress!.done++;
-            if (daoBatchProgress!.done % 8 === 0) flush();
+            // 收敛 sig 增量落盘 — 帛书·「善建者不拔」: sig 只在整批完成后落盘的话, 中途重启
+            //   (窗口 reload/IDE 重启, 大池一轮 12-16 分钟内极易发生)即丢弃全部已收敛进度 →
+            //   下一启动全池从零全量重注, 永不收敛(用户所报「每次新增账号反向注入都失败」之根)。
+            //   随进度增量持久化后, 重启至多丢近 8 个账号的收敛记录, 其余直接命中 skip-converged 快路。
+            if (daoBatchProgress!.done % 8 === 0) { flush(); saveInjectSigMap(sigMap); }
         }
     };
     await Promise.all(Array.from({ length: concurrency }, () => worker()));
@@ -17689,6 +17693,15 @@ function poolReconcileLog(line: string): void {
 }
 async function reconcileAccountPoolInject(reason: string, opts?: { force?: boolean }): Promise<{ ok: boolean; okCount: number; total: number; skipped: boolean }> {
     const skip = { ok: false, okCount: 0, total: 0, skipped: true };
+    // 单一权威 — 帛书·「道生一」: 全池反向注入只由主实例(DEFAULT_PORT 持有者)自动执行。
+    //   多实例(9920+9921…)各自跑 reconcile 时, 期望态 sig 因实例态(端口/relay 会话)不同而互异,
+    //   互相覆盖 dao-inject-sig.json 与远端注入内容 → 两实例轮流判「未收敛」→ 全池全量重注
+    //   乒乓不休(每轮 12-16 分·并发登录/写入互相 429), 即用户所报「反向注入永远修不好」之另一根。
+    //   守柔: 仅拦自动触发(activate/watch/periodic); 用户在任一实例手动触发(manual/api)照常放行。
+    if (ws.port && ws.port !== DEFAULT_PORT && reason !== 'manual' && reason !== 'api') {
+        poolReconcileLog('trigger=' + reason + ' skip=secondary-instance port=' + ws.port);
+        return skip;
+    }
     const p = loadInjectProfile();
     // 帛书·「道生之」: 固定道藏(准则KB/桥KB/DAO_TOKEN)是系统级初始化, 不受用户档案 enabled 门控。
     // 原 !p.enabled → skip 导致新账号的系统级初始化(知识库/密钥/规则)被整体跳过(用户报「新添加100个账号·初始化根本没配好」)。
