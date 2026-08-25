@@ -4250,14 +4250,20 @@ async function _detectAuthCommands() {
       _detectedAuthProvider = "devin";
       log("自适应检测: authProvider = devin (发现 devin.* login/logout 命令)");
     } else {
-      _detectedAuthProvider = "windsurf"; // 默认回退
+      // v3.16.3-hotfix · 检测失败不缓存 · 允许后续重试
+      //   根因: 窗口激活早期内置扩展命令未注册完 → getCommands 不全 → 误判 windsurf
+      //   后果: 永久缓存 windsurf → 路丙永远用不存在的 windsurf.* 命令
+      //         → 路丁 vscdb 直写 → 破坏登录态 (重启窗口即丢登录)
+      //   治法: 未确认时不缓存 (返回 null) · 每次调用重新检测 · 内置扩展注册后自然命中 devin
       log(
-        "自适应检测: authProvider = windsurf (默认回退 · 未检测到 devin.* 命令)",
+        "自适应检测: 未检测到 devin.* 命令 (内置扩展可能未注册完) · 不缓存 · 下次调用重试",
       );
+      return null;
     }
   } catch (e) {
-    _detectedAuthProvider = "windsurf";
-    log("自适应检测: 回退 windsurf (" + (e.message || e) + ")");
+    // v3.16.3-hotfix · 检测异常不缓存 · 允许重试
+    log("自适应检测: 检测异常 (" + (e.message || e) + ") · 不缓存 · 下次调用重试");
+    return null;
   }
   return _detectedAuthProvider;
 }
@@ -4265,6 +4271,14 @@ async function _detectAuthCommands() {
 async function _getAuthCommand(key) {
   const provider = await _detectAuthCommands();
   const candidates = _AUTH_COMMANDS[key] || [];
+  // v3.16.3-hotfix · 未确认 (null) 时优先 devin.* 候选
+  //   Devin Desktop 实测: devin.provideWindsurfAuthTokenToAuthProvider 存在可用
+  //   windsurf.* 旧命令在 Devin 上不存在 · 试 devin.* 更合理 (真 Windsurf 上检测会成功走 windsurf.*)
+  if (!provider) {
+    for (const c of candidates) {
+      if (c.startsWith("devin.")) return c;
+    }
+  }
   // 优先返回已检测到的 provider 对应的命令
   for (const c of candidates) {
     if (c.startsWith(provider + ".")) return c;
@@ -10439,6 +10453,22 @@ async function injectToken(token, opts) {
   //   原理: Electron secrets = v10 + AES-256-GCM · 密钥由 DPAPI 保护
   //   WAM 作为同用户进程可用 DPAPI 解密密钥 → 加密新 session → 直写 vscdb
   log("路丙2次均失败 · 尝试路丁 (vscdb直写)");
+  // v3.16.3-hotfix · 路丁直写前备份 state.vscdb · 万一写入不被 IDE 接受可恢复
+  try {
+    const _bkDir = path.join(WAM_DIR, "vscdb-backups");
+    fs.mkdirSync(_bkDir, { recursive: true });
+    const _dbPath = _getVscdbPath();
+    if (fs.existsSync(_dbPath)) {
+      const _bkFile = path.join(
+        _bkDir,
+        "state.vscdb." + new Date().toISOString().replace(/[:.]/g, "-"),
+      );
+      fs.copyFileSync(_dbPath, _bkFile);
+      log("路丁: vscdb 已备份 → " + _bkFile);
+    }
+  } catch (e) {
+    log("路丁: vscdb 备份失败 (" + (e.message || e) + ")");
+  }
   const d = await _injectViaDing(token, opts.apiServerUrl);
   if (d.ok) {
     log("路丁 ✓ " + (d.detail || ""));
