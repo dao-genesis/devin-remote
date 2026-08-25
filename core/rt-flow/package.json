@@ -6,12 +6,12 @@
 	"publisher": "devaid",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/zhouyoukang/windsurf-assistant.git",
-		"directory": "packages/wam"
+		"url": "https://github.com/dao-genesis/devin-remote.git",
+		"directory": "core/rt-flow"
 	},
-	"homepage": "https://github.com/zhouyoukang/windsurf-assistant",
+	"homepage": "https://github.com/dao-genesis/devin-remote",
 	"bugs": {
-		"url": "https://github.com/zhouyoukang/windsurf-assistant/issues"
+		"url": "https://github.com/dao-genesis/devin-remote/issues"
 	},
 	"keywords": [
 		"runtime",

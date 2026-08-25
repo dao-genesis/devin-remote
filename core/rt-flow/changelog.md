@@ -2,6 +2,43 @@
 
 > 反者道之动 · 弱者道之用 · 天下之物生于有 · 有生于无. —— 帛书《老子》德经
 
+## v4.32.1 (2026-08-25) · 切换账号根治 8-25 实证修复全量移植 (extension.js + dao_stuck.js + _vscdb_helper.py)
+
+> 2026-08-25 本地部署版实证根治「切换账号失效」系列问题, 全量移植回本源。
+> 天下莫柔弱于水 — .pb 增长是最诚实的活跃证据 · 不依赖 IDE 内部状态。
+
+### 改动
+- **命令检测不缓存** (extension.js `_detectAuthCommands`): 检测失败/异常不再缓存 `windsurf`
+  误判结果, 返回 null 允许后续重试 —— 根治「窗口激活早期内置扩展命令未注册完 → 误判 windsurf
+  → 路丙永远用不存在的 windsurf.* 命令 → 路丁 vscdb 直写破坏登录态」。
+- **devin.\* 优先** (extension.js `_getAuthCommand`): 未确认 (null) 时优先 devin.* 候选
+  (Devin Desktop 实测 `devin.provideWindsurfAuthTokenToAuthProvider` 存在可用)。
+- **路丁直写前备份** (extension.js): vscdb 直写前自动备份 `state.vscdb` 到
+  `~/.wam/vscdb-backups/` · 万一写入不被 IDE 接受可恢复。
+- **OLD_REACTIVE** (dao_stuck.js): 老对话重新活跃 (.pb mtime 更新) → 重置计时归零,
+  根治「用户打开旧对话 → staleSec 巨大 → 误报 WARN_STUCK」。
+- **_pbGrowthActive** (dao_stuck.js): vscdbStatus=unknown 时以 .pb 增长为活跃信号
+  (Devin Desktop 不写 metadataCache → vscdbStatus 恒 unknown → 对话追踪完全失效)。
+- **600s 追踪窗口 + 思考期保护** (dao_stuck.js): 追踪窗口 180s→600s ·
+  180-600s 内更新 = AI 思考期 → 保持 streaming 不报卡住 · 仅 >600s 未更新才进卡住检测。
+- **_vscdb_helper.py v3.16.1**: metadataCache 缺失时扫描 `sessioninfo.session.*` 独立 key
+  兜底 (根治标题全失明 → UI 显示「对话 #短UUID」)。
+
+## v4.31.0 (2026-08-xx) · 归零自动化默认开 (对齐手机 APK)
+
+> 桌面端默认开启「归零账号 备份→清理→出库」自动化, 与手机端同源同逻辑。
+> 闭合「备份→清理→出库」整套循环: 额度彻底归零的账号在全量备份后自动清理出库。
+
+## v4.30.0 (2026-08-xx) · 守柔·止血: 破坏性自动化一律默认关
+
+> 守柔曰强 — 破坏性自动化(自动清理/归零移除/闲置触发)一律默认关·显式勾选才开;
+> 出库唯归零 $0 (手动按钮同阈)。残留 $0.x 有效号不误出。
+
+## v4.29.0 (2026-08-xx) · 出库阈值默认 0
+
+> 守柔·止血: 出库阈值默认 0 (仅额度真正归零 $0 才出库) —— 旧默认对齐清理阈值 ($3)。
+> 用户显式配置仍优先。
+
 ## v4.26.12 (2026-07-11) · 下载位置可配置: wam.downloadDir (devin_cloud.js + extension.js · 对齐手机 APK 下载管理)
 
 > 网页内下载此前硬编码落 `~/.dao/downloads`(系统盘)。写盘(out 层 daoSaveDownload)与
